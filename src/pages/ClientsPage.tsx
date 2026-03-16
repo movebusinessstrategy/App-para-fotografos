@@ -1,9 +1,29 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { useOutletContext } from "react-router-dom";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { motion } from "motion/react";
-import { AlertCircle, Camera, Check, CheckCircle2, Copy, Download, Edit2, FileText, Filter, MessageSquare, Plus, RefreshCw, Search, Sparkles, Trash2, Upload } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
+import { 
+  AlertTriangle,
+  Camera, 
+  Check, 
+  CheckCircle2, 
+  ChevronDown,
+  Copy, 
+  Download, 
+  Edit2, 
+  MessageSquare, 
+  Plus, 
+  RefreshCw, 
+  Search, 
+  Sparkles, 
+  Trash2, 
+  Upload, 
+  X,
+  Calendar,
+  Award,
+  SlidersHorizontal
+} from "lucide-react";
 
 import ImportProgressModal, { ImportSummary } from "../components/ImportProgressModal";
 import JobFormModal from "../components/shared/JobFormModal";
@@ -16,6 +36,102 @@ import { cleanPhone, parseCSV, parseDateBR, parseValueBR } from "../utils/csvPar
 import { supabase } from "../integrations/supabase/client";
 import { Client, Job, Opportunity } from "../types";
 
+import * as Select from '@radix-ui/react-select';
+
+// ============================================
+// COMPONENTE DE FILTRO DROPDOWN PREMIUM (RADIX UI)
+// ============================================
+interface FilterDropdownProps {
+  label: string;
+  value: string;
+  options: { value: string; label: string; icon?: React.ReactNode }[];
+  onChange: (value: string) => void;
+  icon?: React.ReactNode;
+  activeColor?: string;
+}
+
+function FilterDropdown({ label, value, options, onChange, icon, activeColor = "indigo" }: FilterDropdownProps) {
+  const selectedOption = options.find(opt => opt.value === value);
+  const isActive = value !== 'all' && value !== '';
+
+  const colorClasses: Record<string, { bg: string; text: string; border: string; hover: string }> = {
+    indigo: { bg: 'bg-indigo-50', text: 'text-indigo-700', border: 'border-indigo-200', hover: 'hover:bg-indigo-100' },
+    amber: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200', hover: 'hover:bg-amber-100' },
+    violet: { bg: 'bg-violet-50', text: 'text-violet-700', border: 'border-violet-200', hover: 'hover:bg-violet-100' },
+    emerald: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200', hover: 'hover:bg-emerald-100' },
+    rose: { bg: 'bg-rose-50', text: 'text-rose-700', border: 'border-rose-200', hover: 'hover:bg-rose-100' },
+    cyan: { bg: 'bg-cyan-50', text: 'text-cyan-700', border: 'border-cyan-200', hover: 'hover:bg-cyan-100' },
+  };
+
+  const colors = colorClasses[activeColor] || colorClasses.indigo;
+
+  return (
+    <Select.Root value={value} onValueChange={onChange}>
+      <Select.Trigger
+        className={cn(
+          "flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 border cursor-pointer outline-none",
+          "data-[state=open]:ring-2 data-[state=open]:ring-offset-1",
+          isActive 
+            ? `${colors.bg} ${colors.text} ${colors.border} shadow-sm data-[state=open]:ring-indigo-300` 
+            : "bg-white border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50 data-[state=open]:ring-gray-300"
+        )}
+      >
+        {icon && (
+          <span className={cn("transition-colors", isActive ? colors.text : "text-gray-400")}>
+            {icon}
+          </span>
+        )}
+        <span className="hidden sm:inline text-xs text-gray-400 font-normal">{label}:</span>
+        <Select.Value>
+          <span className={cn("font-semibold", isActive ? colors.text : "text-gray-700")}>
+            {selectedOption?.label || 'Todos'}
+          </span>
+        </Select.Value>
+        <Select.Icon>
+          <ChevronDown size={16} className="text-gray-400 transition-transform duration-200 data-[state=open]:rotate-180" />
+        </Select.Icon>
+      </Select.Trigger>
+
+      <Select.Portal>
+        <Select.Content
+          className="z-[9999] min-w-[220px] bg-white rounded-xl shadow-xl border border-gray-100 overflow-hidden animate-in fade-in-0 zoom-in-95 duration-150"
+          position="popper"
+          sideOffset={8}
+          align="start"
+        >
+          <Select.Viewport className="p-1.5">
+            {options.map((option) => (
+              <Select.Item
+                key={option.value}
+                value={option.value}
+                className={cn(
+                  "relative flex items-center gap-3 px-3 py-2.5 pr-8 rounded-lg text-sm cursor-pointer outline-none transition-all duration-150",
+                  "data-[highlighted]:bg-gray-50",
+                  value === option.value
+                    ? `${colors.bg} ${colors.text} font-semibold`
+                    : "text-gray-600"
+                )}
+              >
+                {option.icon && (
+                  <span className="text-gray-400">{option.icon}</span>
+                )}
+                <Select.ItemText>{option.label}</Select.ItemText>
+                <Select.ItemIndicator className="absolute right-3">
+                  <Check size={16} className={colors.text} />
+                </Select.ItemIndicator>
+              </Select.Item>
+            ))}
+          </Select.Viewport>
+        </Select.Content>
+      </Select.Portal>
+    </Select.Root>
+  );
+}
+
+
+// ============================================
+// COMPONENTE PRINCIPAL
+// ============================================
 export default function ClientsPage() {
   const { openContactModal } = useOutletContext<LayoutOutletContext>();
   const [clients, setClients] = useState<Client[]>([]);
@@ -62,6 +178,10 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
   const [customDay, setCustomDay] = useState<string>('');
   const [searchName, setSearchName] = useState('');
   const [jobTypeFilter, setJobTypeFilter] = useState('all');
+  const [tierFilter, setTierFilter] = useState<string>('all');
+  const [opportunityFilter, setOpportunityFilter] = useState<string>('all');
+  const [opportunityTypeFilter, setOpportunityTypeFilter] = useState<string>('all');
+  const [opportunityUrgencyFilter, setOpportunityUrgencyFilter] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(50);
   const [selectedClientIds, setSelectedClientIds] = useState<number[]>([]);
@@ -72,6 +192,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [showFilters, setShowFilters] = useState(true);
 
   const handleCloseImportModal = () => {
     setImportModalOpen(false);
@@ -207,6 +328,33 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
 
     if (!matchesSearchName) return false;
 
+    if (tierFilter !== 'all') {
+      if (client.tier !== tierFilter) return false;
+    }
+
+    // Filtro: Com/Sem oportunidades
+    if (opportunityFilter === 'with') {
+      if (!client.opportunities || client.opportunities.length === 0) return false;
+    } else if (opportunityFilter === 'without') {
+      if (client.opportunities && client.opportunities.length > 0) return false;
+    }
+
+    // Filtro: Tipo de oportunidade
+    if (opportunityTypeFilter !== 'all') {
+      const hasMatchingOppType = client.opportunities?.some(
+        opp => opp.type === opportunityTypeFilter
+      );
+      if (!hasMatchingOppType) return false;
+    }
+
+    // Filtro: Urgência da oportunidade
+    if (opportunityUrgencyFilter !== 'all') {
+      const hasMatchingUrgency = client.opportunities?.some(
+        opp => opp.priority === opportunityUrgencyFilter
+      );
+      if (!hasMatchingUrgency) return false;
+    }
+
     if (jobTypeFilter !== 'all') {
       const hasMatchingJobType = client.jobs?.some(job => job.job_type === jobTypeFilter);
       if (!hasMatchingJobType) return false;
@@ -246,22 +394,63 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
     visibleClientIds.every((id) => selectedClientIds.includes(id));
 
   const jobTypeOptions = [
-    'Gestante',
-    'Newborn',
-    'Acompanhamento',
-    'Smash the Cake',
-    'Aniversário',
-    'Batizado',
-    'Família',
-    'Marca Pessoal',
-    'Natal',
-    'Evento Externo',
-    'Outros'
+    { value: 'all', label: 'Todos os ensaios' },
+    { value: 'Gestante', label: 'Gestante' },
+    { value: 'Newborn', label: 'Newborn' },
+    { value: 'Acompanhamento', label: 'Acompanhamento' },
+    { value: 'Smash the Cake', label: 'Smash the Cake' },
+    { value: 'Aniversário', label: 'Aniversário' },
+    { value: 'Batizado', label: 'Batizado' },
+    { value: 'Família', label: 'Família' },
+    { value: 'Marca Pessoal', label: 'Marca Pessoal' },
+    { value: 'Natal', label: 'Natal' },
+    { value: 'Evento Externo', label: 'Evento Externo' },
+    { value: 'Outros', label: 'Outros' },
+  ];
+
+  const tierOptions = [
+    { value: 'all', label: 'Todos os níveis' },
+    { value: 'Bronze', label: 'Bronze' },
+    { value: 'Silver', label: 'Silver' },
+    { value: 'Gold', label: 'Gold' },
+    { value: 'Platinum', label: 'Platinum' },
+    { value: 'Diamond', label: 'Diamond' },
+  ];
+
+  const opportunityOptions = [
+    { value: 'all', label: 'Todas' },
+    { value: 'with', label: 'Com oportunidades' },
+    { value: 'without', label: 'Sem oportunidades' },
+  ];
+
+  const opportunityTypeOptions = [
+    { value: 'all', label: 'Todos os tipos' },
+    { value: 'Newborn', label: 'Newborn' },
+    { value: 'Acompanhamento', label: 'Acompanhamento' },
+    { value: 'Smash the Cake', label: 'Smash the Cake' },
+    { value: 'Aniversário', label: 'Aniversário' },
+    { value: 'Família', label: 'Família' },
+    { value: 'Gestante', label: 'Gestante' },
+    { value: 'Batizado', label: 'Batizado' },
+  ];
+
+  const opportunityUrgencyOptions = [
+    { value: 'all', label: 'Todas' },
+    { value: 'urgent', label: '🔴 Urgente' },
+    { value: 'active', label: '🟡 Ativo' },
+    { value: 'future', label: '🟢 Futuro' },
+  ];
+
+  const contactOptions = [
+    { value: 'all', label: 'Qualquer período' },
+    { value: '7days', label: 'Últimos 7 dias' },
+    { value: '30days', label: 'Últimos 30 dias' },
+    { value: '90days', label: 'Últimos 90 dias' },
   ];
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchName, jobTypeFilter, lastContactFilter, customMonth, customYear, customDay, itemsPerPage]);
+  }, [searchName, jobTypeFilter, lastContactFilter, customMonth, customYear, customDay, itemsPerPage, tierFilter, opportunityFilter, opportunityTypeFilter, opportunityUrgencyFilter]);
 
   const getTierColor = (tier: string) => {
     switch (tier) {
@@ -277,8 +466,32 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
     window.open('/api/clients/export/csv', '_blank');
   };
 
+  const activeFiltersCount = [
+    jobTypeFilter !== 'all',
+    tierFilter !== 'all',
+    opportunityFilter !== 'all',
+    opportunityTypeFilter !== 'all',
+    opportunityUrgencyFilter !== 'all',
+    lastContactFilter !== 'all',
+    searchName !== '',
+  ].filter(Boolean).length;
+
+  const clearAllFilters = () => {
+    setSearchName('');
+    setJobTypeFilter('all');
+    setLastContactFilter('all');
+    setCustomMonth('');
+    setCustomYear('');
+    setCustomDay('');
+    setTierFilter('all');
+    setOpportunityFilter('all');
+    setOpportunityTypeFilter('all');
+    setOpportunityUrgencyFilter('all');
+    setCurrentPage(1);
+  };
+
   // ============================================
-  // 🔄 NOVA FUNÇÃO DE IMPORTAÇÃO RESILIENTE
+  // FUNÇÃO DE IMPORTAÇÃO
   // ============================================
   const handleImportCSV = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -330,9 +543,8 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
         return `${h.padStart(2, '0')}:${m.padStart(2, '0')}`;
       };
 
-      // Função para validar data
       const isValidDate = (dateStr: string | null | undefined): boolean => {
-        if (!dateStr) return true; // null/undefined é ok, vai usar data padrão
+        if (!dateStr) return true;
         const date = new Date(dateStr);
         return !isNaN(date.getTime());
       };
@@ -345,7 +557,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
       const errors: ImportSummary['errors'] = [];
 
       for (let idx = 0; idx < rows.length; idx++) {
-        const rowNumber = idx + 2; // cabeçalho conta como linha 1
+        const rowNumber = idx + 2;
         const row = rows[idx];
 
         try {
@@ -361,7 +573,6 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
           const ageVal = getVal(row, 'IDADE');
           const age = ageVal !== undefined && ageVal !== null ? Number(String(ageVal).replace(/\D/g, '')) || null : null;
 
-          // Validar datas antes de processar
           const birthDateRaw = parseDateBR(getVal(row, 'NASCIMENTO'));
           const closingDateRaw = parseDateBR(getVal(row, 'Data de Fechamento'));
           const dataEnsaioRaw = parseDateBR(getVal(row, 'DATA DO ENSAIO'));
@@ -495,9 +706,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
               importedJobsCount++;
               const insertedJob = newJob;
 
-              // Geração de oportunidades
               if (insertedJob && insertedJob.job_type && insertedJob.job_date) {
-                console.log('🔎 BUSCANDO REGRAS PARA:', insertedJob.job_type, 'USER:', userId);
                 const { data: rules } = await supabase
                   .from('opportunity_rules')
                   .select('*')
@@ -506,9 +715,6 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                   .eq('user_id', userId);
 
                 if (rules && rules.length > 0) {
-                  console.log('🔥 REGRAS ENCONTRADAS:', rules);
-                  console.log('🔥 JOB INSERIDO:', insertedJob);
-
                   for (const rule of rules) {
                     const baseDate = new Date(insertedJob.job_date);
                     baseDate.setDate(baseDate.getDate() + rule.days_offset);
@@ -546,7 +752,6 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
             }
           }
         } catch (error: any) {
-          // ⚠️ CAPTURA O ERRO, SALVA E CONTINUA!
           console.error(`❌ Erro na linha ${rowNumber}:`, error);
           errors.push({
             row: rowNumber,
@@ -557,7 +762,6 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
         setImportProcessed(idx + 1);
       }
 
-      // ✅ Finaliza com sucesso (mesmo com alguns erros)
       setImportProcessed(totalRows);
       setImportDone(true);
       setImportSummary({
@@ -575,199 +779,44 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
     reader.readAsText(file);
     e.target.value = '';
   };
-  // ============================================
-  // FIM DA FUNÇÃO DE IMPORTAÇÃO
-  // ============================================
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      {/* HEADER */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <h3 className="text-2xl font-bold text-gray-800">Clientes</h3>
-          <p className="text-gray-500 mt-1">Gerencie sua base de contatos e histórico.</p>
-          <p className="text-sm text-gray-500 mt-2">
-            <span className="font-semibold text-gray-700">{paginatedClients.length}</span> contatos exibidos de <span className="font-semibold text-gray-700">{clients.length}</span> na base
-            {filteredClients.length !== clients.length && (
-              <span> · <span className="font-semibold text-gray-700">{filteredClients.length}</span> encontrados com os filtros</span>
-            )}
-          </p>
+          <p className="text-gray-500 mt-1">Gerencie sua base de contatos e histórico</p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-            <input
-              type="text"
-              value={searchName}
-              onChange={(e) => setSearchName(e.target.value)}
-              placeholder="Buscar por nome do cliente..."
-              className="pl-9 pr-4 py-2 bg-white border border-gray-200 rounded-xl shadow-sm outline-none text-sm text-gray-700 w-72"
-            />
-          </div>
-
-          <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-3 py-2 shadow-sm">
-            <FileText size={16} className="text-gray-400" />
-            <select
-              value={jobTypeFilter}
-              onChange={(e) => setJobTypeFilter(e.target.value)}
-              className="text-sm bg-transparent border-none outline-none text-gray-600 font-medium"
+        
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 bg-gray-100 rounded-xl p-1">
+            <button 
+              type="button"
+              onClick={onUpdate}
+              className="p-2 text-gray-500 hover:text-indigo-600 hover:bg-white rounded-lg transition-all"
+              title="Atualizar lista"
             >
-              <option value="all">Todos os ensaios</option>
-              {jobTypeOptions.map((jobType) => (
-                <option key={jobType} value={jobType}>{jobType}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-3 py-2 shadow-sm">
-            <Filter size={16} className="text-gray-400" />
-            <select 
-              value={lastContactFilter}
-              onChange={(e) => {
-                setLastContactFilter(e.target.value);
-                setCustomMonth('');
-                setCustomYear('');
-                setCustomDay('');
-              }}
-              className="text-sm bg-transparent border-none outline-none text-gray-600 font-medium"
-            >
-              <option value="all">Último Contato: Todos</option>
-              <option value="7days">Últimos 7 dias</option>
-              <option value="30days">Últimos 30 dias</option>
-              <option value="90days">Últimos 90 dias</option>
-              <option value="custom">Personalizado...</option>
-            </select>
-          </div>
-
-          <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-3 py-2 shadow-sm">
-            <span className="text-sm text-gray-500 font-medium">Por página</span>
-            <select
-              value={itemsPerPage}
-              onChange={(e) => setItemsPerPage(Number(e.target.value))}
-              className="text-sm bg-transparent border-none outline-none text-gray-600 font-medium"
-            >
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-              <option value={200}>200</option>
-            </select>
-          </div>
-
-          <button
-            onClick={() => {
-              setSearchName('');
-              setJobTypeFilter('all');
-              setLastContactFilter('all');
-              setCustomMonth('');
-              setCustomYear('');
-              setCustomDay('');
-              setCurrentPage(1);
-            }}
-            className="px-3 py-2 text-sm text-indigo-600 font-bold hover:bg-indigo-50 rounded-xl transition-colors"
-          >
-            Limpar filtros
-          </button>
-
-          {lastContactFilter === 'custom' && (
-            <motion.div 
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              className="flex items-center gap-2"
-            >
-              <select 
-                value={customMonth}
-                onChange={(e) => setCustomMonth(e.target.value)}
-                className="text-sm bg-white border border-gray-200 rounded-xl px-3 py-2 shadow-sm outline-none text-gray-600 font-medium"
-              >
-                <option value="">Mês (Todos)</option>
-                {Array.from({ length: 12 }, (_, i) => (
-                  <option key={i + 1} value={i + 1}>{format(new Date(2024, i, 1), 'MMMM', { locale: ptBR })}</option>
-                ))}
-              </select>
-              <select 
-                value={customYear}
-                onChange={(e) => setCustomYear(e.target.value)}
-                className="text-sm bg-white border border-gray-200 rounded-xl px-3 py-2 shadow-sm outline-none text-gray-600 font-medium"
-              >
-                <option value="">Ano (Todos)</option>
-                <option value="2026">2026</option>
-                <option value="2025">2025</option>
-                <option value="2024">2024</option>
-                <option value="2023">2023</option>
-                <option value="2022">2022</option>
-              </select>
-              <select 
-                value={customDay}
-                onChange={(e) => setCustomDay(e.target.value)}
-                className="text-sm bg-white border border-gray-200 rounded-xl px-3 py-2 shadow-sm outline-none text-gray-600 font-medium"
-              >
-                <option value="">Dia (Todos)</option>
-                {Array.from({ length: 31 }, (_, i) => (
-                  <option key={i + 1} value={i + 1}>{i + 1}</option>
-                ))}
-              </select>
-              {(customMonth || customYear || customDay) && (
-                <button 
-                  onClick={() => {
-                    setCustomMonth('');
-                    setCustomYear('');
-                    setCustomDay('');
-                  }}
-                  className="text-xs text-indigo-600 font-bold hover:underline px-2"
-                >
-                  Limpar
-                </button>
-              )}
-            </motion.div>
-          )}
-
-          <button 
-            onClick={onUpdate}
-            className="p-2 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors"
-            title="Atualizar lista"
-          >
-            <RefreshCw size={20} />
-          </button>
-          
-          <div className="flex items-center gap-2">
-            <div className="flex bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-              <button 
-                onClick={handleExportCSV}
-                className="p-2 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors border-r border-gray-100"
-                title="Exportar todos os clientes (CSV)"
-              >
-                <Download size={20} />
-              </button>
-
-              <button 
-                onClick={handleExportSelectedCSV}
-                className="p-2 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors border-r border-gray-100"
-                title="Exportar clientes selecionados"
-              >
-                <FileText size={20} />
-              </button>
-
-              <label className="p-2 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer" title="Importar Clientes (CSV)">
-                <Upload size={20} />
-                <input 
-                  type="file" 
-                  accept=".csv" 
-                  onChange={handleImportCSV} 
-                  className="hidden" 
-                />
-              </label>
-            </div>
-
-            <button
-              onClick={handleDeleteSelected}
-              disabled={selectedClientIds.length === 0}
-              className="px-3 py-2 rounded-xl border border-red-200 text-red-600 font-semibold hover:bg-red-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              Excluir selecionados
+              <RefreshCw size={18} />
             </button>
+            <button 
+              type="button"
+              onClick={handleExportCSV}
+              className="p-2 text-gray-500 hover:text-indigo-600 hover:bg-white rounded-lg transition-all"
+              title="Exportar CSV"
+            >
+              <Download size={18} />
+            </button>
+            <label className="p-2 text-gray-500 hover:text-indigo-600 hover:bg-white rounded-lg transition-all cursor-pointer" title="Importar CSV">
+              <Upload size={18} />
+              <input type="file" accept=".csv" onChange={handleImportCSV} className="hidden" />
+            </label>
           </div>
 
           <button 
+            type="button"
             onClick={() => { setSelectedClient(null); setShowModal(true); }}
-            className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-semibold flex items-center gap-2 hover:bg-indigo-700 transition-colors"
+            className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
           >
             <Plus size={20} />
             Novo Cliente
@@ -775,30 +824,192 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
         </div>
       </div>
 
+      {/* BARRA DE FILTROS */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-        {selectedClientIds.length > 0 && (
-          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-indigo-50">
-            <div className="text-sm font-semibold text-indigo-700">
-              {selectedClientIds.length} cliente(s) selecionado(s)
+        <div className="px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-gray-50 to-white">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                <input
+                  type="text"
+                  value={searchName}
+                  onChange={(e) => setSearchName(e.target.value)}
+                  placeholder="Buscar cliente..."
+                  className="pl-10 pr-4 py-2.5 bg-white border border-gray-200 rounded-xl outline-none text-sm text-gray-700 w-64 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 transition-all"
+                />
+                {searchName && (
+                  <button 
+                    type="button"
+                    onClick={() => setSearchName('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    <X size={16} />
+                  </button>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowFilters(!showFilters)}
+                className={cn(
+                  "flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all border",
+                  showFilters || activeFiltersCount > 0
+                    ? "bg-indigo-50 text-indigo-700 border-indigo-200"
+                    : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+                )}
+              >
+                <SlidersHorizontal size={16} />
+                Filtros
+                {activeFiltersCount > 0 && (
+                  <span className="bg-indigo-600 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                    {activeFiltersCount}
+                  </span>
+                )}
+              </button>
             </div>
 
+            <div className="flex items-center gap-3">
+              <div className="text-sm text-gray-500">
+                <span className="font-semibold text-gray-700">{filteredClients.length}</span>
+                {filteredClients.length !== clients.length && (
+                  <span> de {clients.length}</span>
+                )} clientes
+              </div>
+
+              {activeFiltersCount > 0 && (
+                <button
+                  type="button"
+                  onClick={clearAllFilters}
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 rounded-xl transition-all"
+                >
+                  <X size={16} />
+                  Limpar filtros
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <AnimatePresence>
+          {showFilters && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="overflow-hidden"
+            >
+              <div className="px-6 py-4 bg-gray-50/50 border-b border-gray-100">
+                <div className="flex flex-wrap items-center gap-3">
+                  <FilterDropdown
+                    label="Ensaio"
+                    value={jobTypeFilter}
+                    options={jobTypeOptions}
+                    onChange={setJobTypeFilter}
+                    icon={<Camera size={16} />}
+                    activeColor="indigo"
+                  />
+
+                  <FilterDropdown
+                    label="Nível"
+                    value={tierFilter}
+                    options={tierOptions}
+                    onChange={setTierFilter}
+                    icon={<Award size={16} />}
+                    activeColor="violet"
+                  />
+
+                  <FilterDropdown
+                    label="Oportunidades"
+                    value={opportunityFilter}
+                    options={opportunityOptions}
+                    onChange={setOpportunityFilter}
+                    icon={<Sparkles size={16} />}
+                    activeColor="amber"
+                  />
+
+                  <FilterDropdown
+                    label="Tipo Oport."
+                    value={opportunityTypeFilter}
+                    options={opportunityTypeOptions}
+                    onChange={setOpportunityTypeFilter}
+                    icon={<Camera size={16} />}
+                    activeColor="cyan"
+                  />
+
+                  <FilterDropdown
+                    label="Urgência"
+                    value={opportunityUrgencyFilter}
+                    options={opportunityUrgencyOptions}
+                    onChange={setOpportunityUrgencyFilter}
+                    icon={<AlertTriangle size={16} />}
+                    activeColor="rose"
+                  />
+
+                  <FilterDropdown
+                    label="Último contato"
+                    value={lastContactFilter}
+                    options={contactOptions}
+                    onChange={setLastContactFilter}
+                    icon={<Calendar size={16} />}
+                    activeColor="emerald"
+                  />
+
+                  <div className="ml-auto flex items-center gap-2 text-sm text-gray-500">
+                    <span>Exibir</span>
+                    <select
+                      value={itemsPerPage}
+                      onChange={(e) => setItemsPerPage(Number(e.target.value))}
+                      className="bg-white border border-gray-200 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-700 outline-none focus:border-indigo-300"
+                    >
+                      <option value={50}>50</option>
+                      <option value={100}>100</option>
+                      <option value={200}>200</option>
+                    </select>
+                    <span>por página</span>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {selectedClientIds.length > 0 && (
+          <div className="flex items-center justify-between px-6 py-3 bg-indigo-50 border-b border-indigo-100">
+            <div className="flex items-center gap-2 text-sm font-medium text-indigo-700">
+              <CheckCircle2 size={16} />
+              {selectedClientIds.length} cliente(s) selecionado(s)
+            </div>
             <div className="flex items-center gap-2">
               <button
+                type="button"
                 onClick={handleExportSelectedCSV}
-                className="px-3 py-2 text-sm font-semibold text-indigo-600 bg-white border border-indigo-200 rounded-xl hover:bg-indigo-50"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-indigo-600 bg-white border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-all"
               >
-                Exportar selecionados
+                <Download size={14} />
+                Exportar
               </button>
-
               <button
-                onClick={() => setSelectedClientIds([])}
-                className="px-3 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-200 rounded-xl hover:bg-gray-50"
+                type="button"
+                onClick={handleDeleteSelected}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-red-600 bg-white border border-red-200 rounded-lg hover:bg-red-50 transition-all"
               >
-                Limpar seleção
+                <Trash2 size={14} />
+                Excluir
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedClientIds([])}
+                className="px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-gray-800 transition-all"
+              >
+                Cancelar
               </button>
             </div>
           </div>
         )}
+
+        {/* TABELA */}
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider">
@@ -812,6 +1023,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                   />
                 </th>
                 <th className="px-6 py-4 font-medium">Nome / Nível</th>
+                <th className="px-6 py-4 font-medium">Oportunidades</th>
                 <th className="px-6 py-4 font-medium">Contato</th>
                 <th className="px-6 py-4 font-medium">Investimento</th>
                 <th className="px-6 py-4 font-medium">Status</th>
@@ -829,6 +1041,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                       className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                     />
                   </td>
+
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
                       <div className="font-semibold text-gray-900">{client.name}</div>
@@ -841,47 +1054,43 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                     </div>
                     <div className="flex flex-wrap gap-1 mt-1">
                       <div className="text-xs text-gray-500">Desde {format(parseDate(client.created_at) || new Date(), 'MMM yyyy', { locale: ptBR })}</div>
-                      
-                      {/* Show matching jobs if filtering */}
-                      {(customMonth || customYear || customDay) && client.jobs?.filter(j => {
-                        const date = parseDate(j.job_date);
-                        if (!date) return false;
-                        const monthMatch = customMonth ? (date.getMonth() + 1).toString() === customMonth : true;
-                        const yearMatch = customYear ? date.getFullYear().toString() === customYear : true;
-                        const dayMatch = customDay ? date.getDate().toString() === customDay : true;
-                        return monthMatch && yearMatch && dayMatch;
-                      }).map(job => (
-                        <div key={job.id} className="flex items-center gap-1 bg-indigo-50 text-indigo-700 text-[9px] font-bold px-1.5 py-0.5 rounded border border-indigo-100">
-                          <CheckCircle2 size={10} />
-                          {job.job_type} ({format(parseDate(job.job_date)!, 'dd/MM/yy')})
-                        </div>
-                      ))}
-
-                      {client.opportunities?.map((opp) => (
-                        <button 
-                          key={opp.id}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onContactOpp(opp, client);
-                          }}
-                          className={cn(
-                            "flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1 rounded-lg border transition-all animate-pulse shadow-md",
-                            opp.priority === 'urgent' ? "bg-red-600 text-white border-red-700" : 
-                            opp.priority === 'active' ? "bg-amber-600 text-white border-amber-700" :
-                            "bg-indigo-600 text-white border-indigo-700"
-                          )}
-                          title={`Sugerido para: ${format(new Date(opp.suggested_date), 'dd/MM/yyyy')}`}
-                        >
-                          <Sparkles size={12} />
-                          <span className="uppercase tracking-wider">Oportunidade: {opp.type}</span>
-                        </button>
-                      ))}
                     </div>
                   </td>
+
+                  <td className="px-6 py-4">
+                    {client.opportunities && client.opportunities.length > 0 ? (
+                      <div className="flex flex-col gap-1.5">
+                        {client.opportunities.map((opp) => (
+                          <button 
+                            key={opp.id}
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onContactOpp(opp, client);
+                            }}
+                            className={cn(
+                              "flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1.5 rounded-lg border transition-all shadow-sm w-fit",
+                              opp.priority === 'urgent' ? "bg-red-500 text-white border-red-600 hover:bg-red-600" : 
+                              opp.priority === 'active' ? "bg-amber-500 text-white border-amber-600 hover:bg-amber-600" :
+                              "bg-indigo-500 text-white border-indigo-600 hover:bg-indigo-600"
+                            )}
+                            title={`Sugerido para: ${format(new Date(opp.suggested_date), 'dd/MM/yyyy')}`}
+                          >
+                            <Sparkles size={12} />
+                            <span className="uppercase tracking-wider">{opp.type}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-gray-400 italic">—</span>
+                    )}
+                  </td>
+
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2 group/phone">
                       <div className="text-sm text-gray-700">{client.phone}</div>
                       <button 
+                        type="button"
                         onClick={() => copyToClipboard(client.phone)}
                         className="p-1 text-gray-400 hover:text-indigo-600 opacity-0 group-hover/phone:opacity-100 transition-opacity"
                         title="Copiar WhatsApp"
@@ -896,10 +1105,12 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                       </div>
                     )}
                   </td>
+
                   <td className="px-6 py-4">
                     <div className="font-semibold text-gray-900">R$ {(client.total_invested ?? 0).toLocaleString('pt-BR')}</div>
                     <div className="text-xs text-gray-500">{client.jobs?.length || 0} trabalhos realizados</div>
                   </td>
+
                   <td className="px-6 py-4">
                     <span className={cn(
                       "px-2 py-1 rounded-full text-[10px] font-bold uppercase",
@@ -908,9 +1119,11 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                       {client.status === 'active' ? 'Ativo' : 'Inativo'}
                     </span>
                   </td>
+
                   <td className="px-6 py-4 text-right">
                     <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button 
+                        type="button"
                         onClick={() => { setSelectedClient(client); setShowModal(true); }}
                         className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg"
                         title="Editar Perfil"
@@ -918,6 +1131,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                         <Edit2 size={18} />
                       </button>
                       <button 
+                        type="button"
                         onClick={() => handleDelete(client.id)}
                         className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
                         title="Excluir Cliente"
@@ -932,31 +1146,57 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
           </table>
         </div>
 
+        {/* PAGINAÇÃO */}
         <div className="flex flex-col md:flex-row items-center justify-between gap-3 px-6 py-4 border-t border-gray-100 bg-gray-50/50">
           <div className="text-sm text-gray-500">
-            <span className="font-bold text-gray-700">{paginatedClients.length}</span> contatos exibidos de <span className="font-bold text-gray-700">{clients.length}</span> na base
-            {filteredClients.length !== clients.length && (
-              <span> · <span className="font-bold text-gray-700">{filteredClients.length}</span> encontrados com os filtros</span>
-            )}
+            Mostrando <span className="font-semibold text-gray-700">{startIndex + 1}</span> a <span className="font-semibold text-gray-700">{Math.min(startIndex + itemsPerPage, filteredClients.length)}</span> de <span className="font-semibold text-gray-700">{filteredClients.length}</span> clientes
           </div>
 
           <div className="flex items-center gap-2">
             <button
+              type="button"
               disabled={safeCurrentPage === 1}
               onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              className="px-3 py-2 text-sm font-medium rounded-xl border border-gray-200 bg-white disabled:opacity-40"
+              className="px-4 py-2 text-sm font-medium rounded-xl border border-gray-200 bg-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50 transition-all"
             >
               Anterior
             </button>
 
-            <div className="px-3 py-2 text-sm font-bold text-gray-700">
-              Página {safeCurrentPage} de {totalPages}
+            <div className="flex items-center gap-1">
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                let page;
+                if (totalPages <= 5) {
+                  page = i + 1;
+                } else if (safeCurrentPage <= 3) {
+                  page = i + 1;
+                } else if (safeCurrentPage >= totalPages - 2) {
+                  page = totalPages - 4 + i;
+                } else {
+                  page = safeCurrentPage - 2 + i;
+                }
+                return (
+                  <button
+                    key={page}
+                    type="button"
+                    onClick={() => setCurrentPage(page)}
+                    className={cn(
+                      "w-10 h-10 text-sm font-medium rounded-xl transition-all",
+                      safeCurrentPage === page
+                        ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200"
+                        : "text-gray-600 hover:bg-gray-100"
+                    )}
+                  >
+                    {page}
+                  </button>
+                );
+              })}
             </div>
 
             <button
+              type="button"
               disabled={safeCurrentPage === totalPages}
               onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              className="px-3 py-2 text-sm font-medium rounded-xl border border-gray-200 bg-white disabled:opacity-40"
+              className="px-4 py-2 text-sm font-medium rounded-xl border border-gray-200 bg-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50 transition-all"
             >
               Próxima
             </button>
@@ -997,6 +1237,9 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
   );
 }
 
+// ============================================
+// CLIENT MODAL
+// ============================================
 function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: { client: Client | null, onClose: () => void, onSave: () => void, onContactOpp: (opp: Opportunity, client: Client | null) => void }) {
   const [activeTab, setActiveTab] = useState<'info' | 'history' | 'opportunities'>('info');
   const [client, setClient] = useState<Client | null>(initialClient);
@@ -1116,22 +1359,6 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
     onSave();
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && e.target instanceof HTMLInputElement && e.target.type !== 'submit') {
-      e.preventDefault();
-      const form = e.currentTarget as HTMLFormElement;
-      const elements = Array.from(form.elements).filter(el => 
-        (el instanceof HTMLInputElement || el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) && 
-        !el.disabled && el.type !== 'hidden'
-      ) as HTMLElement[];
-      
-      const index = elements.indexOf(e.target as any);
-      if (index > -1 && index < elements.length - 1) {
-        elements[index + 1].focus();
-      }
-    }
-  };
-
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <motion.div 
@@ -1148,14 +1375,15 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
               </span>
             )}
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
-            <Plus className="rotate-45" size={24} />
+          <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X size={24} />
           </button>
         </div>
 
         {initialClient && (
           <div className="flex border-b border-gray-100 px-6 bg-white">
             <button 
+              type="button"
               onClick={() => setActiveTab('info')}
               className={cn(
                 "px-4 py-3 text-sm font-semibold transition-colors border-b-2",
@@ -1165,6 +1393,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
               Dados Pessoais
             </button>
             <button 
+              type="button"
               onClick={() => setActiveTab('history')}
               className={cn(
                 "px-4 py-3 text-sm font-semibold transition-colors border-b-2",
@@ -1174,6 +1403,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
               Histórico de Trabalhos
             </button>
             <button 
+              type="button"
               onClick={() => setActiveTab('opportunities')}
               className={cn(
                 "px-4 py-3 text-sm font-semibold transition-colors border-b-2",
@@ -1187,7 +1417,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
 
         <div className="flex-1 overflow-y-auto p-6">
           {activeTab === 'info' ? (
-            <form onSubmit={handleSubmit} onKeyDown={handleKeyDown} className="space-y-6">
+            <form onSubmit={handleSubmit} className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="md:col-span-2">
                   <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nome Completo</label>
@@ -1373,6 +1603,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
               <div className="flex items-center justify-between">
                 <h4 className="font-bold text-gray-800">Trabalhos Realizados</h4>
                 <button 
+                  type="button"
                   onClick={() => { setEditingJob(null); setShowJobModal(true); }}
                   className="text-sm bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-700 transition-colors"
                 >
@@ -1412,6 +1643,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                       <div className="flex items-center gap-1">
                         {job.status === 'scheduled' && (
                           <button 
+                            type="button"
                             onClick={async () => {
                               await authFetch(`/api/jobs/${job.id}`, {
                                 method: 'PUT',
@@ -1428,6 +1660,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                           </button>
                         )}
                         <button 
+                          type="button"
                           onClick={() => handleEditJob(job)}
                           className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
                           title="Editar"
@@ -1435,6 +1668,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                           <Edit2 size={16} />
                         </button>
                         <button 
+                          type="button"
                           onClick={() => handleDeleteJob(job.id)}
                           className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                           title="Excluir"
@@ -1498,6 +1732,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                       <div className="text-xs font-bold text-gray-400 uppercase">Status: {opp.status}</div>
                       <div className="flex gap-2">
                         <button 
+                          type="button"
                           onClick={async () => {
                             await authFetch(`/api/opportunities/${opp.id}`, {
                               method: 'PUT',
@@ -1512,6 +1747,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                           Ignorar
                         </button>
                         <button 
+                          type="button"
                           onClick={() => {
                             if (client) {
                               onContactOpp(opp, client);

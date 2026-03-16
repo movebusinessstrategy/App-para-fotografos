@@ -18,10 +18,13 @@ import {
   Calendar as CalendarIcon,
   CheckCircle2,
   DollarSign,
+  Eye,
+  EyeOff,
   MessageSquare,
   Sparkles,
   Trello,
   Users,
+  X,
 } from "lucide-react";
 
 import { LayoutOutletContext } from "../components/layout/AppLayout";
@@ -30,7 +33,21 @@ import { cn } from "../utils/cn";
 import { parseDate } from "../utils/date";
 import { Client, DashboardStats, Job, Opportunity } from "../types";
 
-function StatCard({ title, value, icon, trend, trendUp }: { title: string; value: string | number; icon: React.ReactNode; trend: string; trendUp: boolean }) {
+function StatCard({ 
+  title, 
+  value, 
+  icon, 
+  trend, 
+  trendUp, 
+  hidden 
+}: { 
+  title: string; 
+  value: string | number; 
+  icon: React.ReactNode; 
+  trend: string; 
+  trendUp: boolean;
+  hidden?: boolean;
+}) {
   return (
     <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
       <div className="flex items-center justify-between mb-4">
@@ -48,7 +65,9 @@ function StatCard({ title, value, icon, trend, trendUp }: { title: string; value
         ) : null}
       </div>
       <p className="text-gray-500 text-sm font-medium">{title}</p>
-      <h4 className="text-2xl font-bold mt-1">{value}</h4>
+      <h4 className="text-2xl font-bold mt-1">
+        {hidden ? "R$ •••••" : value}
+      </h4>
     </div>
   );
 }
@@ -59,14 +78,20 @@ function Dashboard({
   clients,
   opportunities,
   onContactOpp,
+  onDismissOpp,
 }: {
   stats: DashboardStats | null;
   jobs: Job[];
   clients: Client[];
   opportunities: Opportunity[];
   onContactOpp: (opp: Opportunity, client: Client | null) => void;
+  onDismissOpp: (oppId: number) => void;
 }) {
   const [revenueRange, setRevenueRange] = useState<"7" | "30" | "60" | "90" | "180" | "365" | "custom">("30");
+  const [hideValues, setHideValues] = useState(() => {
+    const saved = localStorage.getItem("dashboard_hide_values");
+    return saved === "true";
+  });
 
   const today = new Date();
   const defaultEnd = format(today, "yyyy-MM-dd");
@@ -74,6 +99,12 @@ function Dashboard({
 
   const [customStartDate, setCustomStartDate] = useState<string>(defaultStart30);
   const [customEndDate, setCustomEndDate] = useState<string>(defaultEnd);
+
+  const toggleHideValues = () => {
+    const newValue = !hideValues;
+    setHideValues(newValue);
+    localStorage.setItem("dashboard_hide_values", String(newValue));
+  };
 
   if (!stats) return null;
 
@@ -187,25 +218,53 @@ function Dashboard({
       total,
     }));
 
+  const formatValue = (value: number) => {
+    if (hideValues) return "R$ •••••";
+    return `R$ ${value.toLocaleString("pt-BR")}`;
+  };
+
   return (
     <div className="space-y-8">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-6">
+      {/* Header com botão de esconder valores */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-800">Dashboard</h2>
+          <p className="text-gray-500 mt-1">Visão geral do seu negócio</p>
+        </div>
+        <button
+          onClick={toggleHideValues}
+          className={cn(
+            "flex items-center gap-2 px-4 py-2 rounded-xl font-semibold transition-all",
+            hideValues
+              ? "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              : "bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+          )}
+          title={hideValues ? "Mostrar valores" : "Esconder valores"}
+        >
+          {hideValues ? <EyeOff size={18} /> : <Eye size={18} />}
+          {hideValues ? "Mostrar valores" : "Esconder valores"}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
         <StatCard title="Leads Ativos" value={stats.activeLeads} icon={<Trello className="text-blue-600" />} trend="" trendUp />
         <StatCard title="Vendas no Mês" value={stats.totalJobsMonth} icon={<CheckCircle2 className="text-emerald-600" />} trend="" trendUp />
         <StatCard title="Clientes do Mês" value={stats.totalClientsMonth} icon={<Users className="text-violet-600" />} trend="" trendUp />
         <StatCard
           title={revenueRange === "custom" ? "Faturamento no Período" : `Faturamento ${rangeDays} dias`}
-          value={`R$ ${revenueSelectedPeriod.toLocaleString("pt-BR")}`}
+          value={formatValue(revenueSelectedPeriod)}
           icon={<DollarSign className="text-amber-600" />}
           trend=""
           trendUp
+          hidden={hideValues}
         />
         <StatCard
           title="Futuro 30 dias"
-          value={`R$ ${futureRevenue30.toLocaleString("pt-BR")}`}
+          value={formatValue(futureRevenue30)}
           icon={<CalendarIcon className="text-green-600" />}
           trend=""
           trendUp
+          hidden={hideValues}
         />
       </div>
 
@@ -220,7 +279,9 @@ function Dashboard({
             <div className="flex items-center justify-between gap-4 flex-wrap mb-6">
               <div>
                 <p className="text-white/80 text-sm font-medium">Faturamento</p>
-                <h3 className="text-white text-4xl md:text-5xl font-bold tracking-tight">R$ {revenueSelectedPeriod.toLocaleString("pt-BR")}</h3>
+                <h3 className="text-white text-4xl md:text-5xl font-bold tracking-tight">
+                  {hideValues ? "R$ •••••" : `R$ ${revenueSelectedPeriod.toLocaleString("pt-BR")}`}
+                </h3>
                 <p className="text-white/80 text-sm mt-2">
                   {format(startDate, "dd/MM/yyyy")} até {format(endDate, "dd/MM/yyyy")}
                 </p>
@@ -276,50 +337,60 @@ function Dashboard({
             </div>
 
             <div className="h-72 md:h-80">
-              <ResponsiveContainer width="100%" height={320}>
-                <AreaChart data={chartData}>
-                  <defs>
-                    <linearGradient id="revenueFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="rgba(255,255,255,0.45)" />
-                      <stop offset="100%" stopColor="rgba(255,255,255,0.05)" />
-                    </linearGradient>
-                  </defs>
+              {hideValues ? (
+                <div className="h-full flex items-center justify-center">
+                  <div className="text-center text-white/60">
+                    <EyeOff size={48} className="mx-auto mb-4 opacity-50" />
+                    <p className="text-lg font-medium">Valores ocultos</p>
+                    <p className="text-sm">Clique em "Mostrar valores" para visualizar o gráfico</p>
+                  </div>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={320}>
+                  <AreaChart data={chartData}>
+                    <defs>
+                      <linearGradient id="revenueFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="rgba(255,255,255,0.45)" />
+                        <stop offset="100%" stopColor="rgba(255,255,255,0.05)" />
+                      </linearGradient>
+                    </defs>
 
-                  <XAxis
-                    dataKey="label"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fontSize: 12, fill: "rgba(255,255,255,0.75)" }}
-                    interval={Math.max(0, Math.floor(chartData.length / 8))}
-                  />
-                  <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "rgba(255,255,255,0.65)" }} />
-                  <Tooltip
-                    formatter={(value: any) => [`R$ ${Number(value || 0).toLocaleString("pt-BR")}`, "Faturamento"]}
-                    labelFormatter={(label: any, payload: any) => {
-                      const item = payload?.[0]?.payload;
-                      return item?.date ? `Data: ${item.date}` : label;
-                    }}
-                    contentStyle={{
-                      borderRadius: "16px",
-                      border: "1px solid rgba(255,255,255,0.15)",
-                      background: "rgba(15, 23, 42, 0.88)",
-                      color: "#fff",
-                      boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
-                      backdropFilter: "blur(10px)",
-                    }}
-                    labelStyle={{ color: "#cbd5e1" }}
-                  />
-                  <Area type="monotone" dataKey="total" stroke="rgba(255,255,255,0)" fill="url(#revenueFill)" />
-                  <Line
-                    type="monotone"
-                    dataKey="total"
-                    stroke="#FFFFFF"
-                    strokeWidth={4}
-                    dot={false}
-                    activeDot={{ r: 6, fill: "#FFFFFF", stroke: "rgba(255,255,255,0.35)", strokeWidth: 8 }}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+                    <XAxis
+                      dataKey="label"
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fontSize: 12, fill: "rgba(255,255,255,0.75)" }}
+                      interval={Math.max(0, Math.floor(chartData.length / 8))}
+                    />
+                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "rgba(255,255,255,0.65)" }} />
+                    <Tooltip
+                      formatter={(value: any) => [`R$ ${Number(value || 0).toLocaleString("pt-BR")}`, "Faturamento"]}
+                      labelFormatter={(label: any, payload: any) => {
+                        const item = payload?.[0]?.payload;
+                        return item?.date ? `Data: ${item.date}` : label;
+                      }}
+                      contentStyle={{
+                        borderRadius: "16px",
+                        border: "1px solid rgba(255,255,255,0.15)",
+                        background: "rgba(15, 23, 42, 0.88)",
+                        color: "#fff",
+                        boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+                        backdropFilter: "blur(10px)",
+                      }}
+                      labelStyle={{ color: "#cbd5e1" }}
+                    />
+                    <Area type="monotone" dataKey="total" stroke="rgba(255,255,255,0)" fill="url(#revenueFill)" />
+                    <Line
+                      type="monotone"
+                      dataKey="total"
+                      stroke="#FFFFFF"
+                      strokeWidth={4}
+                      dot={false}
+                      activeDot={{ r: 6, fill: "#FFFFFF", stroke: "rgba(255,255,255,0.35)", strokeWidth: 8 }}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </div>
         </div>
@@ -337,7 +408,7 @@ function Dashboard({
               <div
                 key={opp.id}
                 className={cn(
-                  "p-3 rounded-xl border transition-colors",
+                  "p-3 rounded-xl border transition-colors relative group",
                   opp.priority === "urgent"
                     ? "bg-red-50/50 border-red-100 hover:border-red-200"
                     : opp.priority === "active"
@@ -345,7 +416,16 @@ function Dashboard({
                       : "bg-gray-50 border-gray-100 hover:border-indigo-200"
                 )}
               >
-                <div className="flex items-center justify-between mb-1">
+                {/* Botão de descartar */}
+                <button
+                  onClick={() => onDismissOpp(opp.id)}
+                  className="absolute top-2 right-2 p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                  title="Descartar oportunidade"
+                >
+                  <X size={14} />
+                </button>
+
+                <div className="flex items-center justify-between mb-1 pr-6">
                   <span className="font-bold text-sm text-gray-900">{opp.client_name}</span>
                   <span
                     className={cn(
@@ -411,7 +491,9 @@ function Dashboard({
                         ? format(new Date(job.job_date), "dd/MM/yyyy")
                         : "-"}
                     </td>
-                    <td className="px-6 py-4 font-semibold">R$ {(job.amount ?? 0).toLocaleString("pt-BR")}</td>
+                    <td className="px-6 py-4 font-semibold">
+                      {hideValues ? "R$ •••••" : `R$ ${(job.amount ?? 0).toLocaleString("pt-BR")}`}
+                    </td>
                     <td className="px-6 py-4">
                       <span
                         className={cn(
@@ -436,12 +518,16 @@ function Dashboard({
           <div className="grid grid-cols-1 gap-3 mb-6">
             <div className="p-4 rounded-xl bg-green-50 border border-green-100">
               <div className="text-xs font-bold uppercase text-green-700 mb-1">Próximos 30 dias</div>
-              <div className="text-2xl font-bold text-green-800">R$ {futureRevenue30.toLocaleString("pt-BR")}</div>
+              <div className="text-2xl font-bold text-green-800">
+                {hideValues ? "R$ •••••" : `R$ ${futureRevenue30.toLocaleString("pt-BR")}`}
+              </div>
             </div>
 
             <div className="p-4 rounded-xl bg-blue-50 border border-blue-100">
               <div className="text-xs font-bold uppercase text-blue-700 mb-1">Próximos 90 dias</div>
-              <div className="text-2xl font-bold text-blue-800">R$ {futureRevenue90.toLocaleString("pt-BR")}</div>
+              <div className="text-2xl font-bold text-blue-800">
+                {hideValues ? "R$ •••••" : `R$ ${futureRevenue90.toLocaleString("pt-BR")}`}
+              </div>
             </div>
           </div>
 
@@ -450,7 +536,9 @@ function Dashboard({
               futureRevenueByMonth.map((item) => (
                 <div key={item.month} className="flex items-center justify-between text-sm border-b border-gray-50 pb-2">
                   <span className="text-gray-600 font-medium">{item.label}</span>
-                  <span className="font-bold text-gray-900">R$ {item.total.toLocaleString("pt-BR")}</span>
+                  <span className="font-bold text-gray-900">
+                    {hideValues ? "R$ •••••" : `R$ ${item.total.toLocaleString("pt-BR")}`}
+                  </span>
                 </div>
               ))
             ) : (
@@ -500,6 +588,20 @@ export default function DashboardPage() {
     openContactModal({ opportunity: opp, client, onUpdate: fetchDashboard });
   };
 
+  const handleDismissOpp = async (oppId: number) => {
+    try {
+      await authFetch(`/api/opportunities/${oppId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'dismissed' })
+      });
+      // Atualiza a lista removendo a oportunidade descartada
+      setOpportunities(prev => prev.filter(opp => opp.id !== oppId));
+    } catch (error) {
+      console.error('Erro ao descartar oportunidade:', error);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -508,5 +610,14 @@ export default function DashboardPage() {
     );
   }
 
-  return <Dashboard stats={stats} jobs={jobs} clients={clients} opportunities={opportunities} onContactOpp={handleContactOpp} />;
+  return (
+    <Dashboard 
+      stats={stats} 
+      jobs={jobs} 
+      clients={clients} 
+      opportunities={opportunities} 
+      onContactOpp={handleContactOpp} 
+      onDismissOpp={handleDismissOpp}
+    />
+  );
 }
