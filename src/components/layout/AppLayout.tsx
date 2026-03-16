@@ -5,12 +5,14 @@ import Sidebar from "./Sidebar";
 import Header from "./Header";
 import ContactOpportunityModal from "../shared/ContactOpportunityModal";
 import { useAuth } from "../../contexts/AuthContext";
+import { authFetch } from "../../utils/authFetch";
 import { Client, Opportunity } from "../../types";
 
 export type ContactModalPayload = {
   opportunity: Opportunity;
   client: Client | null;
   onUpdate?: () => void;
+  onDiscardSuccess?: (oppId: number) => void;
 };
 
 export type LayoutOutletContext = {
@@ -36,6 +38,17 @@ export default function AppLayout() {
 
   const openContactModal = (payload: ContactModalPayload) => setContactModal(payload);
   const closeContactModal = () => setContactModal(null);
+
+  // Função para descartar oportunidade via API
+  const handleDiscard = async (oppId: number) => {
+    await authFetch(`/api/opportunities/${oppId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "dismissed" }),
+    });
+    // Chama o callback para remover localmente no Dashboard
+    contactModal?.onDiscardSuccess?.(oppId);
+  };
 
   return (
     <div className="flex h-screen bg-[#F8F9FA] text-[#1A1A1A] font-sans">
@@ -67,6 +80,7 @@ export default function AppLayout() {
           client={contactModal.client}
           onClose={closeContactModal}
           onUpdate={() => contactModal.onUpdate?.()}
+          onDiscard={handleDiscard}
         />
       )}
     </div>

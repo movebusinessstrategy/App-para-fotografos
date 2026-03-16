@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { format } from "date-fns";
-import { ptBR } from "date-fns/locale";
 import {
   Area,
   AreaChart,
@@ -92,6 +91,7 @@ function Dashboard({
     const saved = localStorage.getItem("dashboard_hide_values");
     return saved === "true";
   });
+  const [confirmDiscardId, setConfirmDiscardId] = useState<number | null>(null);
 
   const today = new Date();
   const defaultEnd = format(today, "yyyy-MM-dd");
@@ -416,47 +416,77 @@ function Dashboard({
                       : "bg-gray-50 border-gray-100 hover:border-indigo-200"
                 )}
               >
-                {/* Botão de descartar */}
-                <button
-                  onClick={() => onDismissOpp(opp.id)}
-                  className="absolute top-2 right-2 p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                  title="Descartar oportunidade"
-                >
-                  <X size={14} />
-                </button>
-
-                <div className="flex items-center justify-between mb-1 pr-6">
-                  <span className="font-bold text-sm text-gray-900">{opp.client_name}</span>
-                  <span
-                    className={cn(
-                      "text-[10px] font-bold px-2 py-0.5 rounded-full uppercase",
-                      getPriorityColor(opp.priority || "future")
-                    )}
-                  >
-                    {opp.type}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1 text-xs text-gray-500">
-                    <CalendarIcon size={12} />
-                    {opp.priority === "urgent" ? "Atrasado: " : "Sugerido: "}
-                    {format(new Date(opp.suggested_date), "dd/MM/yyyy")}
+                {/* Modal de confirmação inline */}
+                {confirmDiscardId === opp.id ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 text-amber-600">
+                      <AlertCircle size={16} />
+                      <p className="text-xs font-medium">Descartar esta oportunidade?</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setConfirmDiscardId(null)}
+                        className="flex-1 py-1.5 text-xs font-bold text-gray-600 hover:bg-gray-100 rounded-lg transition-all border border-gray-200"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        onClick={() => {
+                          onDismissOpp(opp.id);
+                          setConfirmDiscardId(null);
+                        }}
+                        className="flex-1 py-1.5 text-xs font-bold bg-red-500 text-white rounded-lg hover:bg-red-600 transition-all flex items-center justify-center gap-1"
+                      >
+                        <X size={12} />
+                        Confirmar
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {opp.priority === "urgent" && <AlertCircle size={12} className="text-red-500 animate-pulse" />}
-                    {opp.priority === "active" && <Sparkles size={12} className="text-amber-500" />}
+                ) : (
+                  <>
+                    {/* Botão de descartar */}
                     <button
-                      onClick={() => {
-                        const client = clients.find((c) => c.id === opp.client_id) || null;
-                        onContactOpp(opp, client);
-                      }}
-                      className="flex items-center gap-1.5 px-3 py-1 bg-indigo-600 text-white text-[10px] font-bold rounded-lg hover:bg-indigo-700 transition-all shadow-sm"
+                      onClick={() => setConfirmDiscardId(opp.id)}
+                      className="absolute top-2 right-2 p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                      title="Descartar oportunidade"
                     >
-                      <MessageSquare size={12} />
-                      Contatar
+                      <X size={14} />
                     </button>
-                  </div>
-                </div>
+
+                    <div className="flex items-center justify-between mb-1 pr-6">
+                      <span className="font-bold text-sm text-gray-900">{opp.client_name}</span>
+                      <span
+                        className={cn(
+                          "text-[10px] font-bold px-2 py-0.5 rounded-full uppercase",
+                          getPriorityColor(opp.priority || "future")
+                        )}
+                      >
+                        {opp.type}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1 text-xs text-gray-500">
+                        <CalendarIcon size={12} />
+                        {opp.priority === "urgent" ? "Atrasado: " : "Sugerido: "}
+                        {format(new Date(opp.suggested_date), "dd/MM/yyyy")}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {opp.priority === "urgent" && <AlertCircle size={12} className="text-red-500 animate-pulse" />}
+                        {opp.priority === "active" && <Sparkles size={12} className="text-amber-500" />}
+                        <button
+                          onClick={() => {
+                            const client = clients.find((c) => c.id === opp.client_id) || null;
+                            onContactOpp(opp, client);
+                          }}
+                          className="flex items-center gap-1.5 px-3 py-1 bg-indigo-600 text-white text-[10px] font-bold rounded-lg hover:bg-indigo-700 transition-all shadow-sm"
+                        >
+                          <MessageSquare size={12} />
+                          Contatar
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             ))}
             {opportunities.length === 0 && <div className="text-center py-12 text-gray-400 italic text-sm">Nenhuma oportunidade detectada no momento.</div>}
@@ -584,22 +614,33 @@ export default function DashboardPage() {
     fetchDashboard();
   }, []);
 
-  const handleContactOpp = (opp: Opportunity, client: Client | null) => {
-    openContactModal({ opportunity: opp, client, onUpdate: fetchDashboard });
+  // Função para remover oportunidade localmente (usada tanto no Dashboard quanto no Modal)
+  const removeOpportunityLocally = (oppId: number) => {
+    setOpportunities(prev => prev.filter(opp => opp.id !== oppId));
   };
 
+  // Descarte direto na listagem do Dashboard
   const handleDismissOpp = async (oppId: number) => {
     try {
       await authFetch(`/api/opportunities/${oppId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'dismissed' })
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "dismissed" }),
       });
-      // Atualiza a lista removendo a oportunidade descartada
-      setOpportunities(prev => prev.filter(opp => opp.id !== oppId));
+      removeOpportunityLocally(oppId);
     } catch (error) {
-      console.error('Erro ao descartar oportunidade:', error);
+      console.error("Erro ao descartar oportunidade:", error);
     }
+  };
+
+  // Abre o modal de contato com callback para descarte
+  const handleContactOpp = (opp: Opportunity, client: Client | null) => {
+    openContactModal({
+      opportunity: opp,
+      client,
+      onUpdate: fetchDashboard,
+      onDiscardSuccess: removeOpportunityLocally,
+    });
   };
 
   if (loading) {
@@ -611,12 +652,12 @@ export default function DashboardPage() {
   }
 
   return (
-    <Dashboard 
-      stats={stats} 
-      jobs={jobs} 
-      clients={clients} 
-      opportunities={opportunities} 
-      onContactOpp={handleContactOpp} 
+    <Dashboard
+      stats={stats}
+      jobs={jobs}
+      clients={clients}
+      opportunities={opportunities}
+      onContactOpp={handleContactOpp}
       onDismissOpp={handleDismissOpp}
     />
   );
