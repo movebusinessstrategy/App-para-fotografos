@@ -1,0 +1,512 @@
+import React, { useEffect, useState } from "react";
+import { useOutletContext } from "react-router-dom";
+import { format } from "date-fns";
+import { ptBR } from "date-fns/locale";
+import {
+  Area,
+  AreaChart,
+  Line,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import {
+  AlertCircle,
+  ArrowDownRight,
+  ArrowUpRight,
+  Calendar as CalendarIcon,
+  CheckCircle2,
+  DollarSign,
+  MessageSquare,
+  Sparkles,
+  Trello,
+  Users,
+} from "lucide-react";
+
+import { LayoutOutletContext } from "../components/layout/AppLayout";
+import { authFetch } from "../utils/authFetch";
+import { cn } from "../utils/cn";
+import { parseDate } from "../utils/date";
+import { Client, DashboardStats, Job, Opportunity } from "../types";
+
+function StatCard({ title, value, icon, trend, trendUp }: { title: string; value: string | number; icon: React.ReactNode; trend: string; trendUp: boolean }) {
+  return (
+    <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
+      <div className="flex items-center justify-between mb-4">
+        <div className="w-12 h-12 bg-gray-50 rounded-xl flex items-center justify-center">{icon}</div>
+        {trend ? (
+          <div
+            className={cn(
+              "flex items-center gap-1 text-xs font-bold px-2 py-1 rounded-lg",
+              trendUp ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-600"
+            )}
+          >
+            {trendUp ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
+            {trend}
+          </div>
+        ) : null}
+      </div>
+      <p className="text-gray-500 text-sm font-medium">{title}</p>
+      <h4 className="text-2xl font-bold mt-1">{value}</h4>
+    </div>
+  );
+}
+
+function Dashboard({
+  stats,
+  jobs,
+  clients,
+  opportunities,
+  onContactOpp,
+}: {
+  stats: DashboardStats | null;
+  jobs: Job[];
+  clients: Client[];
+  opportunities: Opportunity[];
+  onContactOpp: (opp: Opportunity, client: Client | null) => void;
+}) {
+  const [revenueRange, setRevenueRange] = useState<"7" | "30" | "60" | "90" | "180" | "365" | "custom">("30");
+
+  const today = new Date();
+  const defaultEnd = format(today, "yyyy-MM-dd");
+  const defaultStart30 = format(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 29), "yyyy-MM-dd");
+
+  const [customStartDate, setCustomStartDate] = useState<string>(defaultStart30);
+  const [customEndDate, setCustomEndDate] = useState<string>(defaultEnd);
+
+  if (!stats) return null;
+
+  const getPriorityColor = (priority: string) => {
+    switch (priority) {
+      case "urgent":
+        return "text-red-600 bg-red-50 border-red-100";
+      case "active":
+        return "text-amber-600 bg-amber-50 border-amber-100";
+      default:
+        return "text-indigo-600 bg-indigo-50 border-indigo-100";
+    }
+  };
+
+  const revenueMap = new Map((stats.dailyRevenue || []).map((item) => [item.date, Number(item.total || 0)]));
+
+  let startDate = new Date();
+  let endDate = new Date();
+
+  if (revenueRange === "custom") {
+    const parsedStart = parseDate(customStartDate);
+    const parsedEnd = parseDate(customEndDate);
+
+    startDate = parsedStart || new Date();
+    endDate = parsedEnd || new Date();
+  } else {
+    const rangeDays = Number(revenueRange);
+    endDate = new Date();
+    startDate = new Date();
+    startDate.setDate(endDate.getDate() - (rangeDays - 1));
+  }
+
+  startDate.setHours(0, 0, 0, 0);
+  endDate.setHours(0, 0, 0, 0);
+
+  if (startDate > endDate) {
+    const temp = startDate;
+    startDate = endDate;
+    endDate = temp;
+  }
+
+  const diffTime = endDate.getTime() - startDate.getTime();
+  const rangeDays = Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1;
+
+  const chartData = Array.from({ length: rangeDays }, (_, index) => {
+    const currentDate = new Date(startDate);
+    currentDate.setDate(startDate.getDate() + index);
+
+    const yyyy = currentDate.getFullYear();
+    const mm = String(currentDate.getMonth() + 1).padStart(2, "0");
+    const dd = String(currentDate.getDate()).padStart(2, "0");
+    const isoDate = `${yyyy}-${mm}-${dd}`;
+
+    return {
+      date: isoDate,
+      label: `${dd}/${mm}`,
+      total: revenueMap.get(isoDate) || 0,
+    };
+  });
+
+  const revenueSelectedPeriod = chartData.reduce((sum, item) => sum + item.total, 0);
+
+  const scheduledJobs = jobs.filter((job) => {
+    if (!job.job_date) return false;
+    const date = parseDate(job.job_date);
+    if (!date) return false;
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    return date >= todayStart && job.status !== "cancelled";
+  });
+
+  const futureRevenue30 = scheduledJobs
+    .filter((job) => {
+      const date = parseDate(job.job_date);
+      if (!date) return false;
+      const limit = new Date();
+      limit.setDate(limit.getDate() + 30);
+      return date <= limit;
+    })
+    .reduce((sum, job) => sum + Number(job.amount || 0), 0);
+
+  const futureRevenue90 = scheduledJobs
+    .filter((job) => {
+      const date = parseDate(job.job_date);
+      if (!date) return false;
+      const limit = new Date();
+      limit.setDate(limit.getDate() + 90);
+      return date <= limit;
+    })
+    .reduce((sum, job) => sum + Number(job.amount || 0), 0);
+
+  const futureRevenueByMonthMap = new Map<string, number>();
+
+  scheduledJobs.forEach((job) => {
+    const date = parseDate(job.job_date);
+    if (!date) return;
+
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const key = `${yyyy}-${mm}`;
+
+    futureRevenueByMonthMap.set(key, (futureRevenueByMonthMap.get(key) || 0) + Number(job.amount || 0));
+  });
+
+  const futureRevenueByMonth = Array.from(futureRevenueByMonthMap.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .slice(0, 6)
+    .map(([month, total]) => ({
+      month,
+      label: `${month.slice(5, 7)}/${month.slice(0, 4)}`,
+      total,
+    }));
+
+  return (
+    <div className="space-y-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-6">
+        <StatCard title="Leads Ativos" value={stats.activeLeads} icon={<Trello className="text-blue-600" />} trend="" trendUp />
+        <StatCard title="Vendas no Mês" value={stats.totalJobsMonth} icon={<CheckCircle2 className="text-emerald-600" />} trend="" trendUp />
+        <StatCard title="Clientes do Mês" value={stats.totalClientsMonth} icon={<Users className="text-violet-600" />} trend="" trendUp />
+        <StatCard
+          title={revenueRange === "custom" ? "Faturamento no Período" : `Faturamento ${rangeDays} dias`}
+          value={`R$ ${revenueSelectedPeriod.toLocaleString("pt-BR")}`}
+          icon={<DollarSign className="text-amber-600" />}
+          trend=""
+          trendUp
+        />
+        <StatCard
+          title="Futuro 30 dias"
+          value={`R$ ${futureRevenue30.toLocaleString("pt-BR")}`}
+          icon={<CalendarIcon className="text-green-600" />}
+          trend=""
+          trendUp
+        />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2 rounded-[28px] p-6 md:p-8 shadow-lg overflow-hidden relative bg-gradient-to-br from-indigo-600 via-blue-600 to-violet-600">
+          <div className="absolute inset-0 opacity-20 pointer-events-none">
+            <div className="absolute -top-10 -right-10 w-56 h-56 rounded-full bg-white/20 blur-2xl" />
+            <div className="absolute bottom-0 left-0 w-72 h-72 rounded-full bg-cyan-300/20 blur-3xl" />
+          </div>
+
+          <div className="relative z-10">
+            <div className="flex items-center justify-between gap-4 flex-wrap mb-6">
+              <div>
+                <p className="text-white/80 text-sm font-medium">Faturamento</p>
+                <h3 className="text-white text-4xl md:text-5xl font-bold tracking-tight">R$ {revenueSelectedPeriod.toLocaleString("pt-BR")}</h3>
+                <p className="text-white/80 text-sm mt-2">
+                  {format(startDate, "dd/MM/yyyy")} até {format(endDate, "dd/MM/yyyy")}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3 flex-wrap">
+                <select
+                  value={revenueRange}
+                  onChange={(e) => setRevenueRange(e.target.value as any)}
+                  className="text-sm bg-white/15 text-white rounded-xl px-3 py-2 outline-none border border-white/20 backdrop-blur-md"
+                >
+                  <option value="7" className="text-black">
+                    Últimos 7 dias
+                  </option>
+                  <option value="30" className="text-black">
+                    Mensal (30 dias)
+                  </option>
+                  <option value="60" className="text-black">
+                    60 dias
+                  </option>
+                  <option value="90" className="text-black">
+                    Trimestral (90 dias)
+                  </option>
+                  <option value="180" className="text-black">
+                    Semestral (180 dias)
+                  </option>
+                  <option value="365" className="text-black">
+                    Anual (365 dias)
+                  </option>
+                  <option value="custom" className="text-black">
+                    Período personalizado
+                  </option>
+                </select>
+
+                {revenueRange === "custom" && (
+                  <>
+                    <input
+                      type="date"
+                      value={customStartDate}
+                      onChange={(e) => setCustomStartDate(e.target.value)}
+                      className="text-sm bg-white/15 text-white rounded-xl px-3 py-2 outline-none border border-white/20 backdrop-blur-md"
+                    />
+                    <span className="text-white/70 text-sm">até</span>
+                    <input
+                      type="date"
+                      value={customEndDate}
+                      onChange={(e) => setCustomEndDate(e.target.value)}
+                      className="text-sm bg-white/15 text-white rounded-xl px-3 py-2 outline-none border border-white/20 backdrop-blur-md"
+                    />
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="h-72 md:h-80">
+              <ResponsiveContainer width="100%" height={320}>
+                <AreaChart data={chartData}>
+                  <defs>
+                    <linearGradient id="revenueFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="rgba(255,255,255,0.45)" />
+                      <stop offset="100%" stopColor="rgba(255,255,255,0.05)" />
+                    </linearGradient>
+                  </defs>
+
+                  <XAxis
+                    dataKey="label"
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fontSize: 12, fill: "rgba(255,255,255,0.75)" }}
+                    interval={Math.max(0, Math.floor(chartData.length / 8))}
+                  />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "rgba(255,255,255,0.65)" }} />
+                  <Tooltip
+                    formatter={(value: any) => [`R$ ${Number(value || 0).toLocaleString("pt-BR")}`, "Faturamento"]}
+                    labelFormatter={(label: any, payload: any) => {
+                      const item = payload?.[0]?.payload;
+                      return item?.date ? `Data: ${item.date}` : label;
+                    }}
+                    contentStyle={{
+                      borderRadius: "16px",
+                      border: "1px solid rgba(255,255,255,0.15)",
+                      background: "rgba(15, 23, 42, 0.88)",
+                      color: "#fff",
+                      boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+                      backdropFilter: "blur(10px)",
+                    }}
+                    labelStyle={{ color: "#cbd5e1" }}
+                  />
+                  <Area type="monotone" dataKey="total" stroke="rgba(255,255,255,0)" fill="url(#revenueFill)" />
+                  <Line
+                    type="monotone"
+                    dataKey="total"
+                    stroke="#FFFFFF"
+                    strokeWidth={4}
+                    dot={false}
+                    activeDot={{ r: 6, fill: "#FFFFFF", stroke: "rgba(255,255,255,0.35)", strokeWidth: 8 }}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex flex-col">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="font-bold text-gray-800 flex items-center gap-2">
+              <Sparkles className="text-amber-500" size={18} />
+              Próximas Oportunidades
+            </h3>
+            <span className="bg-amber-100 text-amber-700 text-[10px] font-bold px-2 py-0.5 rounded-full">{opportunities.length}</span>
+          </div>
+          <div className="flex-1 space-y-4 overflow-y-auto max-h-[350px] pr-2 custom-scrollbar">
+            {opportunities.map((opp) => (
+              <div
+                key={opp.id}
+                className={cn(
+                  "p-3 rounded-xl border transition-colors",
+                  opp.priority === "urgent"
+                    ? "bg-red-50/50 border-red-100 hover:border-red-200"
+                    : opp.priority === "active"
+                      ? "bg-amber-50/50 border-amber-100 hover:border-amber-200"
+                      : "bg-gray-50 border-gray-100 hover:border-indigo-200"
+                )}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-sm text-gray-900">{opp.client_name}</span>
+                  <span
+                    className={cn(
+                      "text-[10px] font-bold px-2 py-0.5 rounded-full uppercase",
+                      getPriorityColor(opp.priority || "future")
+                    )}
+                  >
+                    {opp.type}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1 text-xs text-gray-500">
+                    <CalendarIcon size={12} />
+                    {opp.priority === "urgent" ? "Atrasado: " : "Sugerido: "}
+                    {format(new Date(opp.suggested_date), "dd/MM/yyyy")}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {opp.priority === "urgent" && <AlertCircle size={12} className="text-red-500 animate-pulse" />}
+                    {opp.priority === "active" && <Sparkles size={12} className="text-amber-500" />}
+                    <button
+                      onClick={() => {
+                        const client = clients.find((c) => c.id === opp.client_id) || null;
+                        onContactOpp(opp, client);
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1 bg-indigo-600 text-white text-[10px] font-bold rounded-lg hover:bg-indigo-700 transition-all shadow-sm"
+                    >
+                      <MessageSquare size={12} />
+                      Contatar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {opportunities.length === 0 && <div className="text-center py-12 text-gray-400 italic text-sm">Nenhuma oportunidade detectada no momento.</div>}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="p-6 border-b border-gray-50 flex items-center justify-between">
+            <h3 className="font-bold text-gray-800">Trabalhos Recentes</h3>
+            <button className="text-sm text-indigo-600 font-medium hover:underline">Ver todos</button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider">
+                <tr>
+                  <th className="px-6 py-4 font-medium">Cliente</th>
+                  <th className="px-6 py-4 font-medium">Tipo</th>
+                  <th className="px-6 py-4 font-medium">Data</th>
+                  <th className="px-6 py-4 font-medium">Valor</th>
+                  <th className="px-6 py-4 font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {jobs.slice(0, 5).map((job) => (
+                  <tr key={job.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-6 py-4 font-medium">{job.client_name || job.job_name || "Tarefa"}</td>
+                    <td className="px-6 py-4 text-gray-600">{job.job_type}</td>
+                    <td className="px-6 py-4 text-gray-500">
+                      {job.job_date && !isNaN(new Date(job.job_date).getTime())
+                        ? format(new Date(job.job_date), "dd/MM/yyyy")
+                        : "-"}
+                    </td>
+                    <td className="px-6 py-4 font-semibold">R$ {(job.amount ?? 0).toLocaleString("pt-BR")}</td>
+                    <td className="px-6 py-4">
+                      <span
+                        className={cn(
+                          "px-2 py-1 rounded-full text-[10px] font-bold uppercase",
+                          job.payment_status === "paid" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
+                        )}
+                      >
+                        {job.payment_status === "paid" ? "Pago" : "Pendente"}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
+          <h3 className="font-bold text-gray-800 mb-2">Faturamento Futuro</h3>
+          <p className="text-sm text-gray-500 mb-6">Baseado nos ensaios já agendados.</p>
+
+          <div className="grid grid-cols-1 gap-3 mb-6">
+            <div className="p-4 rounded-xl bg-green-50 border border-green-100">
+              <div className="text-xs font-bold uppercase text-green-700 mb-1">Próximos 30 dias</div>
+              <div className="text-2xl font-bold text-green-800">R$ {futureRevenue30.toLocaleString("pt-BR")}</div>
+            </div>
+
+            <div className="p-4 rounded-xl bg-blue-50 border border-blue-100">
+              <div className="text-xs font-bold uppercase text-blue-700 mb-1">Próximos 90 dias</div>
+              <div className="text-2xl font-bold text-blue-800">R$ {futureRevenue90.toLocaleString("pt-BR")}</div>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {futureRevenueByMonth.length > 0 ? (
+              futureRevenueByMonth.map((item) => (
+                <div key={item.month} className="flex items-center justify-between text-sm border-b border-gray-50 pb-2">
+                  <span className="text-gray-600 font-medium">{item.label}</span>
+                  <span className="font-bold text-gray-900">R$ {item.total.toLocaleString("pt-BR")}</span>
+                </div>
+              ))
+            ) : (
+              <div className="text-sm text-gray-400 italic">Nenhum faturamento futuro encontrado.</div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function DashboardPage() {
+  const { openContactModal } = useOutletContext<LayoutOutletContext>();
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchDashboard = async () => {
+    setLoading(true);
+    try {
+      const [statsRes, clientsRes, jobsRes, oppsRes] = await Promise.all([
+        authFetch("/api/stats"),
+        authFetch("/api/clients"),
+        authFetch("/api/jobs"),
+        authFetch("/api/opportunities"),
+      ]);
+
+      setStats(await statsRes.json());
+      setClients(await clientsRes.json());
+      setJobs(await jobsRes.json());
+      setOpportunities(await oppsRes.json());
+    } catch (error) {
+      console.error("Erro ao buscar dados do dashboard:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDashboard();
+  }, []);
+
+  const handleContactOpp = (opp: Opportunity, client: Client | null) => {
+    openContactModal({ opportunity: opp, client, onUpdate: fetchDashboard });
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
+      </div>
+    );
+  }
+
+  return <Dashboard stats={stats} jobs={jobs} clients={clients} opportunities={opportunities} onContactOpp={handleContactOpp} />;
+}

@@ -91,3 +91,31 @@ export interface DashboardStats {
   revenueByType: { job_type: string; total: number }[];
   dailyRevenue: { date: string; total: number }[];
 }
+
+export type DealStage = 'lead' | 'contact' | 'proposal' | 'negotiation' | 'won' | 'lost';
+export type DealPriority = 'low' | 'medium' | 'high';
+
+export interface Deal {
+  id: number;
+  user_id: string;
+  client_id: number | null;
+  title: string;
+  value: number;
+  stage: DealStage;
+  priority: DealPriority;
+  expected_close_date: string | null;
+  next_follow_up: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  client_name?: string | null;
+}
+
+export interface DealActivity {
+  id: number;
+  deal_id: number;
+  user_id: string;
+  type: string;
+  description: string | null;
+  created_at: string;
+}

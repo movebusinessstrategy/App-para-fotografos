@@ -936,6 +936,130 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // ============ DEALS / PIPELINE ROUTES ============
+  app.get('/api/deals', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    const [dealsRes, clientsRes] = await Promise.all([
+      supabase.from('deals').select('*').eq('user_id', userId),
+      supabase.from('clients').select('id, name').eq('user_id', userId),
+    ]);
+
+    const clients = clientsRes.data || [];
+    const clientMap = new Map<number, string>();
+    clients.forEach((c) => clientMap.set(c.id, c.name));
+
+    const deals = (dealsRes.data || []).map((deal) => ({
+      ...deal,
+      client_name: deal.client_id ? clientMap.get(deal.client_id) || null : null,
+    }));
+
+    res.json(deals);
+  });
+
+  app.post('/api/deals', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { client_id, title, value, stage, priority, expected_close_date, next_follow_up, notes } = req.body;
+
+    const { data, error } = await supabase
+      .from('deals')
+      .insert({
+        client_id: client_id || null,
+        title,
+        value: value || 0,
+        stage: stage || 'lead',
+        priority: priority || 'medium',
+        expected_close_date: expected_close_date || null,
+        next_follow_up: next_follow_up || null,
+        notes: notes || null,
+        user_id: userId,
+        updated_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ id: data.id });
+  });
+
+  app.put('/api/deals/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const updates = { ...req.body, updated_at: new Date().toISOString() };
+
+    const { data: existing } = await supabase
+      .from('deals')
+      .select('id')
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!existing) return res.status(404).json({ error: 'Deal not found' });
+
+    const { error } = await supabase.from('deals').update(updates).eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  app.delete('/api/deals/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    const { data: existing } = await supabase
+      .from('deals')
+      .select('id')
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!existing) return res.status(404).json({ error: 'Deal not found' });
+
+    await supabase.from('deals').delete().eq('id', req.params.id).eq('user_id', userId);
+    res.json({ success: true });
+  });
+
+  app.get('/api/deals/:id/activities', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    const { data: activities, error } = await supabase
+      .from('deal_activities')
+      .select('*')
+      .eq('deal_id', req.params.id)
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(activities || []);
+  });
+
+  app.post('/api/deals/:id/activities', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const dealId = Number(req.params.id);
+    const { type, description } = req.body;
+
+    const { data: existing } = await supabase
+      .from('deals')
+      .select('id')
+      .eq('id', dealId)
+      .eq('user_id', userId)
+      .single();
+    if (!existing) return res.status(404).json({ error: 'Deal not found' });
+
+    const { error } = await supabase.from('deal_activities').insert({
+      deal_id: dealId,
+      user_id: userId,
+      type,
+      description: description || null,
+    });
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
   // ============ STATS ROUTE ============
   app.get('/api/stats', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
