@@ -48,14 +48,16 @@ function StatCard({
   hidden?: boolean;
 }) {
   return (
-    <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
+    <div className="bg-white dark:bg-gray-900 p-6 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
       <div className="flex items-center justify-between mb-4">
-        <div className="w-12 h-12 bg-gray-50 rounded-xl flex items-center justify-center">{icon}</div>
+        <div className="w-12 h-12 bg-gray-50 dark:bg-gray-800 rounded-xl flex items-center justify-center">{icon}</div>
         {trend ? (
           <div
             className={cn(
               "flex items-center gap-1 text-xs font-bold px-2 py-1 rounded-lg",
-              trendUp ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-600"
+              trendUp 
+                ? "bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400" 
+                : "bg-red-50 dark:bg-red-500/20 text-red-600 dark:text-red-400"
             )}
           >
             {trendUp ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
@@ -63,8 +65,8 @@ function StatCard({
           </div>
         ) : null}
       </div>
-      <p className="text-gray-500 text-sm font-medium">{title}</p>
-      <h4 className="text-2xl font-bold mt-1">
+      <p className="text-gray-500 dark:text-gray-400 text-sm font-medium">{title}</p>
+      <h4 className="text-2xl font-bold mt-1 text-gray-900 dark:text-white">
         {hidden ? "R$ •••••" : value}
       </h4>
     </div>
@@ -111,11 +113,11 @@ function Dashboard({
   const getPriorityColor = (priority: string) => {
     switch (priority) {
       case "urgent":
-        return "text-red-600 bg-red-50 border-red-100";
+        return "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/20 border-red-100 dark:border-red-500/30";
       case "active":
-        return "text-amber-600 bg-amber-50 border-amber-100";
+        return "text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/20 border-amber-100 dark:border-amber-500/30";
       default:
-        return "text-indigo-600 bg-indigo-50 border-indigo-100";
+        return "text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/20 border-indigo-100 dark:border-indigo-500/30";
     }
   };
 
@@ -228,16 +230,16 @@ function Dashboard({
       {/* Header com botão de esconder valores */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-gray-800">Dashboard</h2>
-          <p className="text-gray-500 mt-1">Visão geral do seu negócio</p>
+          <h2 className="text-2xl font-bold text-gray-800 dark:text-white">Dashboard</h2>
+          <p className="text-gray-500 dark:text-gray-400 mt-1">Visão geral do seu negócio</p>
         </div>
         <button
           onClick={toggleHideValues}
           className={cn(
             "flex items-center gap-2 px-4 py-2 rounded-xl font-semibold transition-all",
             hideValues
-              ? "bg-gray-100 text-gray-600 hover:bg-gray-200"
-              : "bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+              ? "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700"
+              : "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-500/30"
           )}
           title={hideValues ? "Mostrar valores" : "Esconder valores"}
         >
@@ -247,13 +249,13 @@ function Dashboard({
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
-        <StatCard title="Leads Ativos" value={stats.activeLeads} icon={<Trello className="text-blue-600" />} trend="" trendUp />
-        <StatCard title="Vendas no Mês" value={stats.totalJobsMonth} icon={<CheckCircle2 className="text-emerald-600" />} trend="" trendUp />
-        <StatCard title="Clientes do Mês" value={stats.totalClientsMonth} icon={<Users className="text-violet-600" />} trend="" trendUp />
+        <StatCard title="Leads Ativos" value={stats.activeLeads} icon={<Trello className="text-blue-600 dark:text-blue-400" />} trend="" trendUp />
+        <StatCard title="Vendas no Mês" value={stats.totalJobsMonth} icon={<CheckCircle2 className="text-emerald-600 dark:text-emerald-400" />} trend="" trendUp />
+        <StatCard title="Clientes do Mês" value={stats.totalClientsMonth} icon={<Users className="text-violet-600 dark:text-violet-400" />} trend="" trendUp />
         <StatCard
           title={revenueRange === "custom" ? "Faturamento no Período" : `Faturamento ${rangeDays} dias`}
           value={formatValue(revenueSelectedPeriod)}
-          icon={<DollarSign className="text-amber-600" />}
+          icon={<DollarSign className="text-amber-600 dark:text-amber-400" />}
           trend=""
           trendUp
           hidden={hideValues}
@@ -261,7 +263,7 @@ function Dashboard({
         <StatCard
           title="Futuro 30 dias"
           value={formatValue(futureRevenue30)}
-          icon={<CalendarIcon className="text-green-600" />}
+          icon={<CalendarIcon className="text-green-600 dark:text-green-400" />}
           trend=""
           trendUp
           hidden={hideValues}
@@ -269,6 +271,7 @@ function Dashboard({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* Gráfico de faturamento - mantém o gradiente colorido */}
         <div className="lg:col-span-2 rounded-[28px] p-6 md:p-8 shadow-lg overflow-hidden relative bg-gradient-to-br from-indigo-600 via-blue-600 to-violet-600">
           <div className="absolute inset-0 opacity-20 pointer-events-none">
             <div className="absolute -top-10 -right-10 w-56 h-56 rounded-full bg-white/20 blur-2xl" />
@@ -322,14 +325,14 @@ function Dashboard({
                       type="date"
                       value={customStartDate}
                       onChange={(e) => setCustomStartDate(e.target.value)}
-                      className="text-sm bg-white/15 text-white rounded-xl px-3 py-2 outline-none border border-white/20 backdrop-blur-md"
+                      className="text-sm bg-white/15 text-white rounded-xl px-3 py-2 outline-none border border-white/20 backdrop-blur-md [color-scheme:dark]"
                     />
                     <span className="text-white/70 text-sm">até</span>
                     <input
                       type="date"
                       value={customEndDate}
                       onChange={(e) => setCustomEndDate(e.target.value)}
-                      className="text-sm bg-white/15 text-white rounded-xl px-3 py-2 outline-none border border-white/20 backdrop-blur-md"
+                      className="text-sm bg-white/15 text-white rounded-xl px-3 py-2 outline-none border border-white/20 backdrop-blur-md [color-scheme:dark]"
                     />
                   </>
                 )}
@@ -395,13 +398,14 @@ function Dashboard({
           </div>
         </div>
 
-        <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex flex-col">
+        {/* Card de Oportunidades */}
+        <div className="bg-white dark:bg-gray-900 p-6 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm flex flex-col">
           <div className="flex items-center justify-between mb-6">
-            <h3 className="font-bold text-gray-800 flex items-center gap-2">
-              <Sparkles className="text-amber-500" size={18} />
+            <h3 className="font-bold text-gray-800 dark:text-white flex items-center gap-2">
+              <Sparkles className="text-amber-500 dark:text-amber-400" size={18} />
               Próximas Oportunidades
             </h3>
-            <span className="bg-amber-100 text-amber-700 text-[10px] font-bold px-2 py-0.5 rounded-full">{opportunities.length}</span>
+            <span className="bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400 text-[10px] font-bold px-2 py-0.5 rounded-full">{opportunities.length}</span>
           </div>
           <div className="flex-1 space-y-4 overflow-y-auto max-h-[350px] pr-2 custom-scrollbar">
             {opportunities.map((opp) => (
@@ -410,23 +414,23 @@ function Dashboard({
                 className={cn(
                   "p-3 rounded-xl border transition-colors relative group",
                   opp.priority === "urgent"
-                    ? "bg-red-50/50 border-red-100 hover:border-red-200"
+                    ? "bg-red-50/50 dark:bg-red-500/10 border-red-100 dark:border-red-500/30 hover:border-red-200 dark:hover:border-red-500/50"
                     : opp.priority === "active"
-                      ? "bg-amber-50/50 border-amber-100 hover:border-amber-200"
-                      : "bg-gray-50 border-gray-100 hover:border-indigo-200"
+                      ? "bg-amber-50/50 dark:bg-amber-500/10 border-amber-100 dark:border-amber-500/30 hover:border-amber-200 dark:hover:border-amber-500/50"
+                      : "bg-gray-50 dark:bg-gray-800 border-gray-100 dark:border-gray-700 hover:border-indigo-200 dark:hover:border-indigo-500/50"
                 )}
               >
                 {/* Modal de confirmação inline */}
                 {confirmDiscardId === opp.id ? (
                   <div className="space-y-3">
-                    <div className="flex items-center gap-2 text-amber-600">
+                    <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
                       <AlertCircle size={16} />
                       <p className="text-xs font-medium">Descartar esta oportunidade?</p>
                     </div>
                     <div className="flex gap-2">
                       <button
                         onClick={() => setConfirmDiscardId(null)}
-                        className="flex-1 py-1.5 text-xs font-bold text-gray-600 hover:bg-gray-100 rounded-lg transition-all border border-gray-200"
+                        className="flex-1 py-1.5 text-xs font-bold text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-all border border-gray-200 dark:border-gray-600"
                       >
                         Cancelar
                       </button>
@@ -447,14 +451,14 @@ function Dashboard({
                     {/* Botão de descartar */}
                     <button
                       onClick={() => setConfirmDiscardId(opp.id)}
-                      className="absolute top-2 right-2 p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                      className="absolute top-2 right-2 p-1 text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/20 rounded-lg transition-all opacity-0 group-hover:opacity-100"
                       title="Descartar oportunidade"
                     >
                       <X size={14} />
                     </button>
 
                     <div className="flex items-center justify-between mb-1 pr-6">
-                      <span className="font-bold text-sm text-gray-900">{opp.client_name}</span>
+                      <span className="font-bold text-sm text-gray-900 dark:text-white">{opp.client_name}</span>
                       <span
                         className={cn(
                           "text-[10px] font-bold px-2 py-0.5 rounded-full uppercase",
@@ -465,20 +469,20 @@ function Dashboard({
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-1 text-xs text-gray-500">
+                      <div className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
                         <CalendarIcon size={12} />
                         {opp.priority === "urgent" ? "Atrasado: " : "Sugerido: "}
                         {format(new Date(opp.suggested_date), "dd/MM/yyyy")}
                       </div>
                       <div className="flex items-center gap-2">
-                        {opp.priority === "urgent" && <AlertCircle size={12} className="text-red-500 animate-pulse" />}
-                        {opp.priority === "active" && <Sparkles size={12} className="text-amber-500" />}
+                        {opp.priority === "urgent" && <AlertCircle size={12} className="text-red-500 dark:text-red-400 animate-pulse" />}
+                        {opp.priority === "active" && <Sparkles size={12} className="text-amber-500 dark:text-amber-400" />}
                         <button
                           onClick={() => {
                             const client = clients.find((c) => c.id === opp.client_id) || null;
                             onContactOpp(opp, client);
                           }}
-                          className="flex items-center gap-1.5 px-3 py-1 bg-indigo-600 text-white text-[10px] font-bold rounded-lg hover:bg-indigo-700 transition-all shadow-sm"
+                          className="flex items-center gap-1.5 px-3 py-1 bg-indigo-600 dark:bg-indigo-500 text-white text-[10px] font-bold rounded-lg hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-all shadow-sm"
                         >
                           <MessageSquare size={12} />
                           Contatar
@@ -489,20 +493,21 @@ function Dashboard({
                 )}
               </div>
             ))}
-            {opportunities.length === 0 && <div className="text-center py-12 text-gray-400 italic text-sm">Nenhuma oportunidade detectada no momento.</div>}
+            {opportunities.length === 0 && <div className="text-center py-12 text-gray-400 dark:text-gray-500 italic text-sm">Nenhuma oportunidade detectada no momento.</div>}
           </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-          <div className="p-6 border-b border-gray-50 flex items-center justify-between">
-            <h3 className="font-bold text-gray-800">Trabalhos Recentes</h3>
-            <button className="text-sm text-indigo-600 font-medium hover:underline">Ver todos</button>
+        {/* Tabela de Trabalhos Recentes */}
+        <div className="lg:col-span-2 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
+          <div className="p-6 border-b border-gray-50 dark:border-gray-800 flex items-center justify-between">
+            <h3 className="font-bold text-gray-800 dark:text-white">Trabalhos Recentes</h3>
+            <button className="text-sm text-indigo-600 dark:text-indigo-400 font-medium hover:underline">Ver todos</button>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left">
-              <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider">
+              <thead className="bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">
                 <tr>
                   <th className="px-6 py-4 font-medium">Cliente</th>
                   <th className="px-6 py-4 font-medium">Tipo</th>
@@ -511,24 +516,26 @@ function Dashboard({
                   <th className="px-6 py-4 font-medium">Status</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-50">
+              <tbody className="divide-y divide-gray-50 dark:divide-gray-800">
                 {jobs.slice(0, 5).map((job) => (
-                  <tr key={job.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-6 py-4 font-medium">{job.client_name || job.job_name || "Tarefa"}</td>
-                    <td className="px-6 py-4 text-gray-600">{job.job_type}</td>
-                    <td className="px-6 py-4 text-gray-500">
+                  <tr key={job.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
+                    <td className="px-6 py-4 font-medium text-gray-900 dark:text-white">{job.client_name || job.job_name || "Tarefa"}</td>
+                    <td className="px-6 py-4 text-gray-600 dark:text-gray-300">{job.job_type}</td>
+                    <td className="px-6 py-4 text-gray-500 dark:text-gray-400">
                       {job.job_date && !isNaN(new Date(job.job_date).getTime())
                         ? format(new Date(job.job_date), "dd/MM/yyyy")
                         : "-"}
                     </td>
-                    <td className="px-6 py-4 font-semibold">
+                    <td className="px-6 py-4 font-semibold text-gray-900 dark:text-white">
                       {hideValues ? "R$ •••••" : `R$ ${(job.amount ?? 0).toLocaleString("pt-BR")}`}
                     </td>
                     <td className="px-6 py-4">
                       <span
                         className={cn(
                           "px-2 py-1 rounded-full text-[10px] font-bold uppercase",
-                          job.payment_status === "paid" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
+                          job.payment_status === "paid" 
+                            ? "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400" 
+                            : "bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400"
                         )}
                       >
                         {job.payment_status === "paid" ? "Pago" : "Pendente"}
@@ -541,21 +548,22 @@ function Dashboard({
           </div>
         </div>
 
-        <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
-          <h3 className="font-bold text-gray-800 mb-2">Faturamento Futuro</h3>
-          <p className="text-sm text-gray-500 mb-6">Baseado nos ensaios já agendados.</p>
+        {/* Card de Faturamento Futuro */}
+        <div className="bg-white dark:bg-gray-900 p-6 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
+          <h3 className="font-bold text-gray-800 dark:text-white mb-2">Faturamento Futuro</h3>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">Baseado nos ensaios já agendados.</p>
 
           <div className="grid grid-cols-1 gap-3 mb-6">
-            <div className="p-4 rounded-xl bg-green-50 border border-green-100">
-              <div className="text-xs font-bold uppercase text-green-700 mb-1">Próximos 30 dias</div>
-              <div className="text-2xl font-bold text-green-800">
+            <div className="p-4 rounded-xl bg-green-50 dark:bg-green-500/10 border border-green-100 dark:border-green-500/30">
+              <div className="text-xs font-bold uppercase text-green-700 dark:text-green-400 mb-1">Próximos 30 dias</div>
+              <div className="text-2xl font-bold text-green-800 dark:text-green-300">
                 {hideValues ? "R$ •••••" : `R$ ${futureRevenue30.toLocaleString("pt-BR")}`}
               </div>
             </div>
 
-            <div className="p-4 rounded-xl bg-blue-50 border border-blue-100">
-              <div className="text-xs font-bold uppercase text-blue-700 mb-1">Próximos 90 dias</div>
-              <div className="text-2xl font-bold text-blue-800">
+            <div className="p-4 rounded-xl bg-blue-50 dark:bg-blue-500/10 border border-blue-100 dark:border-blue-500/30">
+              <div className="text-xs font-bold uppercase text-blue-700 dark:text-blue-400 mb-1">Próximos 90 dias</div>
+              <div className="text-2xl font-bold text-blue-800 dark:text-blue-300">
                 {hideValues ? "R$ •••••" : `R$ ${futureRevenue90.toLocaleString("pt-BR")}`}
               </div>
             </div>
@@ -564,15 +572,15 @@ function Dashboard({
           <div className="space-y-3">
             {futureRevenueByMonth.length > 0 ? (
               futureRevenueByMonth.map((item) => (
-                <div key={item.month} className="flex items-center justify-between text-sm border-b border-gray-50 pb-2">
-                  <span className="text-gray-600 font-medium">{item.label}</span>
-                  <span className="font-bold text-gray-900">
+                <div key={item.month} className="flex items-center justify-between text-sm border-b border-gray-50 dark:border-gray-800 pb-2">
+                  <span className="text-gray-600 dark:text-gray-400 font-medium">{item.label}</span>
+                  <span className="font-bold text-gray-900 dark:text-white">
                     {hideValues ? "R$ •••••" : `R$ ${item.total.toLocaleString("pt-BR")}`}
                   </span>
                 </div>
               ))
             ) : (
-              <div className="text-sm text-gray-400 italic">Nenhum faturamento futuro encontrado.</div>
+              <div className="text-sm text-gray-400 dark:text-gray-500 italic">Nenhum faturamento futuro encontrado.</div>
             )}
           </div>
         </div>
@@ -614,12 +622,10 @@ export default function DashboardPage() {
     fetchDashboard();
   }, []);
 
-  // Função para remover oportunidade localmente (usada tanto no Dashboard quanto no Modal)
   const removeOpportunityLocally = (oppId: number) => {
     setOpportunities(prev => prev.filter(opp => opp.id !== oppId));
   };
 
-  // Descarte direto na listagem do Dashboard
   const handleDismissOpp = async (oppId: number) => {
     try {
       await authFetch(`/api/opportunities/${oppId}`, {
@@ -633,7 +639,6 @@ export default function DashboardPage() {
     }
   };
 
-  // Abre o modal de contato com callback para descarte
   const handleContactOpp = (opp: Opportunity, client: Client | null) => {
     openContactModal({
       opportunity: opp,
@@ -646,7 +651,7 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 dark:border-indigo-400" />
       </div>
     );
   }

@@ -7,6 +7,16 @@ import dotenv from 'dotenv';
 import Papa from 'papaparse';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createSupabaseClient } from './supabase.js';
+import {
+  DEFAULT_STAGES,
+  calculateTemperature,
+  computePipelineAnalytics,
+  createStageId,
+  ensurePipelineStages,
+  fetchActivityMetrics,
+  recordStageEvent,
+  stageIdOrDefault,
+} from './pipeline-helpers.js';
 
 dotenv.config();
 
@@ -317,7 +327,7 @@ const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) 
 // ============ START SERVER ============
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT || 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json({ limit: '50mb' }));
 
@@ -937,9 +947,29 @@ async function startServer() {
   });
 
   // ============ DEALS / PIPELINE ROUTES ============
-  app.get('/api/deals', requireAuth, async (req, res) => {
-    const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+  const appendStageHistory = (
+    history: any[] | null | undefined,
+    stageId: string,
+    stageName: string,
+    nowIso: string
+  ) => {
+    const next = Array.isArray(history)
+      ? history.map((h) => ({ ...h }))
+      : [];
+    if (next.length > 0 && !next[next.length - 1].left_at) {
+      next[next.length - 1].left_at = nowIso;
+    }
+    next.push({
+      stage_id: stageId,
+      stage_name: stageName,
+      entered_at: nowIso,
+      left_at: null,
+    });
+    return next;
+  };
+
+  const loadDeals = async (supabase: SupabaseClient, userId: string) => {
+    const stages = await ensurePipelineStages(supabase, userId);
 
     const [dealsRes, clientsRes] = await Promise.all([
       supabase.from('deals').select('*').eq('user_id', userId),
@@ -950,55 +980,284 @@ async function startServer() {
     const clientMap = new Map<number, string>();
     clients.forEach((c) => clientMap.set(c.id, c.name));
 
-    const deals = (dealsRes.data || []).map((deal) => ({
-      ...deal,
-      client_name: deal.client_id ? clientMap.get(deal.client_id) || null : null,
-    }));
+    const dealsRaw = dealsRes.data || [];
+    const activityMap = await fetchActivityMetrics(
+      supabase,
+      userId,
+      dealsRaw.map((d: any) => d.id),
+    );
 
+    const deals = dealsRaw.map((deal: any) => {
+      const activity = activityMap.get(deal.id);
+      const { temperature, score } = calculateTemperature(deal, activity);
+      return {
+        ...deal,
+        stage_entered_at: deal.current_stage_entered_at || deal.stage_entered_at || deal.updated_at || deal.created_at,
+        activity_count: activity?.count || 0,
+        last_activity_at: activity?.last || null,
+        temperature,
+        temperature_score: score,
+        client_name: deal.client_id ? clientMap.get(deal.client_id) || null : null,
+      };
+    });
+
+    return { deals, stages };
+  };
+
+  app.get('/api/pipeline/stages', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const stages = await ensurePipelineStages(supabase, userId);
+    res.json(stages);
+  });
+
+  app.post('/api/pipeline/stages', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { name, color } = req.body;
+    if (!name) return res.status(400).json({ error: 'Nome da etapa é obrigatório' });
+
+    const stages = await ensurePipelineStages(supabase, userId);
+    const nonFinal = stages.filter((s) => !s.is_final);
+    const position = nonFinal.length;
+    const id = createStageId(name);
+
+    const payload: any = { id, name, color: color || '#E5E7EB', position, is_final: false, is_won: false, user_id: userId };
+    const { error, data } = await supabase.from('deal_stages').insert(payload).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.put('/api/pipeline/stages/reorder', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { stageIds } = req.body as { stageIds: string[] };
+    if (!Array.isArray(stageIds)) return res.status(400).json({ error: 'stageIds deve ser array' });
+
+    const stages = await ensurePipelineStages(supabase, userId);
+    const finals = stages.filter((s) => s.is_final);
+
+    await Promise.all(stageIds.map((id: string, index: number) => supabase.from('deal_stages').update({ position: index }).eq('id', id).eq('user_id', userId)));
+
+    await Promise.all(
+      finals.map((stage, idx) =>
+        supabase
+          .from('deal_stages')
+          .update({ position: stageIds.length + idx })
+          .eq('id', stage.id)
+          .eq('user_id', userId),
+      ),
+    );
+
+    res.json({ success: true });
+  });
+
+  app.put('/api/pipeline/stages/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { id } = req.params;
+    const { name, color } = req.body;
+
+    const stages = await ensurePipelineStages(supabase, userId);
+    const stage = stages.find((s) => s.id === id) || DEFAULT_STAGES.find((s) => s.id === id);
+    if (!stage) return res.status(404).json({ error: 'Etapa não encontrada' });
+    if (stage.is_final && name) return res.status(400).json({ error: 'Não é possível renomear etapa final' });
+
+    const { error } = await supabase
+      .from('deal_stages')
+      .update({ name: name || stage.name, color: color || stage.color })
+      .eq('id', id)
+      .eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  app.delete('/api/pipeline/stages/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { id } = req.params;
+    const stages = await ensurePipelineStages(supabase, userId);
+    const stage = stages.find((s) => s.id === id);
+    if (!stage) return res.status(404).json({ error: 'Etapa não encontrada' });
+    if (stage.is_final) return res.status(400).json({ error: 'Etapas finais não podem ser removidas' });
+
+    const fallbackStage = stageIdOrDefault(stages, stages.find((s) => !s.is_final && s.id !== id)?.id);
+    await supabase.from('deals').update({ stage: fallbackStage }).eq('stage', id).eq('user_id', userId);
+    await supabase.from('deal_stages').delete().eq('id', id).eq('user_id', userId);
+    res.json({ success: true });
+  });
+
+  app.get('/api/deals', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { deals } = await loadDeals(supabase, userId);
     res.json(deals);
   });
 
   app.post('/api/deals', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
+    const stages = await ensurePipelineStages(supabase, userId);
     const { client_id, title, value, stage, priority, expected_close_date, next_follow_up, notes } = req.body;
+    const nowIso = new Date().toISOString();
+    const stageId = stageIdOrDefault(stages, stage);
+    const stageName = stages.find((s) => s.id === stageId)?.name || stageId;
 
-    const { data, error } = await supabase
-      .from('deals')
-      .insert({
-        client_id: client_id || null,
-        title,
-        value: value || 0,
-        stage: stage || 'lead',
-        priority: priority || 'medium',
-        expected_close_date: expected_close_date || null,
-        next_follow_up: next_follow_up || null,
-        notes: notes || null,
+    const payload: any = {
+      client_id: client_id || null,
+      title,
+      value: value || 0,
+      stage: stageId,
+      stage_entered_at: nowIso,
+      current_stage_entered_at: nowIso,
+      stage_history: [
+        {
+          stage_id: stageId,
+          stage_name: stageName,
+          entered_at: nowIso,
+          left_at: null,
+        },
+      ],
+      priority: priority || 'medium',
+      expected_close_date: expected_close_date || null,
+      next_follow_up: next_follow_up || null,
+      notes: notes || null,
+      user_id: userId,
+      updated_at: nowIso,
+    };
+
+    const { data, error } = await supabase.from('deals').insert(payload).select().single();
+    if (error) {
+      console.warn('Falha ao inserir com campos estendidos, tentando fallback', error.message);
+      const minimal = {
+        client_id: payload.client_id,
+        title: payload.title,
+        value: payload.value,
+        stage: payload.stage,
+        priority: payload.priority,
+        expected_close_date: payload.expected_close_date,
+        next_follow_up: payload.next_follow_up,
+        notes: payload.notes,
         user_id: userId,
-        updated_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
+        updated_at: payload.updated_at,
+        current_stage_entered_at: payload.current_stage_entered_at,
+        stage_history: payload.stage_history,
+      };
+      const retry = await supabase.from('deals').insert(minimal).select().single();
+      if (retry.error || !retry.data) return res.status(500).json({ error: retry.error?.message || 'Erro ao criar deal' });
+      return res.json({ id: retry.data.id });
+    }
+    res.json({ id: data.id });
+  });
 
-    if (error) return res.status(500).json({ error: error.message });
+  app.post('/api/deals/quick', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const stages = await ensurePipelineStages(supabase, userId);
+    const firstStage = stages.find((s) => !s.is_final) || DEFAULT_STAGES[0];
+    const { name, phone, email, value, source } = req.body;
+    if (!name || !phone) return res.status(400).json({ error: 'Nome e telefone são obrigatórios' });
+
+    const nowIso = new Date().toISOString();
+    const payload: any = {
+      title: name,
+      contact_name: name,
+      contact_phone: phone,
+      contact_email: email || null,
+      lead_source: source || null,
+      value: Number(value) || 0,
+      stage: firstStage.id,
+      stage_entered_at: nowIso,
+      current_stage_entered_at: nowIso,
+      stage_history: [
+        {
+          stage_id: firstStage.id,
+          stage_name: firstStage.name,
+          entered_at: nowIso,
+          left_at: null,
+        },
+      ],
+      priority: 'medium',
+      user_id: userId,
+      updated_at: nowIso,
+    };
+
+    const { data, error } = await supabase.from('deals').insert(payload).select().single();
+    if (error) {
+      const retryPayload = {
+        title: name,
+        value: Number(value) || 0,
+        stage: firstStage.id,
+        priority: 'medium',
+        notes: `Telefone: ${phone}${email ? ` | Email: ${email}` : ''}${source ? ` | Origem: ${source}` : ''}`,
+        user_id: userId,
+        updated_at: nowIso,
+        current_stage_entered_at: nowIso,
+        stage_history: payload.stage_history,
+      };
+      const retry = await supabase.from('deals').insert(retryPayload).select().single();
+      if (retry.error || !retry.data) return res.status(500).json({ error: retry.error?.message || 'Erro ao criar lead' });
+      return res.json({ id: retry.data.id, fallbackNotes: true });
+    }
+
     res.json({ id: data.id });
   });
 
   app.put('/api/deals/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const updates = { ...req.body, updated_at: new Date().toISOString() };
+    const dealId = Number(req.params.id);
 
-    const { data: existing } = await supabase
+    console.log('=== DEBUG PUT /api/deals/:id ===');
+    console.log('dealId:', dealId, 'tipo:', typeof dealId);
+    console.log('userId:', userId);
+    console.log('body:', req.body);
+
+    if (isNaN(dealId)) {
+      return res.status(400).json({ error: 'ID inválido' });
+    }
+
+    // Testa buscar SEM o filtro de user_id primeiro
+    const { data: dealSemUser, error: errSemUser } = await supabase
       .from('deals')
-      .select('id')
-      .eq('id', req.params.id)
+      .select('id, user_id, stage')
+      .eq('id', dealId)
+      .single();
+    
+    console.log('Deal sem filtro user_id:', dealSemUser, 'erro:', errSemUser);
+
+    const { data: existing, error: errExisting } = await supabase
+      .from('deals')
+      .select('id, stage, stage_entered_at, stage_history, current_stage_entered_at, user_id')
+      .eq('id', dealId)
       .eq('user_id', userId)
       .single();
 
+    console.log('Deal com filtro user_id:', existing, 'erro:', errExisting);
+    console.log('=== FIM DEBUG ===');
+
     if (!existing) return res.status(404).json({ error: 'Deal not found' });
 
-    const { error } = await supabase.from('deals').update(updates).eq('id', req.params.id).eq('user_id', userId);
+    const updates: any = { ...req.body, updated_at: new Date().toISOString() };
+
+    if (updates.stage && updates.stage !== existing.stage) {
+      const stages = await ensurePipelineStages(supabase, userId);
+      const stageName = stages.find((s) => s.id === updates.stage)?.name || updates.stage;
+      const nowIso = new Date().toISOString();
+      updates.stage_entered_at = nowIso;
+      updates.current_stage_entered_at = nowIso;
+      updates.stage_history = appendStageHistory(existing.stage_history, updates.stage, stageName, nowIso);
+      await recordStageEvent(
+        supabase,
+        userId,
+        dealId,
+        existing.stage,
+        updates.stage,
+        existing.current_stage_entered_at || existing.stage_entered_at
+      );
+    }
+
+    const { error } = await supabase.from('deals').update(updates).eq('id', dealId).eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
   });
@@ -1018,6 +1277,49 @@ async function startServer() {
 
     await supabase.from('deals').delete().eq('id', req.params.id).eq('user_id', userId);
     res.json({ success: true });
+  });
+
+  app.get('/api/deals/:id/history', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const stages = await ensurePipelineStages(supabase, userId);
+    const stageMap = new Map(stages.map((s) => [s.id, s.name]));
+
+    const { data: deal } = await supabase
+      .from('deals')
+      .select('stage_history, stage, current_stage_entered_at, created_at')
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!deal) return res.status(404).json({ error: 'Deal not found' });
+
+    let history = Array.isArray((deal as any).stage_history)
+      ? ((deal as any).stage_history as any[])
+      : [];
+
+    history = history.map((entry) => ({
+      ...entry,
+      stage_name: entry.stage_name || stageMap.get(entry.stage_id) || entry.stage_id,
+    }));
+
+    history.sort(
+      (a, b) =>
+        new Date(a.entered_at).getTime() - new Date(b.entered_at).getTime()
+    );
+
+    if (history.length === 0) {
+      history = [
+        {
+          stage_id: deal.stage,
+          stage_name: stageMap.get(deal.stage) || deal.stage,
+          entered_at: deal.current_stage_entered_at || deal.created_at || new Date().toISOString(),
+          left_at: null,
+        },
+      ];
+    }
+
+    res.json(history);
   });
 
   app.get('/api/deals/:id/activities', requireAuth, async (req, res) => {
@@ -1058,6 +1360,143 @@ async function startServer() {
 
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
+  });
+
+  app.post('/api/deals/:id/convert', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const stages = await ensurePipelineStages(supabase, userId);
+    const wonStage = stages.find((s) => s.is_won) || DEFAULT_STAGES.find((s) => s.is_won);
+    const { createClient, createJob, client, job } = req.body;
+    const nowIso = new Date().toISOString();
+
+    const { data: deal } = await supabase
+      .from('deals')
+      .select('*')
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .single();
+    if (!deal) return res.status(404).json({ error: 'Deal not found' });
+
+    let clientId = deal.client_id as number | null;
+
+    if (createClient) {
+      const clientPayload = {
+        name: client?.name || deal.title,
+        phone: client?.phone || deal.contact_phone || null,
+        email: client?.email || deal.contact_email || null,
+        status: 'active',
+        user_id: userId,
+      } as any;
+      const { data: newClient, error } = await supabase.from('clients').insert(clientPayload).select().single();
+      if (error) return res.status(500).json({ error: error.message });
+      clientId = newClient?.id || clientId;
+    }
+
+    let jobId: number | null = null;
+    if (createJob && job) {
+      const jobPayload = {
+        client_id: clientId || null,
+        job_type: job.job_type,
+        job_date: job.job_date,
+        job_time: job.job_time || null,
+        job_end_time: job.job_end_time || null,
+        job_name: job.job_name || deal.title,
+        amount: job.amount || deal.value || 0,
+        payment_method: job.payment_method || 'Pix',
+        payment_status: job.payment_status || 'pending',
+        status: job.status || 'scheduled',
+        notes: job.notes || '',
+        user_id: userId,
+      } as any;
+      const { data: newJob, error } = await supabase.from('jobs').insert(jobPayload).select().single();
+      if (error) return res.status(500).json({ error: error.message });
+      jobId = newJob?.id || null;
+    }
+
+    const stageId = wonStage?.id || 'won';
+    const stageName = wonStage?.name || stageId;
+    const updates: any = {
+      stage: stageId,
+      stage_entered_at: nowIso,
+      current_stage_entered_at: nowIso,
+      stage_history: appendStageHistory(deal.stage_history, stageId, stageName, nowIso),
+      converted: true,
+      converted_at: nowIso,
+      converted_client_id: clientId,
+      converted_job_id: jobId,
+      client_id: clientId || deal.client_id,
+      temperature: 'hot',
+      temperature_locked: true,
+    };
+
+    const { error } = await supabase.from('deals').update(updates).eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    await recordStageEvent(
+      supabase,
+      userId,
+      Number(req.params.id),
+      deal.stage,
+      updates.stage,
+      deal.current_stage_entered_at || deal.stage_entered_at
+    );
+    res.json({ success: true, client_id: clientId, job_id: jobId });
+  });
+
+  app.post('/api/deals/:id/lost', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const stages = await ensurePipelineStages(supabase, userId);
+    const lostStage = stages.find((s) => s.id === req.body.stageId) || stages.find((s) => s.id === 'lost') || DEFAULT_STAGES.find((s) => s.id === 'lost');
+    const { reason, notes } = req.body;
+    const nowIso = new Date().toISOString();
+
+    const { data: deal } = await supabase
+      .from('deals')
+      .select('*')
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .single();
+    if (!deal) return res.status(404).json({ error: 'Deal not found' });
+
+    const stageId = lostStage?.id || 'lost';
+    const stageName = lostStage?.name || stageId;
+    const updates: any = {
+      stage: stageId,
+      stage_entered_at: nowIso,
+      current_stage_entered_at: nowIso,
+      stage_history: appendStageHistory(deal.stage_history, stageId, stageName, nowIso),
+      lost_reason: reason || null,
+      lost_notes: notes || null,
+      temperature: 'cold',
+      temperature_locked: true,
+    };
+    const { error } = await supabase.from('deals').update(updates).eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    await recordStageEvent(
+      supabase,
+      userId,
+      Number(req.params.id),
+      deal.stage,
+      updates.stage,
+      deal.current_stage_entered_at || deal.stage_entered_at
+    );
+    res.json({ success: true });
+  });
+
+  app.get('/api/pipeline/analytics', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { deals, stages } = await loadDeals(supabase, userId);
+    let events: any[] = [];
+    try {
+      const { data } = await supabase.from('deal_stage_events').select('*').eq('user_id', userId);
+      events = data || [];
+    } catch (err) {
+      console.warn('deal_stage_events not available', err);
+    }
+    const analytics = computePipelineAnalytics(deals, stages, events);
+    res.json(analytics);
   });
 
   // ============ STATS ROUTE ============

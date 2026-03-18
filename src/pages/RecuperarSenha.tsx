@@ -35,20 +35,20 @@ const RecuperarSenha = () => {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4">
-      <div className="w-full max-w-md bg-white rounded-xl shadow-lg p-8">
+      <div className="w-full max-w-md bg-white dark:bg-gray-900 rounded-xl shadow-lg dark:shadow-2xl dark:shadow-black/20 p-8 border border-transparent dark:border-gray-800">
         {/* Header */}
         <div className="text-center mb-6">
-          <div className="mx-auto mb-4 h-12 w-12 rounded-xl bg-purple-600 flex items-center justify-center">
+          <div className="mx-auto mb-4 h-12 w-12 rounded-xl bg-purple-600 dark:bg-purple-500 flex items-center justify-center">
             {emailSent ? (
               <Mail className="text-white" size={24} />
             ) : (
               <span className="text-white font-bold text-xl">FP</span>
             )}
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
             {emailSent ? "Email enviado!" : "Recuperar senha"}
           </h1>
-          <p className="text-gray-500 mt-1">
+          <p className="text-gray-500 dark:text-gray-400 mt-1">
             {emailSent
               ? "Verifique sua caixa de entrada e siga as instruções para redefinir sua senha."
               : "Digite seu email para receber o link de recuperação"}
@@ -57,7 +57,7 @@ const RecuperarSenha = () => {
 
         {/* Error Message */}
         {error && (
-          <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded-lg text-sm">
+          <div className="mb-4 p-3 bg-red-100 dark:bg-red-500/20 border border-red-400 dark:border-red-500/30 text-red-700 dark:text-red-400 rounded-lg text-sm">
             {error}
           </div>
         )}
@@ -65,7 +65,7 @@ const RecuperarSenha = () => {
         {!emailSent ? (
           <form onSubmit={handleRecuperarSenha} className="space-y-4">
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Email
               </label>
               <input
@@ -76,14 +76,14 @@ const RecuperarSenha = () => {
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 disabled={loading}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition disabled:bg-gray-100 disabled:cursor-not-allowed"
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:border-transparent outline-none transition disabled:bg-gray-100 dark:disabled:bg-gray-800/50 disabled:cursor-not-allowed"
               />
             </div>
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-2 px-4 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+              className="w-full py-2 px-4 bg-purple-600 dark:bg-purple-500 hover:bg-purple-700 dark:hover:bg-purple-600 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
             >
               {loading ? (
                 <>
@@ -97,7 +97,7 @@ const RecuperarSenha = () => {
 
             <Link
               to="/login"
-              className="text-sm text-center text-purple-600 hover:text-purple-700 hover:underline flex items-center justify-center gap-1"
+              className="text-sm text-center text-purple-600 dark:text-purple-400 hover:text-purple-700 dark:hover:text-purple-300 hover:underline flex items-center justify-center gap-1 transition-colors"
             >
               <ArrowLeft size={16} />
               Voltar para o login
@@ -107,14 +107,14 @@ const RecuperarSenha = () => {
           <div className="space-y-4">
             <button
               onClick={() => setEmailSent(false)}
-              className="w-full py-2 px-4 border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium rounded-lg transition"
+              className="w-full py-2 px-4 border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 font-medium rounded-lg transition"
             >
               Enviar novamente
             </button>
 
             <Link
               to="/login"
-              className="text-sm text-center text-purple-600 hover:text-purple-700 hover:underline flex items-center justify-center gap-1"
+              className="text-sm text-center text-purple-600 dark:text-purple-400 hover:text-purple-700 dark:hover:text-purple-300 hover:underline flex items-center justify-center gap-1 transition-colors"
             >
               <ArrowLeft size={16} />
               Voltar para o login

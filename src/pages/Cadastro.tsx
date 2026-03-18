@@ -65,7 +65,7 @@ const Cadastro = () => {
   };
 
   const ValidationItem = ({ valid, text }: { valid: boolean; text: string }) => (
-    <div className={`flex items-center gap-2 text-sm ${valid ? "text-green-600" : "text-gray-500"}`}>
+    <div className={`flex items-center gap-2 text-sm ${valid ? "text-green-600 dark:text-green-400" : "text-gray-500 dark:text-gray-400"}`}>
       {valid ? <Check size={14} /> : <X size={14} />}
       {text}
     </div>
@@ -73,26 +73,26 @@ const Cadastro = () => {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4">
-      <div className="w-full max-w-md bg-white rounded-xl shadow-lg p-8">
+      <div className="w-full max-w-md bg-white dark:bg-gray-900 rounded-xl shadow-lg dark:shadow-2xl dark:shadow-purple-500/10 p-8 border border-transparent dark:border-gray-800">
         {/* Header */}
         <div className="text-center mb-6">
-          <div className="mx-auto mb-4 h-12 w-12 rounded-xl bg-purple-600 flex items-center justify-center">
+          <div className="mx-auto mb-4 h-12 w-12 rounded-xl bg-purple-600 dark:bg-purple-500 flex items-center justify-center">
             <span className="text-white font-bold text-xl">FP</span>
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">Criar conta</h1>
-          <p className="text-gray-500 mt-1">Preencha os dados abaixo para começar</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Criar conta</h1>
+          <p className="text-gray-500 dark:text-gray-400 mt-1">Preencha os dados abaixo para começar</p>
         </div>
 
         {/* Success Message */}
         {success && (
-          <div className="mb-4 p-3 bg-green-100 border border-green-400 text-green-700 rounded-lg text-sm">
+          <div className="mb-4 p-3 bg-green-100 dark:bg-green-500/20 border border-green-400 dark:border-green-500/30 text-green-700 dark:text-green-400 rounded-lg text-sm">
             Conta criada com sucesso! Verifique seu email. Redirecionando...
           </div>
         )}
 
         {/* Error Message */}
         {error && (
-          <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded-lg text-sm">
+          <div className="mb-4 p-3 bg-red-100 dark:bg-red-500/20 border border-red-400 dark:border-red-500/30 text-red-700 dark:text-red-400 rounded-lg text-sm">
             {error}
           </div>
         )}
@@ -100,7 +100,7 @@ const Cadastro = () => {
         {/* Form */}
         <form onSubmit={handleCadastro} className="space-y-4">
           <div>
-            <label htmlFor="nome" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="nome" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Nome completo
             </label>
             <input
@@ -111,12 +111,12 @@ const Cadastro = () => {
               onChange={(e) => setNome(e.target.value)}
               required
               disabled={loading}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition disabled:bg-gray-100 disabled:cursor-not-allowed"
+              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:border-transparent outline-none transition bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:cursor-not-allowed"
             />
           </div>
 
           <div>
-            <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Email
             </label>
             <input
@@ -127,12 +127,12 @@ const Cadastro = () => {
               onChange={(e) => setEmail(e.target.value)}
               required
               disabled={loading}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition disabled:bg-gray-100 disabled:cursor-not-allowed"
+              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:border-transparent outline-none transition bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:cursor-not-allowed"
             />
           </div>
 
           <div>
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="password" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Senha
             </label>
             <div className="relative">
@@ -144,12 +144,12 @@ const Cadastro = () => {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 disabled={loading}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition disabled:bg-gray-100 disabled:cursor-not-allowed pr-10"
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:border-transparent outline-none transition bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:cursor-not-allowed pr-10"
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
               >
                 {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
@@ -157,7 +157,7 @@ const Cadastro = () => {
           </div>
 
           <div>
-            <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Confirmar senha
             </label>
             <input
@@ -168,13 +168,13 @@ const Cadastro = () => {
               onChange={(e) => setConfirmPassword(e.target.value)}
               required
               disabled={loading}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition disabled:bg-gray-100 disabled:cursor-not-allowed"
+              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:border-transparent outline-none transition bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:cursor-not-allowed"
             />
           </div>
 
           {/* Validações visuais */}
-          <div className="bg-gray-50 rounded-lg p-3 space-y-1">
-            <p className="text-sm font-medium text-gray-700 mb-2">Requisitos da senha:</p>
+          <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 space-y-1 border border-transparent dark:border-gray-700">
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Requisitos da senha:</p>
             <ValidationItem valid={passwordValidations.minLength} text="Mínimo 8 caracteres" />
             <ValidationItem valid={passwordValidations.hasUppercase} text="Uma letra maiúscula" />
             <ValidationItem valid={passwordValidations.hasLowercase} text="Uma letra minúscula" />
@@ -185,7 +185,7 @@ const Cadastro = () => {
           <button
             type="submit"
             disabled={loading || !isPasswordValid}
-            className="w-full py-2 px-4 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+            className="w-full py-2 px-4 bg-purple-600 dark:bg-purple-500 hover:bg-purple-700 dark:hover:bg-purple-600 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
           >
             {loading ? (
               <>
@@ -197,9 +197,9 @@ const Cadastro = () => {
             )}
           </button>
 
-          <p className="text-sm text-center text-gray-600">
+          <p className="text-sm text-center text-gray-600 dark:text-gray-400">
             Já tem uma conta?{" "}
-            <Link to="/login" className="text-purple-600 hover:text-purple-700 hover:underline font-medium">
+            <Link to="/login" className="text-purple-600 dark:text-purple-400 hover:text-purple-700 dark:hover:text-purple-300 hover:underline font-medium">
               Entrar
             </Link>
           </p>

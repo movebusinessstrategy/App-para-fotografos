@@ -24,54 +24,61 @@ const TITLE_MAP: Record<string, string> = {
   "/clients": "Clientes",
   "/jobs": "Jobs",
   "/pipeline": "Funil de Vendas",
+  "/vendas": "Vendas",
   "/calendar": "Agenda",
   "/settings": "Configurações",
   "/finance": "Financeiro",
+  "/pipeline-settings": "Configurar Funil",
 };
 
 export default function AppLayout() {
   const { user, signOut } = useAuth();
   const location = useLocation();
   const [contactModal, setContactModal] = useState<ContactModalPayload | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const pageTitle = useMemo(() => TITLE_MAP[location.pathname] || "Dashboard", [location.pathname]);
 
   const openContactModal = (payload: ContactModalPayload) => setContactModal(payload);
   const closeContactModal = () => setContactModal(null);
 
-  // Função para descartar oportunidade via API
   const handleDiscard = async (oppId: number) => {
     await authFetch(`/api/opportunities/${oppId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status: "dismissed" }),
     });
-    // Chama o callback para remover localmente no Dashboard
     contactModal?.onDiscardSuccess?.(oppId);
   };
 
   return (
-    <div className="flex h-screen bg-[#F8F9FA] text-[#1A1A1A] font-sans">
-      <Sidebar />
+    <div className="flex h-screen bg-[#F8F9FA] dark:bg-gray-950 text-[#1A1A1A] dark:text-gray-100 font-sans">
+      <Sidebar 
+        isOpen={sidebarOpen} 
+        onClose={() => setSidebarOpen(false)} 
+      />
 
-      <main className="flex-1 overflow-y-auto">
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <Header
           title={pageTitle}
           userInitial={user?.email?.charAt(0).toUpperCase()}
           onSignOut={signOut}
+          onMenuClick={() => setSidebarOpen(true)}
         />
 
-        <Suspense
-          fallback={
-            <div className="p-8 flex items-center justify-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
+        <div className="flex-1 overflow-y-auto">
+          <Suspense
+            fallback={
+              <div className="p-8 flex items-center justify-center">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 dark:border-indigo-400" />
+              </div>
+            }
+          >
+            <div className="p-4 md:p-6 lg:p-8">
+              <Outlet context={{ openContactModal }} />
             </div>
-          }
-        >
-          <div className="p-8">
-            <Outlet context={{ openContactModal }} />
-          </div>
-        </Suspense>
+          </Suspense>
+        </div>
       </main>
 
       {contactModal && (

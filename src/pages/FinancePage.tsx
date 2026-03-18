@@ -32,7 +32,7 @@ export default function FinancePage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 dark:border-indigo-400" />
       </div>
     );
   }
@@ -582,29 +582,29 @@ function Finance({ stats: _stats, jobs }: { stats: DashboardStats | null, jobs: 
 
       {periodFilter === 'custom' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="bg-white/95 border border-white rounded-[24px] px-5 py-4 shadow-[0_18px_45px_rgba(15,23,42,0.06)]">
-            <label className="block text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">Data inicial</label>
+          <div className="bg-white/95 dark:bg-gray-900/95 border border-white dark:border-gray-800 rounded-[24px] px-5 py-4 shadow-[0_18px_45px_rgba(15,23,42,0.06)] dark:shadow-[0_18px_45px_rgba(0,0,0,0.3)]">
+            <label className="block text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-2">Data inicial</label>
             <input
               type="date"
               value={customStartDate}
               onChange={(e) => setCustomStartDate(e.target.value)}
-              className="w-full bg-transparent outline-none text-sm font-medium text-gray-700"
+              className="w-full bg-transparent outline-none text-sm font-medium text-gray-700 dark:text-gray-200"
             />
           </div>
-          <div className="bg-white/95 border border-white rounded-[24px] px-5 py-4 shadow-[0_18px_45px_rgba(15,23,42,0.06)]">
-            <label className="block text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">Data final</label>
+          <div className="bg-white/95 dark:bg-gray-900/95 border border-white dark:border-gray-800 rounded-[24px] px-5 py-4 shadow-[0_18px_45px_rgba(15,23,42,0.06)] dark:shadow-[0_18px_45px_rgba(0,0,0,0.3)]">
+            <label className="block text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-2">Data final</label>
             <input
               type="date"
               value={customEndDate}
               onChange={(e) => setCustomEndDate(e.target.value)}
-              className="w-full bg-transparent outline-none text-sm font-medium text-gray-700"
+              className="w-full bg-transparent outline-none text-sm font-medium text-gray-700 dark:text-gray-200"
             />
           </div>
         </div>
       )}
 
       {totals.unconfiguredJobs > 0 && (
-        <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-100 rounded-[24px] px-5 py-4 text-sm text-amber-800 shadow-[0_12px_28px_rgba(245,158,11,0.08)]">
+        <div className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-500/10 dark:to-orange-500/10 border border-amber-100 dark:border-amber-500/20 rounded-[24px] px-5 py-4 text-sm text-amber-800 dark:text-amber-300 shadow-[0_12px_28px_rgba(245,158,11,0.08)] dark:shadow-none">
           {totals.unconfiguredJobs} ensaio(s) foram calculados com a regra padrão, sem configuração financeira específica do tipo de ensaio.
         </div>
       )}
@@ -672,7 +672,7 @@ function FinanceHeader({
   jobTypeOptions: string[],
 }) {
   return (
-    <div className="relative overflow-hidden rounded-[32px] border border-white/70 bg-gradient-to-br from-slate-900 via-indigo-900 to-sky-900 px-6 py-7 text-white shadow-[0_24px_80px_rgba(30,41,59,0.28)] md:px-8">
+    <div className="relative overflow-hidden rounded-[32px] border border-white/70 dark:border-gray-700/50 bg-gradient-to-br from-slate-900 via-indigo-900 to-sky-900 px-6 py-7 text-white shadow-[0_24px_80px_rgba(30,41,59,0.28)] md:px-8">
       <div className="absolute inset-0 opacity-40">
         <div className="absolute -top-20 left-10 h-52 w-52 rounded-full bg-cyan-300/20 blur-3xl" />
         <div className="absolute right-0 top-0 h-56 w-56 rounded-full bg-indigo-200/20 blur-3xl" />
@@ -780,7 +780,7 @@ function FinanceFilterSelect({
       "flex items-center gap-2 rounded-2xl px-3 py-2.5 shadow-sm transition-colors",
       dark
         ? "border border-white/12 bg-slate-950/15 text-white"
-        : "border border-gray-200 bg-white text-gray-900"
+        : "border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
     )}>
       {icon}
       <select
@@ -788,11 +788,11 @@ function FinanceFilterSelect({
         onChange={(e) => onChange(e.target.value)}
         className={cn(
           "bg-transparent text-sm font-medium outline-none",
-          dark ? "text-white" : "text-gray-700"
+          dark ? "text-white" : "text-gray-700 dark:text-gray-200"
         )}
       >
         {options.map((option) => (
-          <option key={option.value} value={option.value}>
+          <option key={option.value} value={option.value} className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white">
             {option.label}
           </option>
         ))}
@@ -855,42 +855,42 @@ function FinanceSummaryCard({
   accent?: 'primary' | 'indigo' | 'teal' | 'sky' | 'amber' | 'violet' | 'orange' | 'emerald' | 'slate' | 'rose',
 }) {
   const accentStyles = {
-    primary: 'border-indigo-200/70 bg-gradient-to-br from-indigo-600 via-indigo-600 to-blue-600 text-white shadow-[0_20px_45px_rgba(79,70,229,0.22)]',
-    indigo: 'border-indigo-100 bg-white text-gray-900',
-    teal: 'border-teal-100 bg-white text-gray-900',
-    sky: 'border-sky-100 bg-white text-gray-900',
-    amber: 'border-amber-100 bg-white text-gray-900',
-    violet: 'border-violet-100 bg-white text-gray-900',
-    orange: 'border-orange-100 bg-white text-gray-900',
-    emerald: 'border-emerald-100 bg-white text-gray-900',
-    slate: 'border-slate-100 bg-white text-gray-900',
-    rose: 'border-rose-100 bg-white text-gray-900',
+    primary: 'border-indigo-200/70 dark:border-indigo-500/30 bg-gradient-to-br from-indigo-600 via-indigo-600 to-blue-600 text-white shadow-[0_20px_45px_rgba(79,70,229,0.22)]',
+    indigo: 'border-indigo-100 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-900 dark:text-white',
+    teal: 'border-teal-100 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-900 dark:text-white',
+    sky: 'border-sky-100 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-900 dark:text-white',
+    amber: 'border-amber-100 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-900 dark:text-white',
+    violet: 'border-violet-100 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-900 dark:text-white',
+    orange: 'border-orange-100 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-900 dark:text-white',
+    emerald: 'border-emerald-100 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-900 dark:text-white',
+    slate: 'border-slate-100 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-900 dark:text-white',
+    rose: 'border-rose-100 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-900 dark:text-white',
   } as const;
 
   const dotStyles = {
     primary: 'bg-white/20 text-white',
-    indigo: 'bg-indigo-50 text-indigo-600',
-    teal: 'bg-teal-50 text-teal-600',
-    sky: 'bg-sky-50 text-sky-600',
-    amber: 'bg-amber-50 text-amber-600',
-    violet: 'bg-violet-50 text-violet-600',
-    orange: 'bg-orange-50 text-orange-600',
-    emerald: 'bg-emerald-50 text-emerald-600',
-    slate: 'bg-slate-100 text-slate-600',
-    rose: 'bg-rose-50 text-rose-600',
+    indigo: 'bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400',
+    teal: 'bg-teal-50 dark:bg-teal-500/20 text-teal-600 dark:text-teal-400',
+    sky: 'bg-sky-50 dark:bg-sky-500/20 text-sky-600 dark:text-sky-400',
+    amber: 'bg-amber-50 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400',
+    violet: 'bg-violet-50 dark:bg-violet-500/20 text-violet-600 dark:text-violet-400',
+    orange: 'bg-orange-50 dark:bg-orange-500/20 text-orange-600 dark:text-orange-400',
+    emerald: 'bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400',
+    slate: 'bg-slate-100 dark:bg-slate-500/20 text-slate-600 dark:text-slate-400',
+    rose: 'bg-rose-50 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400',
   } as const;
 
   return (
     <div className={cn(
-      "group relative overflow-hidden rounded-[26px] border p-5 shadow-[0_18px_45px_rgba(15,23,42,0.06)] transition-transform duration-200 hover:-translate-y-0.5",
+      "group relative overflow-hidden rounded-[26px] border p-5 shadow-[0_18px_45px_rgba(15,23,42,0.06)] dark:shadow-[0_18px_45px_rgba(0,0,0,0.2)] transition-transform duration-200 hover:-translate-y-0.5",
       accentStyles[accent]
     )}>
       <div className="absolute right-0 top-0 h-24 w-24 rounded-full bg-current/5 blur-2xl" />
       <div className="relative z-10 flex items-start justify-between gap-4">
         <div>
-          <p className={cn("text-sm font-medium", accent === 'primary' ? "text-indigo-100" : "text-gray-500")}>{title}</p>
+          <p className={cn("text-sm font-medium", accent === 'primary' ? "text-indigo-100" : "text-gray-500 dark:text-gray-400")}>{title}</p>
           <p className="mt-3 text-[1.7rem] font-bold tracking-tight">{value}</p>
-          <p className={cn("mt-2 text-xs", accent === 'primary' ? "text-white/70" : "text-gray-400")}>{note}</p>
+          <p className={cn("mt-2 text-xs", accent === 'primary' ? "text-white/70" : "text-gray-400 dark:text-gray-500")}>{note}</p>
         </div>
         <div className={cn("flex h-11 w-11 items-center justify-center rounded-2xl", dotStyles[accent])}>
           {icon}
@@ -922,9 +922,9 @@ function FinanceCharts({
         <div className="h-80">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={weeklyChartData} barGap={10}>
-              <CartesianGrid vertical={false} stroke="#E5E7EB" strokeDasharray="3 3" />
-              <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: '#6B7280', fontSize: 12 }} />
-              <YAxis tickLine={false} axisLine={false} tick={{ fill: '#9CA3AF', fontSize: 12 }} tickFormatter={(value) => `R$ ${Math.round(value / 1000)}k`} />
+              <CartesianGrid vertical={false} stroke="currentColor" strokeDasharray="3 3" className="text-gray-200 dark:text-gray-700" />
+              <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: 'currentColor', fontSize: 12 }} className="text-gray-500 dark:text-gray-400" />
+              <YAxis tickLine={false} axisLine={false} tick={{ fill: 'currentColor', fontSize: 12 }} className="text-gray-400 dark:text-gray-500" tickFormatter={(value) => `R$ ${Math.round(value / 1000)}k`} />
               <Tooltip content={<FinanceChartTooltip />} cursor={{ fill: 'rgba(99, 102, 241, 0.06)' }} />
               <Bar dataKey="faturamento" name="Faturamento" fill="#4F46E5" radius={[10, 10, 0, 0]} />
               <Bar dataKey="lucro" name="Lucro líquido" fill="#10B981" radius={[10, 10, 0, 0]} />
@@ -954,12 +954,12 @@ function FinanceCharts({
           </div>
           <div className="space-y-3">
             {compositionData.map((item) => (
-              <div key={item.name} className="flex items-center justify-between gap-4 rounded-2xl bg-gray-50 px-4 py-3">
+              <div key={item.name} className="flex items-center justify-between gap-4 rounded-2xl bg-gray-50 dark:bg-gray-800 px-4 py-3">
                 <div className="flex items-center gap-3">
                   <span className="h-3 w-3 rounded-full" style={{ backgroundColor: item.color }} />
-                  <span className="text-sm font-medium text-gray-600">{item.name}</span>
+                  <span className="text-sm font-medium text-gray-600 dark:text-gray-300">{item.name}</span>
                 </div>
-                <span className="text-sm font-semibold text-gray-900">{formatCurrency(item.value)}</span>
+                <span className="text-sm font-semibold text-gray-900 dark:text-white">{formatCurrency(item.value)}</span>
               </div>
             ))}
           </div>
@@ -985,9 +985,9 @@ function FinanceCharts({
                   <stop offset="95%" stopColor="#10B981" stopOpacity={0.01} />
                 </linearGradient>
               </defs>
-              <CartesianGrid vertical={false} stroke="#E5E7EB" strokeDasharray="3 3" />
-              <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: '#6B7280', fontSize: 12 }} />
-              <YAxis tickLine={false} axisLine={false} tick={{ fill: '#9CA3AF', fontSize: 12 }} tickFormatter={(value) => `R$ ${Math.round(value / 1000)}k`} />
+              <CartesianGrid vertical={false} stroke="currentColor" strokeDasharray="3 3" className="text-gray-200 dark:text-gray-700" />
+              <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: 'currentColor', fontSize: 12 }} className="text-gray-500 dark:text-gray-400" />
+              <YAxis tickLine={false} axisLine={false} tick={{ fill: 'currentColor', fontSize: 12 }} className="text-gray-400 dark:text-gray-500" tickFormatter={(value) => `R$ ${Math.round(value / 1000)}k`} />
               <Tooltip content={<FinanceChartTooltip />} />
               <Area type="monotone" dataKey="faturamento" stroke="#4F46E5" strokeWidth={3} fill="url(#financeRevenueGradient)" />
               <Area type="monotone" dataKey="lucro" stroke="#10B981" strokeWidth={3} fill="url(#financeProfitGradient)" />
@@ -1005,9 +1005,9 @@ function FinanceCharts({
         <div className="h-80">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={categoryComparisonData} layout="vertical" margin={{ left: 10, right: 10 }}>
-              <CartesianGrid horizontal={false} stroke="#EEF2FF" />
+              <CartesianGrid horizontal={false} stroke="currentColor" className="text-gray-100 dark:text-gray-800" />
               <XAxis type="number" hide />
-              <YAxis type="category" dataKey="label" tickLine={false} axisLine={false} tick={{ fill: '#6B7280', fontSize: 12 }} width={82} />
+              <YAxis type="category" dataKey="label" tickLine={false} axisLine={false} tick={{ fill: 'currentColor', fontSize: 12 }} className="text-gray-500 dark:text-gray-400" width={82} />
               <Tooltip content={<FinanceChartTooltip />} cursor={{ fill: 'rgba(99, 102, 241, 0.06)' }} />
               <Bar dataKey="value" radius={[0, 10, 10, 0]}>
                 {categoryComparisonData.map((entry) => (
@@ -1036,13 +1036,13 @@ function FinanceChartCard({
   children: React.ReactNode,
 }) {
   return (
-    <div className={cn("rounded-[30px] border border-white bg-white/95 p-5 shadow-[0_20px_55px_rgba(15,23,42,0.07)]", className)}>
+    <div className={cn("rounded-[30px] border border-white dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 p-5 shadow-[0_20px_55px_rgba(15,23,42,0.07)] dark:shadow-[0_20px_55px_rgba(0,0,0,0.3)]", className)}>
       <div className="mb-5 flex items-start justify-between gap-4">
         <div>
-          <h4 className="text-lg font-bold text-gray-900">{title}</h4>
-          <p className="mt-1 text-sm text-gray-500">{subtitle}</p>
+          <h4 className="text-lg font-bold text-gray-900 dark:text-white">{title}</h4>
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{subtitle}</p>
         </div>
-        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
+        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400">
           {icon}
         </div>
       </div>
@@ -1055,16 +1055,16 @@ function FinanceChartTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
 
   return (
-    <div className="rounded-2xl border border-gray-100 bg-white px-4 py-3 shadow-xl">
-      {label && <p className="mb-2 text-sm font-semibold text-gray-900">{label}</p>}
+    <div className="rounded-2xl border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-900 px-4 py-3 shadow-xl">
+      {label && <p className="mb-2 text-sm font-semibold text-gray-900 dark:text-white">{label}</p>}
       <div className="space-y-1.5">
         {payload.map((entry: any) => (
           <div key={entry.name} className="flex items-center justify-between gap-4 text-sm">
-            <div className="flex items-center gap-2 text-gray-500">
+            <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
               <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: entry.color }} />
               {entry.name}
             </div>
-            <span className="font-semibold text-gray-900">{formatCurrency(Number(entry.value || 0))}</span>
+            <span className="font-semibold text-gray-900 dark:text-white">{formatCurrency(Number(entry.value || 0))}</span>
           </div>
         ))}
       </div>
@@ -1133,30 +1133,30 @@ function FinanceInsights({
   ] as const;
 
   const toneStyles = {
-    indigo: 'bg-indigo-50 text-indigo-600',
-    teal: 'bg-teal-50 text-teal-600',
-    sky: 'bg-sky-50 text-sky-600',
-    emerald: 'bg-emerald-50 text-emerald-600',
-    amber: 'bg-amber-50 text-amber-600',
-    violet: 'bg-violet-50 text-violet-600',
+    indigo: 'bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400',
+    teal: 'bg-teal-50 dark:bg-teal-500/20 text-teal-600 dark:text-teal-400',
+    sky: 'bg-sky-50 dark:bg-sky-500/20 text-sky-600 dark:text-sky-400',
+    emerald: 'bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400',
+    amber: 'bg-amber-50 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400',
+    violet: 'bg-violet-50 dark:bg-violet-500/20 text-violet-600 dark:text-violet-400',
   } as const;
 
   return (
-    <div className="rounded-[30px] border border-white bg-white/95 p-6 shadow-[0_20px_55px_rgba(15,23,42,0.07)]">
+    <div className="rounded-[30px] border border-white dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 p-6 shadow-[0_20px_55px_rgba(15,23,42,0.07)] dark:shadow-[0_20px_55px_rgba(0,0,0,0.3)]">
       <div className="mb-5 flex items-center justify-between gap-4">
         <div>
-          <h4 className="text-lg font-bold text-gray-900">Resumo visual</h4>
-          <p className="mt-1 text-sm text-gray-500">Os indicadores mais úteis para leitura rápida do financeiro.</p>
+          <h4 className="text-lg font-bold text-gray-900 dark:text-white">Resumo visual</h4>
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Os indicadores mais úteis para leitura rápida do financeiro.</p>
         </div>
       </div>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {insights.map((insight) => (
-          <div key={insight.title} className="rounded-[24px] border border-gray-100 bg-gradient-to-br from-white to-gray-50 p-5">
+          <div key={insight.title} className="rounded-[24px] border border-gray-100 dark:border-gray-800 bg-gradient-to-br from-white to-gray-50 dark:from-gray-900 dark:to-gray-800 p-5">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-sm font-medium text-gray-500">{insight.title}</p>
-                <p className="mt-3 text-xl font-bold text-gray-900">{insight.value}</p>
-                <p className="mt-2 text-sm text-gray-400">{insight.detail}</p>
+                <p className="text-sm font-medium text-gray-500 dark:text-gray-400">{insight.title}</p>
+                <p className="mt-3 text-xl font-bold text-gray-900 dark:text-white">{insight.value}</p>
+                <p className="mt-2 text-sm text-gray-400 dark:text-gray-500">{insight.detail}</p>
               </div>
               <div className={cn("flex h-11 w-11 items-center justify-center rounded-2xl", toneStyles[insight.tone])}>
                 {insight.icon}
@@ -1179,20 +1179,20 @@ function FinanceTable({
   rows: FinancialPeriodSummary[],
 }) {
   return (
-    <div className="overflow-hidden rounded-[30px] border border-white bg-white/95 shadow-[0_20px_55px_rgba(15,23,42,0.07)]">
-      <div className="flex items-center justify-between gap-4 border-b border-gray-100 px-6 py-5">
+    <div className="overflow-hidden rounded-[30px] border border-white dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 shadow-[0_20px_55px_rgba(15,23,42,0.07)] dark:shadow-[0_20px_55px_rgba(0,0,0,0.3)]">
+      <div className="flex items-center justify-between gap-4 border-b border-gray-100 dark:border-gray-800 px-6 py-5">
         <div>
-          <h4 className="font-bold text-gray-800">{title}</h4>
-          <p className="mt-1 text-sm text-gray-500">{subtitle}</p>
+          <h4 className="font-bold text-gray-800 dark:text-white">{title}</h4>
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{subtitle}</p>
         </div>
-        <div className="hidden rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-500 md:block">
+        <div className="hidden rounded-full bg-gray-100 dark:bg-gray-800 px-3 py-1 text-xs font-semibold text-gray-500 dark:text-gray-400 md:block">
           {rows.length} linha(s)
         </div>
       </div>
 
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1400px] text-left">
-          <thead className="sticky top-0 z-[1] bg-gray-50/95 text-[11px] uppercase tracking-wider text-gray-500 backdrop-blur">
+          <thead className="sticky top-0 z-[1] bg-gray-50/95 dark:bg-gray-800/95 text-[11px] uppercase tracking-wider text-gray-500 dark:text-gray-400 backdrop-blur">
             <tr>
               <th className="px-5 py-4 font-semibold">Período</th>
               <th className="px-5 py-4 font-semibold text-right">Faturamento</th>
@@ -1208,31 +1208,34 @@ function FinanceTable({
               <th className="px-5 py-4 font-semibold text-right">Lucro líquido final</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100">
+          <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
             {rows.map((row, index) => (
-              <tr key={row.key} className={cn("transition-colors hover:bg-indigo-50/40", index % 2 === 0 ? "bg-white" : "bg-gray-50/35")}>
+              <tr key={row.key} className={cn(
+                "transition-colors hover:bg-indigo-50/40 dark:hover:bg-indigo-500/10",
+                index % 2 === 0 ? "bg-white dark:bg-gray-900" : "bg-gray-50/35 dark:bg-gray-800/35"
+              )}>
                 <td className="px-5 py-4">
-                  <div className="font-semibold text-gray-800">{row.label}</div>
-                  <div className="mt-1 text-xs text-gray-400">
+                  <div className="font-semibold text-gray-800 dark:text-white">{row.label}</div>
+                  <div className="mt-1 text-xs text-gray-400 dark:text-gray-500">
                     {row.jobsCount} ensaio(s)
                     {row.unconfiguredJobs > 0 && ` · ${row.unconfiguredJobs} sem configuração`}
                   </div>
                 </td>
-                <td className="px-5 py-4 text-right font-semibold text-gray-900">{formatCurrency(row.grossRevenue)}</td>
-                <td className="px-5 py-4 text-right text-gray-600">{formatCurrency(row.keepInBank)}</td>
-                <td className="px-5 py-4 text-right text-gray-600">{formatCurrency(row.variableGraphics)}</td>
-                <td className="px-5 py-4 text-right text-gray-600">{formatCurrency(row.extras)}</td>
-                <td className="px-5 py-4 text-right text-gray-600">{formatCurrency(row.emergencyFund)}</td>
-                <td className="px-5 py-4 text-right text-gray-600">{formatCurrency(row.investments)}</td>
-                <td className="px-5 py-4 text-right text-gray-600">{formatCurrency(row.reinvestment)}</td>
-                <td className="px-5 py-4 text-right text-gray-600">{formatCurrency(row.traffic)}</td>
-                <td className="px-5 py-4 text-right text-gray-600">{formatCurrency(row.proLabore)}</td>
+                <td className="px-5 py-4 text-right font-semibold text-gray-900 dark:text-white">{formatCurrency(row.grossRevenue)}</td>
+                <td className="px-5 py-4 text-right text-gray-600 dark:text-gray-300">{formatCurrency(row.keepInBank)}</td>
+                <td className="px-5 py-4 text-right text-gray-600 dark:text-gray-300">{formatCurrency(row.variableGraphics)}</td>
+                <td className="px-5 py-4 text-right text-gray-600 dark:text-gray-300">{formatCurrency(row.extras)}</td>
+                <td className="px-5 py-4 text-right text-gray-600 dark:text-gray-300">{formatCurrency(row.emergencyFund)}</td>
+                <td className="px-5 py-4 text-right text-gray-600 dark:text-gray-300">{formatCurrency(row.investments)}</td>
+                <td className="px-5 py-4 text-right text-gray-600 dark:text-gray-300">{formatCurrency(row.reinvestment)}</td>
+                <td className="px-5 py-4 text-right text-gray-600 dark:text-gray-300">{formatCurrency(row.traffic)}</td>
+                <td className="px-5 py-4 text-right text-gray-600 dark:text-gray-300">{formatCurrency(row.proLabore)}</td>
                 <td className="px-5 py-4 text-right">
-                  <span className="inline-flex rounded-full bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-700">
+                  <span className="inline-flex rounded-full bg-emerald-50 dark:bg-emerald-500/20 px-3 py-1 text-sm font-semibold text-emerald-700 dark:text-emerald-400">
                     {formatCurrency(row.personalDistribution)}
                   </span>
                 </td>
-                <td className={cn("px-5 py-4 text-right font-semibold", row.netProfit >= 0 ? "text-emerald-600" : "text-red-600")}>
+                <td className={cn("px-5 py-4 text-right font-semibold", row.netProfit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>
                   {formatCurrency(row.netProfit)}
                 </td>
               </tr>
@@ -1240,7 +1243,7 @@ function FinanceTable({
 
             {rows.length === 0 && (
               <tr>
-                <td colSpan={12} className="px-4 py-10 text-center text-sm text-gray-400">
+                <td colSpan={12} className="px-4 py-10 text-center text-sm text-gray-400 dark:text-gray-500">
                   Nenhum ensaio encontrado para os filtros selecionados.
                 </td>
               </tr>

@@ -38,7 +38,7 @@ export default function CalendarPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 dark:border-indigo-400" />
       </div>
     );
   }
@@ -116,15 +116,15 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
     const days = eachDayOfInterval({ start: monthStart, end: monthEnd });
 
     return (
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-        <div className="grid grid-cols-7 bg-gray-50 border-b border-gray-100">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
+        <div className="grid grid-cols-7 bg-gray-50 dark:bg-gray-800 border-b border-gray-100 dark:border-gray-700">
           {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(day => (
-            <div key={day} className="px-4 py-3 text-center text-xs font-bold text-gray-400 uppercase tracking-widest">{day}</div>
+            <div key={day} className="px-4 py-3 text-center text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest">{day}</div>
           ))}
         </div>
         <div className="grid grid-cols-7">
           {Array.from({ length: monthStart.getDay() }).map((_, i) => (
-            <div key={`empty-${i}`} className="h-32 border-b border-r border-gray-50 bg-gray-50/30" />
+            <div key={`empty-${i}`} className="h-32 border-b border-r border-gray-50 dark:border-gray-800 bg-gray-50/30 dark:bg-gray-800/30" />
           ))}
           
           {days.map(day => {
@@ -138,16 +138,18 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => handleDrop(e, day)}
                 onClick={() => handleDayClick(day)}
-                className="h-32 border-b border-r border-gray-50 p-2 hover:bg-gray-50 transition-colors cursor-pointer group/day"
+                className="h-32 border-b border-r border-gray-50 dark:border-gray-800 p-2 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors cursor-pointer group/day"
               >
                 <div className="flex items-center justify-between mb-1">
                   <div className={cn(
                     "text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full",
-                    isSameDay(day, new Date()) ? "bg-indigo-600 text-white" : "text-gray-400 group-hover/day:text-indigo-600"
+                    isSameDay(day, new Date()) 
+                      ? "bg-indigo-600 dark:bg-indigo-500 text-white" 
+                      : "text-gray-400 dark:text-gray-500 group-hover/day:text-indigo-600 dark:group-hover/day:text-indigo-400"
                   )}>
                     {format(day, 'd')}
                   </div>
-                  <Plus size={14} className="text-gray-300 opacity-0 group-hover/day:opacity-100 transition-opacity" />
+                  <Plus size={14} className="text-gray-300 dark:text-gray-600 opacity-0 group-hover/day:opacity-100 transition-opacity" />
                 </div>
                 <div className="space-y-1 overflow-y-auto max-h-20 scrollbar-hide">
                   {dayJobs.map(job => (
@@ -156,9 +158,9 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
                       draggable
                       onDragStart={(e) => handleDragStart(e, job)}
                       onClick={(e) => handleJobClick(job, e)}
-                      className="w-full text-left text-[10px] p-1 bg-indigo-50 text-indigo-700 rounded border border-indigo-100 truncate font-medium flex items-center gap-1 hover:bg-indigo-100 transition-colors cursor-move"
+                      className="w-full text-left text-[10px] p-1 bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 rounded border border-indigo-100 dark:border-indigo-500/30 truncate font-medium flex items-center gap-1 hover:bg-indigo-100 dark:hover:bg-indigo-500/30 transition-colors cursor-move"
                     >
-                      {job.google_event_id && <CalendarIcon size={10} className="text-indigo-400 shrink-0" />}
+                      {job.google_event_id && <CalendarIcon size={10} className="text-indigo-400 dark:text-indigo-400 shrink-0" />}
                       {job.job_time && (
                         <span className="font-bold shrink-0">
                           {job.job_time}{job.job_end_time ? `-${job.job_end_time}` : ''}
@@ -196,19 +198,21 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
               onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => handleDrop(e, day)}
               onClick={() => handleDayClick(day)}
-              className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col min-h-[400px] cursor-pointer group/day"
+              className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col min-h-[400px] cursor-pointer group/day"
             >
               <div className={cn(
-                "p-4 border-b border-gray-50 text-center relative",
-                isSameDay(day, new Date()) ? "bg-indigo-50" : "bg-gray-50/50"
+                "p-4 border-b border-gray-50 dark:border-gray-800 text-center relative",
+                isSameDay(day, new Date()) ? "bg-indigo-50 dark:bg-indigo-500/10" : "bg-gray-50/50 dark:bg-gray-800/50"
               )}>
-                <Plus size={16} className="absolute top-4 right-4 text-gray-300 opacity-0 group-hover/day:opacity-100 transition-opacity" />
-                <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">
+                <Plus size={16} className="absolute top-4 right-4 text-gray-300 dark:text-gray-600 opacity-0 group-hover/day:opacity-100 transition-opacity" />
+                <div className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-1">
                   {format(day, 'EEE', { locale: ptBR })}
                 </div>
                 <div className={cn(
                   "text-xl font-bold inline-flex items-center justify-center w-10 h-10 rounded-full",
-                  isSameDay(day, new Date()) ? "bg-indigo-600 text-white" : "text-gray-700"
+                  isSameDay(day, new Date()) 
+                    ? "bg-indigo-600 dark:bg-indigo-500 text-white" 
+                    : "text-gray-700 dark:text-gray-200"
                 )}>
                   {format(day, 'd')}
                 </div>
@@ -220,25 +224,25 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
                     draggable
                     onDragStart={(e) => handleDragStart(e, job)}
                     onClick={(e) => handleJobClick(job, e)}
-                    className="w-full text-left p-3 bg-white border border-gray-100 rounded-xl shadow-sm hover:border-indigo-200 hover:shadow-md transition-all group cursor-move"
+                    className="w-full text-left p-3 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-xl shadow-sm hover:border-indigo-200 dark:hover:border-indigo-500/30 hover:shadow-md transition-all group cursor-move"
                   >
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full uppercase">
+                      <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/20 px-2 py-0.5 rounded-full uppercase">
                         {job.job_time || '00:00'}{job.job_end_time ? ` - ${job.job_end_time}` : ''}
                       </span>
                       {job.google_event_id && <CalendarIcon size={12} className="text-indigo-400" />}
                     </div>
-                    <div className="font-bold text-gray-900 text-sm mb-1 group-hover:text-indigo-600 transition-colors">
+                    <div className="font-bold text-gray-900 dark:text-white text-sm mb-1 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
                       {job.client_name || job.job_name || 'Tarefa'}
                     </div>
-                    <div className="text-xs text-gray-500 flex items-center gap-1">
+                    <div className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1">
                       <Camera size={12} />
                       {job.job_type}
                     </div>
                   </button>
                 ))}
                 {dayJobs.length === 0 && (
-                  <div className="h-full flex items-center justify-center text-gray-300 italic text-xs text-center px-4">
+                  <div className="h-full flex items-center justify-center text-gray-300 dark:text-gray-600 italic text-xs text-center px-4">
                     Nenhum compromisso
                   </div>
                 )}
@@ -258,23 +262,23 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
 
     return (
       <div className="max-w-2xl mx-auto space-y-4">
-        <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
+        <div className="bg-white dark:bg-gray-900 p-6 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <div className="text-4xl font-bold text-indigo-600">
+            <div className="text-4xl font-bold text-indigo-600 dark:text-indigo-400">
               {format(currentDate, 'd')}
             </div>
             <div>
-              <div className="text-lg font-bold text-gray-800 capitalize">
+              <div className="text-lg font-bold text-gray-800 dark:text-white capitalize">
                 {format(currentDate, 'EEEE', { locale: ptBR })}
               </div>
-              <div className="text-gray-500">
+              <div className="text-gray-500 dark:text-gray-400">
                 {format(currentDate, 'MMMM yyyy', { locale: ptBR })}
               </div>
             </div>
           </div>
           <div className="text-right">
-            <div className="text-sm font-bold text-gray-400 uppercase tracking-widest">Compromissos</div>
-            <div className="text-2xl font-bold text-gray-900">{dayJobs.length}</div>
+            <div className="text-sm font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest">Compromissos</div>
+            <div className="text-2xl font-bold text-gray-900 dark:text-white">{dayJobs.length}</div>
           </div>
         </div>
 
@@ -283,40 +287,40 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
             <button 
               key={job.id}
               onClick={(e) => handleJobClick(job, e)}
-              className="w-full text-left p-5 bg-white border border-gray-100 rounded-2xl shadow-sm hover:border-indigo-200 hover:shadow-md transition-all flex items-center gap-6 group"
+              className="w-full text-left p-5 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl shadow-sm hover:border-indigo-200 dark:hover:border-indigo-500/30 hover:shadow-md transition-all flex items-center gap-6 group"
             >
-              <div className="w-24 text-center border-r border-gray-100 pr-6">
-                <div className="text-xl font-bold text-gray-900">{job.job_time || '00:00'}</div>
-                {job.job_end_time && <div className="text-xs text-gray-400">até {job.job_end_time}</div>}
-                <div className="text-[10px] font-bold text-gray-400 uppercase mt-1">Horário</div>
+              <div className="w-24 text-center border-r border-gray-100 dark:border-gray-800 pr-6">
+                <div className="text-xl font-bold text-gray-900 dark:text-white">{job.job_time || '00:00'}</div>
+                {job.job_end_time && <div className="text-xs text-gray-400 dark:text-gray-500">até {job.job_end_time}</div>}
+                <div className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase mt-1">Horário</div>
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-1">
-                  <h4 className="text-lg font-bold text-gray-900 group-hover:text-indigo-600 transition-colors">
+                  <h4 className="text-lg font-bold text-gray-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
                     {job.client_name || job.job_name || 'Tarefa'}
                   </h4>
                   {job.google_event_id && <CalendarIcon size={16} className="text-indigo-400" />}
                 </div>
-                <div className="flex items-center gap-4 text-sm text-gray-500">
+                <div className="flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
                   <div className="flex items-center gap-1.5">
-                    <Camera size={16} className="text-gray-400" />
+                    <Camera size={16} className="text-gray-400 dark:text-gray-500" />
                     {job.job_type}
                   </div>
                   {job.notes && (
                     <div className="flex items-center gap-1.5 truncate max-w-xs">
-                      <MessageSquare size={16} className="text-gray-400" />
+                      <MessageSquare size={16} className="text-gray-400 dark:text-gray-500" />
                       <span className="truncate">{job.notes}</span>
                     </div>
                   )}
                 </div>
               </div>
-              <ChevronRight className="text-gray-300 group-hover:text-indigo-600 transition-colors" />
+              <ChevronRight className="text-gray-300 dark:text-gray-600 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors" />
             </button>
           ))}
           {dayJobs.length === 0 && (
-            <div className="bg-gray-50 rounded-2xl border border-dashed border-gray-200 p-12 text-center">
-              <CalendarIcon size={48} className="mx-auto text-gray-300 mb-4" />
-              <p className="text-gray-500 font-medium">Nenhum compromisso agendado para este dia.</p>
+            <div className="bg-gray-50 dark:bg-gray-800 rounded-2xl border border-dashed border-gray-200 dark:border-gray-700 p-12 text-center">
+              <CalendarIcon size={48} className="mx-auto text-gray-300 dark:text-gray-600 mb-4" />
+              <p className="text-gray-500 dark:text-gray-400 font-medium">Nenhum compromisso agendado para este dia.</p>
             </div>
           )}
         </div>
@@ -328,25 +332,28 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h3 className="text-2xl font-bold text-gray-800">Agenda</h3>
-          <p className="text-gray-500">Controle seus ensaios e compromissos.</p>
+          <h3 className="text-2xl font-bold text-gray-800 dark:text-white">Agenda</h3>
+          <p className="text-gray-500 dark:text-gray-400">Controle seus ensaios e compromissos.</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-4">
           <button 
             onClick={() => { setEditingJob(null); setSelectedDate(undefined); setShowJobModal(true); }}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 shadow-md shadow-indigo-100 transition-all"
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 dark:bg-indigo-500 text-white rounded-xl font-bold hover:bg-indigo-700 dark:hover:bg-indigo-600 shadow-md shadow-indigo-100 dark:shadow-indigo-500/20 transition-all"
           >
             <Plus size={20} />
             Novo Compromisso
           </button>
 
-          <div className="flex bg-white p-1 rounded-xl border border-gray-100 shadow-sm">
+          {/* View Toggle */}
+          <div className="flex bg-white dark:bg-gray-900 p-1 rounded-xl border border-gray-100 dark:border-gray-800 shadow-sm">
             <button 
               onClick={() => setView('day')}
               className={cn(
                 "px-4 py-1.5 text-sm font-bold rounded-lg transition-all",
-                view === 'day' ? "bg-indigo-600 text-white shadow-md" : "text-gray-400 hover:text-gray-600"
+                view === 'day' 
+                  ? "bg-indigo-600 dark:bg-indigo-500 text-white shadow-md" 
+                  : "text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
               )}
             >
               Dia
@@ -355,7 +362,9 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
               onClick={() => setView('week')}
               className={cn(
                 "px-4 py-1.5 text-sm font-bold rounded-lg transition-all",
-                view === 'week' ? "bg-indigo-600 text-white shadow-md" : "text-gray-400 hover:text-gray-600"
+                view === 'week' 
+                  ? "bg-indigo-600 dark:bg-indigo-500 text-white shadow-md" 
+                  : "text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
               )}
             >
               Semana
@@ -364,30 +373,33 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
               onClick={() => setView('month')}
               className={cn(
                 "px-4 py-1.5 text-sm font-bold rounded-lg transition-all",
-                view === 'month' ? "bg-indigo-600 text-white shadow-md" : "text-gray-400 hover:text-gray-600"
+                view === 'month' 
+                  ? "bg-indigo-600 dark:bg-indigo-500 text-white shadow-md" 
+                  : "text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
               )}
             >
               Mês
             </button>
           </div>
 
-          <div className="flex items-center gap-2 bg-white p-1 rounded-xl border border-gray-100 shadow-sm">
-            <button onClick={prev} className="p-2 hover:bg-gray-50 rounded-lg text-gray-600">
+          {/* Navigation */}
+          <div className="flex items-center gap-2 bg-white dark:bg-gray-900 p-1 rounded-xl border border-gray-100 dark:border-gray-800 shadow-sm">
+            <button onClick={prev} className="p-2 hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg text-gray-600 dark:text-gray-400 transition-colors">
               <ChevronRight className="rotate-180" size={20} />
             </button>
-            <span className="font-bold text-gray-700 min-w-32 text-center capitalize text-sm">
+            <span className="font-bold text-gray-700 dark:text-gray-200 min-w-32 text-center capitalize text-sm">
               {view === 'day' ? format(currentDate, "dd 'de' MMMM", { locale: ptBR }) :
                view === 'week' ? `Semana de ${format(startOfWeek(currentDate, { weekStartsOn: 0 }), 'dd/MM')}` :
                format(currentDate, 'MMMM yyyy', { locale: ptBR })}
             </span>
-            <button onClick={next} className="p-2 hover:bg-gray-50 rounded-lg text-gray-600">
+            <button onClick={next} className="p-2 hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg text-gray-600 dark:text-gray-400 transition-colors">
               <ChevronRight size={20} />
             </button>
           </div>
           
           <button 
             onClick={() => setCurrentDate(new Date())}
-            className="px-4 py-2 bg-white border border-gray-100 rounded-xl text-sm font-bold text-indigo-600 hover:bg-gray-50 shadow-sm transition-all"
+            className="px-4 py-2 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl text-sm font-bold text-indigo-600 dark:text-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-800 shadow-sm transition-all"
           >
             Hoje
           </button>
