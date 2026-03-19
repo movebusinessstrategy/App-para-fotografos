@@ -138,18 +138,18 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
           </div>
 
           {/* Scrollbar horizontal customizada */}
-          <div className="h-2 bg-gray-100 rounded-full mx-4 mb-2 overflow-hidden md:hidden">
-            <div className="h-full bg-gray-300 rounded-full w-1/3" />
+          <div className="h-2 bg-gray-100 dark:bg-gray-800 rounded-full mx-4 mb-2 overflow-hidden md:hidden">
+            <div className="h-full bg-gray-300 dark:bg-gray-600 rounded-full w-1/3" />
           </div>
         </div>
 
         <DragOverlay>
           {activeDeal && (
-            <div className="bg-white border border-gray-300 rounded-lg p-3 shadow-lg w-[260px] opacity-95">
-              <div className="font-medium text-gray-900 text-sm">
+            <div className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 shadow-lg dark:shadow-black/30 w-[260px] opacity-95">
+              <div className="font-medium text-gray-900 dark:text-white text-sm">
                 {activeDeal.title}
               </div>
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                 R$ {(activeDeal.value || 0).toLocaleString("pt-BR")}
               </div>
             </div>
@@ -193,20 +193,22 @@ function StageColumn({
     <div
       ref={setNodeRef}
       className={`flex flex-col flex-shrink-0 w-[280px] min-w-[280px] h-full rounded-lg border transition-colors ${
-        isOver ? "border-gray-400 bg-gray-50" : "border-gray-200 bg-white"
+        isOver 
+          ? "border-gray-400 dark:border-gray-500 bg-gray-50 dark:bg-gray-800/80" 
+          : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900"
       }`}
     >
       {/* Header */}
-      <div className="flex-shrink-0 p-3 border-b border-gray-200">
+      <div className="flex-shrink-0 p-3 border-b border-gray-200 dark:border-gray-700">
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-gray-900 text-sm truncate">
+          <h3 className="font-semibold text-gray-900 dark:text-white text-sm truncate">
             {stage.name}
           </h3>
-          <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
+          <span className="text-xs text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">
             {deals.length}
           </span>
         </div>
-        <div className="text-xs text-gray-500 mt-1">
+        <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
           R$ {totalValue.toLocaleString("pt-BR")}
         </div>
       </div>
@@ -226,8 +228,8 @@ function StageColumn({
         </SortableContext>
 
         {deals.length === 0 && (
-          <div className="flex items-center justify-center h-20 border border-dashed border-gray-200 rounded-lg">
-            <span className="text-xs text-gray-400">Arraste negócios aqui</span>
+          <div className="flex items-center justify-center h-20 border border-dashed border-gray-200 dark:border-gray-700 rounded-lg">
+            <span className="text-xs text-gray-400 dark:text-gray-500">Arraste negócios aqui</span>
           </div>
         )}
       </div>

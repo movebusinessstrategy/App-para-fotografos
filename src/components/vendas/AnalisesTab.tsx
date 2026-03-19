@@ -80,108 +80,108 @@ export function AnalisesTab({ deals, stages }: AnalisesTabProps) {
     <div className="space-y-6 overflow-y-auto h-full pb-4">
       {/* Cards principais */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-white border border-gray-200 rounded-lg p-4">
-          <div className="flex items-center gap-2 text-gray-500 mb-2">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+          <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 mb-2">
             <DollarSign size={18} />
             <span className="text-xs font-medium uppercase">No Funil</span>
           </div>
-          <div className="text-2xl font-bold text-gray-900">{formatCurrency(stats.totalActive)}</div>
-          <div className="text-sm text-gray-500">{stats.activeCount} negócios</div>
+          <div className="text-2xl font-bold text-gray-900 dark:text-white">{formatCurrency(stats.totalActive)}</div>
+          <div className="text-sm text-gray-500 dark:text-gray-400">{stats.activeCount} negócios</div>
         </div>
 
-        <div className="bg-white border border-gray-200 rounded-lg p-4">
-          <div className="flex items-center gap-2 text-green-600 mb-2">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+          <div className="flex items-center gap-2 text-green-600 dark:text-green-400 mb-2">
             <TrendingUp size={18} />
             <span className="text-xs font-medium uppercase">Ganhos</span>
           </div>
-          <div className="text-2xl font-bold text-gray-900">{formatCurrency(stats.totalWon)}</div>
-          <div className="text-sm text-gray-500">{stats.wonCount} negócios</div>
+          <div className="text-2xl font-bold text-gray-900 dark:text-white">{formatCurrency(stats.totalWon)}</div>
+          <div className="text-sm text-gray-500 dark:text-gray-400">{stats.wonCount} negócios</div>
         </div>
 
-        <div className="bg-white border border-gray-200 rounded-lg p-4">
-          <div className="flex items-center gap-2 text-red-600 mb-2">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+          <div className="flex items-center gap-2 text-red-600 dark:text-red-400 mb-2">
             <TrendingDown size={18} />
             <span className="text-xs font-medium uppercase">Perdidos</span>
           </div>
-          <div className="text-2xl font-bold text-gray-900">{formatCurrency(stats.totalLost)}</div>
-          <div className="text-sm text-gray-500">{stats.lostCount} negócios</div>
+          <div className="text-2xl font-bold text-gray-900 dark:text-white">{formatCurrency(stats.totalLost)}</div>
+          <div className="text-sm text-gray-500 dark:text-gray-400">{stats.lostCount} negócios</div>
         </div>
 
-        <div className="bg-white border border-gray-200 rounded-lg p-4">
-          <div className="flex items-center gap-2 text-gray-500 mb-2">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+          <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 mb-2">
             <Target size={18} />
             <span className="text-xs font-medium uppercase">Taxa de Conversão</span>
           </div>
-          <div className="text-2xl font-bold text-gray-900">{stats.winRate.toFixed(1)}%</div>
-          <div className="text-sm text-gray-500">ganhos/total fechados</div>
+          <div className="text-2xl font-bold text-gray-900 dark:text-white">{stats.winRate.toFixed(1)}%</div>
+          <div className="text-sm text-gray-500 dark:text-gray-400">ganhos/total fechados</div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Por etapa */}
-        <div className="bg-white border border-gray-200 rounded-lg p-4">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
           <div className="flex items-center gap-2 mb-4">
-            <BarChart3 size={18} className="text-gray-500" />
-            <h3 className="font-semibold text-gray-900">Por Etapa</h3>
+            <BarChart3 size={18} className="text-gray-500 dark:text-gray-400" />
+            <h3 className="font-semibold text-gray-900 dark:text-white">Por Etapa</h3>
           </div>
           <div className="space-y-3">
             {stats.byStage.map((stage) => (
               <div key={stage.name} className="flex items-center justify-between">
                 <div className="flex-1">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm text-gray-700">{stage.name}</span>
-                    <span className="text-xs text-gray-500">{stage.count} negócios</span>
+                    <span className="text-sm text-gray-700 dark:text-gray-300">{stage.name}</span>
+                    <span className="text-xs text-gray-500 dark:text-gray-400">{stage.count} negócios</span>
                   </div>
-                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-gray-900 rounded-full"
+                      className="h-full bg-gray-900 dark:bg-white rounded-full"
                       style={{
                         width: `${Math.min((stage.value / (stats.totalActive || 1)) * 100, 100)}%`,
                       }}
                     />
                   </div>
                 </div>
-                <span className="text-sm font-medium text-gray-900 ml-4 w-24 text-right">
+                <span className="text-sm font-medium text-gray-900 dark:text-white ml-4 w-24 text-right">
                   {formatCurrency(stage.value)}
                 </span>
               </div>
             ))}
             {stats.byStage.length === 0 && (
-              <p className="text-sm text-gray-500 text-center py-4">Sem dados</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">Sem dados</p>
             )}
           </div>
         </div>
 
         {/* Previsão */}
-        <div className="bg-white border border-gray-200 rounded-lg p-4">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
           <div className="flex items-center gap-2 mb-4">
-            <Clock size={18} className="text-gray-500" />
-            <h3 className="font-semibold text-gray-900">Previsão de Fechamento</h3>
+            <Clock size={18} className="text-gray-500 dark:text-gray-400" />
+            <h3 className="font-semibold text-gray-900 dark:text-white">Previsão de Fechamento</h3>
           </div>
           <div className="space-y-3">
             {stats.byMonth.map(([month, data]) => (
               <div key={month} className="flex items-center justify-between">
                 <div className="flex-1">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm text-gray-700">{formatMonth(month)}</span>
-                    <span className="text-xs text-gray-500">{data.count} negócios</span>
+                    <span className="text-sm text-gray-700 dark:text-gray-300">{formatMonth(month)}</span>
+                    <span className="text-xs text-gray-500 dark:text-gray-400">{data.count} negócios</span>
                   </div>
-                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-gray-700 rounded-full"
+                      className="h-full bg-gray-700 dark:bg-gray-300 rounded-full"
                       style={{
                         width: `${Math.min((data.value / (stats.totalActive || 1)) * 100, 100)}%`,
                       }}
                     />
                   </div>
                 </div>
-                <span className="text-sm font-medium text-gray-900 ml-4 w-24 text-right">
+                <span className="text-sm font-medium text-gray-900 dark:text-white ml-4 w-24 text-right">
                   {formatCurrency(data.value)}
                 </span>
               </div>
             ))}
             {stats.byMonth.length === 0 && (
-              <p className="text-sm text-gray-500 text-center py-4">
+              <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
                 Sem previsões de fechamento definidas
               </p>
             )}
@@ -190,21 +190,21 @@ export function AnalisesTab({ deals, stages }: AnalisesTabProps) {
       </div>
 
       {/* Ticket médio */}
-      <div className="bg-white border border-gray-200 rounded-lg p-4">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
         <div className="flex items-center justify-between">
           <div>
-            <div className="text-xs font-medium text-gray-500 uppercase mb-1">
+            <div className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase mb-1">
               Ticket Médio dos Negócios Ativos
             </div>
-            <div className="text-2xl font-bold text-gray-900">
+            <div className="text-2xl font-bold text-gray-900 dark:text-white">
               {formatCurrency(stats.avgDealValue)}
             </div>
           </div>
           <div className="text-right">
-            <div className="text-xs font-medium text-gray-500 uppercase mb-1">
+            <div className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase mb-1">
               Total de Negócios
             </div>
-            <div className="text-2xl font-bold text-gray-900">{deals.length}</div>
+            <div className="text-2xl font-bold text-gray-900 dark:text-white">{deals.length}</div>
           </div>
         </div>
       </div>

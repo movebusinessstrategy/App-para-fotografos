@@ -88,40 +88,45 @@ export function StageManager({ open, stages, onClose, onUpdated }: StageManagerP
   return (
     <>
       <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gray-50/60">
+        <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl dark:shadow-black/40 w-full max-w-3xl overflow-hidden border border-transparent dark:border-gray-800">
+          {/* Header */}
+          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800 bg-gray-50/60 dark:bg-gray-800/50">
             <div>
-              <p className="text-xs uppercase text-gray-400 font-semibold">Etapas do Funil</p>
-              <h3 className="text-lg font-bold text-gray-800">Organize o pipeline</h3>
+              <p className="text-xs uppercase text-gray-400 dark:text-gray-500 font-semibold">Etapas do Funil</p>
+              <h3 className="text-lg font-bold text-gray-800 dark:text-white">Organize o pipeline</h3>
             </div>
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600">×</button>
+            <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-2xl font-light transition-colors">
+              ×
+            </button>
           </div>
 
           <div className="p-6 space-y-4">
-            <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
-              <p className="text-sm font-semibold text-gray-700 mb-2">Adicionar nova etapa</p>
+            {/* Add Stage Section */}
+            <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-4 border border-gray-100 dark:border-gray-700">
+              <p className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Adicionar nova etapa</p>
               <div className="flex items-center gap-2 flex-wrap">
                 <input
                   value={newStage.name}
                   onChange={(e) => setNewStage((p) => ({ ...p, name: e.target.value }))}
                   placeholder="Nome da etapa"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg"
+                  className="px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
                 />
                 <input
                   type="color"
                   value={newStage.color}
                   onChange={(e) => setNewStage((p) => ({ ...p, color: e.target.value }))}
-                  className="w-12 h-9 rounded border border-gray-200"
+                  className="w-12 h-9 rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 cursor-pointer"
                 />
                 <button
                   onClick={addStage}
-                  className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2"
+                  className="bg-indigo-600 dark:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-colors"
                 >
                   <Plus size={16} /> Adicionar
                 </button>
               </div>
             </div>
 
+            {/* Sortable Stages */}
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
               <SortableContext items={localStages.map((s) => s.id)} strategy={rectSortingStrategy}>
                 <div className="space-y-2">
@@ -132,8 +137,9 @@ export function StageManager({ open, stages, onClose, onUpdated }: StageManagerP
               </SortableContext>
             </DndContext>
 
-            <div className="border border-gray-100 rounded-xl p-4">
-              <p className="text-sm font-semibold text-gray-700 mb-3">Etapas finais (fixas)</p>
+            {/* Final Stages */}
+            <div className="border border-gray-100 dark:border-gray-700 rounded-xl p-4 bg-white dark:bg-gray-800/30">
+              <p className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Etapas finais (fixas)</p>
               <div className="flex flex-wrap gap-2">
                 {finals.map((stage) => (
                   <span
@@ -166,7 +172,11 @@ export function StageManager({ open, stages, onClose, onUpdated }: StageManagerP
   );
 }
 
-type SortableItemProps = { stage: PipelineStage; onUpdate: (id: string, patch: Partial<PipelineStage>) => void; onDelete: (id: string) => void };
+type SortableItemProps = { 
+  stage: PipelineStage; 
+  onUpdate: (id: string, patch: Partial<PipelineStage>) => void; 
+  onDelete: (id: string) => void;
+};
 
 const SortableItem: React.FC<SortableItemProps> = ({ stage, onUpdate, onDelete }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: stage.id });
@@ -179,25 +189,25 @@ const SortableItem: React.FC<SortableItemProps> = ({ stage, onUpdate, onDelete }
       {...attributes}
       {...listeners}
       className={cn(
-        "flex items-center gap-3 bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm",
-        isDragging && "shadow-lg"
+        "flex items-center gap-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 shadow-sm dark:shadow-black/20",
+        isDragging && "shadow-lg dark:shadow-black/40 ring-2 ring-indigo-500/50 dark:ring-indigo-400/50"
       )}
     >
-      <div className="w-3 h-3 rounded-full" style={{ backgroundColor: stage.color }} />
+      <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: stage.color }} />
       <input
         value={stage.name}
         onChange={(e) => onUpdate(stage.id, { name: e.target.value })}
-        className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg"
+        className="flex-1 px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
       />
       <input
         type="color"
         value={stage.color}
         onChange={(e) => onUpdate(stage.id, { color: e.target.value })}
-        className="w-10 h-9 rounded border border-gray-200"
+        className="w-10 h-9 rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 cursor-pointer"
       />
       <button
         onClick={() => onDelete(stage.id)}
-        className="text-rose-500 hover:text-rose-600"
+        className="text-rose-500 dark:text-rose-400 hover:text-rose-600 dark:hover:text-rose-300 transition-colors"
         title="Remover"
       >
         <Trash2 size={18} />

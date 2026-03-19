@@ -78,7 +78,7 @@ export default function ImportProgressModal({
           exit={{ opacity: 0 }}
         >
           <motion.div
-            className="w-full max-w-lg rounded-2xl bg-white shadow-2xl border border-gray-200 p-6 space-y-4 max-h-[90vh] overflow-hidden flex flex-col"
+            className="w-full max-w-lg rounded-2xl bg-white dark:bg-gray-900 shadow-2xl dark:shadow-black/40 border border-gray-200 dark:border-gray-800 p-6 space-y-4 max-h-[90vh] overflow-hidden flex flex-col"
             initial={{ scale: 0.95, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.95, opacity: 0 }}
@@ -89,11 +89,11 @@ export default function ImportProgressModal({
                 className={`w-10 h-10 rounded-xl flex items-center justify-center ${
                   done
                     ? allFailed
-                      ? "bg-red-50 text-red-600"
+                      ? "bg-red-50 dark:bg-red-950/50 text-red-600 dark:text-red-400"
                       : hasErrors
-                        ? "bg-amber-50 text-amber-600"
-                        : "bg-green-50 text-green-600"
-                    : "bg-indigo-50 text-indigo-600"
+                        ? "bg-amber-50 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400"
+                        : "bg-green-50 dark:bg-green-950/50 text-green-600 dark:text-green-400"
+                    : "bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400"
                 }`}
               >
                 {done ? (
@@ -109,24 +109,24 @@ export default function ImportProgressModal({
                 )}
               </div>
               <div>
-                <p className="text-sm text-gray-500">Importação de CSV</p>
-                <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Importação de CSV</p>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{title}</h3>
               </div>
             </div>
 
             {/* Progress indicator */}
-            <div className="flex items-center gap-3 text-sm text-gray-600">
+            <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400">
               {!done ? (
                 <>
-                  <Loader2 className="animate-spin text-indigo-600" size={18} />
+                  <Loader2 className="animate-spin text-indigo-600 dark:text-indigo-400" size={18} />
                   <span>
                     Processando {Math.min(processed, total)} de {total} registros...
                   </span>
                 </>
               ) : allFailed ? (
-                <span className="text-red-600">Importação interrompida por erro crítico.</span>
+                <span className="text-red-600 dark:text-red-400">Importação interrompida por erro crítico.</span>
               ) : (
-                <span className="text-green-600">
+                <span className="text-green-600 dark:text-green-400">
                   {summary?.totalProcessed || processed} de {total} registros processados
                 </span>
               )}
@@ -134,16 +134,16 @@ export default function ImportProgressModal({
 
             {/* Progress bar */}
             <div className="space-y-2">
-              <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden">
+              <div className="w-full h-3 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
                 <motion.div
                   className={`h-full ${
                     done
                       ? allFailed
-                        ? "bg-red-500"
+                        ? "bg-red-500 dark:bg-red-600"
                         : hasErrors
-                          ? "bg-gradient-to-r from-amber-400 via-amber-500 to-orange-500"
-                          : "bg-gradient-to-r from-green-400 via-emerald-500 to-teal-500"
-                      : "bg-gradient-to-r from-indigo-500 via-violet-500 to-blue-500"
+                          ? "bg-gradient-to-r from-amber-400 via-amber-500 to-orange-500 dark:from-amber-500 dark:via-amber-600 dark:to-orange-600"
+                          : "bg-gradient-to-r from-green-400 via-emerald-500 to-teal-500 dark:from-green-500 dark:via-emerald-600 dark:to-teal-600"
+                      : "bg-gradient-to-r from-indigo-500 via-violet-500 to-blue-500 dark:from-indigo-400 dark:via-violet-400 dark:to-blue-400"
                   }`}
                   style={{ width: `${percent}%` }}
                   initial={{ width: 0 }}
@@ -151,7 +151,7 @@ export default function ImportProgressModal({
                   transition={{ ease: "easeOut", duration: 0.25 }}
                 />
               </div>
-              <div className="flex items-center justify-between text-sm text-gray-600">
+              <div className="flex items-center justify-between text-sm text-gray-600 dark:text-gray-400">
                 <span>{percent}% concluído</span>
                 <span>
                   {Math.min(processed, total)} / {total}
@@ -161,27 +161,27 @@ export default function ImportProgressModal({
 
             {/* Success Summary */}
             {done && summary && !allFailed && (
-              <div className="rounded-xl bg-green-50 border border-green-100 p-4 text-sm text-green-800">
+              <div className="rounded-xl bg-green-50 dark:bg-green-950/30 border border-green-100 dark:border-green-900/50 p-4 text-sm text-green-800 dark:text-green-300">
                 <div className="flex items-center gap-2 font-semibold mb-3">
                   <CheckCircle2 size={16} />
                   Resumo da importação
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                  <div className="flex items-center justify-between bg-white/60 rounded-lg px-3 py-2">
-                    <span className="text-green-700">Novos clientes:</span>
-                    <span className="font-bold text-green-800">{summary.importedClientsCount}</span>
+                  <div className="flex items-center justify-between bg-white/60 dark:bg-green-900/30 rounded-lg px-3 py-2">
+                    <span className="text-green-700 dark:text-green-400">Novos clientes:</span>
+                    <span className="font-bold text-green-800 dark:text-green-300">{summary.importedClientsCount}</span>
                   </div>
-                  <div className="flex items-center justify-between bg-white/60 rounded-lg px-3 py-2">
-                    <span className="text-green-700">Atualizados:</span>
-                    <span className="font-bold text-green-800">{summary.updatedClientsCount}</span>
+                  <div className="flex items-center justify-between bg-white/60 dark:bg-green-900/30 rounded-lg px-3 py-2">
+                    <span className="text-green-700 dark:text-green-400">Atualizados:</span>
+                    <span className="font-bold text-green-800 dark:text-green-300">{summary.updatedClientsCount}</span>
                   </div>
-                  <div className="flex items-center justify-between bg-white/60 rounded-lg px-3 py-2">
-                    <span className="text-green-700">Novos trabalhos:</span>
-                    <span className="font-bold text-green-800">{summary.importedJobsCount}</span>
+                  <div className="flex items-center justify-between bg-white/60 dark:bg-green-900/30 rounded-lg px-3 py-2">
+                    <span className="text-green-700 dark:text-green-400">Novos trabalhos:</span>
+                    <span className="font-bold text-green-800 dark:text-green-300">{summary.importedJobsCount}</span>
                   </div>
-                  <div className="flex items-center justify-between bg-white/60 rounded-lg px-3 py-2">
-                    <span className="text-green-700">Jobs atualizados:</span>
-                    <span className="font-bold text-green-800">{summary.updatedJobsCount}</span>
+                  <div className="flex items-center justify-between bg-white/60 dark:bg-green-900/30 rounded-lg px-3 py-2">
+                    <span className="text-green-700 dark:text-green-400">Jobs atualizados:</span>
+                    <span className="font-bold text-green-800 dark:text-green-300">{summary.updatedJobsCount}</span>
                   </div>
                 </div>
               </div>
@@ -189,15 +189,15 @@ export default function ImportProgressModal({
 
             {/* Errors List */}
             {done && hasErrors && (
-              <div className="rounded-xl bg-red-50 border border-red-100 p-4 text-sm flex flex-col max-h-48 overflow-hidden">
+              <div className="rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-100 dark:border-red-900/50 p-4 text-sm flex flex-col max-h-48 overflow-hidden">
                 <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2 font-semibold text-red-800">
+                  <div className="flex items-center gap-2 font-semibold text-red-800 dark:text-red-300">
                     <AlertCircle size={16} />
                     {summary.errors.length} registro(s) com problema
                   </div>
                   <button
                     onClick={handleDownloadErrorReport}
-                    className="flex items-center gap-1.5 text-xs font-bold text-red-700 hover:text-red-900 bg-red-100 hover:bg-red-200 px-2.5 py-1.5 rounded-lg transition-colors"
+                    className="flex items-center gap-1.5 text-xs font-bold text-red-700 dark:text-red-300 hover:text-red-900 dark:hover:text-red-100 bg-red-100 dark:bg-red-900/50 hover:bg-red-200 dark:hover:bg-red-900/70 px-2.5 py-1.5 rounded-lg transition-colors"
                   >
                     <Download size={14} />
                     Baixar relatório
@@ -207,16 +207,16 @@ export default function ImportProgressModal({
                   {summary.errors.slice(0, 10).map((err, idx) => (
                     <div
                       key={idx}
-                      className="flex items-start gap-2 bg-white/70 rounded-lg px-3 py-2 text-xs"
+                      className="flex items-start gap-2 bg-white/70 dark:bg-red-900/30 rounded-lg px-3 py-2 text-xs"
                     >
-                      <span className="font-mono font-bold text-red-600 whitespace-nowrap">
+                      <span className="font-mono font-bold text-red-600 dark:text-red-400 whitespace-nowrap">
                         Linha {err.row}:
                       </span>
-                      <span className="text-red-800">{err.message}</span>
+                      <span className="text-red-800 dark:text-red-300">{err.message}</span>
                     </div>
                   ))}
                   {summary.errors.length > 10 && (
-                    <div className="text-xs text-amber-600 italic text-center py-2">
+                    <div className="text-xs text-amber-600 dark:text-amber-400 italic text-center py-2">
                       ... e mais {summary.errors.length - 10} erro(s). Baixe o relatório para ver todos.
                     </div>
                   )}
@@ -226,7 +226,7 @@ export default function ImportProgressModal({
 
             {/* Critical Error */}
             {done && allFailed && (
-              <div className="rounded-xl bg-red-50 border border-red-100 p-4 text-sm text-red-700">
+              <div className="rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-100 dark:border-red-900/50 p-4 text-sm text-red-700 dark:text-red-300">
                 <div className="flex items-center gap-2 font-semibold">
                   <XCircle size={16} />
                   Erro crítico na importação
@@ -242,8 +242,8 @@ export default function ImportProgressModal({
                   onClick={onClose}
                   className={`px-5 py-2.5 rounded-xl font-semibold transition-colors ${
                     allFailed
-                      ? "bg-red-600 text-white hover:bg-red-700"
-                      : "bg-indigo-600 text-white hover:bg-indigo-700"
+                      ? "bg-red-600 dark:bg-red-500 text-white hover:bg-red-700 dark:hover:bg-red-600"
+                      : "bg-indigo-600 dark:bg-indigo-500 text-white hover:bg-indigo-700 dark:hover:bg-indigo-600"
                   }`}
                 >
                   Fechar

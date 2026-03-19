@@ -190,13 +190,13 @@ export function StageCustomizer({
   return (
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-        <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-hidden flex flex-col">
-          <div className="flex items-center justify-between p-4 border-b border-gray-200">
-            <h2 className="text-lg font-bold text-gray-900">Personalizar Funil</h2>
+        <div className="absolute inset-0 bg-black/30 dark:bg-black/60" onClick={onClose} />
+        <div className="relative bg-white dark:bg-gray-900 rounded-xl shadow-xl dark:shadow-2xl dark:shadow-black/30 w-full max-w-md max-h-[90vh] overflow-hidden flex flex-col border border-transparent dark:border-gray-800">
+          <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-800">
+            <h2 className="text-lg font-bold text-gray-900 dark:text-white">Personalizar Funil</h2>
             <button
               onClick={onClose}
-              className="p-1 text-gray-400 hover:text-gray-600"
+              className="p-1 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
             >
               <X size={20} />
             </button>
@@ -205,7 +205,7 @@ export function StageCustomizer({
           <div className="flex-1 overflow-y-auto p-4">
             {/* Etapas regulares com drag and drop */}
             <div className="space-y-2 mb-6">
-              <label className="text-xs font-medium text-gray-500 uppercase">
+              <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                 Etapas do Funil
               </label>
 
@@ -240,9 +240,9 @@ export function StageCustomizer({
 
                 <DragOverlay>
                   {draggingStage && (
-                    <div className="flex items-center gap-2 p-3 bg-white rounded-lg border border-gray-300 shadow-lg">
-                      <GripVertical size={16} className="text-gray-400" />
-                      <span className="text-sm text-gray-900">{draggingStage.name}</span>
+                    <div className="flex items-center gap-2 p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-300 dark:border-gray-600 shadow-lg dark:shadow-black/30">
+                      <GripVertical size={16} className="text-gray-400 dark:text-gray-500" />
+                      <span className="text-sm text-gray-900 dark:text-white">{draggingStage.name}</span>
                     </div>
                   )}
                 </DragOverlay>
@@ -255,12 +255,12 @@ export function StageCustomizer({
                   onChange={(e) => setNewStageName(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && addStage()}
                   placeholder="Nome da nova etapa..."
-                  className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:border-gray-400"
+                  className="flex-1 px-3 py-2 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:border-gray-400 dark:focus:border-gray-600"
                 />
                 <button
                   onClick={addStage}
                   disabled={!newStageName.trim() || saving}
-                  className="px-3 py-2 bg-gray-900 text-white rounded-lg text-sm hover:bg-gray-800 disabled:opacity-50 flex items-center gap-1"
+                  className="px-3 py-2 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-lg text-sm hover:bg-gray-800 dark:hover:bg-gray-100 disabled:opacity-50 flex items-center gap-1 transition-colors"
                 >
                   <Plus size={16} />
                   Adicionar
@@ -270,29 +270,29 @@ export function StageCustomizer({
 
             {/* Etapas finais */}
             <div className="space-y-2">
-              <label className="text-xs font-medium text-gray-500 uppercase">
+              <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                 Etapas Finais (não editáveis)
               </label>
               {finalStages.map((stage) => (
                 <div
                   key={stage.id}
-                  className="flex items-center gap-3 p-3 bg-gray-100 rounded-lg"
+                  className="flex items-center gap-3 p-3 bg-gray-100 dark:bg-gray-800 rounded-lg"
                 >
                   <span
                     className={`w-2.5 h-2.5 rounded-full ${
                       stage.is_won ? "bg-green-500" : "bg-red-500"
                     }`}
                   />
-                  <span className="text-sm text-gray-600">{stage.name}</span>
+                  <span className="text-sm text-gray-600 dark:text-gray-400">{stage.name}</span>
                 </div>
               ))}
             </div>
           </div>
 
-          <div className="p-4 border-t border-gray-200">
+          <div className="p-4 border-t border-gray-200 dark:border-gray-800">
             <button
               onClick={onClose}
-              className="w-full py-2.5 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800"
+              className="w-full py-2.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-lg text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors"
             >
               Concluído
             </button>
@@ -356,15 +356,15 @@ function SortableStageItem({
     <div
       ref={setNodeRef}
       style={style}
-      className={`flex items-center gap-2 p-3 bg-gray-50 rounded-lg group ${
-        isDragging ? "opacity-50 shadow-lg" : ""
+      className={`flex items-center gap-2 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg group ${
+        isDragging ? "opacity-50 shadow-lg dark:shadow-black/40" : ""
       }`}
     >
       {/* Handle para arrastar */}
       <button
         {...attributes}
         {...listeners}
-        className="cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600 touch-none"
+        className="cursor-grab active:cursor-grabbing text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 touch-none transition-colors"
       >
         <GripVertical size={16} />
       </button>
@@ -379,28 +379,28 @@ function SortableStageItem({
               if (e.key === "Enter") onSaveEdit();
               if (e.key === "Escape") onCancelEdit();
             }}
-            className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm outline-none focus:border-gray-400"
+            className="flex-1 px-2 py-1 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded text-sm text-gray-900 dark:text-white outline-none focus:border-gray-400 dark:focus:border-gray-500"
           />
           <button
             onClick={onSaveEdit}
             disabled={saving}
-            className="p-1.5 text-green-600 hover:bg-green-50 rounded"
+            className="p-1.5 text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 rounded transition-colors"
           >
             <Check size={16} />
           </button>
           <button
             onClick={onCancelEdit}
-            className="p-1.5 text-gray-400 hover:bg-gray-100 rounded"
+            className="p-1.5 text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
           >
             <X size={16} />
           </button>
         </div>
       ) : (
         <>
-          <span className="flex-1 text-sm text-gray-900">{stage.name}</span>
+          <span className="flex-1 text-sm text-gray-900 dark:text-white">{stage.name}</span>
           <button
             onClick={onStartEdit}
-            className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+            className="p-1.5 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded opacity-0 group-hover:opacity-100 transition-all"
             title="Editar nome"
           >
             <Pencil size={14} />
@@ -408,7 +408,7 @@ function SortableStageItem({
           <button
             onClick={onDelete}
             disabled={saving}
-            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+            className="p-1.5 text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded opacity-0 group-hover:opacity-100 transition-all"
             title="Excluir etapa"
           >
             <Trash2 size={14} />

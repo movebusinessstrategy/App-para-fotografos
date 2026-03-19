@@ -73,28 +73,28 @@ export default function JobFormModal({
       <motion.div
         initial={{ scale: 0.9, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden"
+        className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl dark:shadow-black/40 w-full max-w-lg overflow-hidden border border-transparent dark:border-gray-800"
       >
-        <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
-          <h3 className="text-lg font-bold text-gray-800">
+        <div className="p-6 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between bg-gray-50/50 dark:bg-gray-800/50">
+          <h3 className="text-lg font-bold text-gray-800 dark:text-white">
             {job ? "Editar Trabalho" : "Registrar Novo Trabalho"}
           </h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+          <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">
             <Plus className="rotate-45" size={24} />
           </button>
         </div>
         <form onSubmit={handleSubmit} onKeyDown={handleKeyDown} className="p-6 space-y-4">
           {!initialClientId && !job && (
             <div>
-              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Cliente</label>
+              <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Cliente</label>
               <select
                 value={clientId || ""}
                 onChange={(e) => setClientId(e.target.value ? Number(e.target.value) : undefined)}
-                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
               >
-                <option value="">Tarefa (Sem Cliente vinculado)</option>
+                <option value="" className="dark:bg-gray-800">Tarefa (Sem Cliente vinculado)</option>
                 {clients.map((c) => (
-                  <option key={c.id} value={c.id}>
+                  <option key={c.id} value={c.id} className="dark:bg-gray-800">
                     {c.name}
                   </option>
                 ))}
@@ -104,128 +104,132 @@ export default function JobFormModal({
 
           <div className="space-y-4">
             <div>
-              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nome do Ensaio/Trabalho</label>
+              <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Nome do Ensaio/Trabalho</label>
               <input
                 required
                 type="text"
                 placeholder="Ex: Ensaio Gestante Maria"
                 value={formData.job_name}
                 onChange={(e) => setFormData({ ...formData, job_name: e.target.value })}
-                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
               />
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Tipo</label>
+                <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Tipo</label>
                 <select
                   value={formData.job_type}
                   onChange={(e) => setFormData({ ...formData, job_type: e.target.value })}
-                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
                 >
-                  <option>Gestante</option>
-                  <option>Newborn</option>
-                  <option>Acompanhamento</option>
-                  <option>Smash the Cake</option>
-                  <option>Aniversário</option>
-                  <option>Batizado</option>
-                  <option>Família</option>
-                  <option>Marca Pessoal</option>
-                  <option>Evento Externo</option>
-                  <option>Outros</option>
+                  <option className="dark:bg-gray-800">Gestante</option>
+                  <option className="dark:bg-gray-800">Newborn</option>
+                  <option className="dark:bg-gray-800">Acompanhamento</option>
+                  <option className="dark:bg-gray-800">Smash the Cake</option>
+                  <option className="dark:bg-gray-800">Aniversário</option>
+                  <option className="dark:bg-gray-800">Batizado</option>
+                  <option className="dark:bg-gray-800">Família</option>
+                  <option className="dark:bg-gray-800">Marca Pessoal</option>
+                  <option className="dark:bg-gray-800">Evento Externo</option>
+                  <option className="dark:bg-gray-800">Outros</option>
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Status do Ensaio</label>
+                <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Status do Ensaio</label>
                 <select
                   value={formData.status}
                   onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
                 >
-                  <option value="scheduled">Agendado</option>
-                  <option value="completed">Concluído</option>
-                  <option value="cancelled">Cancelado</option>
+                  <option value="scheduled" className="dark:bg-gray-800">Agendado</option>
+                  <option value="completed" className="dark:bg-gray-800">Concluído</option>
+                  <option value="cancelled" className="dark:bg-gray-800">Cancelado</option>
                 </select>
               </div>
             </div>
 
             <div className="grid grid-cols-3 gap-4">
               <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Data</label>
+                <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Data</label>
                 <input
                   required
                   type="date"
                   value={formData.job_date}
                   onChange={(e) => setFormData({ ...formData, job_date: e.target.value })}
-                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 [color-scheme:light] dark:[color-scheme:dark]"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Início</label>
+                <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Início</label>
                 <input
                   required
                   type="time"
                   value={formData.job_time}
                   onChange={(e) => setFormData({ ...formData, job_time: e.target.value })}
-                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 [color-scheme:light] dark:[color-scheme:dark]"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Fim (Opcional)</label>
+                <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Fim (Opcional)</label>
                 <input
                   type="time"
                   value={formData.job_end_time}
                   onChange={(e) => setFormData({ ...formData, job_end_time: e.target.value })}
-                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 [color-scheme:light] dark:[color-scheme:dark]"
                 />
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Valor (R$)</label>
+                <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Valor (R$)</label>
                 <input
                   type="number"
                   value={formData.amount}
                   onChange={(e) =>
                     setFormData({ ...formData, amount: e.target.value === "" ? "" : (Number(e.target.value) as number) })
                   }
-                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 [color-scheme:light] dark:[color-scheme:dark]"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Pagamento</label>
+                <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Pagamento</label>
                 <select
                   value={formData.payment_method}
                   onChange={(e) => setFormData({ ...formData, payment_method: e.target.value })}
-                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
                 >
-                  <option>Pix</option>
-                  <option>Cartão</option>
-                  <option>Dinheiro</option>
-                  <option>Boleto</option>
+                  <option className="dark:bg-gray-800">Pix</option>
+                  <option className="dark:bg-gray-800">Cartão</option>
+                  <option className="dark:bg-gray-800">Dinheiro</option>
+                  <option className="dark:bg-gray-800">Boleto</option>
                 </select>
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Observações</label>
+              <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Observações</label>
               <textarea
                 rows={2}
                 value={formData.notes}
                 onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+                className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 resize-none"
                 placeholder="Detalhes adicionais..."
               />
             </div>
           </div>
           <div className="flex justify-end gap-3 pt-4">
-            <button type="button" onClick={onClose} className="px-6 py-2 text-gray-500 font-medium">
+            <button 
+              type="button" 
+              onClick={onClose} 
+              className="px-6 py-2 text-gray-500 dark:text-gray-400 font-medium hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
+            >
               Cancelar
             </button>
             <button
               type="submit"
-              className="px-8 py-2 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-colors"
+              className="px-8 py-2 bg-indigo-600 dark:bg-indigo-500 text-white rounded-xl font-bold hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-colors"
             >
               {job ? "Salvar Alterações" : "Registrar Trabalho"}
             </button>
