@@ -1,17 +1,26 @@
+// src/components/vendas/DealConversionModal.tsx
 import React, { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { Plus, User, Briefcase, ChevronDown, ChevronUp } from "lucide-react";
+import { Plus, User, Briefcase, ChevronDown, ChevronUp, Link2 } from "lucide-react";
 
-import { Deal } from "../../types";
+import { Deal, Client } from "../../types";
 import { authFetch } from "../../utils/authFetch";
 
 interface DealConversionModalProps {
   deal: Deal | null;
+  clients?: Client[]; // ← ADICIONAR para vincular cliente existente
   onClose: () => void;
   onConverted: () => void;
 }
 
-export function DealConversionModal({ deal, onClose, onConverted }: DealConversionModalProps) {
+export function DealConversionModal({ 
+  deal, 
+  clients = [],
+  onClose, 
+  onConverted 
+}: DealConversionModalProps) {
+  const [conversionMode, setConversionMode] = useState<"new" | "existing">("new");
+  const [selectedClientId, setSelectedClientId] = useState<number | null>(null);
   const [createClient, setCreateClient] = useState(true);
   const [createJob, setCreateJob] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -53,6 +62,13 @@ export function DealConversionModal({ deal, onClose, onConverted }: DealConversi
 
   useEffect(() => {
     if (deal) {
+      // Se já tem client_id, pré-seleciona modo "existente"
+      if (deal.client_id) {
+        setConversionMode("existing");
+        setSelectedClientId(deal.client_id);
+        setCreateClient(false);
+      }
+      
       setClientData((prev) => ({
         ...prev,
         name: deal.contact_name || deal.title || "",
@@ -86,9 +102,11 @@ export function DealConversionModal({ deal, onClose, onConverted }: DealConversi
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          createClient,
+          // Se modo "existing", vincula ao cliente existente
+          existingClientId: conversionMode === "existing" ? selectedClientId : undefined,
+          createClient: conversionMode === "new" && createClient,
           createJob,
-          client: createClient ? clientData : undefined,
+          client: conversionMode === "new" && createClient ? clientData : undefined,
           job: createJob ? jobData : undefined,
         }),
       });
@@ -134,7 +152,9 @@ export function DealConversionModal({ deal, onClose, onConverted }: DealConversi
     "Outro",
   ];
 
-  const canSubmit = createClient ? (clientData.name && clientData.phone) : true;
+  const canSubmit = conversionMode === "existing" 
+    ? selectedClientId !== null 
+    : (createClient ? (clientData.name && clientData.phone) : true);
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[90] flex items-center justify-center p-4">
@@ -147,13 +167,13 @@ export function DealConversionModal({ deal, onClose, onConverted }: DealConversi
         <div className="p-6 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between bg-emerald-50/70 dark:bg-emerald-950/30">
           <div>
             <p className="text-xs uppercase text-emerald-600 dark:text-emerald-400 font-semibold tracking-wide">
-              Fechado Ganho
+              🎉 Fechado Ganho
             </p>
             <h3 className="text-xl font-bold text-gray-900 dark:text-white">
-              Converter deal em venda
+              Converter "{deal.title}" em venda
             </h3>
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-              Preencha os dados para cadastrar o cliente e agendar o trabalho
+              Vincule a um cliente existente ou cadastre um novo
             </p>
           </div>
           <button 
@@ -166,18 +186,83 @@ export function DealConversionModal({ deal, onClose, onConverted }: DealConversi
 
         {/* Content */}
         <div className="p-6 space-y-4 max-h-[65vh] overflow-y-auto">
-          {/* Checkboxes */}
-          <div className="flex flex-wrap gap-4 items-center p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl">
-            <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-300 cursor-pointer select-none">
-              <input 
-                type="checkbox" 
-                checked={createClient} 
-                onChange={(e) => setCreateClient(e.target.checked)}
-                className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-emerald-600 focus:ring-emerald-500 dark:focus:ring-emerald-400 bg-white dark:bg-gray-800"
-              />
-              <User size={16} className="text-blue-500" />
-              Cadastrar cliente
+          
+          {/* ====== MODO DE CONVERSÃO ====== */}
+          <div className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl space-y-3">
+            <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">
+              Como deseja registrar este cliente?
             </label>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setConversionMode("existing");
+                  setCreateClient(false);
+                }}
+                className={`flex-1 p-3 rounded-xl border-2 transition-all flex items-center gap-2 ${
+                  conversionMode === "existing"
+                    ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300"
+                    : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600"
+                }`}
+              >
+                <Link2 size={18} />
+                <div className="text-left">
+                  <p className="font-semibold text-sm">Vincular a cliente existente</p>
+                  <p className="text-xs opacity-70">Selecione da sua base</p>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setConversionMode("new");
+                  setCreateClient(true);
+                }}
+                className={`flex-1 p-3 rounded-xl border-2 transition-all flex items-center gap-2 ${
+                  conversionMode === "new"
+                    ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300"
+                    : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600"
+                }`}
+              >
+                <User size={18} />
+                <div className="text-left">
+                  <p className="font-semibold text-sm">Cadastrar novo cliente</p>
+                  <p className="text-xs opacity-70">Preencha os dados abaixo</p>
+                </div>
+              </button>
+            </div>
+          </div>
+
+          {/* ====== SELECIONAR CLIENTE EXISTENTE ====== */}
+          {conversionMode === "existing" && (
+            <div className="border border-gray-100 dark:border-gray-800 rounded-xl p-4 bg-blue-50/30 dark:bg-blue-950/10">
+              <label className={labelClasses}>
+                <Link2 size={12} className="inline mr-1" />
+                Selecione o Cliente
+              </label>
+              <select
+                value={selectedClientId || ""}
+                onChange={(e) => setSelectedClientId(e.target.value ? Number(e.target.value) : null)}
+                className={selectClasses}
+              >
+                <option value="" className="bg-white dark:bg-gray-800">
+                  -- Selecione um cliente --
+                </option>
+                {clients.map((client) => (
+                  <option key={client.id} value={client.id} className="bg-white dark:bg-gray-800">
+                    {client.name} {client.phone ? `- ${client.phone}` : ""} {client.email ? `(${client.email})` : ""}
+                  </option>
+                ))}
+              </select>
+              {selectedClientId && (
+                <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-2">
+                  ✓ O deal será vinculado a este cliente
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Checkbox criar trabalho */}
+          <div className="flex items-center p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl">
             <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-300 cursor-pointer select-none">
               <input 
                 type="checkbox" 
@@ -186,12 +271,12 @@ export function DealConversionModal({ deal, onClose, onConverted }: DealConversi
                 className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-emerald-600 focus:ring-emerald-500 dark:focus:ring-emerald-400 bg-white dark:bg-gray-800"
               />
               <Briefcase size={16} className="text-purple-500" />
-              Criar trabalho/ensaio
+              Criar trabalho/ensaio junto
             </label>
           </div>
 
-          {/* ==================== SEÇÃO CLIENTE ==================== */}
-          {createClient && (
+          {/* ==================== SEÇÃO CLIENTE (só se for novo) ==================== */}
+          {conversionMode === "new" && createClient && (
             <div className="border border-gray-100 dark:border-gray-800 rounded-xl overflow-hidden">
               {/* Section Header */}
               <button
@@ -203,7 +288,7 @@ export function DealConversionModal({ deal, onClose, onConverted }: DealConversi
                   <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/50 flex items-center justify-center">
                     <User size={16} className="text-blue-600 dark:text-blue-400" />
                   </div>
-                  <span className="font-semibold text-gray-900 dark:text-white">Dados do Cliente</span>
+                  <span className="font-semibold text-gray-900 dark:text-white">Dados do Novo Cliente</span>
                   <span className="text-xs text-gray-400 dark:text-gray-500">• campos com * são obrigatórios</span>
                 </div>
                 {expandedSections.client ? (
@@ -522,10 +607,11 @@ export function DealConversionModal({ deal, onClose, onConverted }: DealConversi
         <div className="p-6 border-t border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
           <div className="flex items-center justify-between">
             <p className="text-xs text-gray-400 dark:text-gray-500">
-              {createClient && createJob && "Cliente e trabalho serão criados automaticamente"}
-              {createClient && !createJob && "Apenas o cliente será cadastrado"}
-              {!createClient && createJob && "Apenas o trabalho será criado"}
-              {!createClient && !createJob && "Nenhuma ação será realizada"}
+              {conversionMode === "existing" && selectedClientId && "Deal será vinculado ao cliente selecionado"}
+              {conversionMode === "existing" && !selectedClientId && "Selecione um cliente para continuar"}
+              {conversionMode === "new" && createClient && createJob && "Novo cliente e trabalho serão criados"}
+              {conversionMode === "new" && createClient && !createJob && "Apenas o novo cliente será cadastrado"}
+              {conversionMode === "new" && !createClient && createJob && "Apenas o trabalho será criado"}
             </p>
             <div className="flex gap-3">
               <button 

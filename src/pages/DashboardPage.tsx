@@ -597,7 +597,7 @@ export default function DashboardPage() {
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchDashboard = async () => {
+    const fetchDashboard = async () => {
     setLoading(true);
     try {
       const [statsRes, clientsRes, jobsRes, oppsRes] = await Promise.all([
@@ -607,10 +607,25 @@ export default function DashboardPage() {
         authFetch("/api/opportunities"),
       ]);
 
-      setStats(await statsRes.json());
-      setClients(await clientsRes.json());
-      setJobs(await jobsRes.json());
-      setOpportunities(await oppsRes.json());
+      // Verifica se as respostas são OK antes de processar
+      if (statsRes.ok) {
+        setStats(await statsRes.json());
+      }
+      
+      if (clientsRes.ok) {
+        const clientsData = await clientsRes.json();
+        setClients(Array.isArray(clientsData) ? clientsData : []);
+      }
+      
+      if (jobsRes.ok) {
+        const jobsData = await jobsRes.json();
+        setJobs(Array.isArray(jobsData) ? jobsData : []);
+      }
+      
+      if (oppsRes.ok) {
+        const oppsData = await oppsRes.json();
+        setOpportunities(Array.isArray(oppsData) ? oppsData : []);
+      }
     } catch (error) {
       console.error("Erro ao buscar dados do dashboard:", error);
     } finally {

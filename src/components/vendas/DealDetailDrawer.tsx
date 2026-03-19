@@ -1,13 +1,28 @@
+// src/components/vendas/DealDetailDrawer.tsx
 import React, { useState, useEffect } from "react";
 import { format } from "date-fns";
-import { X, Trash2, CheckCircle, XCircle } from "lucide-react";
+import { 
+  X, 
+  Trash2, 
+  CheckCircle, 
+  XCircle, 
+  User, 
+  Phone, 
+  Mail, 
+  Instagram,
+  Edit3,
+  Link2,
+  Trophy
+} from "lucide-react";
 import { ConfirmModal } from "../ui/ConfirmModal";
 import { Deal, Client, PipelineStage, DealActivity, StageHistoryEntry } from "../../types";
 import { authFetch } from "../../utils/authFetch";
+import { DealConversionModal } from "../pipeline/DealConversionModal";
 
 interface DealDetailDrawerProps {
   deal: Deal | null;
   client?: Client;
+  clients: Client[]; // ← ADICIONAR: lista de clientes para vincular
   stages: PipelineStage[];
   onClose: () => void;
   onUpdate: (options?: { silent?: boolean }) => void | Promise<void>;
@@ -16,6 +31,7 @@ interface DealDetailDrawerProps {
 export function DealDetailDrawer({
   deal,
   client,
+  clients = [], // ← ADICIONAR
   stages,
   onClose,
   onUpdate,
@@ -28,6 +44,21 @@ export function DealDetailDrawer({
   const [history, setHistory] = useState<StageHistoryEntry[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historyError, setHistoryError] = useState(false);
+  
+  // ====== NOVOS ESTADOS ======
+  const [showConversionModal, setShowConversionModal] = useState(false);
+  const [isEditingContact, setIsEditingContact] = useState(false);
+  const [contactData, setContactData] = useState({
+    contact_name: "",
+    contact_phone: "",
+    contact_email: "",
+    contact_instagram: "",
+  });
+  const [selectedClientId, setSelectedClientId] = useState<number | null>(null);
+  const [editingValue, setEditingValue] = useState(false);
+  const [dealValue, setDealValue] = useState(0);
+  // ============================
+
   const [confirmModal, setConfirmModal] = useState<{
     open: boolean;
     onConfirm: () => void;
@@ -42,6 +73,16 @@ export function DealDetailDrawer({
       setNotes(deal.notes || "");
       setHistory([]);
       setHistoryError(false);
+      setContactData({
+        contact_name: deal.contact_name || "",
+        contact_phone: deal.contact_phone || "",
+        contact_email: deal.contact_email || "",
+        contact_instagram: deal.contact_instagram || "",
+      });
+      setSelectedClientId(deal.client_id || null);
+      setDealValue(deal.value || 0);
+      setIsEditingContact(false);
+      setEditingValue(false);
       loadActivities();
       loadHistory();
     }
@@ -119,12 +160,9 @@ export function DealDetailDrawer({
     });
   };
 
-  const markAsWon = async () => {
-    const wonStage = stages.find((s) => s.is_final && s.is_won);
-    if (wonStage) {
-      await updateDeal({ stage: wonStage.id });
-      onClose();
-    }
+  // ====== MODIFICADO: Abre modal de conversão ======
+  const markAsWon = () => {
+    setShowConversionModal(true);
   };
 
   const markAsLost = async () => {
@@ -135,10 +173,36 @@ export function DealDetailDrawer({
     }
   };
 
+  // ====== NOVO: Salvar dados de contato ======
+  const saveContactData = async () => {
+    await updateDeal(contactData);
+    setIsEditingContact(false);
+  };
+
+  // ====== NOVO: Vincular cliente existente ======
+  const linkClient = async (clientId: number | null) => {
+    setSelectedClientId(clientId);
+    await updateDeal({ client_id: clientId });
+  };
+
+  // ====== NOVO: Salvar valor ======
+  const saveValue = async () => {
+    await updateDeal({ value: dealValue });
+    setEditingValue(false);
+  };
+
   if (!deal) return null;
 
   const currentStage = stages.find((s) => s.id === deal.stage);
+  const isWon = currentStage?.is_final && currentStage?.is_won;
+  const isLost = currentStage?.is_final && !currentStage?.is_won;
+  const isFinal = currentStage?.is_final;
   const safeHistory = Array.isArray(history) ? history : [];
+
+  // Cliente vinculado (do select ou prop)
+  const linkedClient = selectedClientId 
+    ? clients.find(c => c.id === selectedClientId) || client
+    : client;
 
   const formatDuration = (start: string, end?: string | null) => {
     const startDate = new Date(start);
@@ -163,15 +227,31 @@ export function DealDetailDrawer({
     return `${Math.max(1, minutes)} min`;
   };
 
+  const inputClasses = "w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:border-gray-400 dark:focus:border-gray-600";
+
   return (
     <>
       <div className="fixed inset-0 z-50 flex justify-end">
         <div className="absolute inset-0 bg-black/30 dark:bg-black/60" onClick={onClose} />
         <div className="relative w-full max-w-lg bg-white dark:bg-gray-900 h-full shadow-xl dark:shadow-2xl dark:shadow-black/40 overflow-y-auto">
-          {/* Header */}
-          <div className="sticky top-0 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 p-4 z-10">
+          {/* Header com indicador de status */}
+          <div className={`sticky top-0 border-b border-gray-200 dark:border-gray-800 p-4 z-10 ${
+            isWon ? "bg-emerald-50 dark:bg-emerald-950/30" :
+            isLost ? "bg-red-50 dark:bg-red-950/30" :
+            "bg-white dark:bg-gray-900"
+          }`}>
             <div className="flex items-start justify-between">
               <div className="flex-1 min-w-0">
+                {/* Badge de status final */}
+                {isFinal && (
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-semibold rounded-full mb-2 ${
+                    isWon 
+                      ? "bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300" 
+                      : "bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300"
+                  }`}>
+                    {isWon ? <><Trophy size={12} /> Convertido</> : <><XCircle size={12} /> Perdido</>}
+                  </span>
+                )}
                 <h2 className="text-lg font-bold text-gray-900 dark:text-white truncate">{deal.title}</h2>
                 <p className="text-sm text-gray-500 dark:text-gray-400">
                   Etapa: {currentStage?.name || deal.stage}
@@ -187,6 +267,173 @@ export function DealDetailDrawer({
           </div>
 
           <div className="p-4 space-y-6">
+            {/* ====== INFO PRINCIPAL COM EDIÇÃO ====== */}
+            <div className="grid grid-cols-3 gap-4">
+              {/* Valor - Editável */}
+              <div>
+                <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Valor</label>
+                {editingValue ? (
+                  <div className="flex gap-1 mt-1">
+                    <input
+                      type="number"
+                      value={dealValue}
+                      onChange={(e) => setDealValue(Number(e.target.value))}
+                      className="w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded px-2 py-1 text-sm text-gray-900 dark:text-white outline-none"
+                      autoFocus
+                    />
+                    <button
+                      onClick={saveValue}
+                      className="px-2 py-1 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-xs rounded hover:bg-gray-800 dark:hover:bg-gray-100"
+                    >
+                      ✓
+                    </button>
+                  </div>
+                ) : (
+                  <p 
+                    onClick={() => setEditingValue(true)}
+                    className="text-lg font-bold text-gray-900 dark:text-white cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                    title="Clique para editar"
+                  >
+                    R$ {(deal.value || 0).toLocaleString("pt-BR")}
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Previsão</label>
+                <p className="text-sm text-gray-900 dark:text-white">
+                  {deal.expected_close_date
+                    ? format(new Date(deal.expected_close_date), "dd/MM/yyyy")
+                    : "-"}
+                </p>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Prioridade</label>
+                <p className="text-sm text-gray-900 dark:text-white capitalize">{deal.priority || "Média"}</p>
+              </div>
+            </div>
+
+            {/* ====== CLIENTE / CONTATO ====== */}
+            <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase flex items-center gap-1">
+                  <User size={12} />
+                  Cliente / Contato
+                </label>
+                {!linkedClient && (
+                  <button
+                    onClick={() => setIsEditingContact(!isEditingContact)}
+                    className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+                  >
+                    <Edit3 size={12} />
+                    {isEditingContact ? "Cancelar" : "Editar"}
+                  </button>
+                )}
+              </div>
+
+              {/* Select para vincular cliente existente */}
+              <div>
+                <label className="text-[11px] text-gray-400 dark:text-gray-500 uppercase mb-1 block">
+                  <Link2 size={10} className="inline mr-1" />
+                  Vincular a cliente existente
+                </label>
+                <select
+                  value={selectedClientId || ""}
+                  onChange={(e) => linkClient(e.target.value ? Number(e.target.value) : null)}
+                  className="w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white outline-none focus:border-gray-400 dark:focus:border-gray-600"
+                >
+                  <option value="">Nenhum (usar dados do lead)</option>
+                  {clients.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} {c.phone ? `- ${c.phone}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Se tem cliente vinculado, mostra info dele */}
+              {linkedClient ? (
+                <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border border-gray-100 dark:border-gray-700">
+                  <p className="font-medium text-gray-900 dark:text-white">{linkedClient.name}</p>
+                  <div className="mt-2 space-y-1 text-sm text-gray-500 dark:text-gray-400">
+                    {linkedClient.phone && (
+                      <p className="flex items-center gap-2">
+                        <Phone size={12} /> {linkedClient.phone}
+                      </p>
+                    )}
+                    {linkedClient.email && (
+                      <p className="flex items-center gap-2">
+                        <Mail size={12} /> {linkedClient.email}
+                      </p>
+                    )}
+                    {linkedClient.instagram && (
+                      <p className="flex items-center gap-2">
+                        <Instagram size={12} /> {linkedClient.instagram}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                /* Se não tem cliente, mostra/edita dados do lead */
+                <>
+                  {isEditingContact ? (
+                    <div className="space-y-2">
+                      <input
+                        value={contactData.contact_name}
+                        onChange={(e) => setContactData(p => ({ ...p, contact_name: e.target.value }))}
+                        placeholder="Nome do contato"
+                        className={inputClasses}
+                      />
+                      <input
+                        value={contactData.contact_phone}
+                        onChange={(e) => setContactData(p => ({ ...p, contact_phone: e.target.value }))}
+                        placeholder="Telefone"
+                        className={inputClasses}
+                      />
+                      <input
+                        value={contactData.contact_email}
+                        onChange={(e) => setContactData(p => ({ ...p, contact_email: e.target.value }))}
+                        placeholder="Email"
+                        className={inputClasses}
+                      />
+                      <input
+                        value={contactData.contact_instagram}
+                        onChange={(e) => setContactData(p => ({ ...p, contact_instagram: e.target.value }))}
+                        placeholder="@instagram"
+                        className={inputClasses}
+                      />
+                      <button
+                        onClick={saveContactData}
+                        className="w-full py-2 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-sm rounded-lg hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors"
+                      >
+                        Salvar Contato
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-1 text-sm">
+                      <p className="font-medium text-gray-900 dark:text-white">
+                        {deal.contact_name || deal.client_name || "Não informado"}
+                      </p>
+                      {deal.contact_phone && (
+                        <p className="text-gray-500 dark:text-gray-400 flex items-center gap-2">
+                          <Phone size={12} /> {deal.contact_phone}
+                        </p>
+                      )}
+                      {deal.contact_email && (
+                        <p className="text-gray-500 dark:text-gray-400 flex items-center gap-2">
+                          <Mail size={12} /> {deal.contact_email}
+                        </p>
+                      )}
+                      {deal.contact_instagram && (
+                        <p className="text-gray-500 dark:text-gray-400 flex items-center gap-2">
+                          <Instagram size={12} /> {deal.contact_instagram}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
             {/* Histórico do Lead */}
             <div>
               <div className="flex items-center justify-between mb-2">
@@ -247,36 +494,6 @@ export function DealDetailDrawer({
                   );
                 })}
               </div>
-            </div>
-
-            {/* Info principal */}
-            <div className="grid grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Valor</label>
-                <p className="text-lg font-bold text-gray-900 dark:text-white">
-                  R$ {(deal.value || 0).toLocaleString("pt-BR")}
-                </p>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Previsão</label>
-                <p className="text-sm text-gray-900 dark:text-white">
-                  {deal.expected_close_date
-                    ? format(new Date(deal.expected_close_date), "dd/MM/yyyy")
-                    : "-"}
-                </p>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Prioridade</label>
-                <p className="text-sm text-gray-900 dark:text-white capitalize">{deal.priority || "Média"}</p>
-              </div>
-            </div>
-
-            {/* Cliente */}
-            <div>
-              <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Cliente</label>
-              <p className="text-sm text-gray-900 dark:text-white">
-                {client?.name || deal.client_name || "Não informado"}
-              </p>
             </div>
 
             {/* Follow-up */}
@@ -367,24 +584,46 @@ export function DealDetailDrawer({
               />
             </div>
 
-            {/* Ações */}
+            {/* ====== AÇÕES - MODIFICADO ====== */}
             <div className="border-t border-gray-200 dark:border-gray-800 pt-4 space-y-2">
-              <div className="flex gap-2">
-                <button
-                  onClick={markAsWon}
-                  className="flex-1 flex items-center justify-center gap-2 py-2 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 rounded-lg hover:bg-green-100 dark:hover:bg-green-900/30 text-sm font-medium transition-colors"
-                >
-                  <CheckCircle size={16} />
-                  Marcar como Ganho
-                </button>
-                <button
-                  onClick={markAsLost}
-                  className="flex-1 flex items-center justify-center gap-2 py-2 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 text-sm font-medium transition-colors"
-                >
-                  <XCircle size={16} />
-                  Marcar como Perdido
-                </button>
-              </div>
+              {!isFinal ? (
+                /* Deal ainda ativo - mostrar botões de ação */
+                <>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={markAsWon}
+                      className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-emerald-600 dark:bg-emerald-500 text-white rounded-lg hover:bg-emerald-700 dark:hover:bg-emerald-600 text-sm font-medium transition-colors"
+                    >
+                      <Trophy size={16} />
+                      Converter em Venda
+                    </button>
+                    <button
+                      onClick={markAsLost}
+                      className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 text-sm font-medium transition-colors border border-red-200 dark:border-red-800"
+                    >
+                      <XCircle size={16} />
+                      Perdido
+                    </button>
+                  </div>
+                </>
+              ) : (
+                /* Deal finalizado - mostrar info */
+                <div className={`p-3 rounded-lg text-center ${
+                  isWon 
+                    ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300" 
+                    : "bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300"
+                }`}>
+                  <p className="font-medium">
+                    {isWon ? "🎉 Negócio convertido!" : "❌ Negócio perdido"}
+                  </p>
+                  {isWon && deal.client_id && (
+                    <p className="text-sm mt-1 opacity-80">
+                      Vinculado ao cliente: {linkedClient?.name}
+                    </p>
+                  )}
+                </div>
+              )}
+              
               <button
                 onClick={deleteDeal}
                 className="w-full flex items-center justify-center gap-2 py-2 text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg text-sm transition-colors"
@@ -396,6 +635,20 @@ export function DealDetailDrawer({
           </div>
         </div>
       </div>
+
+      {/* Modal de Conversão */}
+      {showConversionModal && (
+          <DealConversionModal
+  deal={deal}
+  clients={clients}  // ← ADICIONA ISSO
+  onClose={() => setShowConversionModal(false)}
+  onConverted={() => {
+    setShowConversionModal(false);
+    onUpdate();
+    onClose();
+  }}
+/>
+      )}
 
       <ConfirmModal
         open={confirmModal.open}

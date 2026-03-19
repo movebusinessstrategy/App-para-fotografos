@@ -199,12 +199,13 @@ export function ListaTab({ deals, stages, clients, onUpdate }: ListaTabProps) {
       </div>
 
       <DealDetailDrawer
-        deal={selectedDeal}
-        client={selectedDeal?.client_id ? clientMap.get(selectedDeal.client_id) : undefined}
-        stages={stages}
-        onClose={() => setSelectedDeal(null)}
-        onUpdate={onUpdate}
-      />
+  deal={selectedDeal}
+  client={selectedDeal?.client_id ? clientMap.get(selectedDeal.client_id) : undefined}
+  clients={clients}  // ← ADICIONAR
+  stages={stages}
+  onClose={() => setSelectedDeal(null)}
+  onUpdate={onUpdate}
+/>
     </>
   );
 }

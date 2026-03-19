@@ -352,11 +352,17 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
   const filteredClients = clients.filter(client => {
     const activityDates = getActivityDates(client);
 
+        const searchTerm = searchName.trim().toLowerCase();
+    
     const matchesSearchName = client.name
       ?.toLowerCase()
-      .includes(searchName.trim().toLowerCase());
+      .includes(searchTerm);
+    
+    const matchesPhone = client.phone
+      ?.toLowerCase()
+      .includes(searchTerm);
 
-    if (!matchesSearchName) return false;
+    if (!matchesSearchName && !matchesPhone) return false;
 
     if (tierFilter !== 'all') {
       if (client.tier !== tierFilter) return false;
