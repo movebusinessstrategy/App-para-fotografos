@@ -3903,8 +3903,8 @@ async function startServer() {
       }
 
       // If running on Render (not localhost), use Render URL as last resort
-      if (process.env.RENDER_EXTERNAL_URL && job.originalPath) {
-        return `${process.env.RENDER_EXTERNAL_URL}/api/video-editor/video/${jobId}`;
+      if (process.env.SERVER_URL && job.originalPath) {
+        return `${process.env.SERVER_URL}/api/video-editor/video/${jobId}`;
       }
 
       return null;
