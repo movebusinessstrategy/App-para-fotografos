@@ -374,8 +374,8 @@ export default function VideoEditorPage() {
                 <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-2">
                   <Eye size={14} /> Preview
                 </h2>
-                <div className="rounded-xl overflow-hidden bg-black aspect-[9/16] max-h-[500px]">
-                  <video src={previewUrl!} controls className="w-full h-full object-contain" />
+                <div className="rounded-xl overflow-hidden bg-black w-full">
+                  <video src={previewUrl!} controls className="w-full h-auto max-h-[420px] block" />
                 </div>
                 <div className="flex items-center gap-2 text-xs text-gray-500">
                   <Film size={12} />
@@ -719,13 +719,14 @@ export default function VideoEditorPage() {
           </div>
 
           <div className="flex flex-col items-center space-y-4">
-            <div className="rounded-2xl overflow-hidden bg-black w-full max-w-2xl">
+            <div className="rounded-2xl overflow-hidden bg-black w-full" style={{ maxWidth: '100%' }}>
               <video
                       src={resultUrl}
                       controls
                       playsInline
                       crossOrigin="anonymous"
-                      className="w-full h-auto max-h-[70vh] block"
+                      className="w-full block"
+                      style={{ maxHeight: '75vh', height: 'auto' }}
                       onError={(e) => {
                         console.error('Video load error:', e);
                         const target = e.target as HTMLVideoElement;
