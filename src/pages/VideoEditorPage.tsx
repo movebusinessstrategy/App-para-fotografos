@@ -724,17 +724,8 @@ export default function VideoEditorPage() {
                       src={resultUrl}
                       controls
                       playsInline
-                      crossOrigin="anonymous"
                       className="w-full block"
                       style={{ maxHeight: '75vh', height: 'auto' }}
-                      onError={(e) => {
-                        console.error('Video load error:', e);
-                        const target = e.target as HTMLVideoElement;
-                        if (target.crossOrigin) {
-                          target.crossOrigin = '';
-                          target.load();
-                        }
-                      }}
                     />
             </div>
           </div>
