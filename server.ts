@@ -3336,14 +3336,14 @@ async function startServer() {
       // Calculate target bitrate: 45MB in bits / duration in seconds
       const duration = await new Promise<number>((resolve) => {
         ffmpeg.ffprobe(inputPath, (err: any, metadata: any) => {
-          resolve(err ? 300 : (metadata?.format?.duration || 300));
+          resolve(err ? 60 : (metadata?.format?.duration || 60));
         });
       });
 
       // Target ~44MB to leave margin
-      const targetBits = 44 * 8 * 1024 * 1024;
+      const targetBits = 48 * 8 * 1024 * 1024;
       const videoBitrate = Math.floor(targetBits / duration / 1000); // kbps
-      const finalBitrate = Math.max(200, Math.min(videoBitrate, 3000)); // clamp 200k-3000k
+      const finalBitrate = Math.max(5000, Math.min(videoBitrate, 8000)); // clamp 5000k-8000k (qualidade alta)
 
       console.log(`[storage] duração: ${duration.toFixed(0)}s, bitrate alvo: ${finalBitrate}kbps`);
 
@@ -3353,7 +3353,7 @@ async function startServer() {
             .outputOptions([
               `-b:v ${finalBitrate}k`,
               '-c:v libx264',
-              '-preset fast',
+              '-preset ultrafast',
               '-c:a aac',
               '-b:a 96k',
               '-movflags +faststart',
@@ -3470,6 +3470,8 @@ async function startServer() {
           } catch {}
         }
         if (restored > 0) console.log(`[video-editor] ${restored} jobs restaurados da nuvem`);
+        // NOTE: NÃO tentamos upload/compressão dos jobs restaurados.
+        // O upload para Supabase acontece SOMENTE quando ensureVideoPublicUrl() é chamada.
       } catch (e: any) { console.error('[video-editor] erro ao restaurar da nuvem:', e.message); }
     })();
 
@@ -3504,7 +3506,7 @@ async function startServer() {
       // Generate thumbnail → upload to Supabase in background
       const thumbPath = path.join(VIDEO_PROCESSED_DIR, `${jobId}_thumb.jpg`);
       ffmpeg(req.file.path)
-        .seekInput(1).frames(1).videoFilter('scale=320:-1').output(thumbPath)
+        .seekInput(0.5).frames(1).videoFilter('scale=180:-1').outputOptions(['-q:v', '8']).output(thumbPath)
         .on('end', async () => {
           const thumbUrl = await uploadToStorage(thumbPath, `thumbs/${jobId}.jpg`, 'image/jpeg');
           if (thumbUrl) videoJobs[jobId].thumbnailSupabaseUrl = thumbUrl;
@@ -3514,10 +3516,9 @@ async function startServer() {
         .on('error', () => void saveJobMeta(jobId))
         .run();
 
-      // Upload original to Supabase in background
-      const supabasePath = `uploads/${jobId}/original${ext}`;
-      const publicUrl = await uploadToStorage(req.file.path, supabasePath, req.file.mimetype);
-      if (publicUrl) videoJobs[jobId].originalSupabaseUrl = publicUrl;
+      // Upload to Supabase DEFERRED — only happens when Creatomate needs the URL
+      // This avoids compressing 200MB+ videos on upload (which freezes the Mac)
+      console.log('[video-editor] Upload concluído (local). Compressão adiada para quando necessário.');
     });
 
     app.post('/api/video-editor/music/:jobId', musicUpload.single('music'), (req: any, res: any) => {
@@ -3872,6 +3873,7 @@ async function startServer() {
     // ═══════════════════════════════════════════════════════════════════════
 
     const CREATOMATE_API_KEY = process.env.CREATOMATE_API_KEY || '';
+    const PEXELS_API_KEY = process.env.PEXELS_API_KEY || '';
     const creatomateJobs: Record<string, {
       renderId?: string;
       status: string;
@@ -3910,18 +3912,158 @@ async function startServer() {
       return null;
     }
 
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PEXELS B-ROLL SEARCH
+    // ═══════════════════════════════════════════════════════════════════════
+    async function searchPexelsVideos(query: string, count = 3): Promise<string[]> {
+      if (!PEXELS_API_KEY) { console.warn('[pexels] sem API key'); return []; }
+      try {
+        const res = await fetch(`https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}&per_page=${count}&size=small&orientation=portrait`, {
+          headers: { Authorization: PEXELS_API_KEY },
+        });
+        if (!res.ok) { console.warn('[pexels] erro:', res.status); return []; }
+        const data = await res.json();
+        return (data.videos || []).map((v: any) => {
+          const files = v.video_files || [];
+          const best = files.find((f: any) => f.width >= 720 && f.width <= 1080 && f.quality === 'hd')
+            || files.find((f: any) => f.quality === 'hd')
+            || files[0];
+          return best?.link || '';
+        }).filter(Boolean);
+      } catch (e: any) {
+        console.warn('[pexels] fetch error:', e.message);
+        return [];
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // AI EDIT PLAN GENERATOR
+    // ═══════════════════════════════════════════════════════════════════════
+    async function generateEditPlan(jobId: string, transcription: string, segments: any[], editOptions: any) {
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const wordTimeline = segments.map((s: any, i: number) => `[${i}] ${s.word} (${s.start.toFixed(2)}-${s.end.toFixed(2)})`).join(' ');
+      const totalDur = segments.length > 0 ? segments[segments.length - 1].end.toFixed(1) : '30';
+
+      const prompt = `Você é um editor de vídeo profissional para Reels/TikTok. Analise a transcrição e crie um plano de edição.
+
+Transcrição com timestamps:
+${wordTimeline || '(sem fala detectada)'}
+
+Duração total: ${totalDur}s
+
+Opções do usuário:
+- Cortes automáticos (remover silêncio): ${editOptions.autoCut ? 'SIM' : 'NÃO'}
+- Zoom dinâmico: ${editOptions.dynamicZoom ? 'SIM' : 'NÃO'}
+- B-roll automático: ${editOptions.broll ? 'SIM' : 'NÃO'}
+- Efeitos sonoros: ${editOptions.sfx ? 'SIM' : 'NÃO'}
+- Transições: ${editOptions.transitions ? 'SIM' : 'NÃO'}
+- Tipo de transição: ${editOptions.transitionType || 'fade'}
+
+Retorne um JSON:
+{
+  "clips": [
+    {
+      "startTime": 0.0,
+      "endTime": 3.5,
+      "zoom": { "startScale": 100, "endScale": 120, "focusX": 50, "focusY": 40 },
+      "brollQuery": "keyword em inglês ou null",
+      "brollStart": 1.5,
+      "brollEnd": 3.0,
+      "sfx": { "type": "whoosh|pop|ding|none", "time": 0.5 },
+      "transition": "fade|slide-left|slide-right|zoom-in|none"
+    }
+  ],
+  "totalDuration": 30.0,
+  "removedSilence": 5.2
+}
+
+REGRAS:
+1. autoCut=SIM: remova gaps de silêncio >0.7s entre palavras.
+2. dynamicZoom=SIM: zoom sutil 100→115-125% em momentos de ênfase.
+3. broll=SIM: brollQuery com 1-2 palavras em INGLÊS. Máx 3 b-rolls. null nos outros.
+4. sfx=SIM: efeitos em transições/impacto. Máx 4. "none" nos outros.
+5. transitions=SIM: transição entre clips. Último clip = "none".
+6. Crie 4-12 clips cobrindo todo o conteúdo falado.
+7. NÃO pule trechos com fala.
+
+Responda APENAS com o JSON.`;
+
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        max_tokens: 3000,
+        messages: [{ role: 'user', content: prompt }],
+        response_format: { type: 'json_object' },
+      });
+
+      const raw = (completion.choices[0].message.content || '').trim();
+      return JSON.parse(raw);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // SFX URLS
+    // ═══════════════════════════════════════════════════════════════════════
+    // SFX desabilitado — URLs externas bloqueiam hotlinking no Creatomate
+    // Para ativar: hospedar os MP3 no próprio Supabase Storage e colocar as URLs aqui
+    const SFX_URLS: Record<string, string> = {};
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // CREATOMATE RENDER — PIPELINE COMPLETO
+    // ═══════════════════════════════════════════════════════════════════════
     app.post('/api/video-editor/creatomate-render/:jobId', async (req: any, res: any) => {
       const { jobId } = req.params;
       const job = videoJobs[jobId];
       if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
 
       if (!CREATOMATE_API_KEY) {
-        return res.status(500).json({ error: 'CREATOMATE_API_KEY não configurada no servidor.' });
+        return res.status(500).json({ error: 'CREATOMATE_API_KEY não configurada.' });
       }
 
-      const videoUrl = await ensureVideoPublicUrl(jobId);
-      if (!videoUrl) {
-        return res.status(400).json({ error: 'Não foi possível gerar URL pública do vídeo. O vídeo pode ser muito grande ou o upload falhou.' });
+      // Retornar imediatamente para o frontend não travar
+      creatomateJobs[jobId] = { status: 'processing', progress: 10, label: 'Iniciando pipeline...' };
+      res.json({ ok: true, status: 'processing' });
+
+      // Pipeline roda em background
+      (async () => {
+        try {
+      // ── AUTO-TRANSCRIBE se ainda não foi feito ──
+      if (!job.transcription && !job.segments?.length) {
+        console.log('[pipeline] auto-transcribe para job', jobId);
+        const audioPath = path.join(VIDEO_PROCESSED_DIR, jobId + '_audio.mp3');
+        const videoPath = job.processedPath || job.originalPath;
+        if (videoPath && fs.existsSync(videoPath)) {
+          try {
+            let audioExtracted = false;
+            try {
+              await new Promise((resolve, reject) => {
+                ffmpeg(videoPath).noVideo().audioCodec('libmp3lame').audioBitrate('128k')
+                  .output(audioPath).on('end', () => resolve(undefined)).on('error', (e) => reject(e)).run();
+              });
+              audioExtracted = fs.existsSync(audioPath) && fs.statSync(audioPath).size > 1000;
+            } catch (ae) {
+              console.warn('[pipeline] audio extraction failed:', ae.message || ae);
+            }
+            if (audioExtracted) {
+              const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+              const transcription = await openai.audio.transcriptions.create({
+                file: fs.createReadStream(audioPath), model: 'whisper-1',
+                response_format: 'verbose_json', timestamp_granularities: ['word'],
+              });
+              job.transcription = transcription.text || '';
+              job.segments = ((transcription).words || []).map((w) => ({ word: w.word, start: w.start, end: w.end }));
+              console.log('[pipeline] auto-transcribe OK:', job.segments.length, 'words');
+              try { fs.unlinkSync(audioPath); } catch {}
+            } else {
+              job.transcription = '';
+              job.segments = [];
+              console.log('[pipeline] sem áudio detectado, prosseguindo sem transcrição');
+            }
+          } catch (te) {
+            console.warn('[pipeline] auto-transcribe error:', te.message || te);
+            job.transcription = '';
+            job.segments = [];
+          }
+        }
       }
 
       const captionsCfg = req.body?.captions || {
@@ -3930,13 +4072,343 @@ async function startServer() {
         strokeColor: '#000000', strokeWidth: '1.6 vmin', position: '80%', maxLength: 14,
       };
 
-      const elements: any[] = [
+      const editOptions = req.body?.editOptions || {
+        autoCut: false, dynamicZoom: false, broll: false,
+        sfx: false, transitions: false, transitionType: 'fade',
+      };
+
+      const hasAdvancedEdits = editOptions.autoCut || editOptions.dynamicZoom || editOptions.broll || editOptions.sfx || editOptions.transitions;
+
+      creatomateJobs[jobId] = { renderId: '', status: 'processing', progress: 5, label: 'Preparando vídeo...' };
+
+      try {
+        // ── STEP 1: Ensure video URL ──
+        creatomateJobs[jobId] = { ...creatomateJobs[jobId], label: 'Fazendo upload do vídeo...', progress: 10 };
+        const videoUrl = await ensureVideoPublicUrl(jobId);
+        if (!videoUrl) {
+          creatomateJobs[jobId] = { renderId: '', status: 'failed', error: 'Falha no upload do vídeo.', progress: 0 };
+          return;
+        }
+
+        let elements: any[];
+
+        if (hasAdvancedEdits) {
+          // ══════════════════════════════════════════════════════════
+          // ADVANCED PIPELINE: Transcribe → AI Plan → B-roll → Build
+          // ══════════════════════════════════════════════════════════
+
+          // ── STEP 2: Transcribe if needed ──
+          let segments = job.segments || [];
+          let transcription = job.transcription || '';
+
+          if (!segments.length && job.originalPath && fs.existsSync(job.originalPath)) {
+            creatomateJobs[jobId] = { ...creatomateJobs[jobId], label: 'Transcrevendo áudio com Whisper...', progress: 20 };
+
+            const audioPath = path.join(VIDEO_PROCESSED_DIR, `${jobId}_audio_pipe.mp3`);
+            try {
+              await new Promise<void>((resolve, reject) => {
+                ffmpeg(job.originalPath)
+                  .noVideo().audioCodec('libmp3lame').audioBitrate('128k')
+                  .output(audioPath)
+                  .on('end', () => resolve()).on('error', (e: any) => reject(e)).run();
+              });
+
+              if (fs.existsSync(audioPath) && fs.statSync(audioPath).size > 1000) {
+                const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+                const result = await openai.audio.transcriptions.create({
+                  file: fs.createReadStream(audioPath),
+                  model: 'whisper-1',
+                  response_format: 'verbose_json',
+                  timestamp_granularities: ['word'],
+                });
+                segments = ((result as any).words || []).map((w: any) => ({ word: w.word, start: w.start, end: w.end }));
+                transcription = result.text;
+                job.segments = segments;
+                job.transcription = transcription;
+                void saveJobMeta(jobId);
+              }
+              try { fs.unlinkSync(audioPath); } catch {}
+            } catch (e: any) {
+              console.warn('[pipeline] transcription failed:', e.message);
+            }
+          }
+
+          // ── STEP 3: AI edit plan ──
+          creatomateJobs[jobId] = { ...creatomateJobs[jobId], label: 'IA criando plano de edição...', progress: 35 };
+
+          let editPlan: any = null;
+          try {
+            editPlan = await generateEditPlan(jobId, transcription, segments, editOptions);
+            console.log('[pipeline] edit plan:', JSON.stringify(editPlan).slice(0, 500));
+          } catch (e: any) {
+            console.warn('[pipeline] AI plan failed:', e.message);
+          }
+
+          // ── STEP 4: Search B-roll ──
+          const brollUrls: Record<string, string> = {};
+          if (editPlan && editOptions.broll) {
+            creatomateJobs[jobId] = { ...creatomateJobs[jobId], label: 'Buscando vídeos B-roll...', progress: 45 };
+
+            const queries = [...new Set(
+              (editPlan.clips || []).map((c: any) => c.brollQuery).filter(Boolean)
+            )] as string[];
+
+            for (const q of queries.slice(0, 3)) {
+              const urls = await searchPexelsVideos(q, 1);
+              if (urls.length > 0) brollUrls[q] = urls[0];
+            }
+            console.log('[pipeline] b-roll found:', Object.keys(brollUrls));
+          }
+
+          // ── STEP 5: Build Creatomate JSON (CORRECTED) ──
+          creatomateJobs[jobId] = { ...creatomateJobs[jobId], label: 'Montando composição...', progress: 55 };
+
+          if (editPlan && editPlan.clips && editPlan.clips.length > 0) {
+            const clips = editPlan.clips;
+
+            // ── Abordagem: UM vídeo principal + zoom via animations ──
+            // Creatomate funciona melhor com source no nível do render, não compositions aninhadas
+
+            const mainVideo: any = {
+              type: 'video',
+              source: videoUrl,
+              // O vídeo toca inteiro — Creatomate cuida do trim via compositions abaixo
+            };
+
+            // Se autoCut está ligado, montamos compositions para cada clip
+            if (editOptions.autoCut && clips.length > 1) {
+              const compositions: any[] = [];
+
+              clips.forEach((clip: any, idx: number) => {
+                const clipDuration = clip.endTime - clip.startTime;
+                if (clipDuration <= 0.1) return;
+
+                const videoEl: any = {
+                  type: 'video',
+                  source: videoUrl,
+                  trim_start: clip.startTime,
+                  trim_duration: clipDuration,
+                  fit: 'cover',
+                };
+
+                // Zoom dinâmico via Creatomate animations (formato correto)
+                if (editOptions.dynamicZoom && clip.zoom && clip.zoom.startScale !== clip.zoom.endScale) {
+                  videoEl.animations = [
+                    {
+                      type: 'scale',
+                      scope: 'element',
+                      start_scale: (clip.zoom.startScale / 100).toFixed(2) + '',
+                      end_scale: (clip.zoom.endScale / 100).toFixed(2) + '',
+                      fade: false,
+                      time: 0,
+                      duration: clipDuration,
+                      easing: 'linear',
+                    }
+                  ];
+                }
+
+                const compElements: any[] = [videoEl];
+
+                // B-roll overlay
+                if (editOptions.broll && clip.brollQuery && brollUrls[clip.brollQuery]) {
+                  const brollDur = Math.min(
+                    (clip.brollEnd || clip.endTime) - (clip.brollStart || clip.startTime),
+                    clipDuration * 0.4
+                  );
+                  const brollTimeInClip = Math.max(0, (clip.brollStart || clip.startTime) - clip.startTime);
+
+                  compElements.push({
+                    type: 'video',
+                    source: brollUrls[clip.brollQuery],
+                    time: brollTimeInClip,
+                    duration: Math.max(brollDur, 1),
+                    trim_duration: Math.max(brollDur, 1),
+                    fit: 'cover',
+                    animations: [
+                      { type: 'fade', duration: 0.3, time: 'start' },
+                      { type: 'fade', duration: 0.3, time: 'end', reversed: true },
+                    ],
+                    z_index: 2,
+                  });
+                }
+
+                const comp: any = {
+                  type: 'composition',
+                  track: 1,
+                  duration: clipDuration,
+                  width: 720,
+                  height: 1280,
+                  fill_color: '#000000',
+                  elements: compElements,
+                };
+
+                // Transição entre clips
+                if (editOptions.transitions && idx > 0) {
+                  const tType = clip.transition || 'fade';
+                  if (tType === 'fade') {
+                    comp.animations = [{ type: 'fade', duration: 0.4, time: 'start' }];
+                  }
+                }
+
+                compositions.push(comp);
+              });
+
+              elements = compositions;
+
+            } else {
+              // Sem autoCut — vídeo inteiro com zoom opcional
+              const videoEl: any = {
+                type: 'video',
+                source: videoUrl,
+              };
+
+              // Zoom suave no vídeo inteiro
+              if (editOptions.dynamicZoom && clips[0]?.zoom) {
+                videoEl.animations = [
+                  {
+                    type: 'scale',
+                    scope: 'element',
+                    start_scale: '1.0',
+                    end_scale: '1.15',
+                    fade: false,
+                    duration: null,
+                    easing: 'linear',
+                  }
+                ];
+              }
+
+              elements = [videoEl];
+            }
+
+            // ── Subtitles: transcript direto do primeiro vídeo ──
+            if (captionsCfg.enabled && captionsCfg.style !== 'none') {
+              // Precisamos de um vídeo nomeado para transcript_source
+              // Dar nome ao primeiro vídeo ou ao vídeo no primeiro composition
+              if (elements.length > 0) {
+                if (elements[0].type === 'composition' && elements[0].elements?.[0]) {
+                  elements[0].elements[0].name = 'Main-Video';
+                } else if (elements[0].type === 'video') {
+                  elements[0].name = 'Main-Video';
+                }
+              }
+
+              elements.push({
+                type: 'text',
+                transcript_source: 'Main-Video',
+                transcript_effect: captionsCfg.style === 'karaoke' ? 'karaoke'
+                  : captionsCfg.style === 'bounce' ? 'bounce' : 'highlight',
+                transcript_maximum_length: captionsCfg.maxLength || 14,
+                y: captionsCfg.position || '80%',
+                width: '81%',
+                height: '35%',
+                x_alignment: '50%',
+                y_alignment: '50%',
+                fill_color: captionsCfg.color || '#ffffff',
+                stroke_color: captionsCfg.strokeColor || '#000000',
+                stroke_width: captionsCfg.strokeWidth || '1.6 vmin',
+                font_family: captionsCfg.fontFamily || 'Montserrat',
+                font_weight: captionsCfg.fontWeight || '700',
+                font_size: captionsCfg.fontSize || '9.29 vmin',
+                background_color: 'rgba(216,216,216,0)',
+                background_x_padding: '31%',
+                background_y_padding: '17%',
+                background_border_radius: '31%',
+                z_index: 10,
+                track: 2,
+                ...(captionsCfg.style === 'highlight' ? { transcript_color: '#FFD700' } : {}),
+              });
+            }
+
+          } else {
+            // AI failed — fallback to simple
+            elements = buildSimpleElements(videoUrl, captionsCfg);
+          }
+
+        } else {
+          // ══════════════════════════════════════════════════════════
+          // SIMPLE PIPELINE: just video + captions (no advanced edits)
+          // ══════════════════════════════════════════════════════════
+          elements = buildSimpleElements(videoUrl, captionsCfg);
+        }
+
+        // ── STEP 6: Send to Creatomate ──
+        creatomateJobs[jobId] = { ...creatomateJobs[jobId], label: 'Enviando para renderização...', progress: 65 };
+
+        console.log('[creatomate] Starting render for job', jobId, 'elements:', elements.length, 'advanced:', hasAdvancedEdits);
+        console.log('[creatomate] JSON:', JSON.stringify(elements, null, 2).slice(0, 3000));
+
+        const response = await fetch('https://api.creatomate.com/v2/renders', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${CREATOMATE_API_KEY}`,
+          },
+          body: JSON.stringify({ output_format: 'mp4', width: 720, height: 1280, elements }),
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          console.error('[creatomate] API error:', response.status, errText);
+          creatomateJobs[jobId] = { renderId: '', status: 'failed', error: 'Creatomate: ' + errText.slice(0, 200), progress: 0 };
+          return;
+        }
+
+        const data = await response.json();
+        const render = Array.isArray(data) ? data[0] : data;
+        const renderId = render.id;
+
+        creatomateJobs[jobId] = { renderId, status: 'processing', progress: 70, label: 'Renderizando na nuvem...' };
+        console.log('[creatomate] Render started:', renderId);
+
+        // Poll
+        const pollCreatomate = async () => {
+          try {
+            const statusRes = await fetch(`https://api.creatomate.com/v2/renders/${renderId}`, {
+              headers: { 'Authorization': `Bearer ${CREATOMATE_API_KEY}` },
+            });
+            const statusData = await statusRes.json();
+
+            if (statusData.status === 'succeeded') {
+              creatomateJobs[jobId] = { renderId, status: 'succeeded', url: statusData.url, progress: 100, label: 'Vídeo pronto! 🎬' };
+              console.log('[creatomate] Render succeeded:', statusData.url);
+              videoJobs[jobId].editedSupabaseUrl = statusData.url;
+              void saveJobMeta(jobId);
+            } else if (statusData.status === 'failed') {
+              creatomateJobs[jobId] = { renderId, status: 'failed', error: statusData.error_message || 'Renderização falhou', progress: 0 };
+              console.error('[creatomate] Render failed:', statusData.error_message);
+            } else {
+              const pct = typeof statusData.progress === 'number'
+                ? Math.min(70 + Math.round(statusData.progress * 30), 95)
+                : Math.min((creatomateJobs[jobId]?.progress || 70) + 3, 95);
+              creatomateJobs[jobId] = { renderId, status: 'processing', progress: pct, label: 'Renderizando na nuvem...' };
+              setTimeout(pollCreatomate, 3000);
+            }
+          } catch (pollErr: any) {
+            console.error('[creatomate] Poll error:', pollErr.message);
+            setTimeout(pollCreatomate, 5000);
+          }
+        };
+
+        setTimeout(pollCreatomate, 5000);
+
+      } catch (err: any) {
+        console.error('[creatomate] Pipeline error:', err.message, err.stack);
+        creatomateJobs[jobId] = { renderId: '', status: 'failed', error: err.message, progress: 0 };
+      }
+    } catch (outerErr: any) {
+      console.error('[creatomate] outer error:', outerErr.message);
+      creatomateJobs[jobId] = { renderId: '', status: 'failed', error: outerErr.message, progress: 0 };
+    }
+    })();
+  });
+
+    function buildSimpleElements(videoUrl: string, captionsCfg: any): any[] {
+      const els: any[] = [
         { name: 'Video-1', type: 'video', source: videoUrl },
       ];
 
       if (captionsCfg.enabled && captionsCfg.style !== 'none') {
-        elements.push({
-          name: 'Subtitles-1',
+        els.push({
           type: 'text',
           transcript_source: 'Video-1',
           transcript_effect: captionsCfg.style === 'karaoke' ? 'karaoke'
@@ -3961,64 +4433,8 @@ async function startServer() {
         });
       }
 
-      console.log('[creatomate] Starting render for job', jobId, 'video:', videoUrl);
-
-      try {
-        const response = await fetch('https://api.creatomate.com/v2/renders', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${CREATOMATE_API_KEY}`,
-          },
-          body: JSON.stringify({ output_format: 'mp4', width: 720, height: 1280, elements }),
-        });
-
-        if (!response.ok) {
-          const errText = await response.text();
-          console.error('[creatomate] API error:', response.status, errText);
-          return res.status(response.status).json({ error: `Creatomate API error: ${errText}` });
-        }
-
-        const data = await response.json();
-        const render = Array.isArray(data) ? data[0] : data;
-        const renderId = render.id;
-
-        creatomateJobs[jobId] = { renderId, status: 'processing', progress: 0, label: 'Enviado para o Creatomate...' };
-        console.log('[creatomate] Render started:', renderId);
-        res.json({ renderId, status: 'processing' });
-
-        const pollCreatomate = async () => {
-          try {
-            const statusRes = await fetch(`https://api.creatomate.com/v2/renders/${renderId}`, {
-              headers: { 'Authorization': `Bearer ${CREATOMATE_API_KEY}` },
-            });
-            const statusData = await statusRes.json();
-
-            if (statusData.status === 'succeeded') {
-              creatomateJobs[jobId] = { renderId, status: 'succeeded', url: statusData.url, progress: 100, label: 'Vídeo pronto!' };
-              console.log('[creatomate] Render succeeded:', statusData.url);
-            } else if (statusData.status === 'failed') {
-              creatomateJobs[jobId] = { renderId, status: 'failed', error: statusData.error_message || 'Renderização falhou', progress: 0 };
-              console.error('[creatomate] Render failed:', statusData.error_message);
-            } else {
-              const pct = typeof statusData.progress === 'number'
-                ? Math.round(statusData.progress * 100)
-                : (creatomateJobs[jobId]?.progress || 0) + 5;
-              creatomateJobs[jobId] = { renderId, status: 'processing', progress: Math.min(pct, 95), label: 'Processando na nuvem...' };
-              setTimeout(pollCreatomate, 3000);
-            }
-          } catch (pollErr: any) {
-            console.error('[creatomate] Poll error:', pollErr.message);
-            setTimeout(pollCreatomate, 5000);
-          }
-        };
-
-        setTimeout(pollCreatomate, 5000);
-      } catch (err: any) {
-        console.error('[creatomate] Request error:', err.message);
-        res.status(500).json({ error: err.message });
-      }
-    });
+      return els;
+    }
 
     app.get('/api/video-editor/creatomate-status/:jobId', (req: any, res: any) => {
       const cJob = creatomateJobs[req.params.jobId];
@@ -4027,7 +4443,6 @@ async function startServer() {
     });
 
     // ═══════════════════════════════════════════════════════════════════════
-    // END CREATOMATE ROUTES
     // ═══════════════════════════════════════════════════════════════════════
 
     app.get('/api/video-editor/segments/:jobId', (req: any, res: any) => {
@@ -4055,6 +4470,32 @@ async function startServer() {
       // Fallback: local file (may not exist after restart)
       if (job?.thumbnailPath && fs.existsSync(job.thumbnailPath)) return res.sendFile(job.thumbnailPath);
       res.status(404).send('No thumbnail');
+    });
+
+    app.delete('/api/video-editor/job/:jobId', async (req: any, res: any) => {
+      const { jobId } = req.params;
+      const job = videoJobs[jobId];
+      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
+
+      // Limpar arquivos locais
+      try {
+        if (job.originalPath && fs.existsSync(job.originalPath)) fs.unlinkSync(job.originalPath);
+        if (job.editedPath && fs.existsSync(job.editedPath)) fs.unlinkSync(job.editedPath);
+        if (job.thumbnailPath && fs.existsSync(job.thumbnailPath)) fs.unlinkSync(job.thumbnailPath);
+      } catch (e) { /* ignore */ }
+
+      // Limpar do Supabase (metadata)
+      try {
+        await storageSupa.storage.from('videos').remove(['meta/' + jobId + '.json']);
+        await storageSupa.storage.from('videos').remove(['thumbs/' + jobId + '.jpg']);
+        await storageSupa.storage.from('videos').remove(['uploads/' + jobId + '/original.mp4']);
+        await storageSupa.storage.from('videos').remove(['uploads/' + jobId + '/original.MOV']);
+      } catch (e) { /* ignore */ }
+
+      delete videoJobs[jobId];
+      delete creatomateJobs[jobId];
+      console.log('[video-editor] Job deletado:', jobId);
+      res.json({ ok: true });
     });
 
     app.get('/api/video-editor/jobs', (_req: any, res: any) => {
