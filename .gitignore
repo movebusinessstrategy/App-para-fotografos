@@ -16,3 +16,11 @@ baileys_sessions/
 # Uploads do editor de vídeo (arquivos grandes)
 server/uploads/
 server/processed/
+# Vídeos e uploads locais
+server/uploads/
+server/processed/
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.bak
