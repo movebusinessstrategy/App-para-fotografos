@@ -718,15 +718,14 @@ export default function VideoEditorPage() {
             </div>
           </div>
 
-          <div className="flex flex-col items-center space-y-4">
-            <div className="rounded-2xl overflow-hidden bg-black w-full" style={{ maxWidth: '100%' }}>
+          <div style={{ width: '100%' }}>
+            <div style={{ width: '100%', borderRadius: '1rem', overflow: 'hidden', background: '#000' }}>
               <video
-                      src={resultUrl}
-                      controls
-                      playsInline
-                      className="w-full block"
-                      style={{ maxHeight: '75vh', height: 'auto' }}
-                    />
+                src={resultUrl}
+                controls
+                playsInline
+                style={{ display: 'block', width: '100%', maxHeight: '80vh' }}
+              />
             </div>
           </div>
 
