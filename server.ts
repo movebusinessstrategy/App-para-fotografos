@@ -3797,7 +3797,8 @@ async function startServer() {
           const vf: string[] = [];
           if (hasZoom) {
             const s = (1 + Math.min(Math.max(zoomCfg.intensity ?? 0.05, 0.01), 0.5)).toFixed(4);
-            vf.push(`scale=iw*${s}:ih*${s},crop=iw/${s}:ih/${s}`);
+            // trunc to nearest even pixel — prevents flickering from non-integer dimensions
+            vf.push(`scale=trunc(iw*${s}/2)*2:trunc(ih*${s}/2)*2,crop=trunc(iw/${s}/2)*2:trunc(ih/${s}/2)*2`);
           }
           if (hasCaptions) {
             const assPath = path.join(VIDEO_PROCESSED_DIR, `${jobId}_captions.ass`);
