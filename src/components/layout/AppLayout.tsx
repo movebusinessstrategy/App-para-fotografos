@@ -29,7 +29,6 @@ const TITLE_MAP: Record<string, string> = {
   "/settings": "Configurações",
   "/finance": "Financeiro",
   "/pipeline-settings": "Configurar Funil",
-  "/video-editor": "Editor de Vídeo",
 };
 
 export default function AppLayout() {
@@ -38,7 +37,9 @@ export default function AppLayout() {
   const [contactModal, setContactModal] = useState<ContactModalPayload | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const pageTitle = useMemo(() => TITLE_MAP[location.pathname] || "Dashboard", [location.pathname]);
+  const pageTitle = useMemo(() => {
+    return TITLE_MAP[location.pathname] || "Dashboard";
+  }, [location.pathname]);
 
   const openContactModal = (payload: ContactModalPayload) => setContactModal(payload);
   const closeContactModal = () => setContactModal(null);

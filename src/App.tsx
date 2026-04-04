@@ -17,7 +17,6 @@ const CalendarPage = lazy(() => import("./pages/CalendarPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const FinancePage = lazy(() => import("./pages/FinancePage"));
 const PipelineSettings = lazy(() => import("./pages/PipelineSettings"));
-const VideoEditorPage = lazy(() => import("./pages/VideoEditorPage"));
 
 export default function App() {
   return (
@@ -59,7 +58,6 @@ export default function App() {
                   path="pipeline-settings"
                   element={<PipelineSettings />}
                 />
-                <Route path="video-editor" element={<VideoEditorPage />} />
               </Route>
             </Routes>
           </Suspense>

@@ -3307,7 +3307,7 @@ async function startServer() {
     const ffmpeg = (await import('fluent-ffmpeg')).default;
     const ffmpegInstaller = (await import('@ffmpeg-installer/ffmpeg')).default;
     const { OpenAI } = await import('openai');
-    const { default: Anthropic } = await import('@anthropic-ai/sdk');
+    const { renderMediaOnLambda, getRenderProgress, downloadMedia } = await import('@remotion/lambda');
     const { v4: uuidv4 } = await import('uuid');
     const { createClient: createSupabaseStorageClient } = await import('@supabase/supabase-js');
 
@@ -3323,6 +3323,52 @@ async function startServer() {
     const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY!;
     const storageSupa = createSupabaseStorageClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
     const VIDEO_BUCKET = 'videos';
+    const REMOTION_DEFAULT_CAPTIONS = {
+      enabled: true,
+      style: 'highlight',
+      fontSize: '9.29 vmin',
+      fontFamily: 'Montserrat',
+      fontWeight: '700',
+      color: '#ffffff',
+      strokeColor: '#000000',
+      strokeWidth: '1.6 vmin',
+      position: '80%',
+      maxLength: 14,
+    };
+    const REMOTION_DEFAULT_EDIT_OPTIONS = {
+      autoCut: true,
+      dynamicZoom: true,
+      broll: false,
+      sfx: false,
+      transitions: true,
+      transitionType: 'fade',
+    };
+    const REMOTION_DEFAULT_OUTPUT = { width: 720, height: 1280, fps: 30 };
+
+    const parseJsonField = <T>(value: unknown, fallback: T): T => {
+      if (!value) return fallback;
+      if (typeof value === 'object') return value as T;
+      if (typeof value !== 'string') return fallback;
+      try {
+        return JSON.parse(value) as T;
+      } catch {
+        return fallback;
+      }
+    };
+
+    const normalizeCaptionCfg = (raw: any) => ({
+      ...REMOTION_DEFAULT_CAPTIONS,
+      ...(raw || {}),
+      style: ['karaoke', 'highlight', 'bounce', 'none'].includes(raw?.style) ? raw.style : REMOTION_DEFAULT_CAPTIONS.style,
+    });
+
+    const normalizeEditOptions = (raw: any) => ({
+      ...REMOTION_DEFAULT_EDIT_OPTIONS,
+      ...(raw || {}),
+      transitionType: ['fade', 'slide-left', 'slide-right', 'zoom-in', 'slide'].includes(raw?.transitionType)
+        ? raw.transitionType
+        : REMOTION_DEFAULT_EDIT_OPTIONS.transitionType,
+    });
 
     // Compress video to fit within Supabase free tier 50MB limit
     async function compressForUpload(inputPath: string, jobId: string): Promise<string | null> {
@@ -3435,6 +3481,10 @@ async function startServer() {
         transcription:       job.transcription       || null,
         segments:            job.segments            || null,
         analysis:            job.analysis            || null,
+        captionsCfg:         job.captionsCfg         || REMOTION_DEFAULT_CAPTIONS,
+        editOptions:         job.editOptions         || REMOTION_DEFAULT_EDIT_OPTIONS,
+        remotionPreviewData: job.remotionPreviewData || null,
+        remotionRender:      job.remotionRender      || null,
         originalSupabaseUrl: job.originalSupabaseUrl || null,
         editedSupabaseUrl:   job.editedSupabaseUrl   || null,
         thumbnailSupabaseUrl:job.thumbnailSupabaseUrl || null,
@@ -3471,7 +3521,7 @@ async function startServer() {
         }
         if (restored > 0) console.log(`[video-editor] ${restored} jobs restaurados da nuvem`);
         // NOTE: NÃO tentamos upload/compressão dos jobs restaurados.
-        // O upload para Supabase acontece SOMENTE quando ensureVideoPublicUrl() é chamada.
+        // O upload para Supabase acontece somente quando preview/render precisar da URL pública.
       } catch (e: any) { console.error('[video-editor] erro ao restaurar da nuvem:', e.message); }
     })();
 
@@ -3493,12 +3543,17 @@ async function startServer() {
     app.post('/api/video-editor/upload', upload.single('video'), async (req: any, res: any) => {
       if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado.' });
       const jobId = uuidv4();
-      const ext = path.extname(req.file.originalname) || '.mp4';
+      const captionsCfg = normalizeCaptionCfg(parseJsonField(req.body?.captions, REMOTION_DEFAULT_CAPTIONS));
+      const editOptions = normalizeEditOptions(parseJsonField(req.body?.editOptions, REMOTION_DEFAULT_EDIT_OPTIONS));
       videoJobs[jobId] = {
         jobId,
         originalPath: req.file.path,
         filename:     req.file.originalname,
         createdAt:    new Date().toISOString(),
+        captionsCfg,
+        editOptions,
+        remotionPreviewData: null,
+        remotionRender: null,
       };
 
       res.json({ jobId, filename: req.file.originalname });
@@ -3516,9 +3571,8 @@ async function startServer() {
         .on('error', () => void saveJobMeta(jobId))
         .run();
 
-      // Upload to Supabase DEFERRED — only happens when Creatomate needs the URL
-      // This avoids compressing 200MB+ videos on upload (which freezes the Mac)
-      console.log('[video-editor] Upload concluído (local). Compressão adiada para quando necessário.');
+      // Upload para Supabase continua adiado para não comprimir vídeos grandes no upload inicial.
+      console.log('[video-editor] Upload concluído (local). Upload para nuvem será feito no preview/render.');
     });
 
     app.post('/api/video-editor/music/:jobId', musicUpload.single('music'), (req: any, res: any) => {
@@ -3865,47 +3919,33 @@ async function startServer() {
       }
     });
 
-    app.get('/api/video-editor/render-progress/:jobId', (req: any, res: any) => {
+    app.get('/api/video-editor/local-render-progress/:jobId', (req: any, res: any) => {
       res.json(videoProgress[req.params.jobId] || { step: 'idle', percent: 0, status: 'idle' });
     });
-    
-    // ═══════════════════════════════════════════════════════════════════════
-    // CREATOMATE ROUTES — Cloud video editing with auto-subtitles
-    // ═══════════════════════════════════════════════════════════════════════
 
-    const CREATOMATE_API_KEY = process.env.CREATOMATE_API_KEY || '';
+    // ═══════════════════════════════════════════════════════════════════════
+    // REMOTION + AWS LAMBDA ROUTES
+    // ═══════════════════════════════════════════════════════════════════════
     const PEXELS_API_KEY = process.env.PEXELS_API_KEY || '';
-    const creatomateJobs: Record<string, {
-      renderId?: string;
-      status: string;
-      url?: string;
-      error?: string;
-      progress?: number;
-      label?: string;
-    }> = {};
 
     async function ensureVideoPublicUrl(jobId: string): Promise<string | null> {
       const job = videoJobs[jobId];
       if (!job) return null;
-
-      // Already have a Supabase URL? Use it
       if (job.originalSupabaseUrl) return job.originalSupabaseUrl;
 
-      // No Supabase URL yet — upload now (with compression if needed)
       if (job.originalPath && fs.existsSync(job.originalPath)) {
-        console.log('[creatomate] vídeo sem URL pública — fazendo upload para Supabase...');
+        console.log('[remotion] vídeo sem URL pública, enviando para Supabase...');
         const ext = path.extname(job.filename || '.mp4') || '.mp4';
         const storagePath = `uploads/${jobId}/original${ext}`;
         const publicUrl = await uploadToStorage(job.originalPath, storagePath, 'video/mp4');
         if (publicUrl) {
           job.originalSupabaseUrl = publicUrl;
           void saveJobMeta(jobId);
-          console.log('[creatomate] upload concluído:', publicUrl);
+          console.log('[remotion] upload concluído:', publicUrl);
           return publicUrl;
         }
       }
 
-      // If running on Render (not localhost), use Render URL as last resort
       if (process.env.SERVER_URL && job.originalPath) {
         return `${process.env.SERVER_URL}/api/video-editor/video/${jobId}`;
       }
@@ -3913,34 +3953,352 @@ async function startServer() {
       return null;
     }
 
+    async function ensureWordSegments(jobId: string): Promise<{ text: string; segments: any[] }> {
+      const job = videoJobs[jobId];
+      if (!job) throw new Error('Job não encontrado.');
+      if (Array.isArray(job.segments) && job.segments.length > 0) {
+        return { text: job.transcription || '', segments: job.segments };
+      }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // PEXELS B-ROLL SEARCH
-    // ═══════════════════════════════════════════════════════════════════════
-    async function searchPexelsVideos(query: string, count = 3): Promise<string[]> {
-      if (!PEXELS_API_KEY) { console.warn('[pexels] sem API key'); return []; }
+      if (!job.originalPath || !fs.existsSync(job.originalPath)) {
+        return { text: job.transcription || '', segments: [] };
+      }
+
+      console.log(`[remotion] transcrevendo job ${jobId} com Whisper...`);
+      const audioPath = path.join(VIDEO_PROCESSED_DIR, `${jobId}_audio_remotion.mp3`);
+      let audioExtracted = false;
+
       try {
-        const res = await fetch(`https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}&per_page=${count}&size=small&orientation=portrait`, {
-          headers: { Authorization: PEXELS_API_KEY },
+        await new Promise<void>((resolve, reject) => {
+          ffmpeg(job.originalPath)
+            .noVideo()
+            .audioCodec('libmp3lame')
+            .audioBitrate('128k')
+            .output(audioPath)
+            .on('end', () => resolve())
+            .on('error', (e: any) => reject(e))
+            .run();
         });
-        if (!res.ok) { console.warn('[pexels] erro:', res.status); return []; }
-        const data = await res.json();
-        return (data.videos || []).map((v: any) => {
-          const files = v.video_files || [];
-          const best = files.find((f: any) => f.width >= 720 && f.width <= 1080 && f.quality === 'hd')
-            || files.find((f: any) => f.quality === 'hd')
-            || files[0];
-          return best?.link || '';
-        }).filter(Boolean);
+        audioExtracted = fs.existsSync(audioPath) && fs.statSync(audioPath).size > 1000;
       } catch (e: any) {
-        console.warn('[pexels] fetch error:', e.message);
+        console.warn('[remotion] erro ao extrair áudio:', e.message);
+      }
+
+      if (!audioExtracted) {
+        job.transcription = '';
+        job.segments = [];
+        void saveJobMeta(jobId);
+        return { text: '', segments: [] };
+      }
+
+      try {
+        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+        const transcription = await openai.audio.transcriptions.create({
+          file: fs.createReadStream(audioPath),
+          model: 'whisper-1',
+          response_format: 'verbose_json',
+          timestamp_granularities: ['word'],
+        });
+        job.transcription = transcription.text || '';
+        job.segments = ((transcription as any).words || []).map((w: any) => ({ word: w.word, start: w.start, end: w.end }));
+        console.log(`[remotion] transcrição pronta (${job.segments.length} palavras)`);
+      } catch (e: any) {
+        console.warn('[remotion] falha na transcrição, seguindo sem legendas automáticas:', e.message);
+        job.transcription = '';
+        job.segments = [];
+      } finally {
+        try { fs.unlinkSync(audioPath); } catch {}
+      }
+
+      void saveJobMeta(jobId);
+      return { text: job.transcription || '', segments: job.segments || [] };
+    }
+
+    async function searchPexelsVideos(query: string, count = 3): Promise<string[]> {
+      if (!PEXELS_API_KEY) {
+        console.warn('[remotion] PEXELS_API_KEY ausente, seguindo sem b-roll.');
+        return [];
+      }
+
+      try {
+        const pexelRes = await fetch(
+          `https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}&per_page=${count}&size=small&orientation=portrait`,
+          { headers: { Authorization: PEXELS_API_KEY } }
+        );
+        if (!pexelRes.ok) {
+          console.warn('[remotion] erro Pexels:', pexelRes.status);
+          return [];
+        }
+        const data = await pexelRes.json();
+        return (data.videos || [])
+          .map((v: any) => {
+            const files = v.video_files || [];
+            const best = files.find((f: any) => f.width >= 720 && f.width <= 1080 && f.quality === 'hd')
+              || files.find((f: any) => f.quality === 'hd')
+              || files[0];
+            return best?.link || '';
+          })
+          .filter(Boolean);
+      } catch (e: any) {
+        console.warn('[remotion] erro ao buscar b-roll:', e.message);
         return [];
       }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // AI EDIT PLAN GENERATOR
-    // ═══════════════════════════════════════════════════════════════════════
+    // ── FASE 2: Multi-clip shorts generation ──────────────────────────────────
+
+    const shortsGenerationLock = new Map<string, Promise<any>>();
+
+    interface GeneratedShort {
+      id: string;
+      title: string;
+      viralityScore: number;
+      hookStrength: number;
+      emotionalImpact: number;
+      valueDelivery: number;
+      trendAlignment: number;
+      hookText: string;
+      clips: Array<{
+        startTime: number;
+        endTime: number;
+        zoomConfig?: { startScale: number; endScale: number; focusX: number; focusY: number };
+        transitionType: 'fade' | 'slide' | 'zoom-in' | 'cut';
+      }>;
+      suggestedCaption: string;
+      suggestedHashtags: string[];
+      estimatedDuration: number;
+      thumbnailTimestamp: number;
+      category: 'hook' | 'story' | 'tip' | 'emotional' | 'funny';
+      captions: { enabled: boolean; style: string };
+      brolls: Array<{ keyword: string; startTime: number; duration: number }>;
+      editedSupabaseUrl?: string;
+      remotionRender?: any;
+    }
+
+    async function generateShorts(jobId: string, transcription: string, segments: any[]): Promise<GeneratedShort[]> {
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const wordTimeline = segments.map((s: any, i: number) =>
+        `[${i}] ${s.word} (${s.start.toFixed(2)}-${s.end.toFixed(2)})`
+      ).join(' ');
+
+      const prompt = `Você é um editor de vídeo viral expert. Analise a transcrição abaixo e gere múltiplos shorts independentes otimizados para TikTok/Reels/Shorts.
+
+Para cada short, forneça:
+- id: string única
+- title: título curto e chamativo
+- viralityScore: nota de 0-100 baseada em:
+  * hookStrength (0-25): quão forte são os primeiros 3 segundos
+  * emotionalImpact (0-25): intensidade emocional do conteúdo
+  * valueDelivery (0-25): quanto valor/informação entrega
+  * trendAlignment (0-25): alinhamento com tendências de conteúdo viral
+- hookText: texto dos primeiros 5 segundos (gancho)
+- clips: array de { startTime, endTime, zoomConfig: { startScale, endScale, focusX, focusY }, transitionType }
+- suggestedCaption: legenda sugerida pra postar nas redes
+- suggestedHashtags: array de hashtags relevantes
+- estimatedDuration: duração total em segundos (ideal 15-60s)
+- thumbnailTimestamp: timestamp (em segundos) do melhor frame pra thumbnail
+- category: "hook" | "story" | "tip" | "emotional" | "funny"
+- captions: { enabled: true, style: "highlight" }
+- brolls: []
+
+Regras:
+- Gere entre 3 e 10 shorts dependendo do tamanho do vídeo
+- Cada short deve ter entre 15 e 60 segundos
+- O primeiro clip de cada short DEVE ter um gancho forte
+- Ordene os shorts por viralityScore (maior primeiro)
+- Não repita o mesmo trecho em shorts diferentes
+- Clips dentro de um short podem ser de diferentes partes do vídeo
+- viralityScore = hookStrength + emotionalImpact + valueDelivery + trendAlignment
+
+IMPORTANTE: viralityScore DEVE ser a soma de hookStrength + emotionalImpact + valueDelivery + trendAlignment. Cada sub-score vai de 0 a 25. A soma dos 4 deve ser igual ao viralityScore. Todos os 4 sub-scores devem ser fornecidos como números inteiros — NUNCA omita ou deixe em 0 sem motivo.
+
+Transcrição com timestamps:
+${wordTimeline || '(sem fala detectada)'}
+
+Responda APENAS em JSON válido no formato:
+{
+  "shorts": [{
+    "id": "short_1",
+    "title": "Título chamativo",
+    "viralityScore": 85,
+    "hookStrength": 22,
+    "emotionalImpact": 20,
+    "valueDelivery": 23,
+    "trendAlignment": 20,
+    "hookText": "Texto do gancho...",
+    "clips": [{ "startTime": 0.0, "endTime": 30.0, "zoomConfig": { "startScale": 1, "endScale": 1.2, "focusX": 0.5, "focusY": 0.5 }, "transitionType": "cut" }],
+    "suggestedCaption": "Legenda para redes sociais",
+    "suggestedHashtags": ["#exemplo", "#viral"],
+    "estimatedDuration": 30,
+    "thumbnailTimestamp": 2.5,
+    "category": "hook",
+    "captions": { "enabled": true, "style": "highlight" },
+    "brolls": []
+  }]
+}`;
+
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        max_tokens: 4000,
+        messages: [{ role: 'user', content: prompt }],
+        response_format: { type: 'json_object' },
+      });
+
+      const raw = (completion.choices[0].message.content || '').trim();
+      const parsed = JSON.parse(raw);
+      const shorts: GeneratedShort[] = (parsed.shorts || []).map((s: any, idx: number) => ({
+        id: s.id || `short-${idx + 1}`,
+        title: s.title || `Short ${idx + 1}`,
+        viralityScore: Number(s.viralityScore) || 0,
+        hookStrength: Number(s.hookStrength) || 0,
+        emotionalImpact: Number(s.emotionalImpact) || 0,
+        valueDelivery: Number(s.valueDelivery) || 0,
+        trendAlignment: Number(s.trendAlignment) || 0,
+        hookText: s.hookText || '',
+        clips: Array.isArray(s.clips) ? s.clips : [],
+        suggestedCaption: s.suggestedCaption || '',
+        suggestedHashtags: Array.isArray(s.suggestedHashtags) ? s.suggestedHashtags : [],
+        estimatedDuration: Number(s.estimatedDuration) || 30,
+        thumbnailTimestamp: Number(s.thumbnailTimestamp) || 0,
+        category: ['hook', 'story', 'tip', 'emotional', 'funny'].includes(s.category) ? s.category : 'hook',
+        captions: { enabled: true, style: s.captions?.style || 'highlight' },
+        brolls: Array.isArray(s.brolls) ? s.brolls : [],
+      }));
+
+      // Fallback: se sub-scores vieram todos 0, distribuir viralityScore proporcionalmente
+      for (const short of shorts) {
+        const total = short.hookStrength + short.emotionalImpact + short.valueDelivery + short.trendAlignment;
+        if (total === 0 && short.viralityScore > 0) {
+          const base = Math.floor(short.viralityScore / 4);
+          const remainder = short.viralityScore % 4;
+          short.hookStrength = base + (remainder > 0 ? 1 : 0);
+          short.emotionalImpact = base + (remainder > 1 ? 1 : 0);
+          short.valueDelivery = base + (remainder > 2 ? 1 : 0);
+          short.trendAlignment = base;
+        }
+      }
+
+      return shorts.sort((a, b) => b.viralityScore - a.viralityScore);
+    }
+
+    async function buildRemotionPreviewDataForShort(jobId: string, shortId: string) {
+      const job = videoJobs[jobId];
+      if (!job) throw new Error('Job não encontrado.');
+
+      const short: GeneratedShort | undefined = (job.shorts || []).find((s: any) => s.id === shortId);
+      if (!short) throw new Error('Short não encontrado.');
+
+      job.captionsCfg = normalizeCaptionCfg(job.captionsCfg || REMOTION_DEFAULT_CAPTIONS);
+
+      const videoUrl = await ensureVideoPublicUrl(jobId);
+      if (!videoUrl) throw new Error('Falha ao preparar URL pública do vídeo.');
+
+      const { segments } = await ensureWordSegments(jobId);
+
+      // Obter duração real do vídeo via ffprobe
+      let videoDuration = 60;
+      const videoPath = job.processedPath || job.originalPath;
+      if (videoPath && fs.existsSync(videoPath)) {
+        try {
+          videoDuration = await new Promise<number>((resolve) => {
+            ffmpeg.ffprobe(videoPath, (err: any, metadata: any) => {
+              resolve(err ? 60 : (metadata?.format?.duration || 60));
+            });
+          });
+        } catch { /* usa fallback */ }
+      }
+
+      // Garantir clips válidos
+      let sourceClips = Array.isArray(short.clips) && short.clips.length > 0
+        ? short.clips
+        : [{ startTime: 0, endTime: Math.min(short.estimatedDuration || 30, videoDuration), transitionType: 'cut' as const }];
+
+      // Validar e limpar cada clip
+      let normalizedClips = sourceClips
+        .map((clip: any, index: number) => {
+          let startTime = Math.max(0, Number(clip?.startTime ?? 0));
+          let endTime = Number(clip?.endTime ?? (startTime + 10));
+
+          if (endTime <= startTime) endTime = startTime + 5;
+          if (startTime >= videoDuration) startTime = Math.max(0, videoDuration - 10);
+          if (endTime > videoDuration) endTime = videoDuration;
+          if (endTime <= startTime) endTime = Math.min(startTime + 5, videoDuration);
+
+          const zc = clip?.zoomConfig || clip?.zoom;
+          return {
+            startTime,
+            endTime,
+            zoom: {
+              startScale: zc?.startScale ? (zc.startScale > 5 ? zc.startScale / 100 : zc.startScale) : 1,
+              endScale: zc?.endScale ? (zc.endScale > 5 ? zc.endScale / 100 : zc.endScale) : 1.1,
+              focusX: zc?.focusX ?? 50,
+              focusY: zc?.focusY ?? 50,
+            },
+            transition: normalizeTransitionForRemotion(clip?.transitionType || clip?.transition || 'fade'),
+            _index: index,
+          };
+        })
+        .filter((clip: any) => clip.endTime - clip.startTime >= 0.5);
+
+      if (normalizedClips.length === 0) {
+        const dur = Math.min(short.estimatedDuration || 30, videoDuration);
+        normalizedClips = [{
+          startTime: 0,
+          endTime: dur,
+          zoom: { startScale: 1, endScale: 1.1, focusX: 50, focusY: 50 },
+          transition: 'fade' as const,
+          _index: 0,
+        }];
+      }
+
+      let timelineCursor = 0;
+      const withTimeline = normalizedClips.map((clip: any) => {
+        const clipDuration = clip.endTime - clip.startTime;
+        const timelineStart = timelineCursor;
+        const timelineEnd = timelineStart + clipDuration;
+        timelineCursor = timelineEnd;
+        return { ...clip, timelineStart, timelineEnd };
+      });
+
+      const duration = Math.max(1, timelineCursor);
+
+      console.log(`[supoclip] short ${shortId}: ${normalizedClips.length} clips, duration=${duration.toFixed(1)}s, videoDuration=${videoDuration.toFixed(1)}s`);
+
+      const captionSegments = (segments || []).filter((w: any) => {
+        return normalizedClips.some((c: any) => w.start >= c.startTime && w.end <= c.endTime);
+      });
+
+      return {
+        videoUrl,
+        clips: withTimeline.map((clip: any) => ({
+          startTime: clip.startTime,
+          endTime: clip.endTime,
+          zoom: clip.zoom,
+          transition: clip.transition,
+        })),
+        captions: {
+          enabled: short.captions?.enabled !== false,
+          style: short.captions?.style || job.captionsCfg?.style || 'highlight',
+          segments: captionSegments,
+          fontFamily: job.captionsCfg?.fontFamily,
+          fontWeight: job.captionsCfg?.fontWeight,
+          color: job.captionsCfg?.color,
+          strokeColor: job.captionsCfg?.strokeColor,
+          strokeWidth: job.captionsCfg?.strokeWidth,
+          position: job.captionsCfg?.position,
+          maxLength: job.captionsCfg?.maxLength,
+        },
+        brolls: [],
+        transitions: normalizeTransitionForRemotion('fade'),
+        duration,
+        width: REMOTION_DEFAULT_OUTPUT.width,
+        height: REMOTION_DEFAULT_OUTPUT.height,
+        fps: REMOTION_DEFAULT_OUTPUT.fps,
+        outputFormat: REMOTION_DEFAULT_OUTPUT,
+        editedUrl: short.editedSupabaseUrl || null,
+      };
+    }
+
     async function generateEditPlan(jobId: string, transcription: string, segments: any[], editOptions: any) {
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
       const wordTimeline = segments.map((s: any, i: number) => `[${i}] ${s.word} (${s.start.toFixed(2)}-${s.end.toFixed(2)})`).join(' ');
@@ -4001,449 +4359,396 @@ Responda APENAS com o JSON.`;
       return JSON.parse(raw);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // SFX URLS
-    // ═══════════════════════════════════════════════════════════════════════
-    // SFX desabilitado — URLs externas bloqueiam hotlinking no Creatomate
-    // Para ativar: hospedar os MP3 no próprio Supabase Storage e colocar as URLs aqui
-    const SFX_URLS: Record<string, string> = {};
+    const normalizeTransitionForRemotion = (value: string): 'fade' | 'slide' | 'zoom-in' => {
+      if (value === 'zoom-in') return 'zoom-in';
+      if (value === 'slide-left' || value === 'slide-right' || value === 'slide') return 'slide';
+      return 'fade';
+    };
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // CREATOMATE RENDER — PIPELINE COMPLETO
-    // ═══════════════════════════════════════════════════════════════════════
-    app.post('/api/video-editor/creatomate-render/:jobId', async (req: any, res: any) => {
+    const getFallbackClips = (segments: any[]) => {
+      if (!segments.length) return [{ startTime: 0, endTime: 30 }];
+      const GAP = 0.7;
+      const PAD = 0.2;
+      const clips: { startTime: number; endTime: number }[] = [];
+      let start = Math.max(0, Number(segments[0].start || 0) - PAD);
+      let end = Number(segments[0].end || 0) + PAD;
+      for (let i = 1; i < segments.length; i++) {
+        const prevEnd = Number(segments[i - 1].end || 0);
+        const currentStart = Number(segments[i].start || 0);
+        if (currentStart - prevEnd > GAP) {
+          clips.push({ startTime: start, endTime: end });
+          start = Math.max(0, currentStart - PAD);
+        }
+        end = Number(segments[i].end || 0) + PAD;
+      }
+      clips.push({ startTime: start, endTime: end });
+      return clips;
+    };
+
+    async function buildRemotionPreviewData(jobId: string, options?: { forceRefresh?: boolean }) {
+      const job = videoJobs[jobId];
+      if (!job) throw new Error('Job não encontrado.');
+
+      if (job.remotionPreviewData && !options?.forceRefresh) {
+        return job.remotionPreviewData;
+      }
+
+      job.captionsCfg = normalizeCaptionCfg(job.captionsCfg || REMOTION_DEFAULT_CAPTIONS);
+      job.editOptions = normalizeEditOptions(job.editOptions || REMOTION_DEFAULT_EDIT_OPTIONS);
+
+      const videoUrl = await ensureVideoPublicUrl(jobId);
+      if (!videoUrl) {
+        throw new Error('Falha ao preparar URL pública do vídeo.');
+      }
+
+      const { text: transcription, segments } = await ensureWordSegments(jobId);
+
+      let editPlan: any = job.remotionEditPlan || null;
+      if (!editPlan || options?.forceRefresh) {
+        try {
+          editPlan = await generateEditPlan(jobId, transcription || '', segments || [], job.editOptions);
+          job.remotionEditPlan = editPlan;
+          console.log('[remotion] plano de edição criado para', jobId);
+        } catch (e: any) {
+          console.warn('[remotion] falha ao gerar plano de edição, usando fallback:', e.message);
+          editPlan = null;
+        }
+      }
+
+      const sourceClips = Array.isArray(editPlan?.clips) && editPlan.clips.length > 0
+        ? editPlan.clips
+        : getFallbackClips(segments || []);
+
+      let normalizedClips = sourceClips
+        .map((clip: any, index: number) => {
+          const startTime = Math.max(0, Number(clip?.startTime ?? 0));
+          const endTime = Math.max(startTime + 0.1, Number(clip?.endTime ?? (startTime + 2)));
+          return {
+            startTime,
+            endTime,
+            zoom: clip?.zoom || {
+              startScale: 1,
+              endScale: 1,
+              focusX: 50,
+              focusY: 50,
+            },
+            transition: normalizeTransitionForRemotion(clip?.transition || job.editOptions.transitionType),
+            brollQuery: clip?.brollQuery || null,
+            brollStart: typeof clip?.brollStart === 'number' ? clip.brollStart : null,
+            brollEnd: typeof clip?.brollEnd === 'number' ? clip.brollEnd : null,
+            _index: index,
+          };
+        })
+        .filter((clip: any) => clip.endTime - clip.startTime > 0.08);
+
+      if (!job.editOptions?.autoCut) {
+        const maxClipEnd = normalizedClips.length > 0
+          ? Math.max(...normalizedClips.map((clip: any) => clip.endTime))
+          : 0;
+        const transcriptEnd = Number(segments?.[segments.length - 1]?.end || 0);
+        const fullEnd = Math.max(1, maxClipEnd, transcriptEnd);
+        normalizedClips = [{
+          startTime: 0,
+          endTime: fullEnd,
+          zoom: normalizedClips[0]?.zoom || {
+            startScale: 1,
+            endScale: 1,
+            focusX: 50,
+            focusY: 50,
+          },
+          transition: 'fade',
+          brollQuery: null,
+          brollStart: null,
+          brollEnd: null,
+          _index: 0,
+        }];
+      }
+
+      if (normalizedClips.length === 0) {
+        normalizedClips.push({
+          startTime: 0,
+          endTime: 30,
+          zoom: { startScale: 1, endScale: 1, focusX: 50, focusY: 50 },
+          transition: 'fade',
+          brollQuery: null,
+          brollStart: null,
+          brollEnd: null,
+          _index: 0,
+        });
+      }
+
+      const autoCutEnabled = Boolean(job.editOptions?.autoCut);
+      let timelineCursor = 0;
+      const withTimeline = normalizedClips.map((clip: any) => {
+        const clipDuration = clip.endTime - clip.startTime;
+        const timelineStart = autoCutEnabled ? timelineCursor : clip.startTime;
+        const timelineEnd = timelineStart + clipDuration;
+        if (autoCutEnabled) timelineCursor = timelineEnd;
+        return { ...clip, timelineStart, timelineEnd };
+      });
+
+      const duration = autoCutEnabled
+        ? Math.max(1, timelineCursor)
+        : Math.max(
+            ...withTimeline.map((clip: any) => clip.timelineEnd),
+            Number(segments?.[segments.length - 1]?.end || 0),
+            1
+          );
+
+      const brollUrls: Record<string, string> = {};
+      if (job.editOptions?.broll) {
+        const uniqueQueries = [...new Set(withTimeline.map((clip: any) => clip.brollQuery).filter(Boolean))] as string[];
+        for (const query of uniqueQueries.slice(0, 3)) {
+          const urls = await searchPexelsVideos(query, 1);
+          if (urls[0]) brollUrls[query] = urls[0];
+        }
+      }
+
+      const brolls = withTimeline
+        .map((clip: any) => {
+          if (!clip.brollQuery || !brollUrls[clip.brollQuery]) return null;
+          const clipDuration = clip.endTime - clip.startTime;
+          const sourceStart = typeof clip.brollStart === 'number' ? clip.brollStart : clip.startTime + clipDuration * 0.2;
+          const sourceEnd = typeof clip.brollEnd === 'number' ? clip.brollEnd : clip.startTime + clipDuration * 0.6;
+          const relStart = Math.max(0, sourceStart - clip.startTime);
+          const relEnd = Math.min(clipDuration, Math.max(relStart + 0.35, sourceEnd - clip.startTime));
+          return {
+            url: brollUrls[clip.brollQuery],
+            startTime: clip.timelineStart + relStart,
+            endTime: clip.timelineStart + relEnd,
+            query: clip.brollQuery,
+          };
+        })
+        .filter(Boolean);
+
+      const previewData = {
+        videoUrl,
+        clips: withTimeline.map((clip: any) => ({
+          startTime: clip.startTime,
+          endTime: clip.endTime,
+          zoom: clip.zoom,
+          transition: clip.transition,
+        })),
+        captions: {
+          enabled: Boolean(job.captionsCfg?.enabled),
+          style: job.captionsCfg?.style || 'highlight',
+          segments: segments || [],
+          fontFamily: job.captionsCfg?.fontFamily,
+          fontWeight: job.captionsCfg?.fontWeight,
+          color: job.captionsCfg?.color,
+          strokeColor: job.captionsCfg?.strokeColor,
+          strokeWidth: job.captionsCfg?.strokeWidth,
+          position: job.captionsCfg?.position,
+          maxLength: job.captionsCfg?.maxLength,
+        },
+        brolls,
+        transitions: normalizeTransitionForRemotion(job.editOptions?.transitionType || 'fade'),
+        duration,
+        width: REMOTION_DEFAULT_OUTPUT.width,
+        height: REMOTION_DEFAULT_OUTPUT.height,
+        fps: REMOTION_DEFAULT_OUTPUT.fps,
+        outputFormat: REMOTION_DEFAULT_OUTPUT,
+        editedUrl: job.editedSupabaseUrl || null,
+      };
+
+      job.remotionPreviewData = previewData;
+      void saveJobMeta(jobId);
+      return previewData;
+    }
+
+    app.get('/api/video-editor/preview-data/:jobId', async (req: any, res: any) => {
+      const { jobId } = req.params;
+      try {
+        const forceRefresh = req.query?.refresh === '1';
+        const data = await buildRemotionPreviewData(jobId, { forceRefresh });
+        res.json(data);
+      } catch (error: any) {
+        console.error('[remotion] preview-data error:', error.message);
+        res.status(500).json({ error: error.message || 'Falha ao preparar preview.' });
+      }
+    });
+
+    app.post('/api/video-editor/render-lambda/:jobId', async (req: any, res: any) => {
       const { jobId } = req.params;
       const job = videoJobs[jobId];
       if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
 
-      if (!CREATOMATE_API_KEY) {
-        return res.status(500).json({ error: 'CREATOMATE_API_KEY não configurada.' });
-      }
-
-      // Retornar imediatamente para o frontend não travar
-      creatomateJobs[jobId] = { status: 'processing', progress: 10, label: 'Iniciando pipeline...' };
-      res.json({ ok: true, status: 'processing' });
-
-      // Pipeline roda em background
-      (async () => {
-        try {
-      // ── AUTO-TRANSCRIBE se ainda não foi feito ──
-      if (!job.transcription && !job.segments?.length) {
-        console.log('[pipeline] auto-transcribe para job', jobId);
-        const audioPath = path.join(VIDEO_PROCESSED_DIR, jobId + '_audio.mp3');
-        const videoPath = job.processedPath || job.originalPath;
-        if (videoPath && fs.existsSync(videoPath)) {
-          try {
-            let audioExtracted = false;
-            try {
-              await new Promise((resolve, reject) => {
-                ffmpeg(videoPath).noVideo().audioCodec('libmp3lame').audioBitrate('128k')
-                  .output(audioPath).on('end', () => resolve(undefined)).on('error', (e) => reject(e)).run();
-              });
-              audioExtracted = fs.existsSync(audioPath) && fs.statSync(audioPath).size > 1000;
-            } catch (ae) {
-              console.warn('[pipeline] audio extraction failed:', ae.message || ae);
-            }
-            if (audioExtracted) {
-              const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-              const transcription = await openai.audio.transcriptions.create({
-                file: fs.createReadStream(audioPath), model: 'whisper-1',
-                response_format: 'verbose_json', timestamp_granularities: ['word'],
-              });
-              job.transcription = transcription.text || '';
-              job.segments = ((transcription).words || []).map((w) => ({ word: w.word, start: w.start, end: w.end }));
-              console.log('[pipeline] auto-transcribe OK:', job.segments.length, 'words');
-              try { fs.unlinkSync(audioPath); } catch {}
-            } else {
-              job.transcription = '';
-              job.segments = [];
-              console.log('[pipeline] sem áudio detectado, prosseguindo sem transcrição');
-            }
-          } catch (te) {
-            console.warn('[pipeline] auto-transcribe error:', te.message || te);
-            job.transcription = '';
-            job.segments = [];
-          }
-        }
-      }
-
-      const captionsCfg = req.body?.captions || {
-        enabled: true, style: 'highlight', fontSize: '9.29 vmin',
-        fontFamily: 'Montserrat', fontWeight: '700', color: '#ffffff',
-        strokeColor: '#000000', strokeWidth: '1.6 vmin', position: '80%', maxLength: 14,
-      };
-
-      const editOptions = req.body?.editOptions || {
-        autoCut: false, dynamicZoom: false, broll: false,
-        sfx: false, transitions: false, transitionType: 'fade',
-      };
-
-      const hasAdvancedEdits = editOptions.autoCut || editOptions.dynamicZoom || editOptions.broll || editOptions.sfx || editOptions.transitions;
-
-      creatomateJobs[jobId] = { renderId: '', status: 'processing', progress: 5, label: 'Preparando vídeo...' };
-
       try {
-        // ── STEP 1: Ensure video URL ──
-        creatomateJobs[jobId] = { ...creatomateJobs[jobId], label: 'Fazendo upload do vídeo...', progress: 10 };
-        const videoUrl = await ensureVideoPublicUrl(jobId);
-        if (!videoUrl) {
-          creatomateJobs[jobId] = { renderId: '', status: 'failed', error: 'Falha no upload do vídeo.', progress: 0 };
-          return;
+        if (req.body?.captions) {
+          job.captionsCfg = normalizeCaptionCfg(req.body.captions);
+        }
+        if (req.body?.editOptions) {
+          job.editOptions = normalizeEditOptions(req.body.editOptions);
         }
 
-        let elements: any[];
-
-        if (hasAdvancedEdits) {
-          // ══════════════════════════════════════════════════════════
-          // ADVANCED PIPELINE: Transcribe → AI Plan → B-roll → Build
-          // ══════════════════════════════════════════════════════════
-
-          // ── STEP 2: Transcribe if needed ──
-          let segments = job.segments || [];
-          let transcription = job.transcription || '';
-
-          if (!segments.length && job.originalPath && fs.existsSync(job.originalPath)) {
-            creatomateJobs[jobId] = { ...creatomateJobs[jobId], label: 'Transcrevendo áudio com Whisper...', progress: 20 };
-
-            const audioPath = path.join(VIDEO_PROCESSED_DIR, `${jobId}_audio_pipe.mp3`);
-            try {
-              await new Promise<void>((resolve, reject) => {
-                ffmpeg(job.originalPath)
-                  .noVideo().audioCodec('libmp3lame').audioBitrate('128k')
-                  .output(audioPath)
-                  .on('end', () => resolve()).on('error', (e: any) => reject(e)).run();
-              });
-
-              if (fs.existsSync(audioPath) && fs.statSync(audioPath).size > 1000) {
-                const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-                const result = await openai.audio.transcriptions.create({
-                  file: fs.createReadStream(audioPath),
-                  model: 'whisper-1',
-                  response_format: 'verbose_json',
-                  timestamp_granularities: ['word'],
-                });
-                segments = ((result as any).words || []).map((w: any) => ({ word: w.word, start: w.start, end: w.end }));
-                transcription = result.text;
-                job.segments = segments;
-                job.transcription = transcription;
-                void saveJobMeta(jobId);
-              }
-              try { fs.unlinkSync(audioPath); } catch {}
-            } catch (e: any) {
-              console.warn('[pipeline] transcription failed:', e.message);
-            }
-          }
-
-          // ── STEP 3: AI edit plan ──
-          creatomateJobs[jobId] = { ...creatomateJobs[jobId], label: 'IA criando plano de edição...', progress: 35 };
-
-          let editPlan: any = null;
-          try {
-            editPlan = await generateEditPlan(jobId, transcription, segments, editOptions);
-            console.log('[pipeline] edit plan:', JSON.stringify(editPlan).slice(0, 500));
-          } catch (e: any) {
-            console.warn('[pipeline] AI plan failed:', e.message);
-          }
-
-          // ── STEP 4: Search B-roll ──
-          const brollUrls: Record<string, string> = {};
-          if (editPlan && editOptions.broll) {
-            creatomateJobs[jobId] = { ...creatomateJobs[jobId], label: 'Buscando vídeos B-roll...', progress: 45 };
-
-            const queries = [...new Set(
-              (editPlan.clips || []).map((c: any) => c.brollQuery).filter(Boolean)
-            )] as string[];
-
-            for (const q of queries.slice(0, 3)) {
-              const urls = await searchPexelsVideos(q, 1);
-              if (urls.length > 0) brollUrls[q] = urls[0];
-            }
-            console.log('[pipeline] b-roll found:', Object.keys(brollUrls));
-          }
-
-          // ── STEP 5: Build Creatomate JSON (CORRECTED) ──
-          creatomateJobs[jobId] = { ...creatomateJobs[jobId], label: 'Montando composição...', progress: 55 };
-
-          if (editPlan && editPlan.clips && editPlan.clips.length > 0) {
-            const clips = editPlan.clips;
-
-            // ── Abordagem: UM vídeo principal + zoom via animations ──
-            // Creatomate funciona melhor com source no nível do render, não compositions aninhadas
-
-            const mainVideo: any = {
-              type: 'video',
-              source: videoUrl,
-              // O vídeo toca inteiro — Creatomate cuida do trim via compositions abaixo
-            };
-
-            // Se autoCut está ligado, montamos compositions para cada clip
-            if (editOptions.autoCut && clips.length > 1) {
-              const compositions: any[] = [];
-
-              clips.forEach((clip: any, idx: number) => {
-                const clipDuration = clip.endTime - clip.startTime;
-                if (clipDuration <= 0.1) return;
-
-                const videoEl: any = {
-                  type: 'video',
-                  source: videoUrl,
-                  trim_start: clip.startTime,
-                  trim_duration: clipDuration,
-                  fit: 'cover',
-                };
-
-                // Zoom dinâmico via Creatomate animations (formato correto)
-                if (editOptions.dynamicZoom && clip.zoom && clip.zoom.startScale !== clip.zoom.endScale) {
-                  videoEl.animations = [
-                    {
-                      type: 'scale',
-                      scope: 'element',
-                      start_scale: (clip.zoom.startScale / 100).toFixed(2) + '',
-                      end_scale: (clip.zoom.endScale / 100).toFixed(2) + '',
-                      fade: false,
-                      time: 0,
-                      duration: clipDuration,
-                      easing: 'linear',
-                    }
-                  ];
-                }
-
-                const compElements: any[] = [videoEl];
-
-                // B-roll overlay
-                if (editOptions.broll && clip.brollQuery && brollUrls[clip.brollQuery]) {
-                  const brollDur = Math.min(
-                    (clip.brollEnd || clip.endTime) - (clip.brollStart || clip.startTime),
-                    clipDuration * 0.4
-                  );
-                  const brollTimeInClip = Math.max(0, (clip.brollStart || clip.startTime) - clip.startTime);
-
-                  compElements.push({
-                    type: 'video',
-                    source: brollUrls[clip.brollQuery],
-                    time: brollTimeInClip,
-                    duration: Math.max(brollDur, 1),
-                    trim_duration: Math.max(brollDur, 1),
-                    fit: 'cover',
-                    animations: [
-                      { type: 'fade', duration: 0.3, time: 'start' },
-                      { type: 'fade', duration: 0.3, time: 'end', reversed: true },
-                    ],
-                    z_index: 2,
-                  });
-                }
-
-                const comp: any = {
-                  type: 'composition',
-                  track: 1,
-                  duration: clipDuration,
-                  width: 720,
-                  height: 1280,
-                  fill_color: '#000000',
-                  elements: compElements,
-                };
-
-                // Transição entre clips
-                if (editOptions.transitions && idx > 0) {
-                  const tType = clip.transition || 'fade';
-                  if (tType === 'fade') {
-                    comp.animations = [{ type: 'fade', duration: 0.4, time: 'start' }];
-                  }
-                }
-
-                compositions.push(comp);
-              });
-
-              elements = compositions;
-
-            } else {
-              // Sem autoCut — vídeo inteiro com zoom opcional
-              const videoEl: any = {
-                type: 'video',
-                source: videoUrl,
-              };
-
-              // Zoom suave no vídeo inteiro
-              if (editOptions.dynamicZoom && clips[0]?.zoom) {
-                videoEl.animations = [
-                  {
-                    type: 'scale',
-                    scope: 'element',
-                    start_scale: '1.0',
-                    end_scale: '1.15',
-                    fade: false,
-                    duration: null,
-                    easing: 'linear',
-                  }
-                ];
-              }
-
-              elements = [videoEl];
-            }
-
-            // ── Subtitles: transcript direto do primeiro vídeo ──
-            if (captionsCfg.enabled && captionsCfg.style !== 'none') {
-              // Precisamos de um vídeo nomeado para transcript_source
-              // Dar nome ao primeiro vídeo ou ao vídeo no primeiro composition
-              if (elements.length > 0) {
-                if (elements[0].type === 'composition' && elements[0].elements?.[0]) {
-                  elements[0].elements[0].name = 'Main-Video';
-                } else if (elements[0].type === 'video') {
-                  elements[0].name = 'Main-Video';
-                }
-              }
-
-              elements.push({
-                type: 'text',
-                transcript_source: 'Main-Video',
-                transcript_effect: captionsCfg.style === 'karaoke' ? 'karaoke'
-                  : captionsCfg.style === 'bounce' ? 'bounce' : 'highlight',
-                transcript_maximum_length: captionsCfg.maxLength || 14,
-                y: captionsCfg.position || '80%',
-                width: '81%',
-                height: '35%',
-                x_alignment: '50%',
-                y_alignment: '50%',
-                fill_color: captionsCfg.color || '#ffffff',
-                stroke_color: captionsCfg.strokeColor || '#000000',
-                stroke_width: captionsCfg.strokeWidth || '1.6 vmin',
-                font_family: captionsCfg.fontFamily || 'Montserrat',
-                font_weight: captionsCfg.fontWeight || '700',
-                font_size: captionsCfg.fontSize || '9.29 vmin',
-                background_color: 'rgba(216,216,216,0)',
-                background_x_padding: '31%',
-                background_y_padding: '17%',
-                background_border_radius: '31%',
-                z_index: 10,
-                track: 2,
-                ...(captionsCfg.style === 'highlight' ? { transcript_color: '#FFD700' } : {}),
-              });
-            }
-
-          } else {
-            // AI failed — fallback to simple
-            elements = buildSimpleElements(videoUrl, captionsCfg);
-          }
-
-        } else {
-          // ══════════════════════════════════════════════════════════
-          // SIMPLE PIPELINE: just video + captions (no advanced edits)
-          // ══════════════════════════════════════════════════════════
-          elements = buildSimpleElements(videoUrl, captionsCfg);
+        const functionName = process.env.REMOTION_AWS_FUNCTION_NAME;
+        const serveUrl = process.env.REMOTION_AWS_SERVE_URL;
+        const region = (process.env.AWS_REGION || 'us-east-1') as any;
+        if (!functionName || !serveUrl) {
+          return res.status(500).json({
+            error: 'Variáveis REMOTION_AWS_FUNCTION_NAME e REMOTION_AWS_SERVE_URL são obrigatórias.',
+          });
         }
 
-        // ── STEP 6: Send to Creatomate ──
-        creatomateJobs[jobId] = { ...creatomateJobs[jobId], label: 'Enviando para renderização...', progress: 65 };
-
-        console.log('[creatomate] Starting render for job', jobId, 'elements:', elements.length, 'advanced:', hasAdvancedEdits);
-        console.log('[creatomate] JSON:', JSON.stringify(elements, null, 2).slice(0, 3000));
-
-        const response = await fetch('https://api.creatomate.com/v2/renders', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${CREATOMATE_API_KEY}`,
+        console.log('[remotion] iniciando render no Lambda para job', jobId);
+        const previewData = await buildRemotionPreviewData(jobId, { forceRefresh: true });
+        const durationInFrames = Math.max(1, Math.round(previewData.duration * previewData.fps));
+        const inputProps = {
+          videoUrl: previewData.videoUrl,
+          clips: previewData.clips,
+          captions: previewData.captions,
+          brolls: previewData.brolls,
+          transitions: previewData.transitions,
+          duration: previewData.duration,
+          outputFormat: {
+            width: previewData.width,
+            height: previewData.height,
+            fps: previewData.fps,
           },
-          body: JSON.stringify({ output_format: 'mp4', width: 720, height: 1280, elements }),
-        });
-
-        if (!response.ok) {
-          const errText = await response.text();
-          console.error('[creatomate] API error:', response.status, errText);
-          creatomateJobs[jobId] = { renderId: '', status: 'failed', error: 'Creatomate: ' + errText.slice(0, 200), progress: 0 };
-          return;
-        }
-
-        const data = await response.json();
-        const render = Array.isArray(data) ? data[0] : data;
-        const renderId = render.id;
-
-        creatomateJobs[jobId] = { renderId, status: 'processing', progress: 70, label: 'Renderizando na nuvem...' };
-        console.log('[creatomate] Render started:', renderId);
-
-        // Poll
-        const pollCreatomate = async () => {
-          try {
-            const statusRes = await fetch(`https://api.creatomate.com/v2/renders/${renderId}`, {
-              headers: { 'Authorization': `Bearer ${CREATOMATE_API_KEY}` },
-            });
-            const statusData = await statusRes.json();
-
-            if (statusData.status === 'succeeded') {
-              creatomateJobs[jobId] = { renderId, status: 'succeeded', url: statusData.url, progress: 100, label: 'Vídeo pronto! 🎬' };
-              console.log('[creatomate] Render succeeded:', statusData.url);
-              videoJobs[jobId].editedSupabaseUrl = statusData.url;
-              void saveJobMeta(jobId);
-            } else if (statusData.status === 'failed') {
-              creatomateJobs[jobId] = { renderId, status: 'failed', error: statusData.error_message || 'Renderização falhou', progress: 0 };
-              console.error('[creatomate] Render failed:', statusData.error_message);
-            } else {
-              const pct = typeof statusData.progress === 'number'
-                ? Math.min(70 + Math.round(statusData.progress * 30), 95)
-                : Math.min((creatomateJobs[jobId]?.progress || 70) + 3, 95);
-              creatomateJobs[jobId] = { renderId, status: 'processing', progress: pct, label: 'Renderizando na nuvem...' };
-              setTimeout(pollCreatomate, 3000);
-            }
-          } catch (pollErr: any) {
-            console.error('[creatomate] Poll error:', pollErr.message);
-            setTimeout(pollCreatomate, 5000);
-          }
         };
 
-        setTimeout(pollCreatomate, 5000);
+        const render = await renderMediaOnLambda({
+          region,
+          functionName,
+          serveUrl,
+          composition: 'VideoComposition',
+          codec: 'h264',
+          inputProps,
+          forceWidth: previewData.width,
+          forceHeight: previewData.height,
+          forceFps: previewData.fps,
+          forceDurationInFrames: durationInFrames,
+          privacy: 'public',
+          overwrite: true,
+        });
 
-      } catch (err: any) {
-        console.error('[creatomate] Pipeline error:', err.message, err.stack);
-        creatomateJobs[jobId] = { renderId: '', status: 'failed', error: err.message, progress: 0 };
+        job.remotionRender = {
+          renderId: render.renderId,
+          bucketName: render.bucketName,
+          status: 'rendering',
+          progress: 0,
+          functionName,
+          serveUrl,
+          cloudWatchLogs: render.cloudWatchLogs,
+          startedAt: Date.now(),
+        };
+        void saveJobMeta(jobId);
+
+        res.json({ renderId: render.renderId, status: 'rendering' });
+      } catch (error: any) {
+        console.error('[remotion] render-lambda error:', error.message);
+        res.status(500).json({ error: error.message || 'Falha ao iniciar renderização no Lambda.' });
       }
-    } catch (outerErr: any) {
-      console.error('[creatomate] outer error:', outerErr.message);
-      creatomateJobs[jobId] = { renderId: '', status: 'failed', error: outerErr.message, progress: 0 };
-    }
-    })();
-  });
+    });
 
-    function buildSimpleElements(videoUrl: string, captionsCfg: any): any[] {
-      const els: any[] = [
-        { name: 'Video-1', type: 'video', source: videoUrl },
-      ];
+    app.get('/api/video-editor/render-progress/:jobId', async (req: any, res: any) => {
+      const { jobId } = req.params;
+      const job = videoJobs[jobId];
+      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
 
-      if (captionsCfg.enabled && captionsCfg.style !== 'none') {
-        els.push({
-          type: 'text',
-          transcript_source: 'Video-1',
-          transcript_effect: captionsCfg.style === 'karaoke' ? 'karaoke'
-            : captionsCfg.style === 'bounce' ? 'bounce' : 'highlight',
-          transcript_maximum_length: captionsCfg.maxLength || 14,
-          y: captionsCfg.position || '80%',
-          width: '81%',
-          height: '35%',
-          x_alignment: '50%',
-          y_alignment: '50%',
-          fill_color: captionsCfg.color || '#ffffff',
-          stroke_color: captionsCfg.strokeColor || '#000000',
-          stroke_width: captionsCfg.strokeWidth || '1.6 vmin',
-          font_family: captionsCfg.fontFamily || 'Montserrat',
-          font_weight: captionsCfg.fontWeight || '700',
-          font_size: captionsCfg.fontSize || '9.29 vmin',
-          background_color: 'rgba(216,216,216,0)',
-          background_x_padding: '31%',
-          background_y_padding: '17%',
-          background_border_radius: '31%',
-          ...(captionsCfg.style === 'highlight' ? { transcript_color: '#FFD700' } : {}),
+      if (job.editedSupabaseUrl) {
+        return res.json({
+          progress: 100,
+          status: 'completed',
+          outputUrl: job.editedSupabaseUrl,
         });
       }
 
-      return els;
-    }
+      if (!job.remotionRender?.renderId || !job.remotionRender?.bucketName) {
+        return res.json({ progress: 0, status: 'idle', outputUrl: null });
+      }
 
-    app.get('/api/video-editor/creatomate-status/:jobId', (req: any, res: any) => {
-      const cJob = creatomateJobs[req.params.jobId];
-      if (!cJob) return res.json({ status: 'unknown', progress: 0 });
-      res.json(cJob);
+      try {
+        const region = (process.env.AWS_REGION || 'us-east-1') as any;
+        const functionName = process.env.REMOTION_AWS_FUNCTION_NAME || job.remotionRender.functionName;
+        const progress = await getRenderProgress({
+          region,
+          functionName,
+          bucketName: job.remotionRender.bucketName,
+          renderId: job.remotionRender.renderId,
+        });
+
+        const progressPct = Math.max(0, Math.min(100, Math.round((progress.overallProgress || 0) * 100)));
+        const failed = Boolean(progress.fatalErrorEncountered);
+        const status = failed
+          ? 'failed'
+          : progress.done
+            ? 'rendered'
+            : 'rendering';
+
+        job.remotionRender = {
+          ...job.remotionRender,
+          status,
+          progress: progressPct,
+          outputUrl: progress.outputFile || null,
+          errors: progress.errors || [],
+          done: progress.done,
+        };
+        if (status === 'failed' || status === 'rendered') {
+          void saveJobMeta(jobId);
+        }
+
+        return res.json({
+          progress: progressPct,
+          status,
+          outputUrl: job.editedSupabaseUrl || progress.outputFile || null,
+          renderId: job.remotionRender.renderId,
+          error: failed ? (progress.errors?.[0]?.message || 'Renderização falhou no Lambda.') : undefined,
+        });
+      } catch (error: any) {
+        console.error('[remotion] render-progress error:', error.message);
+        return res.status(500).json({ error: error.message || 'Falha ao buscar progresso da renderização.' });
+      }
     });
 
-    // ═══════════════════════════════════════════════════════════════════════
+    app.post('/api/video-editor/render-done/:jobId', async (req: any, res: any) => {
+      const { jobId } = req.params;
+      const job = videoJobs[jobId];
+      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
+
+      if (job.editedSupabaseUrl) {
+        return res.json({ ok: true, outputUrl: job.editedSupabaseUrl, status: 'completed' });
+      }
+
+      if (!job.remotionRender?.renderId || !job.remotionRender?.bucketName) {
+        return res.status(400).json({ error: 'Renderização ainda não iniciada.' });
+      }
+
+      try {
+        const region = (process.env.AWS_REGION || 'us-east-1') as any;
+        const outputPath = path.join(VIDEO_PROCESSED_DIR, `${jobId}_lambda_output.mp4`);
+
+        console.log('[remotion] baixando MP4 do S3 para job', jobId);
+        await downloadMedia({
+          region,
+          bucketName: job.remotionRender.bucketName,
+          renderId: job.remotionRender.renderId,
+          outPath: outputPath,
+        });
+
+        const publicUrl = await uploadToStorage(outputPath, `edited/${jobId}/video-editado.mp4`, 'video/mp4');
+        if (!publicUrl) {
+          throw new Error('Falha ao enviar o MP4 final para o Supabase.');
+        }
+
+        job.editedPath = outputPath;
+        job.editedSupabaseUrl = publicUrl;
+        job.remotionRender = {
+          ...job.remotionRender,
+          status: 'completed',
+          progress: 100,
+          outputUrl: publicUrl,
+        };
+        void saveJobMeta(jobId);
+
+        console.log('[remotion] render finalizada e salva no Supabase:', publicUrl);
+        res.json({ ok: true, outputUrl: publicUrl, status: 'completed' });
+      } catch (error: any) {
+        console.error('[remotion] render-done error:', error.message);
+        res.status(500).json({ error: error.message || 'Falha ao finalizar renderização.' });
+      }
+    });
+
     // ═══════════════════════════════════════════════════════════════════════
 
     app.get('/api/video-editor/segments/:jobId', (req: any, res: any) => {
@@ -4494,7 +4799,6 @@ Responda APENAS com o JSON.`;
       } catch (e) { /* ignore */ }
 
       delete videoJobs[jobId];
-      delete creatomateJobs[jobId];
       console.log('[video-editor] Job deletado:', jobId);
       res.json({ ok: true });
     });
@@ -4526,6 +4830,9 @@ Responda APENAS com o JSON.`;
         analysis:       job.analysis       || null,
         segments:       job.segments       || null,
         transcription:  job.transcription  || null,
+        captionsCfg:    job.captionsCfg    || REMOTION_DEFAULT_CAPTIONS,
+        editOptions:    job.editOptions    || REMOTION_DEFAULT_EDIT_OPTIONS,
+        remotionRender: job.remotionRender || null,
         hasEdited:      !!job.editedSupabaseUrl || !!(job.editedPath && fs.existsSync(job.editedPath)),
         localAvailable,
       });
@@ -4563,6 +4870,357 @@ Responda APENAS com o JSON.`;
         });
         fs.createReadStream(job.editedPath).pipe(res);
       }
+    });
+
+  // ── FASE 2: Shorts endpoints ──────────────────────────────────────────────
+
+    // GET /api/video-editor/shorts/:jobId — lista (ou gera) os shorts de um job
+    app.get('/api/video-editor/shorts/:jobId', async (req: any, res: any) => {
+      const { jobId } = req.params;
+      const job = videoJobs[jobId];
+      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
+
+      try {
+        const forceRefresh = req.query?.refresh === '1';
+
+        if (!job.shorts || forceRefresh) {
+          // Verificar se já está gerando (evitar race condition)
+          if (shortsGenerationLock.has(jobId)) {
+            console.log('[supoclip] aguardando geração em andamento para', jobId);
+            await shortsGenerationLock.get(jobId);
+            return res.json({ shorts: job.shorts || [], filename: job.filename || 'video.mp4' });
+          }
+
+          const generatePromise = (async () => {
+            console.log('[supoclip] gerando shorts para', jobId);
+            const { text: transcription, segments } = await ensureWordSegments(jobId);
+            job.shorts = await generateShorts(jobId, transcription || '', segments || []);
+            void saveJobMeta(jobId);
+            console.log('[supoclip] gerados', job.shorts.length, 'shorts para', jobId);
+          })();
+
+          shortsGenerationLock.set(jobId, generatePromise);
+          try {
+            await generatePromise;
+          } finally {
+            shortsGenerationLock.delete(jobId);
+          }
+        }
+
+        res.json({ shorts: job.shorts, filename: job.filename || 'video.mp4' });
+      } catch (error: any) {
+        console.error('[supoclip] shorts error:', error.message);
+        shortsGenerationLock.delete(jobId);
+        res.status(500).json({ error: error.message || 'Falha ao gerar shorts.' });
+      }
+    });
+
+    // GET /api/video-editor/short-preview/:jobId/:shortId — preview data de 1 short
+    app.get('/api/video-editor/short-preview/:jobId/:shortId', async (req: any, res: any) => {
+      const { jobId, shortId } = req.params;
+      try {
+        const job = videoJobs[jobId];
+        if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
+
+        const shorts = job.shorts || [];
+        const short = shorts.find((s: any) => s.id === shortId);
+        if (!short) {
+          return res.status(404).json({
+            error: 'Short não encontrado.',
+            availableIds: shorts.map((s: any) => s.id),
+          });
+        }
+
+        // Garantir defaults seguros antes de chamar buildRemotionPreviewDataForShort
+        if (!Array.isArray(short.clips) || short.clips.length === 0) {
+          short.clips = [{ startTime: 0, endTime: short.estimatedDuration || 30, transitionType: 'cut' }];
+        }
+        if (!short.captions) short.captions = { enabled: true, style: 'highlight' };
+        if (!Array.isArray(short.brolls)) short.brolls = [];
+
+        console.log('[supoclip] short-preview building for', shortId, 'clips:', short.clips.length);
+        const data = await buildRemotionPreviewDataForShort(jobId, shortId);
+        console.log('[supoclip] short-preview success for', shortId);
+        res.json(data);
+      } catch (error: any) {
+        console.error('[supoclip] short-preview error:', error.message, error.stack);
+        res.status(500).json({ error: error.message || 'Falha ao preparar preview do short.' });
+      }
+    });
+
+    // POST /api/video-editor/render-short/:jobId/:shortId — renderiza 1 short no Lambda
+    app.post('/api/video-editor/render-short/:jobId/:shortId', async (req: any, res: any) => {
+      const { jobId, shortId } = req.params;
+      const job = videoJobs[jobId];
+      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
+
+      const short = (job.shorts || []).find((s: any) => s.id === shortId);
+      if (!short) return res.status(404).json({ error: 'Short não encontrado.' });
+
+      const functionName = process.env.REMOTION_AWS_FUNCTION_NAME;
+      const serveUrl = process.env.REMOTION_AWS_SERVE_URL;
+      const region = (process.env.AWS_REGION || 'us-east-1') as any;
+      if (!functionName || !serveUrl) {
+        return res.status(500).json({ error: 'Variáveis AWS não configuradas.' });
+      }
+
+      try {
+        const previewData = await buildRemotionPreviewDataForShort(jobId, shortId);
+        const durationInFrames = Math.max(1, Math.round(previewData.duration * previewData.fps));
+        const inputProps = {
+          videoUrl: previewData.videoUrl,
+          clips: previewData.clips,
+          captions: previewData.captions,
+          brolls: previewData.brolls,
+          transitions: previewData.transitions,
+          duration: previewData.duration,
+          outputFormat: { width: previewData.width, height: previewData.height, fps: previewData.fps },
+        };
+
+        const render = await renderMediaOnLambda({
+          region, functionName, serveUrl,
+          composition: 'VideoComposition',
+          codec: 'h264',
+          inputProps,
+          forceWidth: previewData.width,
+          forceHeight: previewData.height,
+          forceFps: previewData.fps,
+          forceDurationInFrames: durationInFrames,
+          privacy: 'public',
+          overwrite: true,
+        });
+
+        short.remotionRender = {
+          renderId: render.renderId,
+          bucketName: render.bucketName,
+          status: 'rendering',
+          progress: 0,
+          functionName,
+          startedAt: Date.now(),
+        };
+        void saveJobMeta(jobId);
+
+        console.log('[supoclip] render iniciado para short', shortId, render.renderId);
+        res.json({ renderId: render.renderId, status: 'rendering' });
+      } catch (error: any) {
+        console.error('[supoclip] render-short error:', error.message);
+        res.status(500).json({ error: error.message || 'Falha ao renderizar short.' });
+      }
+    });
+
+    // GET /api/video-editor/render-short-progress/:jobId/:shortId
+    app.get('/api/video-editor/render-short-progress/:jobId/:shortId', async (req: any, res: any) => {
+      const { jobId, shortId } = req.params;
+      const job = videoJobs[jobId];
+      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
+
+      const short = (job.shorts || []).find((s: any) => s.id === shortId);
+      if (!short) return res.status(404).json({ error: 'Short não encontrado.' });
+
+      if (short.editedSupabaseUrl) {
+        return res.json({ progress: 100, status: 'completed', outputUrl: short.editedSupabaseUrl });
+      }
+
+      if (!short.remotionRender?.renderId) {
+        return res.json({ progress: 0, status: 'idle', outputUrl: null });
+      }
+
+      try {
+        const region = (process.env.AWS_REGION || 'us-east-1') as any;
+        const functionName = process.env.REMOTION_AWS_FUNCTION_NAME || short.remotionRender.functionName;
+        const progress = await getRenderProgress({
+          region, functionName,
+          bucketName: short.remotionRender.bucketName,
+          renderId: short.remotionRender.renderId,
+        });
+
+        const progressPct = Math.max(0, Math.min(100, Math.round((progress.overallProgress || 0) * 100)));
+        const failed = Boolean(progress.fatalErrorEncountered);
+        const status = failed ? 'failed' : progress.done ? 'rendered' : 'rendering';
+
+        short.remotionRender = { ...short.remotionRender, status, progress: progressPct, done: progress.done };
+
+        if (status === 'rendered') {
+          // Finalizar automaticamente
+          try {
+            const outputPath = path.join(VIDEO_PROCESSED_DIR, `${jobId}_short_${shortId}.mp4`);
+            await downloadMedia({ region, bucketName: short.remotionRender.bucketName, renderId: short.remotionRender.renderId, outPath: outputPath });
+            const publicUrl = await uploadToStorage(outputPath, `edited/${jobId}/short-${shortId}.mp4`, 'video/mp4');
+            if (publicUrl) {
+              short.editedSupabaseUrl = publicUrl;
+              short.remotionRender = { ...short.remotionRender, status: 'completed', progress: 100, outputUrl: publicUrl };
+              void saveJobMeta(jobId);
+            }
+            return res.json({ progress: 100, status: 'completed', outputUrl: publicUrl || null });
+          } catch (e: any) {
+            console.error('[supoclip] finalização do short falhou:', e.message);
+          }
+        }
+
+        return res.json({ progress: progressPct, status, outputUrl: short.editedSupabaseUrl || null });
+      } catch (error: any) {
+        console.error('[supoclip] render-short-progress error:', error.message);
+        return res.status(500).json({ error: error.message || 'Falha ao buscar progresso.' });
+      }
+    });
+
+    // GET /api/video-editor/thumbnail/:jobId?timestamp=X — extrai frame do vídeo
+    app.get('/api/video-editor/thumbnail/:jobId', async (req: any, res: any) => {
+      const { jobId } = req.params;
+      const job = videoJobs[jobId];
+      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
+
+      const timestamp = Math.max(0, parseFloat(String(req.query?.timestamp || '0')));
+
+      // Se já tem thumbnail no timestamp 0, redireciona
+      if (timestamp === 0 && job.thumbnailSupabaseUrl) {
+        return res.redirect(job.thumbnailSupabaseUrl);
+      }
+
+      const videoPath = job.originalPath || job.supabaseUrl;
+      if (!videoPath && !job.supabaseUrl) {
+        return res.status(404).json({ error: 'Vídeo não disponível.' });
+      }
+
+      try {
+        const ffmpeg = (await import('fluent-ffmpeg')).default;
+        const ffmpegInstaller = (await import('@ffmpeg-installer/ffmpeg')).default;
+        ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+
+        const thumbPath = path.join(VIDEO_PROCESSED_DIR, `${jobId}_thumb_${Math.round(timestamp * 10)}.jpg`);
+
+        const inputSource = (videoPath && fs.existsSync(videoPath)) ? videoPath : job.supabaseUrl;
+        if (!inputSource) return res.status(404).json({ error: 'Fonte de vídeo não encontrada.' });
+
+        await new Promise<void>((resolve, reject) => {
+          ffmpeg(inputSource)
+            .seekInput(timestamp)
+            .frames(1)
+            .output(thumbPath)
+            .on('end', () => resolve())
+            .on('error', (err: Error) => reject(err))
+            .run();
+        });
+
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        fs.createReadStream(thumbPath).pipe(res);
+        // Limpar após envio
+        res.on('finish', () => {
+          try { fs.unlinkSync(thumbPath); } catch { /* ignore */ }
+        });
+      } catch (error: any) {
+        console.error('[supoclip] thumbnail error:', error.message);
+        // Fallback: redirecionar para thumbnail padrão se existir
+        if (job.thumbnailSupabaseUrl) return res.redirect(job.thumbnailSupabaseUrl);
+        res.status(500).json({ error: 'Falha ao gerar thumbnail.' });
+      }
+    });
+
+    // POST /api/video-editor/render-batch/:jobId — renderiza múltiplos shorts em paralelo
+    app.post('/api/video-editor/render-batch/:jobId', async (req: any, res: any) => {
+      const { jobId } = req.params;
+      const job = videoJobs[jobId];
+      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
+
+      const { shortIds } = req.body as { shortIds: string[] };
+      if (!Array.isArray(shortIds) || shortIds.length === 0) {
+        return res.status(400).json({ error: 'shortIds é obrigatório.' });
+      }
+
+      const functionName = process.env.REMOTION_AWS_FUNCTION_NAME;
+      const serveUrl = process.env.REMOTION_AWS_SERVE_URL;
+      const region = (process.env.AWS_REGION || 'us-east-1') as any;
+      if (!functionName || !serveUrl) {
+        return res.status(500).json({ error: 'Variáveis AWS não configuradas.' });
+      }
+
+      const results: Array<{ shortId: string; renderId?: string; status: string; error?: string }> = [];
+      const CONCURRENCY = 3;
+
+      const renderOne = async (shortId: string) => {
+        const short = (job.shorts || []).find((s: any) => s.id === shortId);
+        if (!short) {
+          results.push({ shortId, status: 'error', error: 'Short não encontrado' });
+          return;
+        }
+        try {
+          const previewData = await buildRemotionPreviewDataForShort(jobId, shortId);
+          const durationInFrames = Math.max(1, Math.round(previewData.duration * previewData.fps));
+          const render = await renderMediaOnLambda({
+            region, functionName, serveUrl,
+            composition: 'VideoComposition',
+            codec: 'h264',
+            inputProps: {
+              videoUrl: previewData.videoUrl,
+              clips: previewData.clips,
+              captions: previewData.captions,
+              brolls: previewData.brolls,
+              transitions: previewData.transitions,
+              duration: previewData.duration,
+              outputFormat: { width: previewData.width, height: previewData.height, fps: previewData.fps },
+            },
+            forceWidth: previewData.width,
+            forceHeight: previewData.height,
+            forceFps: previewData.fps,
+            forceDurationInFrames: durationInFrames,
+            privacy: 'public',
+            overwrite: true,
+          });
+          short.remotionRender = { renderId: render.renderId, bucketName: render.bucketName, status: 'rendering', progress: 0, functionName, startedAt: Date.now() };
+          results.push({ shortId, renderId: render.renderId, status: 'rendering' });
+          console.log('[supoclip] batch render iniciado para short', shortId);
+        } catch (e: any) {
+          console.error('[supoclip] batch render falhou para short', shortId, e.message);
+          results.push({ shortId, status: 'error', error: e.message });
+        }
+      };
+
+      // Processar em chunks de CONCURRENCY
+      for (let i = 0; i < shortIds.length; i += CONCURRENCY) {
+        const chunk = shortIds.slice(i, i + CONCURRENCY);
+        await Promise.all(chunk.map(renderOne));
+      }
+
+      void saveJobMeta(jobId);
+      res.json({ results });
+    });
+
+    // GET /api/video-editor/batch-progress/:jobId — progresso de todos os renders ativos
+    app.get('/api/video-editor/batch-progress/:jobId', async (req: any, res: any) => {
+      const { jobId } = req.params;
+      const job = videoJobs[jobId];
+      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
+
+      const shorts = (job.shorts || []) as GeneratedShort[];
+      const region = (process.env.AWS_REGION || 'us-east-1') as any;
+
+      const statusList = await Promise.all(
+        shorts.map(async (short) => {
+          if (short.editedSupabaseUrl) {
+            return { shortId: short.id, progress: 100, status: 'completed', outputUrl: short.editedSupabaseUrl };
+          }
+          if (!short.remotionRender?.renderId) {
+            return { shortId: short.id, progress: 0, status: 'idle', outputUrl: null };
+          }
+          try {
+            const functionName = process.env.REMOTION_AWS_FUNCTION_NAME || short.remotionRender.functionName;
+            const progress = await getRenderProgress({
+              region, functionName,
+              bucketName: short.remotionRender.bucketName,
+              renderId: short.remotionRender.renderId,
+            });
+            const progressPct = Math.max(0, Math.min(100, Math.round((progress.overallProgress || 0) * 100)));
+            const failed = Boolean(progress.fatalErrorEncountered);
+            const status = failed ? 'failed' : progress.done ? 'rendered' : 'rendering';
+            return { shortId: short.id, progress: progressPct, status, outputUrl: null };
+          } catch {
+            return { shortId: short.id, progress: 0, status: 'unknown', outputUrl: null };
+          }
+        })
+      );
+
+      res.json({ shorts: statusList });
     });
   }
 

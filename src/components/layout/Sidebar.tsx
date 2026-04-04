@@ -9,7 +9,6 @@ import {
   Settings2,
   Trello,
   Users,
-  Video,
   X
 } from "lucide-react";
 
@@ -23,7 +22,6 @@ const navItems = [
   { to: "/pipeline-settings", label: "Configurar Funil", icon: Settings2 },
   { to: "/calendar", label: "Agenda", icon: Calendar },
   { to: "/finance", label: "Financeiro", icon: DollarSign },
-  { to: "/video-editor", label: "Editor de Vídeo", icon: Video },
 ];
 
 const settingsItem = { to: "/settings", label: "Configurações", icon: Settings };
