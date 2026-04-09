@@ -188,6 +188,25 @@
   background: #4b5563;
 }
 
+/* ===== Kanban card staleness pulse animations ===== */
+@keyframes pulse-red {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); border-color: #ef4444; }
+  50%       { box-shadow: 0 0 0 4px rgba(239, 68, 68, 0); border-color: #fca5a5; }
+}
+
+@keyframes pulse-amber {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.6); border-color: #fbbf24; }
+  50%       { box-shadow: 0 0 0 4px rgba(251, 191, 36, 0); border-color: #fde68a; }
+}
+
+.animate-pulse-red {
+  animation: pulse-red 1.8s ease-in-out infinite;
+}
+
+.animate-pulse-amber {
+  animation: pulse-amber 1.8s ease-in-out infinite;
+}
+
 /* Mobile - esconde scrollbar mas mantém funcionalidade */
 @media (max-width: 768px) {
   .overflow-x-auto {

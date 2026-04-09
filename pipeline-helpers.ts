@@ -272,3 +272,140 @@ export const createStageId = (name: string) => {
     .replace(/(^-|-$)/g, '');
   return slug || randomUUID();
 };
+
+// ========= PRODUCTION PROCESSES & STAGES V2 =========
+
+export interface ProductionProcessDef {
+  id: string;
+  name: string;
+  position: number;
+  color: string;
+}
+
+export interface ProductionStageDef {
+  id: string;
+  name: string;
+  position: number;
+  color: string;
+  process_id: string;
+  expected_hours: number;
+  is_final: boolean;
+  is_won: boolean;
+}
+
+export const DEFAULT_PRODUCTION_PROCESSES: ProductionProcessDef[] = [
+  { id: 'proc-empresa',     name: 'Processo dentro da Empresa', position: 0, color: '#3b82f6' },
+  { id: 'proc-fotos',       name: 'Processo de Enviar Fotos',   position: 1, color: '#0ea5e9' },
+  { id: 'proc-edicao',      name: 'Processo de Edição',         position: 2, color: '#8b5cf6' },
+  { id: 'proc-finalizacao', name: 'Processo de Finalização',    position: 3, color: '#f59e0b' },
+  { id: 'proc-embalagem',   name: 'Processo de Embalagem',      position: 4, color: '#10b981' },
+  { id: 'proc-posvenda',    name: 'Processo de Pós Venda',      position: 5, color: '#f43f5e' },
+];
+
+export const DEFAULT_PRODUCTION_STAGES_V2: ProductionStageDef[] = [
+  // Empresa
+  { id: 'prod-emp-1', name: 'Ensaio Vendido',    position: 0, process_id: 'proc-empresa', color: '#3b82f6', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-emp-2', name: 'Contrato',           position: 1, process_id: 'proc-empresa', color: '#3b82f6', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-emp-3', name: 'Alinhamento',        position: 2, process_id: 'proc-empresa', color: '#3b82f6', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-emp-4', name: 'Ensaio a Realizar',  position: 3, process_id: 'proc-empresa', color: '#3b82f6', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-emp-5', name: 'Ensaio Realizado',   position: 4, process_id: 'proc-empresa', color: '#22c55e', is_final: true,  is_won: true,  expected_hours: 0 },
+  // Enviar Fotos
+  { id: 'prod-foto-1', name: 'Importar foto no HD',              position: 0, process_id: 'proc-fotos', color: '#0ea5e9', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-foto-2', name: 'Fazer seleção',                    position: 1, process_id: 'proc-fotos', color: '#0ea5e9', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-foto-3', name: 'Enviado para cliente selecionar',  position: 2, process_id: 'proc-fotos', color: '#0ea5e9', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-foto-4', name: 'Cliente selecionou',               position: 3, process_id: 'proc-fotos', color: '#0ea5e9', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-foto-5', name: 'Pendência de pagamento',           position: 4, process_id: 'proc-fotos', color: '#0ea5e9', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-foto-6', name: 'Prontos para Editar',              position: 5, process_id: 'proc-fotos', color: '#22c55e', is_final: true,  is_won: true,  expected_hours: 0 },
+  // Edição
+  { id: 'prod-edit-1', name: 'Fila de Edição', position: 0, process_id: 'proc-edicao', color: '#8b5cf6', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-edit-2', name: 'Em Edição',       position: 1, process_id: 'proc-edicao', color: '#8b5cf6', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-edit-3', name: 'Editados',         position: 2, process_id: 'proc-edicao', color: '#8b5cf6', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-edit-4', name: 'Vídeo a fazer',    position: 3, process_id: 'proc-edicao', color: '#8b5cf6', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-edit-5', name: 'Revisado',         position: 4, process_id: 'proc-edicao', color: '#8b5cf6', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-edit-6', name: 'Aprovado',         position: 5, process_id: 'proc-edicao', color: '#8b5cf6', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-edit-7', name: 'Mandou Prévia',    position: 6, process_id: 'proc-edicao', color: '#22c55e', is_final: true,  is_won: true,  expected_hours: 0 },
+  // Finalização
+  { id: 'prod-final-1', name: 'Fila para Revelação',          position: 0, process_id: 'proc-finalizacao', color: '#f59e0b', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-final-2', name: 'Mandou Revelar',                position: 1, process_id: 'proc-finalizacao', color: '#f59e0b', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-final-3', name: 'Design sendo Desenvolvido',     position: 2, process_id: 'proc-finalizacao', color: '#f59e0b', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-final-4', name: 'Design Finalizar',              position: 3, process_id: 'proc-finalizacao', color: '#f59e0b', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-final-5', name: 'Enviado para o Cliente Aprovar', position: 4, process_id: 'proc-finalizacao', color: '#f59e0b', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-final-6', name: 'Aprovado',                      position: 5, process_id: 'proc-finalizacao', color: '#f59e0b', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-final-7', name: 'Mandou para a Produção',        position: 6, process_id: 'proc-finalizacao', color: '#f59e0b', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-final-8', name: 'Produto chegou no estúdio',     position: 7, process_id: 'proc-finalizacao', color: '#22c55e', is_final: true,  is_won: true,  expected_hours: 0 },
+  // Embalagem
+  { id: 'prod-emb-1', name: 'Aguardando Embalagem',         position: 0, process_id: 'proc-embalagem', color: '#10b981', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-emb-2', name: 'Embalado e Pronto',             position: 1, process_id: 'proc-embalagem', color: '#10b981', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-emb-3', name: 'Avisou cliente que está pronto', position: 2, process_id: 'proc-embalagem', color: '#10b981', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-emb-4', name: 'Combinou de Retirar',           position: 3, process_id: 'proc-embalagem', color: '#10b981', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-emb-5', name: 'Retirado',                      position: 4, process_id: 'proc-embalagem', color: '#22c55e', is_final: true,  is_won: true,  expected_hours: 0 },
+  // Pós Venda
+  { id: 'prod-pos-1', name: 'Perguntar se deu Certo as fotos',  position: 0, process_id: 'proc-posvenda', color: '#f43f5e', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-pos-2', name: 'Pedido de avaliação no Google',    position: 1, process_id: 'proc-posvenda', color: '#f43f5e', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-pos-3', name: 'Não pedimos avaliação',            position: 2, process_id: 'proc-posvenda', color: '#f43f5e', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-pos-4', name: 'Avaliaram no Google',              position: 3, process_id: 'proc-posvenda', color: '#22c55e', is_final: true,  is_won: true,  expected_hours: 0 },
+];
+
+export const ensureProductionProcesses = async (supabase: SupabaseClient, userId: string): Promise<ProductionProcessDef[]> => {
+  try {
+    const { data, error } = await supabase
+      .from('production_processes')
+      .select('*')
+      .eq('user_id', userId)
+      .order('position');
+
+    if (error) {
+      console.warn('[production processes] error:', error.message);
+      return DEFAULT_PRODUCTION_PROCESSES;
+    }
+
+    if (!data || data.length === 0) {
+      const payload = DEFAULT_PRODUCTION_PROCESSES.map(p => ({ ...p, user_id: userId }));
+      await supabase.from('production_processes').insert(payload);
+      return DEFAULT_PRODUCTION_PROCESSES;
+    }
+
+    return data;
+  } catch (err) {
+    console.error('ensureProductionProcesses error', err);
+    return DEFAULT_PRODUCTION_PROCESSES;
+  }
+};
+
+export const ensureProductionStagesV2 = async (supabase: SupabaseClient, userId: string): Promise<ProductionStageDef[]> => {
+  try {
+    const { data, error } = await supabase
+      .from('deal_stages')
+      .select('*')
+      .eq('user_id', userId)
+      .like('id', 'prod-%')
+      .not('process_id', 'is', null)
+      .order('position');
+
+    if (error) {
+      console.warn('[production stages v2] error:', error.message);
+      return DEFAULT_PRODUCTION_STAGES_V2;
+    }
+
+    if (!data || data.length === 0) {
+      const payload = DEFAULT_PRODUCTION_STAGES_V2.map(s => ({ ...s, user_id: userId }));
+      const { error: insertError } = await supabase.from('deal_stages').insert(payload);
+      if (insertError) console.warn('Não foi possível inserir etapas v2:', insertError.message);
+      return DEFAULT_PRODUCTION_STAGES_V2;
+    }
+
+    return data.map((row: any) => ({
+      id: row.id,
+      name: row.name,
+      position: Number(row.position ?? 0),
+      color: row.color ?? '#94a3b8',
+      process_id: row.process_id,
+      expected_hours: Number(row.expected_hours ?? 0),
+      is_final: Boolean(row.is_final),
+      is_won: Boolean(row.is_won),
+    }));
+  } catch (err) {
+    console.error('ensureProductionStagesV2 error', err);
+    return DEFAULT_PRODUCTION_STAGES_V2;
+  }
+};

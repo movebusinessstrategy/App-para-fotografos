@@ -1,3 +1,14 @@
+export interface TeamMember {
+  id: string;
+  owner_user_id: string;
+  name: string;
+  email?: string;
+  color: string;
+  permissions: Record<string, boolean>;
+  is_active: boolean;
+  created_at: string;
+}
+
 export interface Client {
   id: number;
   name: string;
@@ -42,6 +53,28 @@ export interface Job {
   notes: string;
   google_event_id?: string;
   created_at: string;
+  production_stage?: string | null;
+  production_stage_entered_at?: string | null;
+  labels?: string[];
+  assignee_id?: string | null;
+}
+
+export interface ProductionProcess {
+  id: string;
+  name: string;
+  position: number;
+  color: string;
+}
+
+export interface ProductionStageV2 {
+  id: string;
+  name: string;
+  position: number;
+  color: string;
+  process_id: string;
+  expected_hours: number;
+  is_final?: boolean;
+  is_won?: boolean;
 }
 
 export interface FunnelStage {
@@ -175,4 +208,59 @@ export interface PipelineAnalytics {
   temperatureDistribution: Record<DealTemperature, number>;
   forecastHotValue: number;
   overdueFollowUps: number;
+}
+
+export interface Filho {
+  id: string;
+  cliente_id: number;
+  nome: string;
+  data_nascimento: string;
+  sexo?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Oportunidade {
+  id: string;
+  cliente_id: number;
+  cliente_nome?: string;
+  cliente_telefone?: string;
+  cliente_email?: string;
+  filho_id?: string;
+  tipo: string;
+  status: string;
+  prioridade: string;
+  data_oportunidade: string;
+  data_contato?: string;
+  valor_proposta?: number;
+  notas?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Cupom {
+  id: string;
+  codigo: string;
+  cliente_id?: number;
+  oportunidade_id?: string;
+  tipo_desconto: 'PERCENTUAL' | 'VALOR_FIXO';
+  valor_desconto: number;
+  data_validade: string;
+  usado: boolean;
+  created_at: string;
+}
+
+export interface Aniversariante {
+  tipo: 'MAE' | 'FILHO';
+  nome: string;
+  filhoId?: string;
+  clienteId: number;
+  clienteNome: string;
+  telefone: string;
+  email?: string;
+  dataNascimento: string;
+  diasParaAniversario: number;
+  idade: number;
+  sexo?: string;
+  nivel?: string;
 }

@@ -9,6 +9,29 @@ interface DealCardProps {
   onClick: () => void;
 }
 
+function TierBadge({ tier }: { tier?: string | null }) {
+  if (!tier) return null;
+  const t = tier.toLowerCase();
+  if (t === 'gold' || t === 'ouro') {
+    return <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-yellow-100 dark:bg-yellow-500/20 text-yellow-700 dark:text-yellow-300">Gold</span>;
+  }
+  if (t === 'silver' || t === 'prata') {
+    return <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300">Silver</span>;
+  }
+  if (t === 'bronze') {
+    return <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-orange-100 dark:bg-orange-500/20 text-orange-700 dark:text-orange-300">Bronze</span>;
+  }
+  return null;
+}
+
+function getStaleness(enteredAt?: string | null): 'urgent' | 'warning' | null {
+  if (!enteredAt) return null;
+  const hours = (Date.now() - new Date(enteredAt).getTime()) / 3_600_000;
+  if (hours >= 24) return 'urgent';
+  if (hours >= 12) return 'warning';
+  return null;
+}
+
 export function DealCard({ deal, client, onClick }: DealCardProps) {
   const {
     attributes,
@@ -24,6 +47,23 @@ export function DealCard({ deal, client, onClick }: DealCardProps) {
     transition,
   };
 
+  const staleness = getStaleness(deal.current_stage_entered_at);
+  const tier = client?.tier || client?.status;
+
+  const borderClass =
+    staleness === 'urgent'
+      ? 'border-red-500 dark:border-red-500 animate-pulse-red'
+      : staleness === 'warning'
+      ? 'border-amber-400 dark:border-amber-400 animate-pulse-amber'
+      : 'border-gray-200 dark:border-gray-700';
+
+  const bgClass =
+    staleness === 'urgent'
+      ? 'bg-red-50/60 dark:bg-red-900/10'
+      : staleness === 'warning'
+      ? 'bg-amber-50/60 dark:bg-amber-900/10'
+      : 'bg-white dark:bg-gray-800';
+
   return (
     <div
       ref={setNodeRef}
@@ -31,18 +71,29 @@ export function DealCard({ deal, client, onClick }: DealCardProps) {
       {...attributes}
       {...listeners}
       onClick={onClick}
-      className={`bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3 cursor-pointer hover:border-gray-300 dark:hover:border-gray-600 hover:shadow-sm dark:hover:shadow-black/20 transition-all ${
+      className={`${bgClass} border ${borderClass} rounded-lg p-3 cursor-pointer hover:shadow-sm dark:hover:shadow-black/20 transition-all ${
         isDragging ? "opacity-50 shadow-lg dark:shadow-black/40" : ""
       }`}
     >
       <div className="font-medium text-gray-900 dark:text-white text-sm truncate">
         {deal.title}
       </div>
-      <div className="text-xs text-gray-500 dark:text-gray-400 mt-1 truncate">
-        {client?.name || deal.client_name || "Sem cliente"}
+      <div className="flex items-center gap-1.5 mt-1">
+        <span className="text-xs text-gray-500 dark:text-gray-400 truncate flex-1">
+          {client?.name || deal.client_name || "Sem cliente"}
+        </span>
+        <TierBadge tier={tier} />
       </div>
-      <div className="text-sm font-semibold text-gray-900 dark:text-white mt-2">
-        R$ {(deal.value || 0).toLocaleString("pt-BR")}
+      <div className="flex items-center justify-between mt-2">
+        <span className="text-sm font-semibold text-gray-900 dark:text-white">
+          R$ {(deal.value || 0).toLocaleString("pt-BR")}
+        </span>
+        {staleness === 'urgent' && (
+          <span className="text-[10px] font-semibold text-red-600 dark:text-red-400">+24h</span>
+        )}
+        {staleness === 'warning' && (
+          <span className="text-[10px] font-semibold text-amber-600 dark:text-amber-400">+12h</span>
+        )}
       </div>
     </div>
   );

@@ -1095,7 +1095,6 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                   />
                 </th>
                 <th className="px-6 py-4 font-medium">Nome / Nível</th>
-                <th className="px-6 py-4 font-medium">Oportunidades</th>
                 <th className="px-6 py-4 font-medium">Contato</th>
                 <th className="px-6 py-4 font-medium">Investimento</th>
                 <th className="px-6 py-4 font-medium">Status</th>
@@ -1127,35 +1126,6 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                     <div className="flex flex-wrap gap-1 mt-1">
                       <div className="text-xs text-gray-500 dark:text-gray-400">Desde {format(parseDate(client.created_at) || new Date(), 'MMM yyyy', { locale: ptBR })}</div>
                     </div>
-                  </td>
-
-                  <td className="px-6 py-4">
-                    {client.opportunities && client.opportunities.length > 0 ? (
-                      <div className="flex flex-col gap-1.5">
-                        {client.opportunities.map((opp) => (
-                          <button 
-                            key={opp.id}
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onContactOpp(opp, client);
-                            }}
-                            className={cn(
-                              "flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1.5 rounded-lg border transition-all shadow-sm w-fit",
-                              opp.priority === 'urgent' ? "bg-red-500 text-white border-red-600 hover:bg-red-600" : 
-                              opp.priority === 'active' ? "bg-amber-500 text-white border-amber-600 hover:bg-amber-600" :
-                              "bg-indigo-500 text-white border-indigo-600 hover:bg-indigo-600"
-                            )}
-                            title={`Sugerido para: ${format(new Date(opp.suggested_date), 'dd/MM/yyyy')}`}
-                          >
-                            <Sparkles size={12} />
-                            <span className="uppercase tracking-wider">{opp.type}</span>
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="text-xs text-gray-400 dark:text-gray-500 italic">—</span>
-                    )}
                   </td>
 
                   <td className="px-6 py-4">
