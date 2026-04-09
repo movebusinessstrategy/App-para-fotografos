@@ -1,25 +1,40 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { Calendar as CalendarIcon, Camera, Edit2, Plus, Trash2 } from "lucide-react";
+import { Camera, Edit2, LayoutGrid, List, Plus, Search, Settings, Tag, Trash2, X } from "lucide-react";
+import { SearchableSelect } from "../components/ui/SearchableSelect";
 
 import { ConfirmModal } from "../components/ui/ConfirmModal";
 import JobFormModal from "../components/shared/JobFormModal";
-import { ProductionBoard, ProductionStage, JobWithProduction } from "../components/producao/ProductionBoard";
+import { ProductionBoard, JobWithProduction } from "../components/producao/ProductionBoard";
+import { ProductionCustomizer } from "../components/producao/ProductionCustomizer";
 import { JobDetailDrawer } from "../components/producao/JobDetailDrawer";
 import { authFetch } from "../utils/authFetch";
 import { cn } from "../utils/cn";
 import { parseDate } from "../utils/date";
-import { Client, Job } from "../types";
+import { Client, Job, ProductionProcess, ProductionStageV2, TeamMember } from "../types";
+
+const LABEL_COLORS = ['#6366f1','#ec4899','#f59e0b','#10b981','#0ea5e9','#f43f5e','#8b5cf6','#22c55e'];
+function getLabelColor(label: string) {
+  let hash = 0;
+  for (let i = 0; i < label.length; i++) hash = label.charCodeAt(i) + ((hash << 5) - hash);
+  return LABEL_COLORS[Math.abs(hash) % LABEL_COLORS.length];
+}
 
 export default function JobsPage() {
   const [jobs, setJobs] = useState<JobWithProduction[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+  const [processes, setProcesses] = useState<ProductionProcess[]>([]);
+  const [stages, setStages] = useState<ProductionStageV2[]>([]);
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"funil" | "lista">("funil");
+  const [customizerOpen, setCustomizerOpen] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editingJob, setEditingJob] = useState<Job | null>(null);
-  const [filters, setFilters] = useState({ type: "all", client: "all", status: "all" });
+  const [filters, setFilters] = useState({ type: "all" });
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedJob, setSelectedJob] = useState<JobWithProduction | null>(null);
   const [confirmModal, setConfirmModal] = useState<{
     open: boolean;
     onConfirm: () => void;
@@ -27,82 +42,95 @@ export default function JobsPage() {
     message: string;
     variant?: "danger" | "warning";
   }>({ open: false, onConfirm: () => {}, title: "", message: "" });
-  const [selectedJob, setSelectedJob] = useState<JobWithProduction | null>(null);
-  const [productionStages, setProductionStages] = useState<ProductionStage[]>([
-    { id: "prod-agendado", name: "Agendado", position: 0, color: "#22c55e" },
-    { id: "prod-ensaio-realizado", name: "Ensaio Realizado", position: 1, color: "#fbbf24" },
-    { id: "prod-em-edicao", name: "Em Edição", position: 2, color: "#3b82f6" },
-    { id: "prod-entregue", name: "Entregue", position: 3, color: "#a855f7" },
-  ]);
 
-  const fetchData = async () => {
-    setLoading(true);
+  const fetchData = async (options?: { silent?: boolean }) => {
+    if (!options?.silent) setLoading(true);
     try {
-      const [jobsRes, clientsRes, productionRes] = await Promise.all([
+      const [jobsRes, clientsRes, processesRes, stagesRes, membersRes] = await Promise.all([
         authFetch("/api/jobs"),
         authFetch("/api/clients"),
-        authFetch("/api/production/stages").catch(() => null),
+        authFetch("/api/production/processes").catch(() => null),
+        authFetch("/api/production/stages-v2").catch(() => null),
+        authFetch("/api/team-members").catch(() => null),
       ]);
-      setJobs(await jobsRes.json());
-      setClients(await clientsRes.json());
-      if (productionRes && productionRes.ok) {
-        const stages = await productionRes.json();
-        setProductionStages(
-          stages.map((s: any, idx: number) => ({
-            id: s.id || s.name || `stage-${idx}`,
-            name: s.name,
-            position: s.position ?? idx,
-            color: s.color,
-          }))
-        );
+
+      const jobsData = await jobsRes.json();
+      const clientsData = await clientsRes.json();
+      setJobs(jobsData);
+      setClients(clientsData);
+
+      if (processesRes?.ok) {
+        try { setProcesses(await processesRes.json()); } catch (_) {}
       }
-    } catch (error) {
-      console.error("Erro ao carregar agendamentos:", error);
+      if (stagesRes?.ok) {
+        try { setStages(await stagesRes.json()); } catch (_) {}
+      }
+      if (membersRes?.ok) {
+        try { setTeamMembers(await membersRes.json()); } catch (_) {}
+      }
+    } catch (err) {
+      console.error("Erro ao carregar produção:", err);
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchData();
-  }, []);
+  useEffect(() => { fetchData(); }, []);
 
-  const filteredJobs = useMemo(() => {
-    return jobs.filter((job) => {
-      const matchesType = filters.type === "all" || job.job_type === filters.type;
-      const matchesClient = filters.client === "all" || String(job.client_id) === filters.client;
-      const matchesStatus = filters.status === "all" || job.status === filters.status;
-      return matchesType && matchesClient && matchesStatus;
-    });
-  }, [jobs, filters]);
+  const filteredJobs = useMemo(() => jobs.filter(job => {
+    const matchesType = filters.type === "all" || job.job_type === filters.type;
+    const q = searchQuery.toLowerCase().trim();
+    const matchesSearch = !q || (job.client_name || '').toLowerCase().includes(q) || (job.job_name || '').toLowerCase().includes(q);
+    return matchesType && matchesSearch;
+  }), [jobs, filters, searchQuery]);
 
-  const handleProductionStageChange = async (jobId: number, stageId: string) => {
-    setJobs((prev) =>
-      prev.map((job) => (job.id === jobId ? { ...job, production_stage: stageId } : job))
-    );
+  const handleAssigneeChange = async (jobId: number, assigneeId: string | null) => {
+    setJobs(prev => prev.map(j => j.id === jobId ? { ...j, assignee_id: assigneeId } : j));
+    try {
+      await authFetch(`/api/jobs/${jobId}/assignee`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignee_id: assigneeId }),
+      });
+    } catch (err) {
+      console.error("Erro ao atribuir responsável:", err);
+    }
+  };
 
+  const handleStageChange = async (jobId: number, stageId: string) => {
+    setJobs(prev => prev.map(j => j.id === jobId
+      ? { ...j, production_stage: stageId, production_stage_entered_at: new Date().toISOString() }
+      : j
+    ));
     try {
       await authFetch(`/api/jobs/${jobId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ production_stage: stageId }),
       });
-    } catch (error) {
-      console.error("Erro ao atualizar estágio de produção:", error);
+    } catch (err) {
+      console.error("Erro ao mover etapa:", err);
     }
   };
 
   const handleDelete = (id: number) => {
     setConfirmModal({
       open: true,
-      title: "Excluir agendamento",
-      message: "Deseja excluir este agendamento/trabalho?",
+      title: "Excluir trabalho",
+      message: "Deseja excluir este trabalho? Esta ação não pode ser desfeita.",
       variant: "danger",
       onConfirm: async () => {
         await authFetch(`/api/jobs/${id}`, { method: "DELETE" });
         fetchData();
       },
     });
+  };
+
+  const getStageLabel = (job: JobWithProduction) => {
+    if (!job.production_stage) return null;
+    const stage = stages.find(s => s.id === job.production_stage);
+    const proc = stage ? processes.find(p => p.id === stage.process_id) : null;
+    return stage ? { stageName: stage.name, processName: proc?.name, color: stage.color || proc?.color || '#94a3b8' } : null;
   };
 
   if (loading) {
@@ -113,230 +141,270 @@ export default function JobsPage() {
     );
   }
 
-  const jobTypes = Array.from(new Set(jobs.map((j) => j.job_type))).filter(Boolean);
+  const jobTypes = Array.from(new Set(jobs.map(j => j.job_type))).filter(Boolean) as string[];
 
   return (
     <>
-      <div className="space-y-6">
+      <div className="space-y-5">
+        {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h3 className="text-2xl font-bold text-gray-800 dark:text-white">Agendamentos/Trabalhos</h3>
-            <p className="text-gray-500 dark:text-gray-400">Gerencie seus ensaios, sessões e tarefas agendadas.</p>
-          </div>
-          <button
-            onClick={() => {
-              setEditingJob(null);
-              setShowModal(true);
-            }}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 dark:bg-indigo-500 text-white rounded-xl font-bold hover:bg-indigo-700 dark:hover:bg-indigo-600 shadow-md shadow-indigo-100 dark:shadow-indigo-500/20 transition-all"
-          >
-            <Plus size={20} />
-            Novo agendamento
-          </button>
-        </div>
-
-        <div className="flex gap-2">
-          <button
-            onClick={() => setActiveTab("funil")}
-            className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
-              activeTab === "funil"
-                ? "bg-blue-500 text-white"
-                : "bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-            }`}
-          >
-            Funil de Produção
-          </button>
-          <button
-            onClick={() => setActiveTab("lista")}
-            className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
-              activeTab === "lista"
-                ? "bg-blue-500 text-white"
-                : "bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-            }`}
-          >
-            Lista
-          </button>
-        </div>
-
-        {/* FILTROS */}
-        <div className="flex flex-wrap gap-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 shadow-sm">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-500 dark:text-gray-400">Tipo</span>
-            <select
-              value={filters.type}
-              onChange={(e) => setFilters((prev) => ({ ...prev, type: e.target.value }))}
-              className="text-sm border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 outline-none bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 focus:border-indigo-300 dark:focus:border-indigo-500"
-            >
-              <option value="all">Todos</option>
-              {jobTypes.map((type) => (
-                <option key={type} value={type}>
-                  {type}
-                </option>
-              ))}
-            </select>
+            <h3 className="text-2xl font-bold text-gray-800 dark:text-white">Produção</h3>
+            <p className="text-gray-500 dark:text-gray-400 text-sm">Gerencie o fluxo de produção dos seus ensaios.</p>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-500 dark:text-gray-400">Cliente</span>
-            <select
-              value={filters.client}
-              onChange={(e) => setFilters((prev) => ({ ...prev, client: e.target.value }))}
-              className="text-sm border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 outline-none bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 focus:border-indigo-300 dark:focus:border-indigo-500"
+            {activeTab === "funil" && processes.length > 0 && (
+              <button
+                onClick={() => setCustomizerOpen(true)}
+                className="flex items-center gap-2 px-3 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600 text-sm font-medium transition-colors shadow-sm"
+              >
+                <Settings size={15} />
+                Configurar
+              </button>
+            )}
+            {/* View toggle */}
+            <div className="flex bg-gray-100 dark:bg-gray-800 rounded-xl p-1 gap-1">
+              <button
+                onClick={() => setActiveTab("funil")}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
+                  activeTab === "funil"
+                    ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
+                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                )}
+              >
+                <LayoutGrid size={15} />
+                Kanban
+              </button>
+              <button
+                onClick={() => setActiveTab("lista")}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
+                  activeTab === "lista"
+                    ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
+                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                )}
+              >
+                <List size={15} />
+                Lista
+              </button>
+            </div>
+
+            <button
+              onClick={() => { setEditingJob(null); setShowModal(true); }}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 dark:bg-indigo-500 text-white rounded-xl font-semibold hover:bg-indigo-700 dark:hover:bg-indigo-600 shadow-md shadow-indigo-100 dark:shadow-indigo-500/20 transition-all text-sm"
             >
-              <option value="all">Todos</option>
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+              <Plus size={16} />
+              Novo trabalho
+            </button>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-500 dark:text-gray-400">Status</span>
-            <select
-              value={filters.status}
-              onChange={(e) => setFilters((prev) => ({ ...prev, status: e.target.value }))}
-              className="text-sm border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 outline-none bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 focus:border-indigo-300 dark:focus:border-indigo-500"
-            >
-              <option value="all">Todos</option>
-              <option value="scheduled">Agendado</option>
-              <option value="completed">Concluído</option>
-              <option value="cancelled">Cancelado</option>
-            </select>
-          </div>
-          <button
-            onClick={() => setFilters({ type: "all", client: "all", status: "all" })}
-            className="text-sm text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
-          >
-            Limpar filtros
-          </button>
         </div>
 
-        {activeTab === "funil" ? (
-          <ProductionBoard
-            jobs={filteredJobs}
-            stages={productionStages}
-            onChangeStage={handleProductionStageChange}
-            onJobClick={(job) => setSelectedJob(job)}
+        {/* Filters */}
+        <div className="flex flex-wrap items-center gap-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-3 shadow-sm">
+          {/* Search */}
+          <div className="relative flex-1 min-w-[200px]">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Buscar cliente..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-3 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500 focus:border-indigo-400 dark:focus:border-indigo-500 transition-colors"
+            />
+            {searchQuery && (
+              <button onClick={() => setSearchQuery("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+                <X size={13} />
+              </button>
+            )}
+          </div>
+
+          {/* Type searchable dropdown */}
+          <SearchableSelect
+            value={filters.type}
+            onChange={v => setFilters(prev => ({ ...prev, type: v }))}
+            placeholder="Tipo de ensaio"
+            highlighted
+            options={[
+              { value: "all", label: "Todos os tipos" },
+              ...jobTypes.map(t => ({ value: t, label: t })),
+            ]}
           />
+
+          {(filters.type !== 'all' || searchQuery) && (
+            <button
+              onClick={() => { setFilters({ type: "all" }); setSearchQuery(""); }}
+              className="flex items-center gap-1 text-sm text-gray-500 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+            >
+              <X size={14} />
+              Limpar
+            </button>
+          )}
+        </div>
+
+        {/* Content */}
+        {activeTab === "funil" ? (
+          processes.length > 0 ? (
+            <ProductionBoard
+              jobs={filteredJobs}
+              processes={processes}
+              stages={stages}
+              teamMembers={teamMembers}
+              onChangeStage={handleStageChange}
+              onJobClick={job => setSelectedJob(job)}
+              onStagesUpdate={setStages}
+              onAssigneeChange={handleAssigneeChange}
+            />
+          ) : (
+            <div className="flex flex-col items-center justify-center py-24 gap-3">
+              <p className="text-gray-500 dark:text-gray-400 text-sm font-medium">Processos não carregados</p>
+              <p className="text-gray-400 dark:text-gray-500 text-xs text-center max-w-sm">
+                Reinicie o servidor para ativar os novos endpoints de produção.<br/>
+                Depois, execute o SQL no Supabase para criar as tabelas necessárias.
+              </p>
+              <button
+                onClick={fetchData}
+                className="mt-2 px-4 py-2 bg-indigo-600 text-white text-sm rounded-xl hover:bg-indigo-700 transition-colors"
+              >
+                Tentar novamente
+              </button>
+            </div>
+          )
         ) : (
+          /* ── Lista ── */
           <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm overflow-hidden">
-            {/* TABELA */}
             <table className="w-full text-left">
               <thead className="bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">
                 <tr>
                   <th className="px-6 py-3 font-semibold">Cliente</th>
                   <th className="px-6 py-3 font-semibold">Tipo</th>
-                <th className="px-6 py-3 font-semibold">Data</th>
-                <th className="px-6 py-3 font-semibold">Valor</th>
-                <th className="px-6 py-3 font-semibold">Status</th>
-                <th className="px-6 py-3 font-semibold">Pagamento</th>
-                <th className="px-6 py-3 font-semibold text-right">Ações</th>
+                  <th className="px-6 py-3 font-semibold">Data</th>
+                  <th className="px-6 py-3 font-semibold">Valor</th>
+                  <th className="px-6 py-3 font-semibold">Etapa</th>
+                  <th className="px-6 py-3 font-semibold">Etiquetas</th>
+                  <th className="px-6 py-3 font-semibold">Status</th>
+                  <th className="px-6 py-3 font-semibold text-right">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                {filteredJobs.map((job) => {
+                {filteredJobs.map(job => {
                   const jobDate = parseDate(job.job_date);
-                return (
-                  <tr key={job.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors group">
-                    <td className="px-6 py-4 font-medium text-gray-900 dark:text-white flex items-center gap-2">
-                      <Camera size={14} className="text-gray-400 dark:text-gray-500" />
-                      {job.client_name || clients.find((c) => c.id === job.client_id)?.name || job.job_name || "Tarefa"}
-                    </td>
-                    <td className="px-6 py-4 text-gray-600 dark:text-gray-300">{job.job_type}</td>
-                    <td className="px-6 py-4 text-gray-500 dark:text-gray-400">
-                      {jobDate ? format(jobDate, "dd/MM/yyyy", { locale: ptBR }) : "-"}
-                      {job.job_time && <span className="text-xs text-gray-400 dark:text-gray-500"> · {job.job_time}</span>}
-                    </td>
-                    <td className="px-6 py-4 font-semibold text-gray-900 dark:text-white">
-                      R$ {(job.amount ?? 0).toLocaleString("pt-BR")}
-                    </td>
-                    <td className="px-6 py-4">
-                      <span
-                        className={cn(
+                  const stageInfo = getStageLabel(job);
+                  return (
+                    <tr key={job.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors group">
+                      <td className="px-6 py-4">
+                        <button
+                          onClick={() => setSelectedJob(job)}
+                          className="flex items-center gap-2 font-medium text-gray-900 dark:text-white hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors text-left"
+                        >
+                          <Camera size={14} className="text-gray-400 flex-shrink-0" />
+                          {job.client_name || clients.find(c => c.id === job.client_id)?.name || job.job_name || "Trabalho"}
+                        </button>
+                      </td>
+                      <td className="px-6 py-4 text-gray-600 dark:text-gray-300 text-sm">{job.job_type}</td>
+                      <td className="px-6 py-4 text-gray-500 dark:text-gray-400 text-sm">
+                        {jobDate ? format(jobDate, "dd/MM/yyyy", { locale: ptBR }) : "—"}
+                        {job.job_time && <span className="text-xs text-gray-400"> · {job.job_time}</span>}
+                      </td>
+                      <td className="px-6 py-4 font-semibold text-gray-900 dark:text-white text-sm">
+                        R$ {(job.amount ?? 0).toLocaleString("pt-BR")}
+                      </td>
+                      <td className="px-6 py-4">
+                        {stageInfo ? (
+                          <div>
+                            <span
+                              className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold text-white"
+                              style={{ backgroundColor: stageInfo.color }}
+                            >
+                              {stageInfo.stageName}
+                            </span>
+                            {stageInfo.processName && (
+                              <p className="text-[10px] text-gray-400 mt-0.5">{stageInfo.processName}</p>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-gray-400">—</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex flex-wrap gap-1">
+                          {(job.labels || []).map(label => (
+                            <span
+                              key={label}
+                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold text-white"
+                              style={{ backgroundColor: getLabelColor(label) }}
+                            >
+                              <Tag size={8} />
+                              {label}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={cn(
                           "px-2 py-1 rounded-full text-[10px] font-bold uppercase",
                           job.status === "completed"
                             ? "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400"
                             : job.status === "cancelled"
                             ? "bg-rose-100 dark:bg-rose-500/20 text-rose-700 dark:text-rose-400"
                             : "bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400"
-                        )}
-                      >
-                        {job.status === "scheduled" ? "Agendado" : job.status === "completed" ? "Concluído" : "Cancelado"}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span
-                        className={cn(
-                          "px-2 py-1 rounded-full text-[10px] font-bold uppercase",
-                          job.payment_status === "paid" 
-                            ? "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400" 
-                            : "bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400"
-                        )}
-                      >
-                        {job.payment_status === "paid" ? "Pago" : "Pendente"}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex items-center gap-2 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button
-                          onClick={() => {
-                            setEditingJob(job);
-                            setShowModal(true);
-                          }}
-                          className="p-2 text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 rounded-lg transition-colors"
-                          title="Editar"
-                        >
-                          <Edit2 size={16} />
-                        </button>
-                        <button 
-                          onClick={() => handleDelete(job.id)} 
-                          className="p-2 text-gray-500 dark:text-gray-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/10 rounded-lg transition-colors"
-                          title="Excluir"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
+                        )}>
+                          {job.status === "scheduled" ? "Agendado" : job.status === "completed" ? "Concluído" : "Cancelado"}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <div className="flex items-center gap-2 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={() => { setEditingJob(job); setShowModal(true); }}
+                            className="p-2 text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 rounded-lg transition-colors"
+                            title="Editar"
+                          >
+                            <Edit2 size={15} />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(job.id)}
+                            className="p-2 text-gray-500 dark:text-gray-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/10 rounded-lg transition-colors"
+                            title="Excluir"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {filteredJobs.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="px-6 py-12 text-center text-sm text-gray-400 dark:text-gray-500">
+                      Nenhum trabalho encontrado.
                     </td>
                   </tr>
-                );
-              })}
-
-              {filteredJobs.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="px-6 py-10 text-center text-sm text-gray-400 dark:text-gray-500">
-                    Nenhum agendamento encontrado para os filtros selecionados.
-                  </td>
-                </tr>
-              )}
+                )}
               </tbody>
             </table>
           </div>
         )}
-
-        {showModal && (
-          <JobFormModal
-            clients={clients}
-            job={editingJob}
-            onClose={() => {
-              setShowModal(false);
-              setEditingJob(null);
-            }}
-            onSave={() => {
-              setShowModal(false);
-              setEditingJob(null);
-              fetchData();
-            }}
-          />
-        )}
       </div>
 
+      {/* Job form modal */}
+      {showModal && (
+        <JobFormModal
+          clients={clients}
+          job={editingJob}
+          onClose={() => { setShowModal(false); setEditingJob(null); }}
+          onSave={() => { setShowModal(false); setEditingJob(null); fetchData(); }}
+        />
+      )}
+
+      {/* Job detail drawer */}
       <JobDetailDrawer
         job={selectedJob}
-        stages={productionStages}
+        stages={stages.map(s => ({ id: s.id, name: s.name }))}
         onClose={() => setSelectedJob(null)}
         onStageChange={(jobId, stageId) => {
-          handleProductionStageChange(jobId, stageId);
-          setSelectedJob(prev => prev ? { ...prev, production_stage: stageId } : null);
+          handleStageChange(jobId, stageId);
+          setSelectedJob(prev => prev ? { ...prev, production_stage: stageId, production_stage_entered_at: new Date().toISOString() } : null);
         }}
       />
 
@@ -346,11 +414,16 @@ export default function JobsPage() {
         message={confirmModal.message}
         confirmText="Confirmar"
         variant={confirmModal.variant || "danger"}
-        onConfirm={() => {
-          confirmModal.onConfirm();
-          setConfirmModal((prev) => ({ ...prev, open: false }));
-        }}
-        onCancel={() => setConfirmModal((prev) => ({ ...prev, open: false }))}
+        onConfirm={() => { confirmModal.onConfirm(); setConfirmModal(prev => ({ ...prev, open: false })); }}
+        onCancel={() => setConfirmModal(prev => ({ ...prev, open: false }))}
+      />
+
+      <ProductionCustomizer
+        open={customizerOpen}
+        processes={processes}
+        stages={stages}
+        onClose={() => setCustomizerOpen(false)}
+        onUpdated={() => fetchData({ silent: true })}
       />
     </>
   );

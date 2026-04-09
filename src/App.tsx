@@ -17,6 +17,9 @@ const CalendarPage = lazy(() => import("./pages/CalendarPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const FinancePage = lazy(() => import("./pages/FinancePage"));
 const PipelineSettings = lazy(() => import("./pages/PipelineSettings"));
+const OportunidadesPage = lazy(() => import("./pages/OportunidadesPage"));
+const ContractsPage = lazy(() => import("./pages/ContractsPage"));
+const AdminPage = lazy(() => import("./pages/AdminPage"));
 
 export default function App() {
   return (
@@ -58,6 +61,9 @@ export default function App() {
                   path="pipeline-settings"
                   element={<PipelineSettings />}
                 />
+                <Route path="oportunidades" element={<OportunidadesPage />} />
+                <Route path="contratos" element={<ContractsPage />} />
+                <Route path="admin" element={<AdminPage />} />
               </Route>
             </Routes>
           </Suspense>

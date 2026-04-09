@@ -29,6 +29,7 @@ const TITLE_MAP: Record<string, string> = {
   "/settings": "Configurações",
   "/finance": "Financeiro",
   "/pipeline-settings": "Configurar Funil",
+  "/oportunidades": "Oportunidades",
 };
 
 export default function AppLayout() {

@@ -6,20 +6,18 @@ import { google } from 'googleapis';
 import dotenv from 'dotenv';
 import Papa from 'papaparse';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { createSupabaseClient } from './supabase.js';
-import makeWASocket, { DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
-import { Boom } from '@hapi/boom';
-import QRCode from 'qrcode';
-import pino from 'pino';
-import fs from 'fs';
+import { createSupabaseClient, supabaseAdmin } from './supabase.js';
 import {
   DEFAULT_STAGES,
   DEFAULT_PRODUCTION_STAGES,
+  DEFAULT_PRODUCTION_STAGES_V2,
   calculateTemperature,
   computePipelineAnalytics,
   createStageId,
   ensurePipelineStages,
   ensureProductionStages,
+  ensureProductionProcesses,
+  ensureProductionStagesV2,
   fetchActivityMetrics,
   recordStageEvent,
   stageIdOrDefault,
@@ -171,136 +169,6 @@ const liveWhatsAppMessagesByPhone = new Map<string, LiveWhatsAppMessage[]>();
 const readUpToTimestampByPhone = new Map<string, number>();
 const qrCodeByInstance = new Map<string, string>();
 
-// ============ BAILEYS DIRETO (substitui Evolution API) ============
-const baileysConnections = new Map<string, any>(); // userId → WASocket
-const baileysQrCodes = new Map<string, string>();  // userId → base64 QR
-const baileysStates = new Map<string, string>();   // userId → 'open'|'close'|'connecting'
-const contactNamesByPhone = new Map<string, string>(); // phone → nome real do contato
-
-async function startBaileysConnection(userId: string): Promise<void> {
-  // Fecha conexão existente
-  const existing = baileysConnections.get(userId);
-  if (existing) {
-    try { existing.end(undefined); } catch {}
-    baileysConnections.delete(userId);
-  }
-  baileysQrCodes.delete(userId);
-  baileysStates.set(userId, 'connecting');
-
-  const sessionDir = `./baileys_sessions/${userId}`;
-  fs.mkdirSync(sessionDir, { recursive: true });
-
-  const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-  const { version } = await fetchLatestBaileysVersion();
-
-  const sock = makeWASocket({
-    version,
-    auth: state,
-    printQRInTerminal: false,
-    logger: pino({ level: 'silent' }),
-    browser: ['FocalPoint', 'Chrome', '1.0.0'],
-    connectTimeoutMs: 30000,
-  });
-
-  baileysConnections.set(userId, sock);
-  sock.ev.on('creds.update', saveCreds);
-
-  sock.ev.on('connection.update', async (update: any) => {
-    const { connection, lastDisconnect, qr } = update;
-
-    if (qr) {
-      const base64 = await QRCode.toDataURL(qr).catch(() => '');
-      if (base64) {
-        baileysQrCodes.set(userId, base64);
-        console.log(`[Baileys] QR pronto para: ${userId.substring(0, 8)}`);
-      }
-    }
-
-    if (connection === 'open') {
-      baileysStates.set(userId, 'open');
-      baileysQrCodes.delete(userId);
-      console.log(`[Baileys] Conectado: ${userId.substring(0, 8)}`);
-    }
-
-    if (connection === 'close') {
-      baileysStates.set(userId, 'close');
-      const code = (lastDisconnect?.error as Boom)?.output?.statusCode;
-      console.log(`[Baileys] Fechado (${code}) para: ${userId.substring(0, 8)}`);
-      const loggedOut = code === DisconnectReason.loggedOut || code === DisconnectReason.connectionReplaced;
-      if (!loggedOut) {
-        setTimeout(() => startBaileysConnection(userId).catch(console.error), 5000);
-      } else {
-        baileysConnections.delete(userId);
-      }
-    }
-  });
-
-  // Mensagens em tempo real e histórico recente
-  sock.ev.on('messages.upsert', ({ messages, type }: any) => {
-    if (type !== 'notify' && type !== 'append') return;
-    processBaileysMessages(messages, userId);
-  });
-
-  // Histórico inicial sincronizado no login (evento principal de sync)
-  sock.ev.on('messaging-history.set', ({ messages }: any) => {
-    if (!Array.isArray(messages) || messages.length === 0) return;
-    console.log(`[Baileys] History sync: ${messages.length} mensagens`);
-    processBaileysMessages(messages, userId);
-  });
-}
-
-function extractBaileysText(msg: any): string {
-  const m = msg.message ?? {};
-  return (
-    m.conversation
-    ?? m.extendedTextMessage?.text
-    ?? m.imageMessage?.caption
-    ?? m.videoMessage?.caption
-    ?? m.documentMessage?.caption
-    ?? m.documentWithCaptionMessage?.message?.documentMessage?.caption
-    ?? (m.audioMessage ? '[Áudio]' : null)
-    ?? (m.imageMessage ? '[Imagem]' : null)
-    ?? (m.videoMessage ? '[Vídeo]' : null)
-    ?? (m.documentMessage ? '[Documento]' : null)
-    ?? (m.stickerMessage ? '[Figurinha]' : null)
-    ?? (m.contactMessage ? '[Contato]' : null)
-    ?? (m.locationMessage ? '[Localização]' : null)
-    ?? (m.reactionMessage ? `Reagiu: ${m.reactionMessage.text ?? ''}` : null)
-    // m.protocolMessage: ignorar mensagens de protocolo (deletados, etc)
-    ?? (Object.keys(m).length > 0 ? '[Mensagem]' : null)
-    ?? ''
-  );
-}
-
-function processBaileysMessages(messages: any[], userId?: string) {
-  for (const msg of messages) {
-    const jid = msg.key?.remoteJid ?? '';
-    if (jid.includes('@g.us')) continue;
-    if (!msg.message) continue;
-    if (msg.message?.protocolMessage) continue;
-
-    const phone = jid.replace('@s.whatsapp.net', '').replace(/\D/g, '');
-    if (!phone) continue;
-
-    const text = extractBaileysText(msg);
-    if (!text) continue;
-
-    const pushName = (msg as any).pushName;
-    if (pushName && !msg.key.fromMe && !contactNamesByPhone.has(phone)) {
-      contactNamesByPhone.set(phone, pushName);
-    }
-
-    cacheLiveWhatsAppMessage({
-      id: msg.key.id ?? `${phone}-${Date.now()}`,
-      phone,
-      name: contactNamesByPhone.get(phone) ?? pushName ?? undefined,
-      text,
-      fromMe: Boolean(msg.key.fromMe),
-      timestamp: Number(msg.messageTimestamp) * 1000,
-      source: 'webhook',
-    }, userId);
-  }
-}
 
 const normalizePhone = (value: unknown) => {
   if (typeof value !== 'string' && typeof value !== 'number') return '';
@@ -733,16 +601,62 @@ async function startServer() {
     }
 
     const token = authHeader.substring(7);
-    const supabase = createSupabaseClient(authHeader);
+    const userClient = createSupabaseClient(authHeader);
 
     try {
-      const { data: { user }, error } = await supabase.auth.getUser(token);
+      const { data: { user }, error } = await userClient.auth.getUser(token);
       if (error || !user) {
         return res.status(401).json({ error: 'Não autorizado' });
       }
 
+      // ── Detectar se é membro de equipe ────────────────────────────────
+      if (supabaseAdmin) {
+        // 1) Verificar por member_user_id (já vinculado)
+        const { data: memberById } = await supabaseAdmin
+          .from('team_members')
+          .select('id, owner_user_id, permissions')
+          .eq('member_user_id', user.id)
+          .eq('is_active', true)
+          .maybeSingle();
+
+        if (memberById) {
+          (req as any).userId = memberById.owner_user_id;
+          (req as any).memberPermissions = memberById.permissions;
+          (req as any).isMember = true;
+          (req as any).supabase = supabaseAdmin;
+          return next();
+        }
+
+        // 2) Auto-link: primeira entrada após convite (busca por e-mail)
+        if (user.email) {
+          const { data: memberByEmail } = await supabaseAdmin
+            .from('team_members')
+            .select('id, owner_user_id, permissions')
+            .eq('email', user.email)
+            .eq('is_active', true)
+            .is('member_user_id', null)
+            .maybeSingle();
+
+          if (memberByEmail) {
+            await supabaseAdmin
+              .from('team_members')
+              .update({ member_user_id: user.id })
+              .eq('id', memberByEmail.id);
+
+            (req as any).userId = memberByEmail.owner_user_id;
+            (req as any).memberPermissions = memberByEmail.permissions;
+            (req as any).isMember = true;
+            (req as any).supabase = supabaseAdmin;
+            return next();
+          }
+        }
+      }
+
+      // ── Dono da conta ─────────────────────────────────────────────────
       (req as any).userId = user.id;
-      (req as any).supabase = supabase;
+      (req as any).memberPermissions = null;
+      (req as any).isMember = false;
+      (req as any).supabase = userClient;
       next();
     } catch (err) {
       console.error('Erro ao validar token:', err);
@@ -795,14 +709,18 @@ async function startServer() {
       }
     }
 
-    // Baileys direto — sem Evolution API
+    // Evolution API
     try {
-      console.log(`[Baileys] Iniciando conexão para: ${userId.substring(0, 8)}`);
-      await startBaileysConnection(userId);
-      res.json({ success: true, status: 'connecting', instance: { state: 'connecting' } });
+      const response = await fetch(`${EVOLUTION_API_URL}/instance/create`, {
+        method: 'POST',
+        headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instanceName, qrcode: true, integration: 'WHATSAPP-BAILEYS' }),
+      });
+      const parsed = await parseHttpResponse(response);
+      return res.status(response.status).json({ success: response.ok, provider: 'evolution', ...parsed.data });
     } catch (error) {
-      console.error('[Baileys] Erro ao iniciar:', error);
-      res.status(500).json({ error: 'Falha ao iniciar WhatsApp' });
+      console.error('Erro ao inicializar sessão Evolution API:', error);
+      return res.status(500).json({ error: 'Falha ao inicializar sessão WhatsApp' });
     }
   });
 
@@ -921,23 +839,19 @@ async function startServer() {
       }
     }
 
-    // Baileys direto — aguarda QR em memória (gerado em 1-3s)
+    // Evolution API
     try {
-      for (let i = 0; i < 20; i++) {
-        const state = baileysStates.get(userId);
-        if (state === 'open') return res.json({ instance: { state: 'open' } });
-        const qr = baileysQrCodes.get(userId);
-        if (qr) {
-          console.log(`[Baileys] QR servido após ${i}s para: ${userId.substring(0, 8)}`);
-          return res.json({ base64: qr, qrcode: { base64: qr } });
-        }
-        await new Promise(r => setTimeout(r, 1000));
-      }
-      console.log(`[Baileys] QR timeout para: ${userId.substring(0, 8)}`);
-      res.json({ count: 0 });
+      const response = await fetch(`${EVOLUTION_API_URL}/instance/connect/${instanceName}`, {
+        method: 'GET',
+        headers: { 'apikey': EVOLUTION_API_KEY },
+      });
+      const parsed = await parseHttpResponse(response);
+      const base64 = parsed.data?.base64 ?? qrCodeByInstance.get(instanceName) ?? '';
+      if (!base64) return res.json({ count: 0 });
+      return res.status(response.status).json({ base64, qrcode: { base64 }, provider: 'evolution' });
     } catch (error) {
-      console.error('[Baileys] Erro ao buscar QR:', error);
-      res.status(500).json({ error: 'Falha ao buscar QR Code' });
+      console.error('Erro ao buscar QR Code (Evolution API):', error);
+      return res.status(500).json({ error: 'Falha ao buscar QR Code' });
     }
   });
 
@@ -1063,9 +977,19 @@ async function startServer() {
       }
     }
 
-    // Baileys direto
-    const state = baileysStates.get(userId) ?? 'close';
-    res.json({ instance: { state }, state, connectionStatus: state });
+    // Evolution API
+    try {
+      const response = await fetch(`${EVOLUTION_API_URL}/instance/connectionState/${instanceName}`, {
+        method: 'GET',
+        headers: { 'apikey': EVOLUTION_API_KEY },
+      });
+      const parsed = await parseHttpResponse(response);
+      const state = normalizeWhatsappState(parsed.data);
+      return res.status(response.status).json({ instance: { state }, state, connectionStatus: state, provider: 'evolution' });
+    } catch (error) {
+      console.error('Erro ao verificar status (Evolution API):', error);
+      return res.status(500).json({ error: 'Falha ao verificar status' });
+    }
   });
 
   app.post('/api/whatsapp/webhook/configure', requireAuth, async (req, res) => {
@@ -1147,19 +1071,19 @@ async function startServer() {
       }
     }
 
-    // Baileys direto
+    // Evolution API
+    const phone = String(number).replace(/\D/g, '');
     try {
-      const sock = baileysConnections.get(userId);
-      if (!sock || baileysStates.get(userId) !== 'open') {
-        return res.status(503).json({ error: 'WhatsApp não conectado' });
-      }
-      const cleanNumber = String(number).replace(/\D/g, '');
-      const jid = `${cleanNumber}@s.whatsapp.net`;
-      await sock.sendMessage(jid, { text: String(text) });
-      res.json({ success: true });
+      const response = await fetch(`${EVOLUTION_API_URL}/message/sendText/${instanceName}`, {
+        method: 'POST',
+        headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ number: phone, textMessage: { text: String(text) } }),
+      });
+      const parsed = await parseHttpResponse(response);
+      return res.status(response.status).json(parsed.data);
     } catch (error) {
-      console.error('[Baileys] Erro ao enviar mensagem:', error);
-      res.status(500).json({ error: 'Falha ao enviar mensagem' });
+      console.error('Erro ao enviar mensagem (Evolution API):', error);
+      return res.status(500).json({ error: 'Falha ao enviar mensagem' });
     }
   });
 
@@ -1185,21 +1109,17 @@ async function startServer() {
       }
     }
 
-    // Baileys direto
+    // Evolution API
     try {
-      const sock = baileysConnections.get(userId);
-      if (sock) {
-        try { await sock.logout(); } catch {}
-        baileysConnections.delete(userId);
-      }
-      baileysStates.set(userId, 'close');
-      baileysQrCodes.delete(userId);
-      const sessionDir = `./baileys_sessions/${userId}`;
-      try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch {}
-      res.json({ ok: true });
+      const response = await fetch(`${EVOLUTION_API_URL}/instance/delete/${instanceName}`, {
+        method: 'DELETE',
+        headers: { 'apikey': EVOLUTION_API_KEY },
+      });
+      const parsed = await parseHttpResponse(response);
+      return res.status(response.status).json(parsed.data);
     } catch (error) {
-      console.error('[Baileys] Erro ao desconectar:', error);
-      res.status(500).json({ error: 'Falha ao desconectar WhatsApp' });
+      console.error('Erro ao deletar instância (Evolution API):', error);
+      return res.status(500).json({ error: 'Falha ao desconectar WhatsApp' });
     }
   });
 
@@ -1228,22 +1148,18 @@ async function startServer() {
       }
     }
 
-    // Baileys direto — retorna chats do cache em memória
-    const chats: any[] = [];
-    for (const [phone, messages] of liveWhatsAppMessagesByPhone.entries()) {
-      if (messages.length === 0) continue;
-      const last = messages[messages.length - 1];
-      chats.push({
-        id: `${phone}@s.whatsapp.net`,
-        remoteJid: `${phone}@s.whatsapp.net`,
-        name: last.name ?? phone,
-        lastMessage: last.text,
-        timestamp: last.timestamp,
-        unreadCount: 0,
+    // Evolution API
+    try {
+      const response = await fetch(`${EVOLUTION_API_URL}/chat/findChats/${instanceName}`, {
+        method: 'GET',
+        headers: { 'apikey': EVOLUTION_API_KEY },
       });
+      const parsed = await parseHttpResponse(response);
+      return res.status(response.status).json(parsed.data);
+    } catch (error) {
+      console.error('Erro ao buscar conversas (Evolution API):', error);
+      return res.status(500).json({ error: 'Falha ao buscar conversas' });
     }
-    chats.sort((a, b) => b.timestamp - a.timestamp);
-    res.json(chats);
   });
 
   // Mensagens de um contato específico
@@ -1297,10 +1213,10 @@ async function startServer() {
       }
     }
 
-    // Baileys: servir mensagens do cache em memória
+    // Evolution API — retorna mensagens do cache em memória (recebidas via webhook)
     const phone = normalizePhone(jid);
     const messages = getLiveMessagesByPhone(phone, limit);
-    return res.json({ messages, provider: 'baileys' });
+    return res.json({ messages, provider: 'evolution' });
   });
 
   // Webhook para mensagens recebidas (Evolution API chama este endpoint)
@@ -1389,8 +1305,7 @@ async function startServer() {
       const latest = messages[messages.length - 1];
       const readUntil = readUpToTimestampByPhone.get(phone) ?? 0;
       const unread = messages.filter((m) => !m.fromMe && m.timestamp > readUntil).length;
-      // Usar nome salvo no cache de contatos, senão fallback para pushName das mensagens
-      const name = contactNamesByPhone.get(phone) || messages.map((m) => m.name).find((n) => n) || undefined;
+      const name = messages.map((m) => m.name).find((n) => n) || undefined;
       return {
         phone,
         name,
@@ -1427,7 +1342,7 @@ async function startServer() {
           const latest = messages[messages.length - 1];
           return {
             phone,
-            contact_name: contactNamesByPhone.get(phone) || null,
+            contact_name: null,
             last_message: latest?.text || '',
             last_message_at: latest ? new Date(latest.timestamp).toISOString() : new Date().toISOString(),
             unread_count: 0,
@@ -1442,7 +1357,7 @@ async function startServer() {
         const latest = messages[messages.length - 1];
         return {
           phone,
-          contact_name: contactNamesByPhone.get(phone) || null,
+          contact_name: null,
           last_message: latest?.text || '',
           last_message_at: latest ? new Date(latest.timestamp).toISOString() : new Date().toISOString(),
           unread_count: 0,
@@ -1515,47 +1430,14 @@ async function startServer() {
     return res.json({ ok: true });
   });
 
-  // Enviar mensagem via Baileys
-  app.post('/api/inbox/send', requireAuth, async (req, res) => {
-    const userId = (req as any).userId;
-    const { phone, text } = req.body;
-    if (!phone || !text) return res.status(400).json({ error: 'phone e text são obrigatórios' });
-
-    const sock = baileysConnections.get(userId);
-    if (!sock) return res.status(503).json({ error: 'WhatsApp não conectado' });
-
-    try {
-      const jid = `${phone.replace(/\D/g, '')}@s.whatsapp.net`;
-      await sock.sendMessage(jid, { text });
-
-      const msgId = `sent-${Date.now()}`;
-      const ts = new Date().toISOString();
-
-      // Salvar localmente
-      cacheLiveWhatsAppMessage({
-        id: msgId,
-        phone: phone.replace(/\D/g, ''),
-        text,
-        fromMe: true,
-        timestamp: Date.now(),
-        source: 'webhook',
-      }, userId);
-
-      return res.json({ ok: true, message_id: msgId, timestamp: ts });
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message || 'Falha ao enviar mensagem' });
-    }
-  });
-
   // Sincroniza histórico de conversas recentes da Evolution API para o cache em memória
   app.post('/api/whatsapp/sync-history', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const instanceName = getInstanceName(userId);
     const limit = Number(req.query.limit) || 30; // últimas 30 conversas
 
-    // Baileys sincroniza automaticamente ao conectar via messages.upsert
     const total = liveWhatsAppMessagesByPhone.size;
-    res.json({ synced: total, total, note: 'Baileys sincroniza automaticamente ao conectar' });
+    res.json({ synced: total, total, note: 'Mensagens recebidas via webhook da Evolution API / Z-API' });
   });
 
   // Marca mensagens de um contato como lidas
@@ -1894,7 +1776,9 @@ async function startServer() {
 
     const jobsFormatted = (jobs || []).map(j => ({
       ...j,
-      client_name: (j.clients as any)?.name || null
+      client_name: (j.clients as any)?.name || null,
+      // Default unassigned jobs to the first production stage
+      production_stage: j.production_stage || 'prod-emp-1',
     }));
 
     res.json(jobsFormatted);
@@ -1905,22 +1789,43 @@ async function startServer() {
     const supabase = (req as any).supabase as SupabaseClient;
     const { client_id, job_type, job_date, job_time, job_end_time, job_name, amount, payment_method, payment_status, status, notes } = req.body;
 
-    const { data, error } = await supabase.from('jobs').insert({
+    // Sanitize amount — empty string from form becomes 0
+    const amountNum = (amount === '' || amount == null) ? 0 : Number(amount);
+
+    const baseJobPayload: any = {
       client_id: client_id || null,
       job_type,
       job_date,
-      job_time,
-      job_end_time,
+      job_time: job_time || null,
+      job_end_time: job_end_time || null,
       job_name,
-      amount,
+      amount: amountNum,
       payment_method,
       payment_status,
       status: status || 'scheduled',
       notes,
-      user_id: userId
+      user_id: userId,
+    };
+
+    // Try inserting with production columns (requires migration)
+    let { data, error } = await supabase.from('jobs').insert({
+      ...baseJobPayload,
+      production_stage: 'prod-emp-1',
+      production_stage_entered_at: new Date().toISOString(),
     }).select().single();
 
-    if (error) return res.status(500).json({ error: error.message });
+    // Fallback: if production columns don't exist yet, insert without them
+    if (error && (error.code === '42703' || error.message?.includes('column') || error.message?.includes('production_stage'))) {
+      console.warn('[POST /api/jobs] Production columns missing, inserting without them. Run SQL migration!');
+      const fallback = await supabase.from('jobs').insert(baseJobPayload).select().single();
+      data = fallback.data;
+      error = fallback.error;
+    }
+
+    if (error) {
+      console.error('[POST /api/jobs] Supabase error:', error.message);
+      return res.status(500).json({ error: error.message });
+    }
 
     if (client_id) {
       await generateOpportunities(supabase, client_id, job_type, job_date, userId, data.id);
@@ -1944,20 +1849,25 @@ async function startServer() {
 
     if (!oldJob) return res.status(404).json({ error: 'Job not found' });
 
-    const updatePayload: any = {
-      client_id: client_id || null,
-      job_type,
-      job_date,
-      job_time,
-      job_end_time,
-      job_name,
-      amount,
-      payment_method,
-      payment_status,
-      status: status || oldJob.status,
-      notes,
-    };
-    if (production_stage !== undefined) updatePayload.production_stage = production_stage;
+    // Only include fields that were explicitly sent — avoids wiping fields on partial updates (e.g. moving stages)
+    const updatePayload: any = {};
+    if (client_id !== undefined) updatePayload.client_id = client_id || null;
+    if (job_type !== undefined) updatePayload.job_type = job_type;
+    if (job_date !== undefined) updatePayload.job_date = job_date;
+    if (job_time !== undefined) updatePayload.job_time = job_time || null;
+    if (job_end_time !== undefined) updatePayload.job_end_time = job_end_time || null;
+    if (job_name !== undefined) updatePayload.job_name = job_name;
+    if (amount !== undefined) updatePayload.amount = amount;
+    if (payment_method !== undefined) updatePayload.payment_method = payment_method;
+    if (payment_status !== undefined) updatePayload.payment_status = payment_status;
+    if (status !== undefined) updatePayload.status = status || oldJob.status;
+    if (notes !== undefined) updatePayload.notes = notes;
+    if (production_stage !== undefined) {
+      updatePayload.production_stage = production_stage;
+      if (production_stage !== oldJob.production_stage) {
+        updatePayload.production_stage_entered_at = new Date().toISOString();
+      }
+    }
 
     await supabase.from('jobs').update(updatePayload).eq('id', req.params.id).eq('user_id', userId);
 
@@ -2568,6 +2478,321 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // ============ PRODUCTION PROCESSES ROUTES (V2) ============
+  app.get('/api/production/processes', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const processes = await ensureProductionProcesses(supabase, userId);
+    res.json(processes);
+  });
+
+  app.put('/api/production/processes/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { name } = req.body;
+    if (!name?.trim()) return res.status(400).json({ error: 'Nome obrigatório' });
+    const { error } = await supabase
+      .from('production_processes')
+      .update({ name: name.trim() })
+      .eq('id', req.params.id)
+      .eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  app.post('/api/production/processes', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { name } = req.body;
+    if (!name?.trim()) return res.status(400).json({ error: 'Nome obrigatório' });
+    const { data: existing } = await supabase.from('production_processes').select('position').eq('user_id', userId).order('position', { ascending: false }).limit(1);
+    const position = (existing?.[0]?.position ?? -1) + 1;
+    const id = `proc-${createStageId(name)}-${Math.random().toString(36).slice(2, 6)}`;
+    const color = ['#6366f1','#ec4899','#f59e0b','#10b981','#0ea5e9','#8b5cf6'][position % 6];
+    const { data, error } = await supabase.from('production_processes').insert({ id, name: name.trim(), position, color, user_id: userId }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.delete('/api/production/processes/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { id } = req.params;
+    const { data: allProcesses } = await supabase.from('production_processes').select('id').eq('user_id', userId);
+    if (!allProcesses || allProcesses.length <= 1) return res.status(400).json({ error: 'É necessário ter pelo menos 1 processo' });
+    // Move jobs deste processo para sem etapa
+    await supabase.from('deal_stages').select('id').eq('process_id', id).eq('user_id', userId).then(async ({ data: stageRows }) => {
+      if (stageRows?.length) {
+        const ids = stageRows.map((s: any) => s.id);
+        await supabase.from('jobs').update({ production_stage: null }).in('production_stage', ids).eq('user_id', userId);
+      }
+    });
+    await supabase.from('deal_stages').delete().eq('process_id', id).eq('user_id', userId);
+    await supabase.from('production_processes').delete().eq('id', id).eq('user_id', userId);
+    res.json({ success: true });
+  });
+
+  app.post('/api/production/stages-v2', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { name, process_id } = req.body;
+    if (!name?.trim() || !process_id) return res.status(400).json({ error: 'Nome e process_id obrigatórios' });
+    const { data: existing } = await supabase.from('deal_stages').select('position').eq('process_id', process_id).eq('user_id', userId).order('position', { ascending: false }).limit(1);
+    const position = (existing?.[0]?.position ?? -1) + 1;
+    const id = `prod-${createStageId(name)}-${Math.random().toString(36).slice(2, 7)}`;
+    const { data: proc } = await supabase.from('production_processes').select('color').eq('id', process_id).eq('user_id', userId).single();
+    const color = proc?.color || '#94a3b8';
+    const payload = { id, name: name.trim(), position, process_id, color, is_final: false, is_won: false, expected_hours: 0, user_id: userId };
+    const { data, error } = await supabase.from('deal_stages').insert(payload).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.delete('/api/production/stages-v2/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { id } = req.params;
+    const { data: stage } = await supabase.from('deal_stages').select('*').eq('id', id).eq('user_id', userId).single();
+    if (!stage) return res.status(404).json({ error: 'Etapa não encontrada' });
+    const { data: siblings } = await supabase.from('deal_stages').select('id').eq('process_id', stage.process_id).eq('user_id', userId);
+    if (!siblings || siblings.length <= 1) return res.status(400).json({ error: 'É necessário ter pelo menos 1 etapa' });
+    const fallbackId = siblings.find((s: any) => s.id !== id)?.id || null;
+    await supabase.from('jobs').update({ production_stage: fallbackId }).eq('production_stage', id).eq('user_id', userId);
+    await supabase.from('deal_stages').delete().eq('id', id).eq('user_id', userId);
+    res.json({ success: true });
+  });
+
+  app.put('/api/production/stages-v2/reorder', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { stageIds } = req.body as { stageIds: string[] };
+    if (!Array.isArray(stageIds)) return res.status(400).json({ error: 'stageIds deve ser array' });
+    await Promise.all(stageIds.map((sid: string, i: number) =>
+      supabase.from('deal_stages').update({ position: i }).eq('id', sid).eq('user_id', userId)
+    ));
+    res.json({ success: true });
+  });
+
+  // ============ PRODUCTION STAGES V2 ROUTES ============
+  app.get('/api/production/stages-v2', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const stages = await ensureProductionStagesV2(supabase, userId);
+    res.json(stages);
+  });
+
+  app.patch('/api/production/stages/:id/expected-hours', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { expected_hours } = req.body;
+    const { error } = await supabase
+      .from('deal_stages')
+      .update({ expected_hours: Number(expected_hours) || 0 })
+      .eq('id', req.params.id)
+      .eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  app.patch('/api/production/stages/:id/name', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { name } = req.body;
+    if (!name?.trim()) return res.status(400).json({ error: 'Nome obrigatório' });
+    const { error } = await supabase
+      .from('deal_stages')
+      .update({ name: name.trim() })
+      .eq('id', req.params.id)
+      .eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  // ============ TEAM MEMBERS ============
+
+  app.get('/api/team-members', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase
+      .from('team_members')
+      .select('*')
+      .eq('owner_user_id', userId)
+      .eq('is_active', true)
+      .order('created_at');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  });
+
+  app.post('/api/team-members', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { name, email, color, permissions, password } = req.body;
+    if (!name?.trim()) return res.status(400).json({ error: 'Nome obrigatório' });
+    const defaultPermissions = { dashboard: true, clients: true, jobs: true, vendas: true, calendar: true, finance: true, oportunidades: true, contratos: true };
+
+    // Cria o registro na tabela team_members
+    const { data, error } = await supabase
+      .from('team_members')
+      .insert({ owner_user_id: userId, name: name.trim(), email: email?.trim() || null, color: color || '#6366f1', permissions: permissions || defaultPermissions })
+      .select().single();
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Se veio senha, cria o usuário no Supabase Auth imediatamente
+    if (password && email?.trim() && supabaseAdmin) {
+      const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.createUser({
+        email: email.trim(),
+        password,
+        email_confirm: true, // confirma o email automaticamente — não precisa clicar em link
+      });
+      if (authError) {
+        // Usuário já existe no auth — apenas atualiza a senha e vincula
+        if (authError.message?.toLowerCase().includes('already')) {
+          const { data: existing } = await supabaseAdmin.auth.admin.listUsers();
+          const found = (existing?.users ?? []).find((u: any) => u.email === email.trim());
+          if (found) {
+            await supabaseAdmin.auth.admin.updateUserById(found.id, { password });
+            await supabaseAdmin.from('team_members').update({ member_user_id: found.id }).eq('id', data.id);
+          }
+        } else {
+          return res.status(500).json({ error: `Membro criado mas erro ao gerar acesso: ${authError.message}` });
+        }
+      } else if (authUser?.user) {
+        await supabaseAdmin.from('team_members').update({ member_user_id: authUser.user.id }).eq('id', data.id);
+      }
+    }
+
+    res.json(data);
+  });
+
+  app.put('/api/team-members/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { name, email, color, permissions, password } = req.body;
+
+    // Atualiza dados do membro
+    const { error } = await supabase
+      .from('team_members')
+      .update({ name: name?.trim(), email: email?.trim() || null, color, permissions })
+      .eq('id', req.params.id)
+      .eq('owner_user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Se veio nova senha, atualiza no Supabase Auth
+    if (password && supabaseAdmin) {
+      // Busca o member_user_id vinculado
+      const { data: member } = await supabaseAdmin
+        .from('team_members')
+        .select('member_user_id, email')
+        .eq('id', req.params.id)
+        .single();
+
+      if (member?.member_user_id) {
+        // Já tem usuário vinculado — apenas atualiza a senha
+        const { error: pwError } = await supabaseAdmin.auth.admin.updateUserById(member.member_user_id, { password });
+        if (pwError) return res.status(500).json({ error: `Dados salvos mas erro ao atualizar senha: ${pwError.message}` });
+      } else if (member?.email) {
+        // Ainda não tem usuário — cria com a nova senha
+        const memberEmail = email?.trim() || member.email;
+        const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.createUser({
+          email: memberEmail,
+          password,
+          email_confirm: true,
+        });
+        if (authError) {
+          // Já existe no auth — encontra e atualiza
+          const { data: existing } = await supabaseAdmin.auth.admin.listUsers();
+          const found = (existing?.users ?? []).find((u: any) => u.email === memberEmail);
+          if (found) {
+            await supabaseAdmin.auth.admin.updateUserById(found.id, { password });
+            await supabaseAdmin.from('team_members').update({ member_user_id: found.id }).eq('id', req.params.id);
+          }
+        } else if (authUser?.user) {
+          await supabaseAdmin.from('team_members').update({ member_user_id: authUser.user.id }).eq('id', req.params.id);
+        }
+      }
+    }
+
+    res.json({ success: true });
+  });
+
+  app.delete('/api/team-members/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    // Desvincula jobs antes de excluir
+    await supabase.from('jobs').update({ assignee_id: null }).eq('assignee_id', req.params.id).eq('user_id', userId);
+    const { error } = await supabase
+      .from('team_members')
+      .update({ is_active: false })
+      .eq('id', req.params.id)
+      .eq('owner_user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  app.get('/api/me', requireAuth, async (req, res) => {
+    res.json({
+      isMember: (req as any).isMember ?? false,
+      permissions: (req as any).memberPermissions ?? null,
+    });
+  });
+
+  app.post('/api/admin/invite', requireAuth, async (req, res) => {
+    if ((req as any).isMember) {
+      return res.status(403).json({ error: 'Apenas o proprietário pode convidar membros' });
+    }
+    if (!supabaseAdmin) {
+      return res.status(500).json({ error: 'SUPABASE_SERVICE_ROLE_KEY não configurada' });
+    }
+    const userId = (req as any).userId;
+    const { team_member_id } = req.body;
+    if (!team_member_id) return res.status(400).json({ error: 'team_member_id obrigatório' });
+
+    const { data: member } = await supabaseAdmin
+      .from('team_members')
+      .select('*')
+      .eq('id', team_member_id)
+      .eq('owner_user_id', userId)
+      .single();
+
+    if (!member) return res.status(404).json({ error: 'Membro não encontrado' });
+    if (!member.email) return res.status(400).json({ error: 'Membro sem e-mail cadastrado' });
+
+    const appUrl = process.env.SERVER_URL || process.env.APP_URL || 'http://localhost:3000';
+    const { error } = await supabaseAdmin.auth.admin.inviteUserByEmail(member.email, {
+      redirectTo: `${appUrl}/login`,
+    });
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  app.patch('/api/jobs/:id/assignee', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { assignee_id } = req.body;
+    const { error } = await supabase
+      .from('jobs')
+      .update({ assignee_id: assignee_id || null })
+      .eq('id', req.params.id)
+      .eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  // Labels on jobs
+  app.patch('/api/jobs/:id/labels', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { labels } = req.body;
+    const { error } = await supabase
+      .from('jobs')
+      .update({ labels: Array.isArray(labels) ? labels : [] })
+      .eq('id', req.params.id)
+      .eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
   app.get('/api/deals', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
@@ -2888,6 +3113,8 @@ async function startServer() {
         payment_status: job.payment_status || 'pending',
         status: job.status || 'scheduled',
         notes: job.notes || '',
+        production_stage: 'prod-emp-1',
+        production_stage_entered_at: new Date().toISOString(),
         user_id: userId,
       } as any;
       const { data: newJob, error } = await supabase.from('jobs').insert(jobPayload).select().single();
@@ -2921,6 +3148,17 @@ async function startServer() {
       updates.stage,
       deal.current_stage_entered_at || deal.stage_entered_at
     );
+
+    // Marcar oportunidades do cliente como convertidas
+    if (clientId) {
+      await supabase
+        .from('opportunities')
+        .update({ status: 'converted' })
+        .eq('user_id', userId)
+        .eq('client_id', clientId)
+        .in('status', ['em_kanban', 'future', 'active', 'urgent', 'pendente']);
+    }
+
     res.json({ success: true, client_id: clientId, job_id: jobId });
   });
 
@@ -3301,1928 +3539,535 @@ async function startServer() {
     }
   });
 
-  // ============ VIDEO EDITOR ROUTES ============
-  {
-    const multer = (await import('multer')).default;
-    const ffmpeg = (await import('fluent-ffmpeg')).default;
-    const ffmpegInstaller = (await import('@ffmpeg-installer/ffmpeg')).default;
-    const { OpenAI } = await import('openai');
-    const { renderMediaOnLambda, getRenderProgress, downloadMedia } = await import('@remotion/lambda');
-    const { v4: uuidv4 } = await import('uuid');
-    const { createClient: createSupabaseStorageClient } = await import('@supabase/supabase-js');
 
-    ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+  // ============ OPORTUNIDADES / ANIVERSARIANTES ============
 
-    const VIDEO_UPLOADS_DIR = path.join(__dirname, 'server/uploads');
-    const VIDEO_PROCESSED_DIR = path.join(__dirname, 'server/processed');
-    fs.mkdirSync(VIDEO_UPLOADS_DIR, { recursive: true });
-    fs.mkdirSync(VIDEO_PROCESSED_DIR, { recursive: true });
+  // Dashboard summary
+  app.get('/api/oportunidades/dashboard', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
 
-    // Supabase Storage client — uses service role key to bypass RLS
-    const SUPABASE_URL = process.env.VITE_SUPABASE_URL!;
-    const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY!;
-    const storageSupa = createSupabaseStorageClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-    const VIDEO_BUCKET = 'videos';
-    const REMOTION_DEFAULT_CAPTIONS = {
-      enabled: true,
-      style: 'highlight',
-      fontSize: '9.29 vmin',
-      fontFamily: 'Montserrat',
-      fontWeight: '700',
-      color: '#ffffff',
-      strokeColor: '#000000',
-      strokeWidth: '1.6 vmin',
-      position: '80%',
-      maxLength: 14,
-    };
-    const REMOTION_DEFAULT_EDIT_OPTIONS = {
-      autoCut: true,
-      dynamicZoom: true,
-      broll: false,
-      sfx: false,
-      transitions: true,
-      transitionType: 'fade',
-    };
-    const REMOTION_DEFAULT_OUTPUT = { width: 720, height: 1280, fps: 30 };
+    const today = new Date();
 
-    const parseJsonField = <T>(value: unknown, fallback: T): T => {
-      if (!value) return fallback;
-      if (typeof value === 'object') return value as T;
-      if (typeof value !== 'string') return fallback;
-      try {
-        return JSON.parse(value) as T;
-      } catch {
-        return fallback;
+    const { data: clientsAll } = await supabase.from('clients').select('id,name,phone,birth_date').eq('user_id', userId);
+    const clientIds = (clientsAll || []).map((c: any) => c.id);
+    const { data: filhosAll } = clientIds.length
+      ? await supabase.from('filhos').select('*').in('cliente_id', clientIds)
+      : { data: [] };
+    const { data: opsPendentes } = await supabase
+      .from('opportunities')
+      .select('id')
+      .eq('user_id', userId)
+      .in('status', ['future', 'active', 'urgent', 'pendente']);
+    const { data: opsEmKanban } = await supabase
+      .from('opportunities')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('status', 'em_kanban');
+    const { data: opsConvertidas } = await supabase
+      .from('opportunities')
+      .select('id')
+      .eq('user_id', userId)
+      .in('status', ['converted', 'convertido']);
+
+    const clients = clientsAll || [];
+    const filhos = filhosAll || [];
+
+    // Calcula dias até o próximo aniversário (com suporte à virada de ano)
+    const daysUntilBirthday = (dateStr: string): number => {
+      if (!dateStr) return -1;
+      const d = new Date(dateStr);
+      const thisYear = new Date(today.getFullYear(), d.getUTCMonth(), d.getUTCDate());
+      let diff = Math.round((thisYear.getTime() - today.setHours(0,0,0,0)) / 86400000);
+      if (diff < 0) {
+        const nextYear = new Date(today.getFullYear() + 1, d.getUTCMonth(), d.getUTCDate());
+        diff = Math.round((nextYear.getTime() - new Date().setHours(0,0,0,0)) / 86400000);
       }
+      return diff;
     };
 
-    const normalizeCaptionCfg = (raw: any) => ({
-      ...REMOTION_DEFAULT_CAPTIONS,
-      ...(raw || {}),
-      style: ['karaoke', 'highlight', 'bounce', 'none'].includes(raw?.style) ? raw.style : REMOTION_DEFAULT_CAPTIONS.style,
-    });
+    const isBirthdayToday = (dateStr: string) => daysUntilBirthday(dateStr) === 0;
+    const isBirthdayThisWeek = (dateStr: string) => { const d = daysUntilBirthday(dateStr); return d >= 0 && d <= 7; };
 
-    const normalizeEditOptions = (raw: any) => ({
-      ...REMOTION_DEFAULT_EDIT_OPTIONS,
-      ...(raw || {}),
-      transitionType: ['fade', 'slide-left', 'slide-right', 'zoom-in', 'slide'].includes(raw?.transitionType)
-        ? raw.transitionType
-        : REMOTION_DEFAULT_EDIT_OPTIONS.transitionType,
-    });
+    const anivHoje = clients.filter((c: any) => isBirthdayToday(c.birth_date)).length
+      + filhos.filter((f: any) => isBirthdayToday(f.data_nascimento)).length;
+    const anivSemana = clients.filter((c: any) => isBirthdayThisWeek(c.birth_date)).length
+      + filhos.filter((f: any) => isBirthdayThisWeek(f.data_nascimento)).length;
 
-    // Compress video to fit within Supabase free tier 50MB limit
-    async function compressForUpload(inputPath: string, jobId: string): Promise<string | null> {
-      const stat = fs.statSync(inputPath);
-      if (stat.size <= 45 * 1024 * 1024) return inputPath; // already small enough
+    const totalPendentes = (opsPendentes || []).length;
+    const totalEmKanban = (opsEmKanban || []).length;
+    const totalConvertidas = (opsConvertidas || []).length;
+    const totalAproveitadas = totalEmKanban + totalConvertidas;
+    const total = totalPendentes + totalAproveitadas;
+    const taxaConversao = total > 0 ? Math.round((totalAproveitadas / total) * 100) : 0;
 
-      const sizeMB = stat.size / 1024 / 1024;
-      const compressedPath = path.join(VIDEO_PROCESSED_DIR, `${jobId}_compressed_upload.mp4`);
-      console.log(`[storage] comprimindo ${sizeMB.toFixed(1)}MB → <48MB para Supabase...`);
+    res.json({ anivHoje, anivSemana, totalPendentes, taxaConversao });
+  });
 
-      // Calculate target bitrate: 45MB in bits / duration in seconds
-      const duration = await new Promise<number>((resolve) => {
-        ffmpeg.ffprobe(inputPath, (err: any, metadata: any) => {
-          resolve(err ? 60 : (metadata?.format?.duration || 60));
-        });
-      });
+  // Aniversariantes (mães e filhos)
+  app.get('/api/oportunidades/aniversariantes', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const periodo = (req.query.periodo as string) || 'hoje'; // hoje | semana | mes
 
-      // Target ~44MB to leave margin
-      const targetBits = 48 * 8 * 1024 * 1024;
-      const videoBitrate = Math.floor(targetBits / duration / 1000); // kbps
-      const finalBitrate = Math.max(5000, Math.min(videoBitrate, 8000)); // clamp 5000k-8000k (qualidade alta)
+    const today = new Date();
+    const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
 
-      console.log(`[storage] duração: ${duration.toFixed(0)}s, bitrate alvo: ${finalBitrate}kbps`);
+    const { data: clients, error } = await supabase
+      .from('clients')
+      .select('id,name,phone,email,birth_date,status')
+      .eq('user_id', userId);
 
-      try {
-        await new Promise<void>((resolve, reject) => {
-          ffmpeg(inputPath)
-            .outputOptions([
-              `-b:v ${finalBitrate}k`,
-              '-c:v libx264',
-              '-preset ultrafast',
-              '-c:a aac',
-              '-b:a 96k',
-              '-movflags +faststart',
-              '-vf scale=trunc(iw/2)*2:trunc(ih/2)*2',
-              '-y',
-            ])
-            .output(compressedPath)
-            .on('end', () => resolve())
-            .on('error', (e: any) => reject(e))
-            .run();
-        });
-        const compStat = fs.statSync(compressedPath);
-        console.log(`[storage] comprimido: ${(compStat.size / 1024 / 1024).toFixed(1)}MB`);
-        if (compStat.size > 49 * 1024 * 1024) {
-          console.warn('[storage] compressão insuficiente, pulando upload');
-          try { fs.unlinkSync(compressedPath); } catch {}
-          return null;
-        }
-        return compressedPath;
-      } catch (e: any) {
-        console.error('[storage] compress failed:', e.message);
-        try { fs.unlinkSync(compressedPath); } catch {}
-        return null;
+    if (error) return res.status(500).json({ error: error.message });
+
+    const clientIds = (clients || []).map((c: any) => c.id);
+    const { data: filhos } = clientIds.length
+      ? await supabase.from('filhos').select('*').in('cliente_id', clientIds)
+      : { data: [] };
+
+    // Dias até próximo aniversário (suporta virada de ano)
+    const calcDias = (dateStr: string): number => {
+      if (!dateStr) return -1;
+      const d = new Date(dateStr);
+      let bday = new Date(todayMidnight.getFullYear(), d.getUTCMonth(), d.getUTCDate());
+      let diff = Math.round((bday.getTime() - todayMidnight.getTime()) / 86400000);
+      if (diff < 0) {
+        bday = new Date(todayMidnight.getFullYear() + 1, d.getUTCMonth(), d.getUTCDate());
+        diff = Math.round((bday.getTime() - todayMidnight.getTime()) / 86400000);
       }
-    }
-
-    async function uploadToStorage(localPath: string, storagePath: string, mimeType = 'video/mp4'): Promise<string | null> {
-      try {
-        const stat = fs.statSync(localPath);
-        const sizeMB = stat.size / 1024 / 1024;
-
-        let fileToUpload = localPath;
-        // If file is too large, compress it first (only for video)
-        if (stat.size > 45 * 1024 * 1024 && mimeType.startsWith('video/')) {
-          const jobId = path.basename(storagePath).replace(/\.[^.]+$/, '');
-          const compressed = await compressForUpload(localPath, `upload_${Date.now()}`);
-          if (!compressed) {
-            console.log(`[storage] arquivo ${sizeMB.toFixed(1)}MB — não foi possível comprimir, pulando upload`);
-            return null;
-          }
-          fileToUpload = compressed;
-        } else if (stat.size > 45 * 1024 * 1024) {
-          console.log(`[storage] arquivo ${sizeMB.toFixed(1)}MB > 45MB (não-vídeo) — pulando upload`);
-          return null;
-        }
-
-        const buffer = fs.readFileSync(fileToUpload);
-        const { error } = await storageSupa.storage.from(VIDEO_BUCKET).upload(storagePath, buffer, {
-          contentType: mimeType,
-          upsert: true,
-        });
-
-        // Clean up compressed file if different from original
-        if (fileToUpload !== localPath) {
-          try { fs.unlinkSync(fileToUpload); } catch {}
-        }
-
-        if (error) { console.error('[storage] upload error:', error.message); return null; }
-        const { data } = storageSupa.storage.from(VIDEO_BUCKET).getPublicUrl(storagePath);
-        console.log(`[storage] upload OK: ${(buffer.length / 1024 / 1024).toFixed(1)}MB → ${storagePath}`);
-        return data.publicUrl;
-      } catch (e: any) {
-        console.error('[storage] upload failed:', e.message);
-        return null;
-      }
-    }
-
-    const videoJobs: Record<string, any> = {};
-    const videoProgress: Record<string, any> = {};
-
-    // ── Jobs index: persiste na nuvem (Supabase Storage) ────────────────────
-    async function saveJobMeta(jobId: string) {
-      const job = videoJobs[jobId];
-      if (!job) return;
-      const meta = {
-        jobId,
-        filename:            job.filename            || 'video.mp4',
-        createdAt:           job.createdAt           || new Date().toISOString(),
-        transcription:       job.transcription       || null,
-        segments:            job.segments            || null,
-        analysis:            job.analysis            || null,
-        captionsCfg:         job.captionsCfg         || REMOTION_DEFAULT_CAPTIONS,
-        editOptions:         job.editOptions         || REMOTION_DEFAULT_EDIT_OPTIONS,
-        remotionPreviewData: job.remotionPreviewData || null,
-        remotionRender:      job.remotionRender      || null,
-        originalSupabaseUrl: job.originalSupabaseUrl || null,
-        editedSupabaseUrl:   job.editedSupabaseUrl   || null,
-        thumbnailSupabaseUrl:job.thumbnailSupabaseUrl || null,
-        status: job.analysis ? 'analyzed' : job.segments ? 'transcribed' : 'uploaded',
-      };
-      try {
-        const buf = Buffer.from(JSON.stringify(meta));
-        const { error } = await storageSupa.storage.from(VIDEO_BUCKET)
-          .upload(`meta/${jobId}.json`, buf, { contentType: 'application/json', upsert: true });
-        if (error) console.error('[meta] save error:', error.message);
-      } catch (e: any) { console.error('[meta] save failed:', e.message); }
-    }
-
-    // Load jobs from Supabase on startup (background)
-    (async () => {
-      try {
-        const { data: files, error } = await storageSupa.storage.from(VIDEO_BUCKET).list('meta', { limit: 50 });
-        if (error || !files?.length) return;
-        let restored = 0;
-        for (const file of files) {
-          try {
-            const { data } = await storageSupa.storage.from(VIDEO_BUCKET).download(`meta/${file.name}`);
-            if (!data) continue;
-            const meta = JSON.parse(await data.text());
-            if (!meta.jobId) continue;
-            videoJobs[meta.jobId] = {
-              ...meta,
-              originalPath: null,   // arquivo local não existe após reinício
-              processedPath: null,
-              editedPath: null,
-            };
-            restored++;
-          } catch {}
-        }
-        if (restored > 0) console.log(`[video-editor] ${restored} jobs restaurados da nuvem`);
-        // NOTE: NÃO tentamos upload/compressão dos jobs restaurados.
-        // O upload para Supabase acontece somente quando preview/render precisar da URL pública.
-      } catch (e: any) { console.error('[video-editor] erro ao restaurar da nuvem:', e.message); }
-    })();
-
-    const videoStorage = multer.diskStorage({
-      destination: (_req: any, _file: any, cb: any) => cb(null, VIDEO_UPLOADS_DIR),
-      filename: (_req: any, file: any, cb: any) => cb(null, `${Date.now()}-${file.originalname}`),
-    });
-    const upload = multer({ storage: videoStorage });
-
-    const musicStorage = multer.diskStorage({
-      destination: (_req: any, _file: any, cb: any) => cb(null, VIDEO_UPLOADS_DIR),
-      filename: (_req: any, file: any, cb: any) => {
-        const ext = path.extname(file.originalname) || '.mp3';
-        cb(null, `music_${Date.now()}${ext}`);
-      },
-    });
-    const musicUpload = multer({ storage: musicStorage, limits: { fileSize: 50 * 1024 * 1024 } });
-
-    app.post('/api/video-editor/upload', upload.single('video'), async (req: any, res: any) => {
-      if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado.' });
-      const jobId = uuidv4();
-      const captionsCfg = normalizeCaptionCfg(parseJsonField(req.body?.captions, REMOTION_DEFAULT_CAPTIONS));
-      const editOptions = normalizeEditOptions(parseJsonField(req.body?.editOptions, REMOTION_DEFAULT_EDIT_OPTIONS));
-      videoJobs[jobId] = {
-        jobId,
-        originalPath: req.file.path,
-        filename:     req.file.originalname,
-        createdAt:    new Date().toISOString(),
-        captionsCfg,
-        editOptions,
-        remotionPreviewData: null,
-        remotionRender: null,
-      };
-
-      res.json({ jobId, filename: req.file.originalname });
-
-      // Generate thumbnail → upload to Supabase in background
-      const thumbPath = path.join(VIDEO_PROCESSED_DIR, `${jobId}_thumb.jpg`);
-      ffmpeg(req.file.path)
-        .seekInput(0.5).frames(1).videoFilter('scale=180:-1').outputOptions(['-q:v', '8']).output(thumbPath)
-        .on('end', async () => {
-          const thumbUrl = await uploadToStorage(thumbPath, `thumbs/${jobId}.jpg`, 'image/jpeg');
-          if (thumbUrl) videoJobs[jobId].thumbnailSupabaseUrl = thumbUrl;
-          try { fs.unlinkSync(thumbPath); } catch {}
-          void saveJobMeta(jobId);
-        })
-        .on('error', () => void saveJobMeta(jobId))
-        .run();
-
-      // Upload para Supabase continua adiado para não comprimir vídeos grandes no upload inicial.
-      console.log('[video-editor] Upload concluído (local). Upload para nuvem será feito no preview/render.');
-    });
-
-    app.post('/api/video-editor/music/:jobId', musicUpload.single('music'), (req: any, res: any) => {
-      const job = videoJobs[req.params.jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
-      if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo de música enviado.' });
-      job.musicPath = req.file.path;
-      res.json({ ok: true });
-    });
-
-    app.get('/api/video-editor/progress/:jobId', (req: any, res: any) => {
-      res.json(videoProgress[req.params.jobId] || { step: 'idle', percent: 0 });
-    });
-
-    app.post('/api/video-editor/normalize/:jobId', (req: any, res: any) => {
-      const job = videoJobs[req.params.jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
-      if (!job.originalPath) return res.status(400).json({ error: 'Arquivo de vídeo não está no servidor. Faça o upload novamente.' });
-      const { jobId } = req.params;
-      const outputFile = `${jobId}_normalized.mp4`;
-      const outputPath = path.join(VIDEO_PROCESSED_DIR, outputFile);
-      videoProgress[jobId] = { step: 'normalize', percent: 0, status: 'processing' };
-
-      // Respond immediately — FFmpeg runs in background
-      res.json({ status: 'processing' });
-
-      // Use stream copy (no re-encoding) — fast and avoids codec issues
-      const proc = ffmpeg(job.originalPath)
-        .outputOptions(['-c copy', '-movflags +faststart'])
-        .output(outputPath)
-        .on('progress', (p: any) => {
-          const pct = p.percent && p.percent > 0 ? Math.min(Math.round(p.percent), 99) : 50;
-          videoProgress[jobId] = { step: 'normalize', percent: pct, status: 'processing' };
-        })
-        .on('end', () => {
-          videoProgress[jobId] = { step: 'normalize', percent: 100, status: 'done' };
-          videoJobs[jobId].processedFile = outputFile;
-          videoJobs[jobId].processedPath = outputPath;
-        })
-        .on('error', (err: any) => {
-          // On copy failure, just use original file directly
-          videoProgress[jobId] = { step: 'normalize', percent: 100, status: 'done' };
-          videoJobs[jobId].processedPath = job.originalPath;
-        });
-
-      proc.run();
-
-      // Safety timeout: if FFmpeg hangs for 2 minutes, mark as done using original file
-      setTimeout(() => {
-        if (videoProgress[jobId]?.status === 'processing') {
-          proc.kill('SIGKILL');
-          videoProgress[jobId] = { step: 'normalize', percent: 100, status: 'done' };
-          videoJobs[jobId].processedPath = job.originalPath;
-        }
-      }, 120_000);
-    });
-
-    app.post('/api/video-editor/transcribe/:jobId', async (req: any, res: any) => {
-      const job = videoJobs[req.params.jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
-      const { jobId } = req.params;
-      const audioPath = path.join(VIDEO_PROCESSED_DIR, `${jobId}_audio.mp3`);
-      const videoPath = job.processedPath || job.originalPath;
-      try {
-        videoProgress[jobId] = { step: 'transcribe', percent: 10, label: 'Extraindo áudio...' };
-
-        // Extract audio — if fails (no audio track), treat as silent video
-        let audioExtracted = false;
-        try {
-          await new Promise<void>((resolve, reject) => {
-            ffmpeg(videoPath)
-              .noVideo()
-              .audioCodec('libmp3lame')
-              .audioBitrate('128k')
-              .output(audioPath)
-              .on('progress', (p: any) => {
-                videoProgress[jobId] = { step: 'transcribe', percent: Math.min(10 + Math.round((p.percent || 0) * 0.3), 40), label: 'Extraindo áudio...' };
-              })
-              .on('end', () => resolve())
-              .on('error', (e: any) => reject(e))
-              .run();
-          });
-          audioExtracted = fs.existsSync(audioPath) && fs.statSync(audioPath).size > 1000;
-        } catch (audioErr: any) {
-          console.warn('[video-editor] audio extraction failed (no audio track?):', audioErr.message);
-        }
-
-        if (!audioExtracted) {
-          // No audio track — skip transcription, continue with empty result
-          videoJobs[jobId].transcription = '';
-          videoJobs[jobId].segments = [];
-          videoProgress[jobId] = { step: 'transcribe', percent: 100, label: 'Sem áudio — análise por metadados.' };
-          return res.json({ text: '', segments: [] });
-        }
-
-        videoProgress[jobId] = { step: 'transcribe', percent: 50, label: 'Transcrevendo com Whisper...' };
-        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-        const transcription = await openai.audio.transcriptions.create({
-          file: fs.createReadStream(audioPath),
-          model: 'whisper-1',
-          response_format: 'verbose_json',
-          timestamp_granularities: ['word'],
-        });
-        const segments = ((transcription as any).words || []).map((w: any) => ({ word: w.word, start: w.start, end: w.end }));
-        videoJobs[jobId].transcription = transcription.text;
-        videoJobs[jobId].segments = segments;
-        videoProgress[jobId] = { step: 'transcribe', percent: 100, label: 'Transcrição concluída!' };
-        try { fs.unlinkSync(audioPath); } catch {}
-        res.json({ text: transcription.text, segments });
-      } catch (err: any) {
-        videoProgress[jobId] = { step: 'transcribe', percent: 0, error: err.message };
-        res.status(500).json({ error: err.message });
-      }
-    });
-
-    app.post('/api/video-editor/analyze/:jobId', async (req: any, res: any) => {
-      const job = videoJobs[req.params.jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
-      const { jobId } = req.params;
-      const segments = job.segments || [];
-      const transcriptionWithIndices = segments.map((s: any, i: number) => `[${i}] ${s.word}`).join(' ');
-      const hasTranscription = transcriptionWithIndices.trim().length > 0;
-      const prompt = hasTranscription
-        ? `Você é um editor de vídeo profissional. Analise a transcrição abaixo e crie um plano de edição.\n\nTranscrição (com índices de legenda):\n${transcriptionWithIndices}\n\nRetorne um JSON com exatamente esta estrutura:\n{\n  "narrativeFormat": "educativo|storytelling|lista|comparativo|cta|tutorial|depoimento",\n  "colorPalette": { "primary": "#hex", "secondary": "#hex", "accent": "#hex", "background": "#hex" },\n  "scenes": [{ "id": 1, "type": "A|B|C|D|E|F|G|H|I", "startLeg": 0, "title": "texto principal", "subtitle": "texto secundário", "icon": "emoji", "duration": 3 }]\n}\nTipos: A=Tela cheia, B=Texto embaixo, C=Painel+rosto, D=Comparativo, E=Card numerado, F=WhatsApp, G=Número, H=Fluxo, I=CTA\nCrie entre 6 e 10 cenas. Responda APENAS com o JSON, sem markdown.`
-        : `Você é um editor de vídeo profissional. Crie um plano de edição genérico para um vídeo chamado "${job.filename || 'video.mp4'}". Não há transcrição disponível (vídeo sem áudio ou sem fala).\n\nRetorne um JSON com exatamente esta estrutura:\n{\n  "narrativeFormat": "educativo|storytelling|lista|comparativo|cta|tutorial|depoimento",\n  "colorPalette": { "primary": "#hex", "secondary": "#hex", "accent": "#hex", "background": "#hex" },\n  "scenes": [{ "id": 1, "type": "A|B|C|D|E|F|G|H|I", "startLeg": 0, "title": "texto principal", "subtitle": "texto secundário", "icon": "emoji", "duration": 3 }]\n}\nTipos: A=Tela cheia, B=Texto embaixo, C=Painel+rosto, D=Comparativo, E=Card numerado, F=WhatsApp, G=Número, H=Fluxo, I=CTA\nCrie entre 6 e 10 cenas com conteúdo inspirador/visual. Responda APENAS com o JSON, sem markdown.`;
-      try {
-        videoProgress[jobId] = { step: 'analyze', percent: 20, label: 'Enviando para IA...' };
-        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-        const completion = await openai.chat.completions.create({
-          model: 'gpt-4o-mini',
-          max_tokens: 2048,
-          messages: [{ role: 'user', content: prompt }],
-          response_format: { type: 'json_object' },
-        });
-
-        videoProgress[jobId] = { step: 'analyze', percent: 90, label: 'Processando resposta...' };
-        const rawText = (completion.choices[0].message.content || '').trim();
-        const jsonStr = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-        const analysis = JSON.parse(jsonStr);
-        videoJobs[jobId].analysis = analysis;
-        videoProgress[jobId] = { step: 'analyze', percent: 100, label: 'Análise concluída!' };
-        void saveJobMeta(jobId);
-        res.json(analysis);
-      } catch (err: any) {
-        const msg = err?.message || String(err);
-        console.error('[video-editor] analyze error:', msg);
-        videoProgress[jobId] = { step: 'analyze', percent: 0, error: msg };
-        res.status(500).json({ error: msg });
-      }
-    });
-
-    app.get('/api/video-editor/video/:jobId', (req: any, res: any) => {
-      const job = videoJobs[req.params.jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
-      const videoPath = job.processedPath || job.originalPath;
-      if (!videoPath || !fs.existsSync(videoPath)) return res.status(404).json({ error: 'Arquivo não encontrado.' });
-      const stat = fs.statSync(videoPath);
-      const range = req.headers.range;
-      if (range) {
-        const [startStr, endStr] = range.replace(/bytes=/, '').split('-');
-        const start = parseInt(startStr, 10);
-        const end = endStr ? parseInt(endStr, 10) : stat.size - 1;
-        res.writeHead(206, { 'Content-Range': `bytes ${start}-${end}/${stat.size}`, 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1, 'Content-Type': 'video/mp4' });
-        fs.createReadStream(videoPath, { start, end }).pipe(res);
-      } else {
-        res.writeHead(200, { 'Content-Length': stat.size, 'Content-Type': 'video/mp4' });
-        fs.createReadStream(videoPath).pipe(res);
-      }
-    });
-
-    function generateAssSubtitles(
-      segments: { word: string; start: number; end: number }[],
-      cfg: { fontSize: number; color: string; position: string }
-    ): string {
-      if (!segments.length) return '';
-      const alignment = cfg.position === 'top' ? 8 : cfg.position === 'middle' ? 5 : 2;
-      const marginV = cfg.position === 'top' ? 80 : cfg.position === 'middle' ? 0 : 60;
-      const hex = (cfg.color || '#FFFFFF').replace('#', '').padEnd(6, 'F');
-      const r = hex.slice(0, 2); const g = hex.slice(2, 4); const b = hex.slice(4, 6);
-      const assColor = `&H00${b}${g}${r}`;
-      const header = `[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,${cfg.fontSize},${assColor},&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,3,1,${alignment},10,10,${marginV},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`;
-      const lines: { text: string; start: number; end: number }[] = [];
-      let words: string[] = [];
-      let lineStart = segments[0].start;
-      for (let i = 0; i < segments.length; i++) {
-        words.push(segments[i].word.trim());
-        const nextGap = i < segments.length - 1 ? segments[i + 1].start - segments[i].end : 99;
-        if (words.length >= 5 || nextGap > 0.4 || i === segments.length - 1) {
-          lines.push({ text: words.join(' '), start: lineStart, end: segments[i].end + 0.05 });
-          words = [];
-          if (i < segments.length - 1) lineStart = segments[i + 1].start;
-        }
-      }
-      const fmt = (s: number) => {
-        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60), cs = Math.floor((s % 1) * 100);
-        return `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}.${String(cs).padStart(2,'0')}`;
-      };
-      return header + '\n' + lines.map(l => `Dialogue: 0,${fmt(l.start)},${fmt(l.end)},Default,,0,0,0,,${l.text}`).join('\n') + '\n';
-    }
-
-    app.post('/api/video-editor/render/:jobId', async (req: any, res: any) => {
-      const job = videoJobs[req.params.jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
-
-      const { jobId } = req.params;
-      const effects = req.body?.effects || {};
-      const silenceCfg = effects.silenceCut ?? { enabled: true, gap: 0.5, pad: 0.2 };
-      const zoomCfg    = effects.zoom     ?? { enabled: false, intensity: 0.05 };
-      const captionCfg = effects.captions ?? { enabled: false, fontSize: 28, color: '#FFFFFF', position: 'bottom' };
-      const musicCfg   = effects.music    ?? { enabled: false, volume: 15 };
-
-      const words: { word: string; start: number; end: number }[] = job.segments || [];
-      const inputPath  = job.processedPath || job.originalPath;
-      const cutPath    = path.join(VIDEO_PROCESSED_DIR, `${jobId}_cut.mp4`);
-      const outputPath = path.join(VIDEO_PROCESSED_DIR, `${jobId}_edited.mp4`);
-
-      if (!inputPath) {
-        return res.status(400).json({ error: 'Arquivo de vídeo não encontrado no servidor. Faça o upload novamente.' });
-      }
-
-      videoProgress[jobId] = { step: 'render', percent: 0, status: 'processing', label: 'Preparando...' };
-      res.json({ status: 'processing' });
-
-      try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch {}
-
-      try {
-        // ── PASS 1: Cut silences (concat demuxer, stream copy) ───────────────
-        if (silenceCfg.enabled && words.length > 0) {
-          const GAP = silenceCfg.gap ?? 0.5;
-          const PAD = silenceCfg.pad ?? 0.2;
-          const segs: { start: number; end: number }[] = [];
-          let segStart = Math.max(0, words[0].start - PAD);
-          let segEnd   = words[0].end + PAD;
-          for (let i = 1; i < words.length; i++) {
-            if (words[i].start - words[i - 1].end > GAP) {
-              segs.push({ start: segStart, end: segEnd });
-              segStart = Math.max(0, words[i].start - PAD);
-            }
-            segEnd = words[i].end + PAD;
-          }
-          segs.push({ start: segStart, end: segEnd });
-
-          videoProgress[jobId] = { step: 'render', percent: 10, status: 'processing', label: `Cortando ${segs.length} trechos de fala...` };
-
-          const concatFile = path.join(VIDEO_PROCESSED_DIR, `${jobId}_concat.txt`);
-          const escapedInput = inputPath.replace(/\\/g, '/').replace(/'/g, "'\\''");
-          fs.writeFileSync(concatFile,
-            segs.map(s => `file '${escapedInput}'\ninpoint ${s.start.toFixed(3)}\noutpoint ${s.end.toFixed(3)}`).join('\n')
-          );
-          await new Promise<void>((resolve, reject) => {
-            ffmpeg().input(concatFile).inputOptions(['-f concat', '-safe 0'])
-              .outputOptions(['-c copy', '-movflags +faststart']).output(cutPath)
-              .on('end', () => resolve()).on('error', (e: any) => reject(e)).run();
-          });
-          try { fs.unlinkSync(concatFile); } catch {}
-        } else {
-          fs.copyFileSync(inputPath, cutPath);
-        }
-
-        videoProgress[jobId] = { step: 'render', percent: 35, status: 'processing', label: 'Aplicando efeitos...' };
-
-        // ── PASS 2: Effects (zoom + captions + music) ────────────────────────
-        const hasZoom     = zoomCfg.enabled;
-        const hasCaptions = captionCfg.enabled && words.length > 0;
-        const hasMusic    = musicCfg.enabled && job.musicPath && fs.existsSync(job.musicPath);
-        const hasVideoFx  = hasZoom || hasCaptions;
-
-        if (!hasVideoFx && !hasMusic) {
-          fs.renameSync(cutPath, outputPath);
-        } else {
-          let cmd: any = ffmpeg(cutPath);
-          if (hasMusic) cmd = cmd.input(job.musicPath);
-
-          // Build video filter chain
-          const vf: string[] = [];
-          if (hasZoom) {
-            const s = (1 + Math.min(Math.max(zoomCfg.intensity ?? 0.05, 0.01), 0.5)).toFixed(4);
-            // trunc to nearest even pixel — prevents flickering from non-integer dimensions
-            vf.push(`scale=trunc(iw*${s}/2)*2:trunc(ih*${s}/2)*2,crop=trunc(iw/${s}/2)*2:trunc(ih/${s}/2)*2`);
-          }
-          if (hasCaptions) {
-            const assPath = path.join(VIDEO_PROCESSED_DIR, `${jobId}_captions.ass`);
-            fs.writeFileSync(assPath, generateAssSubtitles(words, {
-              fontSize: captionCfg.fontSize ?? 28,
-              color:    captionCfg.color    ?? '#FFFFFF',
-              position: captionCfg.position ?? 'bottom',
-            }), 'utf8');
-            const esc = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
-            vf.push(`ass='${esc}'`);
-          }
-
-          const vol = Math.min(Math.max((musicCfg.volume ?? 15) / 100, 0.01), 1.5).toFixed(3);
-          const onProg = (p: any) => {
-            videoProgress[jobId] = { step: 'render', percent: Math.min(35 + Math.round((p.percent || 0) * 0.5), 88), status: 'processing', label: 'Renderizando efeitos...' };
-          };
-
-          if (hasVideoFx && !hasMusic) {
-            await new Promise<void>((resolve, reject) => {
-              cmd.videoFilter(vf.join(','))
-                .outputOptions(['-c:v libx264', '-crf 23', '-preset fast', '-c:a copy', '-movflags +faststart'])
-                .output(outputPath)
-                .on('progress', onProg).on('end', () => resolve()).on('error', (e: any) => reject(e)).run();
-            });
-          } else if (!hasVideoFx && hasMusic) {
-            await new Promise<void>((resolve, reject) => {
-              cmd.outputOptions([
-                '-filter_complex', `[1:a]aloop=loop=-1:size=2147483647,volume=${vol}[bgm];[0:a][bgm]amix=inputs=2:duration=first[outa]`,
-                '-map', '0:v', '-map', '[outa]',
-                '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart',
-              ]).output(outputPath)
-                .on('progress', onProg).on('end', () => resolve()).on('error', (e: any) => reject(e)).run();
-            });
-          } else {
-            // Both video and audio effects
-            const vPart = `[0:v]${vf.join(',')}[outv]`;
-            const aPart = `[1:a]aloop=loop=-1:size=2147483647,volume=${vol}[bgm];[0:a][bgm]amix=inputs=2:duration=first[outa]`;
-            await new Promise<void>((resolve, reject) => {
-              cmd.outputOptions([
-                '-filter_complex', `${vPart};${aPart}`,
-                '-map', '[outv]', '-map', '[outa]',
-                '-c:v', 'libx264', '-crf', '23', '-preset', 'fast',
-                '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart',
-              ]).output(outputPath)
-                .on('progress', onProg).on('end', () => resolve()).on('error', (e: any) => reject(e)).run();
-            });
-          }
-
-          try { if (fs.existsSync(cutPath)) fs.unlinkSync(cutPath); } catch {}
-        }
-
-        videoJobs[jobId].editedPath = outputPath;
-        videoProgress[jobId] = { step: 'render', percent: 90, status: 'processing', label: 'Salvando na nuvem...' };
-
-        const supabasePath = `edited/${jobId}/video-editado.mp4`;
-        const publicUrl = await uploadToStorage(outputPath, supabasePath, 'video/mp4');
-        if (publicUrl) videoJobs[jobId].editedSupabaseUrl = publicUrl;
-
-        videoProgress[jobId] = { step: 'render', percent: 100, status: 'done' };
-        void saveJobMeta(jobId);
-      } catch (err: any) {
-        console.error('[video-editor] render error:', err.message);
-        videoProgress[jobId] = { step: 'render', percent: 0, status: 'error', error: err.message };
-      }
-    });
-
-    app.get('/api/video-editor/local-render-progress/:jobId', (req: any, res: any) => {
-      res.json(videoProgress[req.params.jobId] || { step: 'idle', percent: 0, status: 'idle' });
-    });
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // REMOTION + AWS LAMBDA ROUTES
-    // ═══════════════════════════════════════════════════════════════════════
-    const PEXELS_API_KEY = process.env.PEXELS_API_KEY || '';
-
-    async function ensureVideoPublicUrl(jobId: string): Promise<string | null> {
-      const job = videoJobs[jobId];
-      if (!job) return null;
-      if (job.originalSupabaseUrl) return job.originalSupabaseUrl;
-
-      if (job.originalPath && fs.existsSync(job.originalPath)) {
-        console.log('[remotion] vídeo sem URL pública, enviando para Supabase...');
-        const ext = path.extname(job.filename || '.mp4') || '.mp4';
-        const storagePath = `uploads/${jobId}/original${ext}`;
-        const publicUrl = await uploadToStorage(job.originalPath, storagePath, 'video/mp4');
-        if (publicUrl) {
-          job.originalSupabaseUrl = publicUrl;
-          void saveJobMeta(jobId);
-          console.log('[remotion] upload concluído:', publicUrl);
-          return publicUrl;
-        }
-      }
-
-      if (process.env.SERVER_URL && job.originalPath) {
-        return `${process.env.SERVER_URL}/api/video-editor/video/${jobId}`;
-      }
-
-      return null;
-    }
-
-    async function ensureWordSegments(jobId: string): Promise<{ text: string; segments: any[] }> {
-      const job = videoJobs[jobId];
-      if (!job) throw new Error('Job não encontrado.');
-      if (Array.isArray(job.segments) && job.segments.length > 0) {
-        return { text: job.transcription || '', segments: job.segments };
-      }
-
-      if (!job.originalPath || !fs.existsSync(job.originalPath)) {
-        return { text: job.transcription || '', segments: [] };
-      }
-
-      console.log(`[remotion] transcrevendo job ${jobId} com Whisper...`);
-      const audioPath = path.join(VIDEO_PROCESSED_DIR, `${jobId}_audio_remotion.mp3`);
-      let audioExtracted = false;
-
-      try {
-        await new Promise<void>((resolve, reject) => {
-          ffmpeg(job.originalPath)
-            .noVideo()
-            .audioCodec('libmp3lame')
-            .audioBitrate('128k')
-            .output(audioPath)
-            .on('end', () => resolve())
-            .on('error', (e: any) => reject(e))
-            .run();
-        });
-        audioExtracted = fs.existsSync(audioPath) && fs.statSync(audioPath).size > 1000;
-      } catch (e: any) {
-        console.warn('[remotion] erro ao extrair áudio:', e.message);
-      }
-
-      if (!audioExtracted) {
-        job.transcription = '';
-        job.segments = [];
-        void saveJobMeta(jobId);
-        return { text: '', segments: [] };
-      }
-
-      try {
-        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-        const transcription = await openai.audio.transcriptions.create({
-          file: fs.createReadStream(audioPath),
-          model: 'whisper-1',
-          response_format: 'verbose_json',
-          timestamp_granularities: ['word'],
-        });
-        job.transcription = transcription.text || '';
-        job.segments = ((transcription as any).words || []).map((w: any) => ({ word: w.word, start: w.start, end: w.end }));
-        console.log(`[remotion] transcrição pronta (${job.segments.length} palavras)`);
-      } catch (e: any) {
-        console.warn('[remotion] falha na transcrição, seguindo sem legendas automáticas:', e.message);
-        job.transcription = '';
-        job.segments = [];
-      } finally {
-        try { fs.unlinkSync(audioPath); } catch {}
-      }
-
-      void saveJobMeta(jobId);
-      return { text: job.transcription || '', segments: job.segments || [] };
-    }
-
-    async function searchPexelsVideos(query: string, count = 3): Promise<string[]> {
-      if (!PEXELS_API_KEY) {
-        console.warn('[remotion] PEXELS_API_KEY ausente, seguindo sem b-roll.');
-        return [];
-      }
-
-      try {
-        const pexelRes = await fetch(
-          `https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}&per_page=${count}&size=small&orientation=portrait`,
-          { headers: { Authorization: PEXELS_API_KEY } }
-        );
-        if (!pexelRes.ok) {
-          console.warn('[remotion] erro Pexels:', pexelRes.status);
-          return [];
-        }
-        const data = await pexelRes.json();
-        return (data.videos || [])
-          .map((v: any) => {
-            const files = v.video_files || [];
-            const best = files.find((f: any) => f.width >= 720 && f.width <= 1080 && f.quality === 'hd')
-              || files.find((f: any) => f.quality === 'hd')
-              || files[0];
-            return best?.link || '';
-          })
-          .filter(Boolean);
-      } catch (e: any) {
-        console.warn('[remotion] erro ao buscar b-roll:', e.message);
-        return [];
-      }
-    }
-
-    // ── FASE 2: Multi-clip shorts generation ──────────────────────────────────
-
-    const shortsGenerationLock = new Map<string, Promise<any>>();
-
-    interface GeneratedShort {
-      id: string;
-      title: string;
-      viralityScore: number;
-      hookStrength: number;
-      emotionalImpact: number;
-      valueDelivery: number;
-      trendAlignment: number;
-      hookText: string;
-      clips: Array<{
-        startTime: number;
-        endTime: number;
-        zoomConfig?: { startScale: number; endScale: number; focusX: number; focusY: number };
-        transitionType: 'fade' | 'slide' | 'zoom-in' | 'cut';
-      }>;
-      suggestedCaption: string;
-      suggestedHashtags: string[];
-      estimatedDuration: number;
-      thumbnailTimestamp: number;
-      category: 'hook' | 'story' | 'tip' | 'emotional' | 'funny';
-      captions: { enabled: boolean; style: string };
-      brolls: Array<{ keyword: string; startTime: number; duration: number }>;
-      editedSupabaseUrl?: string;
-      remotionRender?: any;
-    }
-
-    async function generateShorts(jobId: string, transcription: string, segments: any[]): Promise<GeneratedShort[]> {
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-      const wordTimeline = segments.map((s: any, i: number) =>
-        `[${i}] ${s.word} (${s.start.toFixed(2)}-${s.end.toFixed(2)})`
-      ).join(' ');
-
-      const prompt = `Você é um editor de vídeo viral expert. Analise a transcrição abaixo e gere múltiplos shorts independentes otimizados para TikTok/Reels/Shorts.
-
-Para cada short, forneça:
-- id: string única
-- title: título curto e chamativo
-- viralityScore: nota de 0-100 baseada em:
-  * hookStrength (0-25): quão forte são os primeiros 3 segundos
-  * emotionalImpact (0-25): intensidade emocional do conteúdo
-  * valueDelivery (0-25): quanto valor/informação entrega
-  * trendAlignment (0-25): alinhamento com tendências de conteúdo viral
-- hookText: texto dos primeiros 5 segundos (gancho)
-- clips: array de { startTime, endTime, zoomConfig: { startScale, endScale, focusX, focusY }, transitionType }
-- suggestedCaption: legenda sugerida pra postar nas redes
-- suggestedHashtags: array de hashtags relevantes
-- estimatedDuration: duração total em segundos (ideal 15-60s)
-- thumbnailTimestamp: timestamp (em segundos) do melhor frame pra thumbnail
-- category: "hook" | "story" | "tip" | "emotional" | "funny"
-- captions: { enabled: true, style: "highlight" }
-- brolls: []
-
-Regras:
-- Gere entre 3 e 10 shorts dependendo do tamanho do vídeo
-- Cada short deve ter entre 15 e 60 segundos
-- O primeiro clip de cada short DEVE ter um gancho forte
-- Ordene os shorts por viralityScore (maior primeiro)
-- Não repita o mesmo trecho em shorts diferentes
-- Clips dentro de um short podem ser de diferentes partes do vídeo
-- viralityScore = hookStrength + emotionalImpact + valueDelivery + trendAlignment
-
-IMPORTANTE: viralityScore DEVE ser a soma de hookStrength + emotionalImpact + valueDelivery + trendAlignment. Cada sub-score vai de 0 a 25. A soma dos 4 deve ser igual ao viralityScore. Todos os 4 sub-scores devem ser fornecidos como números inteiros — NUNCA omita ou deixe em 0 sem motivo.
-
-Transcrição com timestamps:
-${wordTimeline || '(sem fala detectada)'}
-
-Responda APENAS em JSON válido no formato:
-{
-  "shorts": [{
-    "id": "short_1",
-    "title": "Título chamativo",
-    "viralityScore": 85,
-    "hookStrength": 22,
-    "emotionalImpact": 20,
-    "valueDelivery": 23,
-    "trendAlignment": 20,
-    "hookText": "Texto do gancho...",
-    "clips": [{ "startTime": 0.0, "endTime": 30.0, "zoomConfig": { "startScale": 1, "endScale": 1.2, "focusX": 0.5, "focusY": 0.5 }, "transitionType": "cut" }],
-    "suggestedCaption": "Legenda para redes sociais",
-    "suggestedHashtags": ["#exemplo", "#viral"],
-    "estimatedDuration": 30,
-    "thumbnailTimestamp": 2.5,
-    "category": "hook",
-    "captions": { "enabled": true, "style": "highlight" },
-    "brolls": []
-  }]
-}`;
-
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        max_tokens: 4000,
-        messages: [{ role: 'user', content: prompt }],
-        response_format: { type: 'json_object' },
-      });
-
-      const raw = (completion.choices[0].message.content || '').trim();
-      const parsed = JSON.parse(raw);
-      const shorts: GeneratedShort[] = (parsed.shorts || []).map((s: any, idx: number) => ({
-        id: s.id || `short-${idx + 1}`,
-        title: s.title || `Short ${idx + 1}`,
-        viralityScore: Number(s.viralityScore) || 0,
-        hookStrength: Number(s.hookStrength) || 0,
-        emotionalImpact: Number(s.emotionalImpact) || 0,
-        valueDelivery: Number(s.valueDelivery) || 0,
-        trendAlignment: Number(s.trendAlignment) || 0,
-        hookText: s.hookText || '',
-        clips: Array.isArray(s.clips) ? s.clips : [],
-        suggestedCaption: s.suggestedCaption || '',
-        suggestedHashtags: Array.isArray(s.suggestedHashtags) ? s.suggestedHashtags : [],
-        estimatedDuration: Number(s.estimatedDuration) || 30,
-        thumbnailTimestamp: Number(s.thumbnailTimestamp) || 0,
-        category: ['hook', 'story', 'tip', 'emotional', 'funny'].includes(s.category) ? s.category : 'hook',
-        captions: { enabled: true, style: s.captions?.style || 'highlight' },
-        brolls: Array.isArray(s.brolls) ? s.brolls : [],
-      }));
-
-      // Fallback: se sub-scores vieram todos 0, distribuir viralityScore proporcionalmente
-      for (const short of shorts) {
-        const total = short.hookStrength + short.emotionalImpact + short.valueDelivery + short.trendAlignment;
-        if (total === 0 && short.viralityScore > 0) {
-          const base = Math.floor(short.viralityScore / 4);
-          const remainder = short.viralityScore % 4;
-          short.hookStrength = base + (remainder > 0 ? 1 : 0);
-          short.emotionalImpact = base + (remainder > 1 ? 1 : 0);
-          short.valueDelivery = base + (remainder > 2 ? 1 : 0);
-          short.trendAlignment = base;
-        }
-      }
-
-      return shorts.sort((a, b) => b.viralityScore - a.viralityScore);
-    }
-
-    async function buildRemotionPreviewDataForShort(jobId: string, shortId: string) {
-      const job = videoJobs[jobId];
-      if (!job) throw new Error('Job não encontrado.');
-
-      const short: GeneratedShort | undefined = (job.shorts || []).find((s: any) => s.id === shortId);
-      if (!short) throw new Error('Short não encontrado.');
-
-      job.captionsCfg = normalizeCaptionCfg(job.captionsCfg || REMOTION_DEFAULT_CAPTIONS);
-
-      const videoUrl = await ensureVideoPublicUrl(jobId);
-      if (!videoUrl) throw new Error('Falha ao preparar URL pública do vídeo.');
-
-      const { segments } = await ensureWordSegments(jobId);
-
-      // Obter duração real do vídeo via ffprobe
-      let videoDuration = 60;
-      const videoPath = job.processedPath || job.originalPath;
-      if (videoPath && fs.existsSync(videoPath)) {
-        try {
-          videoDuration = await new Promise<number>((resolve) => {
-            ffmpeg.ffprobe(videoPath, (err: any, metadata: any) => {
-              resolve(err ? 60 : (metadata?.format?.duration || 60));
-            });
-          });
-        } catch { /* usa fallback */ }
-      }
-
-      // Garantir clips válidos
-      let sourceClips = Array.isArray(short.clips) && short.clips.length > 0
-        ? short.clips
-        : [{ startTime: 0, endTime: Math.min(short.estimatedDuration || 30, videoDuration), transitionType: 'cut' as const }];
-
-      // Validar e limpar cada clip
-      let normalizedClips = sourceClips
-        .map((clip: any, index: number) => {
-          let startTime = Math.max(0, Number(clip?.startTime ?? 0));
-          let endTime = Number(clip?.endTime ?? (startTime + 10));
-
-          if (endTime <= startTime) endTime = startTime + 5;
-          if (startTime >= videoDuration) startTime = Math.max(0, videoDuration - 10);
-          if (endTime > videoDuration) endTime = videoDuration;
-          if (endTime <= startTime) endTime = Math.min(startTime + 5, videoDuration);
-
-          const zc = clip?.zoomConfig || clip?.zoom;
-          return {
-            startTime,
-            endTime,
-            zoom: {
-              startScale: zc?.startScale ? (zc.startScale > 5 ? zc.startScale / 100 : zc.startScale) : 1,
-              endScale: zc?.endScale ? (zc.endScale > 5 ? zc.endScale / 100 : zc.endScale) : 1.1,
-              focusX: zc?.focusX ?? 50,
-              focusY: zc?.focusY ?? 50,
-            },
-            transition: normalizeTransitionForRemotion(clip?.transitionType || clip?.transition || 'fade'),
-            _index: index,
-          };
-        })
-        .filter((clip: any) => clip.endTime - clip.startTime >= 0.5);
-
-      if (normalizedClips.length === 0) {
-        const dur = Math.min(short.estimatedDuration || 30, videoDuration);
-        normalizedClips = [{
-          startTime: 0,
-          endTime: dur,
-          zoom: { startScale: 1, endScale: 1.1, focusX: 50, focusY: 50 },
-          transition: 'fade' as const,
-          _index: 0,
-        }];
-      }
-
-      let timelineCursor = 0;
-      const withTimeline = normalizedClips.map((clip: any) => {
-        const clipDuration = clip.endTime - clip.startTime;
-        const timelineStart = timelineCursor;
-        const timelineEnd = timelineStart + clipDuration;
-        timelineCursor = timelineEnd;
-        return { ...clip, timelineStart, timelineEnd };
-      });
-
-      const duration = Math.max(1, timelineCursor);
-
-      console.log(`[supoclip] short ${shortId}: ${normalizedClips.length} clips, duration=${duration.toFixed(1)}s, videoDuration=${videoDuration.toFixed(1)}s`);
-
-      const captionSegments = (segments || []).filter((w: any) => {
-        return normalizedClips.some((c: any) => w.start >= c.startTime && w.end <= c.endTime);
-      });
-
-      return {
-        videoUrl,
-        clips: withTimeline.map((clip: any) => ({
-          startTime: clip.startTime,
-          endTime: clip.endTime,
-          zoom: clip.zoom,
-          transition: clip.transition,
-        })),
-        captions: {
-          enabled: short.captions?.enabled !== false,
-          style: short.captions?.style || job.captionsCfg?.style || 'highlight',
-          segments: captionSegments,
-          fontFamily: job.captionsCfg?.fontFamily,
-          fontWeight: job.captionsCfg?.fontWeight,
-          color: job.captionsCfg?.color,
-          strokeColor: job.captionsCfg?.strokeColor,
-          strokeWidth: job.captionsCfg?.strokeWidth,
-          position: job.captionsCfg?.position,
-          maxLength: job.captionsCfg?.maxLength,
-        },
-        brolls: [],
-        transitions: normalizeTransitionForRemotion('fade'),
-        duration,
-        width: REMOTION_DEFAULT_OUTPUT.width,
-        height: REMOTION_DEFAULT_OUTPUT.height,
-        fps: REMOTION_DEFAULT_OUTPUT.fps,
-        outputFormat: REMOTION_DEFAULT_OUTPUT,
-        editedUrl: short.editedSupabaseUrl || null,
-      };
-    }
-
-    async function generateEditPlan(jobId: string, transcription: string, segments: any[], editOptions: any) {
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-      const wordTimeline = segments.map((s: any, i: number) => `[${i}] ${s.word} (${s.start.toFixed(2)}-${s.end.toFixed(2)})`).join(' ');
-      const totalDur = segments.length > 0 ? segments[segments.length - 1].end.toFixed(1) : '30';
-
-      const prompt = `Você é um editor de vídeo profissional para Reels/TikTok. Analise a transcrição e crie um plano de edição.
-
-Transcrição com timestamps:
-${wordTimeline || '(sem fala detectada)'}
-
-Duração total: ${totalDur}s
-
-Opções do usuário:
-- Cortes automáticos (remover silêncio): ${editOptions.autoCut ? 'SIM' : 'NÃO'}
-- Zoom dinâmico: ${editOptions.dynamicZoom ? 'SIM' : 'NÃO'}
-- B-roll automático: ${editOptions.broll ? 'SIM' : 'NÃO'}
-- Efeitos sonoros: ${editOptions.sfx ? 'SIM' : 'NÃO'}
-- Transições: ${editOptions.transitions ? 'SIM' : 'NÃO'}
-- Tipo de transição: ${editOptions.transitionType || 'fade'}
-
-Retorne um JSON:
-{
-  "clips": [
-    {
-      "startTime": 0.0,
-      "endTime": 3.5,
-      "zoom": { "startScale": 100, "endScale": 120, "focusX": 50, "focusY": 40 },
-      "brollQuery": "keyword em inglês ou null",
-      "brollStart": 1.5,
-      "brollEnd": 3.0,
-      "sfx": { "type": "whoosh|pop|ding|none", "time": 0.5 },
-      "transition": "fade|slide-left|slide-right|zoom-in|none"
-    }
-  ],
-  "totalDuration": 30.0,
-  "removedSilence": 5.2
-}
-
-REGRAS:
-1. autoCut=SIM: remova gaps de silêncio >0.7s entre palavras.
-2. dynamicZoom=SIM: zoom sutil 100→115-125% em momentos de ênfase.
-3. broll=SIM: brollQuery com 1-2 palavras em INGLÊS. Máx 3 b-rolls. null nos outros.
-4. sfx=SIM: efeitos em transições/impacto. Máx 4. "none" nos outros.
-5. transitions=SIM: transição entre clips. Último clip = "none".
-6. Crie 4-12 clips cobrindo todo o conteúdo falado.
-7. NÃO pule trechos com fala.
-
-Responda APENAS com o JSON.`;
-
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        max_tokens: 3000,
-        messages: [{ role: 'user', content: prompt }],
-        response_format: { type: 'json_object' },
-      });
-
-      const raw = (completion.choices[0].message.content || '').trim();
-      return JSON.parse(raw);
-    }
-
-    const normalizeTransitionForRemotion = (value: string): 'fade' | 'slide' | 'zoom-in' => {
-      if (value === 'zoom-in') return 'zoom-in';
-      if (value === 'slide-left' || value === 'slide-right' || value === 'slide') return 'slide';
-      return 'fade';
+      return diff;
     };
 
-    const getFallbackClips = (segments: any[]) => {
-      if (!segments.length) return [{ startTime: 0, endTime: 30 }];
-      const GAP = 0.7;
-      const PAD = 0.2;
-      const clips: { startTime: number; endTime: number }[] = [];
-      let start = Math.max(0, Number(segments[0].start || 0) - PAD);
-      let end = Number(segments[0].end || 0) + PAD;
-      for (let i = 1; i < segments.length; i++) {
-        const prevEnd = Number(segments[i - 1].end || 0);
-        const currentStart = Number(segments[i].start || 0);
-        if (currentStart - prevEnd > GAP) {
-          clips.push({ startTime: start, endTime: end });
-          start = Math.max(0, currentStart - PAD);
-        }
-        end = Number(segments[i].end || 0) + PAD;
-      }
-      clips.push({ startTime: start, endTime: end });
-      return clips;
+    const isInPeriod = (dateStr: string) => {
+      const diff = calcDias(dateStr);
+      if (diff < 0) return false;
+      if (periodo === 'hoje') return diff === 0;
+      if (periodo === 'semana') return diff <= 7;
+      if (periodo === 'mes') return diff <= 31;
+      return false;
     };
 
-    async function buildRemotionPreviewData(jobId: string, options?: { forceRefresh?: boolean }) {
-      const job = videoJobs[jobId];
-      if (!job) throw new Error('Job não encontrado.');
+    const calcIdade = (dateStr: string) => {
+      const d = new Date(dateStr);
+      return todayMidnight.getFullYear() - d.getUTCFullYear();
+    };
 
-      if (job.remotionPreviewData && !options?.forceRefresh) {
-        return job.remotionPreviewData;
-      }
+    const result: any[] = [];
 
-      job.captionsCfg = normalizeCaptionCfg(job.captionsCfg || REMOTION_DEFAULT_CAPTIONS);
-      job.editOptions = normalizeEditOptions(job.editOptions || REMOTION_DEFAULT_EDIT_OPTIONS);
-
-      const videoUrl = await ensureVideoPublicUrl(jobId);
-      if (!videoUrl) {
-        throw new Error('Falha ao preparar URL pública do vídeo.');
-      }
-
-      const { text: transcription, segments } = await ensureWordSegments(jobId);
-
-      let editPlan: any = job.remotionEditPlan || null;
-      if (!editPlan || options?.forceRefresh) {
-        try {
-          editPlan = await generateEditPlan(jobId, transcription || '', segments || [], job.editOptions);
-          job.remotionEditPlan = editPlan;
-          console.log('[remotion] plano de edição criado para', jobId);
-        } catch (e: any) {
-          console.warn('[remotion] falha ao gerar plano de edição, usando fallback:', e.message);
-          editPlan = null;
-        }
-      }
-
-      const sourceClips = Array.isArray(editPlan?.clips) && editPlan.clips.length > 0
-        ? editPlan.clips
-        : getFallbackClips(segments || []);
-
-      let normalizedClips = sourceClips
-        .map((clip: any, index: number) => {
-          const startTime = Math.max(0, Number(clip?.startTime ?? 0));
-          const endTime = Math.max(startTime + 0.1, Number(clip?.endTime ?? (startTime + 2)));
-          return {
-            startTime,
-            endTime,
-            zoom: clip?.zoom || {
-              startScale: 1,
-              endScale: 1,
-              focusX: 50,
-              focusY: 50,
-            },
-            transition: normalizeTransitionForRemotion(clip?.transition || job.editOptions.transitionType),
-            brollQuery: clip?.brollQuery || null,
-            brollStart: typeof clip?.brollStart === 'number' ? clip.brollStart : null,
-            brollEnd: typeof clip?.brollEnd === 'number' ? clip.brollEnd : null,
-            _index: index,
-          };
-        })
-        .filter((clip: any) => clip.endTime - clip.startTime > 0.08);
-
-      if (!job.editOptions?.autoCut) {
-        const maxClipEnd = normalizedClips.length > 0
-          ? Math.max(...normalizedClips.map((clip: any) => clip.endTime))
-          : 0;
-        const transcriptEnd = Number(segments?.[segments.length - 1]?.end || 0);
-        const fullEnd = Math.max(1, maxClipEnd, transcriptEnd);
-        normalizedClips = [{
-          startTime: 0,
-          endTime: fullEnd,
-          zoom: normalizedClips[0]?.zoom || {
-            startScale: 1,
-            endScale: 1,
-            focusX: 50,
-            focusY: 50,
-          },
-          transition: 'fade',
-          brollQuery: null,
-          brollStart: null,
-          brollEnd: null,
-          _index: 0,
-        }];
-      }
-
-      if (normalizedClips.length === 0) {
-        normalizedClips.push({
-          startTime: 0,
-          endTime: 30,
-          zoom: { startScale: 1, endScale: 1, focusX: 50, focusY: 50 },
-          transition: 'fade',
-          brollQuery: null,
-          brollStart: null,
-          brollEnd: null,
-          _index: 0,
+    for (const c of (clients || [])) {
+      if (c.birth_date && isInPeriod(c.birth_date)) {
+        result.push({
+          tipo: 'MAE',
+          nome: c.name,
+          clienteId: c.id,
+          clienteNome: c.name,
+          telefone: c.phone,
+          email: c.email,
+          dataNascimento: c.birth_date,
+          diasParaAniversario: calcDias(c.birth_date),
+          idade: calcIdade(c.birth_date),
+          nivel: c.status || 'Bronze',
         });
       }
-
-      const autoCutEnabled = Boolean(job.editOptions?.autoCut);
-      let timelineCursor = 0;
-      const withTimeline = normalizedClips.map((clip: any) => {
-        const clipDuration = clip.endTime - clip.startTime;
-        const timelineStart = autoCutEnabled ? timelineCursor : clip.startTime;
-        const timelineEnd = timelineStart + clipDuration;
-        if (autoCutEnabled) timelineCursor = timelineEnd;
-        return { ...clip, timelineStart, timelineEnd };
-      });
-
-      const duration = autoCutEnabled
-        ? Math.max(1, timelineCursor)
-        : Math.max(
-            ...withTimeline.map((clip: any) => clip.timelineEnd),
-            Number(segments?.[segments.length - 1]?.end || 0),
-            1
-          );
-
-      const brollUrls: Record<string, string> = {};
-      if (job.editOptions?.broll) {
-        const uniqueQueries = [...new Set(withTimeline.map((clip: any) => clip.brollQuery).filter(Boolean))] as string[];
-        for (const query of uniqueQueries.slice(0, 3)) {
-          const urls = await searchPexelsVideos(query, 1);
-          if (urls[0]) brollUrls[query] = urls[0];
-        }
-      }
-
-      const brolls = withTimeline
-        .map((clip: any) => {
-          if (!clip.brollQuery || !brollUrls[clip.brollQuery]) return null;
-          const clipDuration = clip.endTime - clip.startTime;
-          const sourceStart = typeof clip.brollStart === 'number' ? clip.brollStart : clip.startTime + clipDuration * 0.2;
-          const sourceEnd = typeof clip.brollEnd === 'number' ? clip.brollEnd : clip.startTime + clipDuration * 0.6;
-          const relStart = Math.max(0, sourceStart - clip.startTime);
-          const relEnd = Math.min(clipDuration, Math.max(relStart + 0.35, sourceEnd - clip.startTime));
-          return {
-            url: brollUrls[clip.brollQuery],
-            startTime: clip.timelineStart + relStart,
-            endTime: clip.timelineStart + relEnd,
-            query: clip.brollQuery,
-          };
-        })
-        .filter(Boolean);
-
-      const previewData = {
-        videoUrl,
-        clips: withTimeline.map((clip: any) => ({
-          startTime: clip.startTime,
-          endTime: clip.endTime,
-          zoom: clip.zoom,
-          transition: clip.transition,
-        })),
-        captions: {
-          enabled: Boolean(job.captionsCfg?.enabled),
-          style: job.captionsCfg?.style || 'highlight',
-          segments: segments || [],
-          fontFamily: job.captionsCfg?.fontFamily,
-          fontWeight: job.captionsCfg?.fontWeight,
-          color: job.captionsCfg?.color,
-          strokeColor: job.captionsCfg?.strokeColor,
-          strokeWidth: job.captionsCfg?.strokeWidth,
-          position: job.captionsCfg?.position,
-          maxLength: job.captionsCfg?.maxLength,
-        },
-        brolls,
-        transitions: normalizeTransitionForRemotion(job.editOptions?.transitionType || 'fade'),
-        duration,
-        width: REMOTION_DEFAULT_OUTPUT.width,
-        height: REMOTION_DEFAULT_OUTPUT.height,
-        fps: REMOTION_DEFAULT_OUTPUT.fps,
-        outputFormat: REMOTION_DEFAULT_OUTPUT,
-        editedUrl: job.editedSupabaseUrl || null,
-      };
-
-      job.remotionPreviewData = previewData;
-      void saveJobMeta(jobId);
-      return previewData;
     }
 
-    app.get('/api/video-editor/preview-data/:jobId', async (req: any, res: any) => {
-      const { jobId } = req.params;
-      try {
-        const forceRefresh = req.query?.refresh === '1';
-        const data = await buildRemotionPreviewData(jobId, { forceRefresh });
-        res.json(data);
-      } catch (error: any) {
-        console.error('[remotion] preview-data error:', error.message);
-        res.status(500).json({ error: error.message || 'Falha ao preparar preview.' });
-      }
-    });
-
-    app.post('/api/video-editor/render-lambda/:jobId', async (req: any, res: any) => {
-      const { jobId } = req.params;
-      const job = videoJobs[jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
-
-      try {
-        if (req.body?.captions) {
-          job.captionsCfg = normalizeCaptionCfg(req.body.captions);
-        }
-        if (req.body?.editOptions) {
-          job.editOptions = normalizeEditOptions(req.body.editOptions);
-        }
-
-        const functionName = process.env.REMOTION_AWS_FUNCTION_NAME;
-        const serveUrl = process.env.REMOTION_AWS_SERVE_URL;
-        const region = (process.env.AWS_REGION || 'us-east-1') as any;
-        if (!functionName || !serveUrl) {
-          return res.status(500).json({
-            error: 'Variáveis REMOTION_AWS_FUNCTION_NAME e REMOTION_AWS_SERVE_URL são obrigatórias.',
-          });
-        }
-
-        console.log('[remotion] iniciando render no Lambda para job', jobId);
-        const previewData = await buildRemotionPreviewData(jobId, { forceRefresh: true });
-        const durationInFrames = Math.max(1, Math.round(previewData.duration * previewData.fps));
-        const inputProps = {
-          videoUrl: previewData.videoUrl,
-          clips: previewData.clips,
-          captions: previewData.captions,
-          brolls: previewData.brolls,
-          transitions: previewData.transitions,
-          duration: previewData.duration,
-          outputFormat: {
-            width: previewData.width,
-            height: previewData.height,
-            fps: previewData.fps,
-          },
-        };
-
-        const render = await renderMediaOnLambda({
-          region,
-          functionName,
-          serveUrl,
-          composition: 'VideoComposition',
-          codec: 'h264',
-          inputProps,
-          forceWidth: previewData.width,
-          forceHeight: previewData.height,
-          forceFps: previewData.fps,
-          forceDurationInFrames: durationInFrames,
-          privacy: 'public',
-          overwrite: true,
-        });
-
-        job.remotionRender = {
-          renderId: render.renderId,
-          bucketName: render.bucketName,
-          status: 'rendering',
-          progress: 0,
-          functionName,
-          serveUrl,
-          cloudWatchLogs: render.cloudWatchLogs,
-          startedAt: Date.now(),
-        };
-        void saveJobMeta(jobId);
-
-        res.json({ renderId: render.renderId, status: 'rendering' });
-      } catch (error: any) {
-        console.error('[remotion] render-lambda error:', error.message);
-        res.status(500).json({ error: error.message || 'Falha ao iniciar renderização no Lambda.' });
-      }
-    });
-
-    app.get('/api/video-editor/render-progress/:jobId', async (req: any, res: any) => {
-      const { jobId } = req.params;
-      const job = videoJobs[jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
-
-      if (job.editedSupabaseUrl) {
-        return res.json({
-          progress: 100,
-          status: 'completed',
-          outputUrl: job.editedSupabaseUrl,
+    for (const f of (filhos || [])) {
+      if (isInPeriod(f.data_nascimento)) {
+        const cliente = (clients || []).find((c: any) => c.id === f.cliente_id);
+        if (!cliente) continue;
+        result.push({
+          tipo: 'FILHO',
+          nome: f.nome,
+          filhoId: f.id,
+          clienteId: cliente.id,
+          clienteNome: cliente.name,
+          telefone: cliente.phone,
+          email: cliente.email,
+          dataNascimento: f.data_nascimento,
+          diasParaAniversario: calcDias(f.data_nascimento),
+          idade: calcIdade(f.data_nascimento),
+          sexo: f.sexo,
+          nivel: cliente.status || 'Bronze',
         });
       }
+    }
 
-      if (!job.remotionRender?.renderId || !job.remotionRender?.bucketName) {
-        return res.json({ progress: 0, status: 'idle', outputUrl: null });
-      }
+    result.sort((a, b) => a.diasParaAniversario - b.diasParaAniversario);
+    res.json(result);
+  });
 
-      try {
-        const region = (process.env.AWS_REGION || 'us-east-1') as any;
-        const functionName = process.env.REMOTION_AWS_FUNCTION_NAME || job.remotionRender.functionName;
-        const progress = await getRenderProgress({
-          region,
-          functionName,
-          bucketName: job.remotionRender.bucketName,
-          renderId: job.remotionRender.renderId,
+  // Smash the Cake (bebês completando 1 ano em 30 dias)
+  app.get('/api/oportunidades/smash-the-cake', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    const { data: clients } = await supabase.from('clients').select('id,name,phone,email,status').eq('user_id', userId);
+    const { data: filhos } = await supabase.from('filhos').select('*').in('cliente_id', (clients || []).map((c: any) => c.id));
+
+    const today = new Date();
+    const result: any[] = [];
+
+    for (const f of (filhos || [])) {
+      const nascimento = new Date(f.data_nascimento);
+      const aniversario1Ano = new Date(nascimento.getUTCFullYear() + 1, nascimento.getUTCMonth(), nascimento.getUTCDate());
+      const diff = Math.ceil((aniversario1Ano.getTime() - today.getTime()) / 86400000);
+      if (diff >= 0 && diff <= 30) {
+        const cliente = (clients || []).find((c: any) => c.id === f.cliente_id);
+        if (!cliente) continue;
+        result.push({
+          filhoId: f.id,
+          nome: f.nome,
+          clienteId: cliente.id,
+          clienteNome: cliente.name,
+          telefone: cliente.phone,
+          dataNascimento: f.data_nascimento,
+          diasParaAniversario: diff,
+          sexo: f.sexo,
+          nivel: cliente.status || 'Bronze',
         });
+      }
+    }
 
-        const progressPct = Math.max(0, Math.min(100, Math.round((progress.overallProgress || 0) * 100)));
-        const failed = Boolean(progress.fatalErrorEncountered);
-        const status = failed
-          ? 'failed'
-          : progress.done
-            ? 'rendered'
-            : 'rendering';
+    result.sort((a, b) => a.diasParaAniversario - b.diasParaAniversario);
+    res.json(result);
+  });
 
-        job.remotionRender = {
-          ...job.remotionRender,
-          status,
-          progress: progressPct,
-          outputUrl: progress.outputFile || null,
-          errors: progress.errors || [],
-          done: progress.done,
-        };
-        if (status === 'failed' || status === 'rendered') {
-          void saveJobMeta(jobId);
-        }
+  // Acompanhamentos (3, 6, 9, 12 meses)
+  app.get('/api/oportunidades/acompanhamentos', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
 
-        return res.json({
-          progress: progressPct,
-          status,
-          outputUrl: job.editedSupabaseUrl || progress.outputFile || null,
-          renderId: job.remotionRender.renderId,
-          error: failed ? (progress.errors?.[0]?.message || 'Renderização falhou no Lambda.') : undefined,
+    const { data: clients } = await supabase.from('clients').select('id,name,phone,email,status').eq('user_id', userId);
+    const { data: filhos } = await supabase.from('filhos').select('*').in('cliente_id', (clients || []).map((c: any) => c.id));
+
+    const today = new Date();
+    const result: any[] = [];
+
+    for (const f of (filhos || [])) {
+      const nascimento = new Date(f.data_nascimento);
+      const diffMs = today.getTime() - nascimento.getTime();
+      const idadeMeses = Math.floor(diffMs / (1000 * 60 * 60 * 24 * 30.44));
+
+      if ([3, 6, 9, 12].includes(idadeMeses)) {
+        const cliente = (clients || []).find((c: any) => c.id === f.cliente_id);
+        if (!cliente) continue;
+        result.push({
+          filhoId: f.id,
+          nome: f.nome,
+          clienteId: cliente.id,
+          clienteNome: cliente.name,
+          telefone: cliente.phone,
+          dataNascimento: f.data_nascimento,
+          idadeMeses,
+          sexo: f.sexo,
+          nivel: cliente.status || 'Bronze',
         });
-      } catch (error: any) {
-        console.error('[remotion] render-progress error:', error.message);
-        return res.status(500).json({ error: error.message || 'Falha ao buscar progresso da renderização.' });
       }
-    });
+    }
 
-    app.post('/api/video-editor/render-done/:jobId', async (req: any, res: any) => {
-      const { jobId } = req.params;
-      const job = videoJobs[jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
+    res.json(result);
+  });
 
-      if (job.editedSupabaseUrl) {
-        return res.json({ ok: true, outputUrl: job.editedSupabaseUrl, status: 'completed' });
-      }
+  // Newborn (bebês nascidos nos últimos 30 dias)
+  app.get('/api/oportunidades/newborn', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
 
-      if (!job.remotionRender?.renderId || !job.remotionRender?.bucketName) {
-        return res.status(400).json({ error: 'Renderização ainda não iniciada.' });
-      }
+    const { data: clients } = await supabase.from('clients').select('id,name,phone,email,status').eq('user_id', userId);
+    const { data: filhos } = await supabase.from('filhos').select('*').in('cliente_id', (clients || []).map((c: any) => c.id));
 
-      try {
-        const region = (process.env.AWS_REGION || 'us-east-1') as any;
-        const outputPath = path.join(VIDEO_PROCESSED_DIR, `${jobId}_lambda_output.mp4`);
+    const today = new Date();
+    const result: any[] = [];
 
-        console.log('[remotion] baixando MP4 do S3 para job', jobId);
-        await downloadMedia({
-          region,
-          bucketName: job.remotionRender.bucketName,
-          renderId: job.remotionRender.renderId,
-          outPath: outputPath,
+    for (const f of (filhos || [])) {
+      const nascimento = new Date(f.data_nascimento);
+      const diffMs = today.getTime() - nascimento.getTime();
+      const diasDeVida = Math.floor(diffMs / 86400000);
+
+      if (diasDeVida >= 0 && diasDeVida <= 30) {
+        const cliente = (clients || []).find((c: any) => c.id === f.cliente_id);
+        if (!cliente) continue;
+        result.push({
+          filhoId: f.id,
+          nome: f.nome,
+          clienteId: cliente.id,
+          clienteNome: cliente.name,
+          telefone: cliente.phone,
+          dataNascimento: f.data_nascimento,
+          diasDeVida,
+          sexo: f.sexo,
+          nivel: cliente.status || 'Bronze',
         });
-
-        const publicUrl = await uploadToStorage(outputPath, `edited/${jobId}/video-editado.mp4`, 'video/mp4');
-        if (!publicUrl) {
-          throw new Error('Falha ao enviar o MP4 final para o Supabase.');
-        }
-
-        job.editedPath = outputPath;
-        job.editedSupabaseUrl = publicUrl;
-        job.remotionRender = {
-          ...job.remotionRender,
-          status: 'completed',
-          progress: 100,
-          outputUrl: publicUrl,
-        };
-        void saveJobMeta(jobId);
-
-        console.log('[remotion] render finalizada e salva no Supabase:', publicUrl);
-        res.json({ ok: true, outputUrl: publicUrl, status: 'completed' });
-      } catch (error: any) {
-        console.error('[remotion] render-done error:', error.message);
-        res.status(500).json({ error: error.message || 'Falha ao finalizar renderização.' });
       }
-    });
+    }
 
-    // ═══════════════════════════════════════════════════════════════════════
+    result.sort((a, b) => a.diasDeVida - b.diasDeVida);
+    res.json(result);
+  });
 
-    app.get('/api/video-editor/segments/:jobId', (req: any, res: any) => {
-      const job = videoJobs[req.params.jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
-      const words: { start: number; end: number }[] = job.segments || [];
-      if (words.length === 0) return res.json({ segments: [], duration: 0 });
-      const GAP = 0.5, PAD = 0.2;
-      const segs: { start: number; end: number }[] = [];
-      let segStart = Math.max(0, words[0].start - PAD), segEnd = words[0].end + PAD;
-      for (let i = 1; i < words.length; i++) {
-        if (words[i].start - words[i - 1].end > GAP) {
-          segs.push({ start: segStart, end: segEnd });
-          segStart = Math.max(0, words[i].start - PAD);
-        }
-        segEnd = words[i].end + PAD;
-      }
-      segs.push({ start: segStart, end: segEnd });
-      res.json({ segments: segs });
-    });
+  // Aniversário (filhos completando 2+ anos nos próximos 30 dias)
+  app.get('/api/oportunidades/aniversario', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
 
-    app.get('/api/video-editor/thumb/:jobId', (req: any, res: any) => {
-      const job = videoJobs[req.params.jobId];
-      if (job?.thumbnailSupabaseUrl) return res.redirect(job.thumbnailSupabaseUrl);
-      // Fallback: local file (may not exist after restart)
-      if (job?.thumbnailPath && fs.existsSync(job.thumbnailPath)) return res.sendFile(job.thumbnailPath);
-      res.status(404).send('No thumbnail');
-    });
+    const { data: clients } = await supabase.from('clients').select('id,name,phone,email,status').eq('user_id', userId);
+    const { data: filhos } = await supabase.from('filhos').select('*').in('cliente_id', (clients || []).map((c: any) => c.id));
 
-    app.delete('/api/video-editor/job/:jobId', async (req: any, res: any) => {
-      const { jobId } = req.params;
-      const job = videoJobs[jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
+    const today = new Date();
+    const result: any[] = [];
 
-      // Limpar arquivos locais
-      try {
-        if (job.originalPath && fs.existsSync(job.originalPath)) fs.unlinkSync(job.originalPath);
-        if (job.editedPath && fs.existsSync(job.editedPath)) fs.unlinkSync(job.editedPath);
-        if (job.thumbnailPath && fs.existsSync(job.thumbnailPath)) fs.unlinkSync(job.thumbnailPath);
-      } catch (e) { /* ignore */ }
+    for (const f of (filhos || [])) {
+      const nascimento = new Date(f.data_nascimento);
+      const idadeAtual = today.getFullYear() - nascimento.getUTCFullYear();
+      const proximoAniversario = new Date(today.getFullYear(), nascimento.getUTCMonth(), nascimento.getUTCDate());
+      if (proximoAniversario < today) proximoAniversario.setFullYear(today.getFullYear() + 1);
+      const diff = Math.ceil((proximoAniversario.getTime() - today.getTime()) / 86400000);
+      const idadeQueCompleta = proximoAniversario.getFullYear() - nascimento.getUTCFullYear();
 
-      // Limpar do Supabase (metadata)
-      try {
-        await storageSupa.storage.from('videos').remove(['meta/' + jobId + '.json']);
-        await storageSupa.storage.from('videos').remove(['thumbs/' + jobId + '.jpg']);
-        await storageSupa.storage.from('videos').remove(['uploads/' + jobId + '/original.mp4']);
-        await storageSupa.storage.from('videos').remove(['uploads/' + jobId + '/original.MOV']);
-      } catch (e) { /* ignore */ }
-
-      delete videoJobs[jobId];
-      console.log('[video-editor] Job deletado:', jobId);
-      res.json({ ok: true });
-    });
-
-    app.get('/api/video-editor/jobs', (_req: any, res: any) => {
-      const jobs = Object.values(videoJobs)
-        .filter((job: any) => job.filename && job.createdAt)
-        .map((job: any) => ({
-          jobId:            job.jobId,
-          filename:         job.filename,
-          createdAt:        job.createdAt,
-          hasTranscription: !!job.transcription,
-          hasAnalysis:      !!job.analysis,
-          hasEdited:        !!job.editedSupabaseUrl || !!(job.editedPath && fs.existsSync(job.editedPath)),
-          thumbnailUrl:     job.thumbnailSupabaseUrl || null,
-        }))
-        .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-        .slice(0, 12);
-      res.json({ jobs });
-    });
-
-    app.get('/api/video-editor/restore/:jobId', (req: any, res: any) => {
-      const job = videoJobs[req.params.jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
-      const localAvailable = !!(job.originalPath && fs.existsSync(job.originalPath));
-      res.json({
-        jobId:          req.params.jobId,
-        filename:       job.filename || 'video.mp4',
-        analysis:       job.analysis       || null,
-        segments:       job.segments       || null,
-        transcription:  job.transcription  || null,
-        captionsCfg:    job.captionsCfg    || REMOTION_DEFAULT_CAPTIONS,
-        editOptions:    job.editOptions    || REMOTION_DEFAULT_EDIT_OPTIONS,
-        remotionRender: job.remotionRender || null,
-        hasEdited:      !!job.editedSupabaseUrl || !!(job.editedPath && fs.existsSync(job.editedPath)),
-        localAvailable,
-      });
-    });
-
-    app.get('/api/video-editor/edited/:jobId', (req: any, res: any) => {
-      const job = videoJobs[req.params.jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
-
-      // Prefer Supabase URL (persistent across restarts)
-      if (job.editedSupabaseUrl) return res.redirect(job.editedSupabaseUrl);
-
-      // Fallback: serve from local disk (only works on same server session)
-      if (!job.editedPath || !fs.existsSync(job.editedPath)) {
-        return res.status(404).json({ error: 'Vídeo editado não encontrado. Reprocesse o vídeo.' });
-      }
-      const stat = fs.statSync(job.editedPath);
-      const range = req.headers.range;
-      if (range) {
-        const [startStr, endStr] = range.replace(/bytes=/, '').split('-');
-        const start = parseInt(startStr, 10);
-        const end = endStr ? parseInt(endStr, 10) : stat.size - 1;
-        res.writeHead(206, {
-          'Content-Range': `bytes ${start}-${end}/${stat.size}`,
-          'Accept-Ranges': 'bytes',
-          'Content-Length': end - start + 1,
-          'Content-Type': 'video/mp4',
+      // Apenas 2 anos em diante (1 ano = Smash the Cake), janela de 30 dias
+      if (idadeQueCompleta >= 2 && diff >= 0 && diff <= 30) {
+        const cliente = (clients || []).find((c: any) => c.id === f.cliente_id);
+        if (!cliente) continue;
+        result.push({
+          filhoId: f.id,
+          nome: f.nome,
+          clienteId: cliente.id,
+          clienteNome: cliente.name,
+          telefone: cliente.phone,
+          dataNascimento: f.data_nascimento,
+          diasParaAniversario: diff,
+          idadeQueCompleta,
+          sexo: f.sexo,
+          nivel: cliente.status || 'Bronze',
         });
-        fs.createReadStream(job.editedPath, { start, end }).pipe(res);
-      } else {
-        res.writeHead(200, {
-          'Content-Length': stat.size,
-          'Content-Type': 'video/mp4',
-          'Content-Disposition': 'attachment; filename="video-editado.mp4"',
-        });
-        fs.createReadStream(job.editedPath).pipe(res);
       }
-    });
+    }
 
-  // ── FASE 2: Shorts endpoints ──────────────────────────────────────────────
+    result.sort((a, b) => a.diasParaAniversario - b.diasParaAniversario);
+    res.json(result);
+  });
 
-    // GET /api/video-editor/shorts/:jobId — lista (ou gera) os shorts de um job
-    app.get('/api/video-editor/shorts/:jobId', async (req: any, res: any) => {
-      const { jobId } = req.params;
-      const job = videoJobs[jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
+  // CRUD filhos
+  app.get('/api/filhos/cliente/:clienteId', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { clienteId } = req.params;
 
-      try {
-        const forceRefresh = req.query?.refresh === '1';
+    const { data: client } = await supabase.from('clients').select('id').eq('id', clienteId).eq('user_id', userId).single();
+    if (!client) return res.status(404).json({ error: 'Cliente não encontrado' });
 
-        if (!job.shorts || forceRefresh) {
-          // Verificar se já está gerando (evitar race condition)
-          if (shortsGenerationLock.has(jobId)) {
-            console.log('[supoclip] aguardando geração em andamento para', jobId);
-            await shortsGenerationLock.get(jobId);
-            return res.json({ shorts: job.shorts || [], filename: job.filename || 'video.mp4' });
-          }
+    const { data, error } = await supabase.from('filhos').select('*').eq('cliente_id', clienteId).order('data_nascimento');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  });
 
-          const generatePromise = (async () => {
-            console.log('[supoclip] gerando shorts para', jobId);
-            const { text: transcription, segments } = await ensureWordSegments(jobId);
-            job.shorts = await generateShorts(jobId, transcription || '', segments || []);
-            void saveJobMeta(jobId);
-            console.log('[supoclip] gerados', job.shorts.length, 'shorts para', jobId);
-          })();
+  app.post('/api/filhos', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { cliente_id, nome, data_nascimento, sexo } = req.body;
+    if (!cliente_id || !nome || !data_nascimento) return res.status(400).json({ error: 'cliente_id, nome e data_nascimento são obrigatórios' });
 
-          shortsGenerationLock.set(jobId, generatePromise);
-          try {
-            await generatePromise;
-          } finally {
-            shortsGenerationLock.delete(jobId);
-          }
-        }
+    const { data: client } = await supabase.from('clients').select('id').eq('id', cliente_id).eq('user_id', userId).single();
+    if (!client) return res.status(404).json({ error: 'Cliente não encontrado' });
 
-        res.json({ shorts: job.shorts, filename: job.filename || 'video.mp4' });
-      } catch (error: any) {
-        console.error('[supoclip] shorts error:', error.message);
-        shortsGenerationLock.delete(jobId);
-        res.status(500).json({ error: error.message || 'Falha ao gerar shorts.' });
-      }
-    });
+    const { data, error } = await supabase.from('filhos').insert({ cliente_id, nome, data_nascimento, sexo: sexo || null }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
 
-    // GET /api/video-editor/short-preview/:jobId/:shortId — preview data de 1 short
-    app.get('/api/video-editor/short-preview/:jobId/:shortId', async (req: any, res: any) => {
-      const { jobId, shortId } = req.params;
-      try {
-        const job = videoJobs[jobId];
-        if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
+  app.put('/api/filhos/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { nome, data_nascimento, sexo } = req.body;
 
-        const shorts = job.shorts || [];
-        const short = shorts.find((s: any) => s.id === shortId);
-        if (!short) {
-          return res.status(404).json({
-            error: 'Short não encontrado.',
-            availableIds: shorts.map((s: any) => s.id),
-          });
-        }
+    const { data: filho } = await supabase.from('filhos').select('*, clients!inner(user_id)').eq('id', req.params.id).single();
+    if (!filho || (filho as any).clients?.user_id !== userId) return res.status(404).json({ error: 'Filho não encontrado' });
 
-        // Garantir defaults seguros antes de chamar buildRemotionPreviewDataForShort
-        if (!Array.isArray(short.clips) || short.clips.length === 0) {
-          short.clips = [{ startTime: 0, endTime: short.estimatedDuration || 30, transitionType: 'cut' }];
-        }
-        if (!short.captions) short.captions = { enabled: true, style: 'highlight' };
-        if (!Array.isArray(short.brolls)) short.brolls = [];
+    const { error } = await supabase.from('filhos').update({ nome, data_nascimento, sexo, updated_at: new Date().toISOString() }).eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
 
-        console.log('[supoclip] short-preview building for', shortId, 'clips:', short.clips.length);
-        const data = await buildRemotionPreviewDataForShort(jobId, shortId);
-        console.log('[supoclip] short-preview success for', shortId);
-        res.json(data);
-      } catch (error: any) {
-        console.error('[supoclip] short-preview error:', error.message, error.stack);
-        res.status(500).json({ error: error.message || 'Falha ao preparar preview do short.' });
-      }
-    });
+  app.delete('/api/filhos/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
 
-    // POST /api/video-editor/render-short/:jobId/:shortId — renderiza 1 short no Lambda
-    app.post('/api/video-editor/render-short/:jobId/:shortId', async (req: any, res: any) => {
-      const { jobId, shortId } = req.params;
-      const job = videoJobs[jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
+    const { data: filho } = await supabase.from('filhos').select('cliente_id').eq('id', req.params.id).single();
+    if (!filho) return res.status(404).json({ error: 'Filho não encontrado' });
+    const { data: client } = await supabase.from('clients').select('id').eq('id', (filho as any).cliente_id).eq('user_id', userId).single();
+    if (!client) return res.status(403).json({ error: 'Sem permissão' });
 
-      const short = (job.shorts || []).find((s: any) => s.id === shortId);
-      if (!short) return res.status(404).json({ error: 'Short não encontrado.' });
+    await supabase.from('filhos').delete().eq('id', req.params.id);
+    res.json({ success: true });
+  });
 
-      const functionName = process.env.REMOTION_AWS_FUNCTION_NAME;
-      const serveUrl = process.env.REMOTION_AWS_SERVE_URL;
-      const region = (process.env.AWS_REGION || 'us-east-1') as any;
-      if (!functionName || !serveUrl) {
-        return res.status(500).json({ error: 'Variáveis AWS não configuradas.' });
-      }
+  // CRUD oportunidades — usa a tabela 'opportunities' que já existe e funciona
+  app.get('/api/oportunidades', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
 
-      try {
-        const previewData = await buildRemotionPreviewDataForShort(jobId, shortId);
-        const durationInFrames = Math.max(1, Math.round(previewData.duration * previewData.fps));
-        const inputProps = {
-          videoUrl: previewData.videoUrl,
-          clips: previewData.clips,
-          captions: previewData.captions,
-          brolls: previewData.brolls,
-          transitions: previewData.transitions,
-          duration: previewData.duration,
-          outputFormat: { width: previewData.width, height: previewData.height, fps: previewData.fps },
-        };
+    const { data, error } = await supabase
+      .from('opportunities')
+      .select('*, clients(name, phone, email)')
+      .eq('user_id', userId)
+      .order('suggested_date', { ascending: true });
 
-        const render = await renderMediaOnLambda({
-          region, functionName, serveUrl,
-          composition: 'VideoComposition',
-          codec: 'h264',
-          inputProps,
-          forceWidth: previewData.width,
-          forceHeight: previewData.height,
-          forceFps: previewData.fps,
-          forceDurationInFrames: durationInFrames,
-          privacy: 'public',
-          overwrite: true,
-        });
+    if (error) return res.status(500).json({ error: error.message });
 
-        short.remotionRender = {
-          renderId: render.renderId,
-          bucketName: render.bucketName,
-          status: 'rendering',
-          progress: 0,
-          functionName,
-          startedAt: Date.now(),
-        };
-        void saveJobMeta(jobId);
+    const enriched = (data || []).map((o: any) => ({
+      id: o.id,
+      cliente_id: o.client_id,
+      cliente_nome: (o.clients as any)?.name || '',
+      cliente_telefone: (o.clients as any)?.phone || '',
+      cliente_email: (o.clients as any)?.email || '',
+      tipo: o.type,
+      status: o.status,
+      data_oportunidade: o.suggested_date,
+      notas: o.notes,
+      valor_proposta: o.estimated_value,
+      prioridade: getPriority(o.suggested_date),
+    }));
+    res.json(enriched);
+  });
 
-        console.log('[supoclip] render iniciado para short', shortId, render.renderId);
-        res.json({ renderId: render.renderId, status: 'rendering' });
-      } catch (error: any) {
-        console.error('[supoclip] render-short error:', error.message);
-        res.status(500).json({ error: error.message || 'Falha ao renderizar short.' });
-      }
-    });
+  app.post('/api/oportunidades', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { cliente_id, tipo, status, data_oportunidade, notas, valor_proposta } = req.body;
+    if (!cliente_id || !tipo || !data_oportunidade) return res.status(400).json({ error: 'cliente_id, tipo e data_oportunidade são obrigatórios' });
 
-    // GET /api/video-editor/render-short-progress/:jobId/:shortId
-    app.get('/api/video-editor/render-short-progress/:jobId/:shortId', async (req: any, res: any) => {
-      const { jobId, shortId } = req.params;
-      const job = videoJobs[jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
+    const { data: client } = await supabase.from('clients').select('id').eq('id', cliente_id).eq('user_id', userId).single();
+    if (!client) return res.status(404).json({ error: 'Cliente não encontrado' });
 
-      const short = (job.shorts || []).find((s: any) => s.id === shortId);
-      if (!short) return res.status(404).json({ error: 'Short não encontrado.' });
+    // Insere na tabela opportunities com os campos corretos
+    const { data, error } = await supabase.from('opportunities').insert({
+      client_id: cliente_id,
+      type: tipo,
+      suggested_date: data_oportunidade,
+      status: status || 'future',
+      notes: notas || null,
+      estimated_value: valor_proposta || null,
+      user_id: userId,
+    }).select().single();
 
-      if (short.editedSupabaseUrl) {
-        return res.json({ progress: 100, status: 'completed', outputUrl: short.editedSupabaseUrl });
-      }
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
 
-      if (!short.remotionRender?.renderId) {
-        return res.json({ progress: 0, status: 'idle', outputUrl: null });
-      }
+  app.put('/api/oportunidades/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
 
-      try {
-        const region = (process.env.AWS_REGION || 'us-east-1') as any;
-        const functionName = process.env.REMOTION_AWS_FUNCTION_NAME || short.remotionRender.functionName;
-        const progress = await getRenderProgress({
-          region, functionName,
-          bucketName: short.remotionRender.bucketName,
-          renderId: short.remotionRender.renderId,
-        });
+    const { data: op } = await supabase
+      .from('opportunities')
+      .select('id')
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .single();
+    if (!op) return res.status(404).json({ error: 'Oportunidade não encontrada' });
 
-        const progressPct = Math.max(0, Math.min(100, Math.round((progress.overallProgress || 0) * 100)));
-        const failed = Boolean(progress.fatalErrorEncountered);
-        const status = failed ? 'failed' : progress.done ? 'rendered' : 'rendering';
+    // Mapeia campos do frontend para os campos reais da tabela
+    const { status, notas, valor_proposta } = req.body;
+    const updates: any = {};
+    if (status !== undefined) updates.status = status;
+    if (notas !== undefined) updates.notes = notas;
+    if (valor_proposta !== undefined) updates.estimated_value = valor_proposta;
 
-        short.remotionRender = { ...short.remotionRender, status, progress: progressPct, done: progress.done };
+    const { error } = await supabase.from('opportunities').update(updates).eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
 
-        if (status === 'rendered') {
-          // Finalizar automaticamente
-          try {
-            const outputPath = path.join(VIDEO_PROCESSED_DIR, `${jobId}_short_${shortId}.mp4`);
-            await downloadMedia({ region, bucketName: short.remotionRender.bucketName, renderId: short.remotionRender.renderId, outPath: outputPath });
-            const publicUrl = await uploadToStorage(outputPath, `edited/${jobId}/short-${shortId}.mp4`, 'video/mp4');
-            if (publicUrl) {
-              short.editedSupabaseUrl = publicUrl;
-              short.remotionRender = { ...short.remotionRender, status: 'completed', progress: 100, outputUrl: publicUrl };
-              void saveJobMeta(jobId);
-            }
-            return res.json({ progress: 100, status: 'completed', outputUrl: publicUrl || null });
-          } catch (e: any) {
-            console.error('[supoclip] finalização do short falhou:', e.message);
-          }
-        }
+  // Converter oportunidade em Job
+  app.post('/api/oportunidades/:id/converter-job', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { job_date, amount, payment_method, job_name } = req.body;
 
-        return res.json({ progress: progressPct, status, outputUrl: short.editedSupabaseUrl || null });
-      } catch (error: any) {
-        console.error('[supoclip] render-short-progress error:', error.message);
-        return res.status(500).json({ error: error.message || 'Falha ao buscar progresso.' });
-      }
-    });
+    if (!job_date) return res.status(400).json({ error: 'job_date é obrigatório' });
 
-    // GET /api/video-editor/thumbnail/:jobId?timestamp=X — extrai frame do vídeo
-    app.get('/api/video-editor/thumbnail/:jobId', async (req: any, res: any) => {
-      const { jobId } = req.params;
-      const job = videoJobs[jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
+    const { data: op } = await supabase
+      .from('opportunities')
+      .select('*, clients(name)')
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .single();
 
-      const timestamp = Math.max(0, parseFloat(String(req.query?.timestamp || '0')));
+    if (!op) return res.status(404).json({ error: 'Oportunidade não encontrada' });
 
-      // Se já tem thumbnail no timestamp 0, redireciona
-      if (timestamp === 0 && job.thumbnailSupabaseUrl) {
-        return res.redirect(job.thumbnailSupabaseUrl);
-      }
+    // Cria o Job
+    const { data: job, error: jobError } = await supabase.from('jobs').insert({
+      client_id: op.client_id,
+      job_type: op.type,
+      job_date,
+      job_name: job_name || op.type,
+      amount: amount || 0,
+      payment_method: payment_method || 'PIX',
+      payment_status: 'pending',
+      status: 'scheduled',
+      notes: op.notes || '',
+      user_id: userId,
+    }).select().single();
 
-      const videoPath = job.originalPath || job.supabaseUrl;
-      if (!videoPath && !job.supabaseUrl) {
-        return res.status(404).json({ error: 'Vídeo não disponível.' });
-      }
+    if (jobError) return res.status(500).json({ error: jobError.message });
 
-      try {
-        const ffmpeg = (await import('fluent-ffmpeg')).default;
-        const ffmpegInstaller = (await import('@ffmpeg-installer/ffmpeg')).default;
-        ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+    // Atualiza o status da oportunidade para convertido
+    await supabase.from('opportunities').update({ status: 'converted' }).eq('id', req.params.id);
 
-        const thumbPath = path.join(VIDEO_PROCESSED_DIR, `${jobId}_thumb_${Math.round(timestamp * 10)}.jpg`);
+    res.json({ success: true, job });
+  });
 
-        const inputSource = (videoPath && fs.existsSync(videoPath)) ? videoPath : job.supabaseUrl;
-        if (!inputSource) return res.status(404).json({ error: 'Fonte de vídeo não encontrada.' });
+  // CRUD cupons
+  app.post('/api/cupons', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { cliente_id, oportunidade_id, tipo_desconto, valor_desconto, data_validade, codigo } = req.body;
+    if (!tipo_desconto || !valor_desconto || !data_validade) return res.status(400).json({ error: 'Campos obrigatórios faltando' });
 
-        await new Promise<void>((resolve, reject) => {
-          ffmpeg(inputSource)
-            .seekInput(timestamp)
-            .frames(1)
-            .output(thumbPath)
-            .on('end', () => resolve())
-            .on('error', (err: Error) => reject(err))
-            .run();
-        });
+    if (cliente_id) {
+      const { data: client } = await supabase.from('clients').select('id').eq('id', cliente_id).eq('user_id', userId).single();
+      if (!client) return res.status(404).json({ error: 'Cliente não encontrado' });
+    }
 
-        res.setHeader('Content-Type', 'image/jpeg');
-        res.setHeader('Cache-Control', 'public, max-age=3600');
-        fs.createReadStream(thumbPath).pipe(res);
-        // Limpar após envio
-        res.on('finish', () => {
-          try { fs.unlinkSync(thumbPath); } catch { /* ignore */ }
-        });
-      } catch (error: any) {
-        console.error('[supoclip] thumbnail error:', error.message);
-        // Fallback: redirecionar para thumbnail padrão se existir
-        if (job.thumbnailSupabaseUrl) return res.redirect(job.thumbnailSupabaseUrl);
-        res.status(500).json({ error: 'Falha ao gerar thumbnail.' });
-      }
-    });
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let cod = codigo || '';
+    if (!cod) {
+      for (let i = 0; i < 8; i++) cod += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
 
-    // POST /api/video-editor/render-batch/:jobId — renderiza múltiplos shorts em paralelo
-    app.post('/api/video-editor/render-batch/:jobId', async (req: any, res: any) => {
-      const { jobId } = req.params;
-      const job = videoJobs[jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
+    const { data, error } = await supabase.from('cupons').insert({
+      codigo: cod, cliente_id: cliente_id || null, oportunidade_id: oportunidade_id || null,
+      tipo_desconto, valor_desconto, data_validade, usado: false
+    }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
 
-      const { shortIds } = req.body as { shortIds: string[] };
-      if (!Array.isArray(shortIds) || shortIds.length === 0) {
-        return res.status(400).json({ error: 'shortIds é obrigatório.' });
-      }
+  app.get('/api/cupons', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data: clients } = await supabase.from('clients').select('id').eq('user_id', userId);
+    const clientIds = (clients || []).map((c: any) => c.id);
+    if (!clientIds.length) return res.json([]);
+    const { data, error } = await supabase.from('cupons').select('*').in('cliente_id', clientIds).order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  });
 
-      const functionName = process.env.REMOTION_AWS_FUNCTION_NAME;
-      const serveUrl = process.env.REMOTION_AWS_SERVE_URL;
-      const region = (process.env.AWS_REGION || 'us-east-1') as any;
-      if (!functionName || !serveUrl) {
-        return res.status(500).json({ error: 'Variáveis AWS não configuradas.' });
-      }
+  // Atualiza data de nascimento da mãe (birth_date) no cliente
+  app.patch('/api/clients/:id/mae-nascimento', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { mae_nascimento } = req.body;
 
-      const results: Array<{ shortId: string; renderId?: string; status: string; error?: string }> = [];
-      const CONCURRENCY = 3;
+    const { data: existing } = await supabase.from('clients').select('id').eq('id', req.params.id).eq('user_id', userId).single();
+    if (!existing) return res.status(404).json({ error: 'Cliente não encontrado' });
 
-      const renderOne = async (shortId: string) => {
-        const short = (job.shorts || []).find((s: any) => s.id === shortId);
-        if (!short) {
-          results.push({ shortId, status: 'error', error: 'Short não encontrado' });
-          return;
-        }
-        try {
-          const previewData = await buildRemotionPreviewDataForShort(jobId, shortId);
-          const durationInFrames = Math.max(1, Math.round(previewData.duration * previewData.fps));
-          const render = await renderMediaOnLambda({
-            region, functionName, serveUrl,
-            composition: 'VideoComposition',
-            codec: 'h264',
-            inputProps: {
-              videoUrl: previewData.videoUrl,
-              clips: previewData.clips,
-              captions: previewData.captions,
-              brolls: previewData.brolls,
-              transitions: previewData.transitions,
-              duration: previewData.duration,
-              outputFormat: { width: previewData.width, height: previewData.height, fps: previewData.fps },
-            },
-            forceWidth: previewData.width,
-            forceHeight: previewData.height,
-            forceFps: previewData.fps,
-            forceDurationInFrames: durationInFrames,
-            privacy: 'public',
-            overwrite: true,
-          });
-          short.remotionRender = { renderId: render.renderId, bucketName: render.bucketName, status: 'rendering', progress: 0, functionName, startedAt: Date.now() };
-          results.push({ shortId, renderId: render.renderId, status: 'rendering' });
-          console.log('[supoclip] batch render iniciado para short', shortId);
-        } catch (e: any) {
-          console.error('[supoclip] batch render falhou para short', shortId, e.message);
-          results.push({ shortId, status: 'error', error: e.message });
-        }
-      };
-
-      // Processar em chunks de CONCURRENCY
-      for (let i = 0; i < shortIds.length; i += CONCURRENCY) {
-        const chunk = shortIds.slice(i, i + CONCURRENCY);
-        await Promise.all(chunk.map(renderOne));
-      }
-
-      void saveJobMeta(jobId);
-      res.json({ results });
-    });
-
-    // GET /api/video-editor/batch-progress/:jobId — progresso de todos os renders ativos
-    app.get('/api/video-editor/batch-progress/:jobId', async (req: any, res: any) => {
-      const { jobId } = req.params;
-      const job = videoJobs[jobId];
-      if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
-
-      const shorts = (job.shorts || []) as GeneratedShort[];
-      const region = (process.env.AWS_REGION || 'us-east-1') as any;
-
-      const statusList = await Promise.all(
-        shorts.map(async (short) => {
-          if (short.editedSupabaseUrl) {
-            return { shortId: short.id, progress: 100, status: 'completed', outputUrl: short.editedSupabaseUrl };
-          }
-          if (!short.remotionRender?.renderId) {
-            return { shortId: short.id, progress: 0, status: 'idle', outputUrl: null };
-          }
-          try {
-            const functionName = process.env.REMOTION_AWS_FUNCTION_NAME || short.remotionRender.functionName;
-            const progress = await getRenderProgress({
-              region, functionName,
-              bucketName: short.remotionRender.bucketName,
-              renderId: short.remotionRender.renderId,
-            });
-            const progressPct = Math.max(0, Math.min(100, Math.round((progress.overallProgress || 0) * 100)));
-            const failed = Boolean(progress.fatalErrorEncountered);
-            const status = failed ? 'failed' : progress.done ? 'rendered' : 'rendering';
-            return { shortId: short.id, progress: progressPct, status, outputUrl: null };
-          } catch {
-            return { shortId: short.id, progress: 0, status: 'unknown', outputUrl: null };
-          }
-        })
-      );
-
-      res.json({ shorts: statusList });
-    });
-  }
+    // birth_date é o campo existente que armazena a data de nascimento do cliente (mãe)
+    const { error } = await supabase.from('clients').update({ birth_date: mae_nascimento }).eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
 
   // ============ VITE / STATIC FILES ============
   if (process.env.NODE_ENV !== 'production') {

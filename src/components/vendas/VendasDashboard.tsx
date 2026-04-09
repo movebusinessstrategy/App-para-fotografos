@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { BarChart3, LayoutGrid, Plus, MessageSquare } from "lucide-react";
+import { BarChart3, LayoutGrid, Plus, MessageSquare, Settings } from "lucide-react";
 import { FunilTab } from "./FunilTab";
 import { AnalisesTab } from "./AnalisesTab";
 import { NewDealModal } from "./NewDealModal";
+import { StageCustomizer } from "./StageCustomizer";
 import { InboxView } from "./inbox/InboxView";
 import { authFetch } from "../../utils/authFetch";
 import { Deal, PipelineStage, Client } from "../../types";
@@ -16,6 +17,7 @@ export function VendasDashboard() {
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [newDealOpen, setNewDealOpen] = useState(false);
+  const [customizerOpen, setCustomizerOpen] = useState(false);
 
   const fetchData = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) setLoading(true);
@@ -59,13 +61,24 @@ export function VendasDashboard() {
           </p>
         </div>
 
-        <button
-          onClick={() => setNewDealOpen(true)}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold transition-colors"
-        >
-          <Plus size={16} />
-          Novo Lead
-        </button>
+        <div className="flex items-center gap-2">
+          {tab === "kanban" && (
+            <button
+              onClick={() => setCustomizerOpen(true)}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600 text-sm font-medium transition-colors"
+            >
+              <Settings size={15} />
+              Configurar funil
+            </button>
+          )}
+          <button
+            onClick={() => setNewDealOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold transition-colors"
+          >
+            <Plus size={16} />
+            Novo Lead
+          </button>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -121,6 +134,13 @@ export function VendasDashboard() {
         clients={clients}
         onClose={() => setNewDealOpen(false)}
         onCreated={() => { setNewDealOpen(false); fetchData(); }}
+      />
+
+      <StageCustomizer
+        open={customizerOpen}
+        stages={stages}
+        onClose={() => setCustomizerOpen(false)}
+        onUpdated={() => fetchData({ silent: true })}
       />
     </div>
   );

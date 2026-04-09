@@ -2,11 +2,20 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   X, User, Phone, Mail, Instagram, MapPin, Calendar,
   CheckSquare, Square, Trash2, Plus, Image, Clock,
-  ChevronRight
+  ChevronRight, Tag, FileText
 } from "lucide-react";
+import { SearchableSelect } from "../ui/SearchableSelect";
+import { ContractGenerator } from "../contracts/ContractGenerator";
 import { authFetch } from "../../utils/authFetch";
 import { parseDate } from "../../utils/date";
 import { JobWithProduction } from "./ProductionBoard";
+
+const LABEL_COLORS = ['#6366f1','#ec4899','#f59e0b','#10b981','#0ea5e9','#f43f5e','#8b5cf6','#22c55e'];
+function getLabelColor(label: string) {
+  let hash = 0;
+  for (let i = 0; i < label.length; i++) hash = label.charCodeAt(i) + ((hash << 5) - hash);
+  return LABEL_COLORS[Math.abs(hash) % LABEL_COLORS.length];
+}
 
 interface ChecklistItem {
   id: number;
@@ -26,7 +35,8 @@ interface StageHistory {
   stage_name: string;
   entered_at: string;
   exited_at: string | null;
-  duration_hours: number | null;
+  duration_ms: number | null;
+  is_current: boolean;
 }
 
 interface ClientDetail {
@@ -49,14 +59,17 @@ interface JobDetailDrawerProps {
 const formatCurrency = (v: number) =>
   (v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: 0 });
 
-const formatDuration = (hours: number | null | undefined) => {
-  if (hours == null || isNaN(hours)) return "Em andamento";
-  if (hours === 0) return "< 1min";
-  if (hours < 1) return "< 1h";
-  if (hours < 24) return `${hours}h`;
+const formatDuration = (ms: number | null | undefined) => {
+  if (ms == null) return "—";
+  const totalMinutes = Math.floor(ms / 60_000);
+  if (totalMinutes < 1) return "< 1min";
+  if (totalMinutes < 60) return `${totalMinutes}min`;
+  const hours = Math.floor(totalMinutes / 60);
+  const remMins = totalMinutes % 60;
+  if (hours < 24) return remMins > 0 ? `${hours}h ${remMins}min` : `${hours}h`;
   const days = Math.floor(hours / 24);
-  const remaining = hours % 24;
-  return remaining > 0 ? `${days}d ${remaining}h` : `${days}d`;
+  const remHours = hours % 24;
+  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
 };
 
 export function JobDetailDrawer({ job, stages, onClose, onStageChange }: JobDetailDrawerProps) {
@@ -70,6 +83,9 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange }: JobDeta
   const [loadingClient, setLoadingClient] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [labels, setLabels] = useState<string[]>([]);
+  const [newLabel, setNewLabel] = useState("");
+  const [showContract, setShowContract] = useState(false);
 
   useEffect(() => {
     if (!job) return;
@@ -78,6 +94,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange }: JobDeta
     setChecklist([]);
     setTestimonials([]);
     setStageHistory([]);
+    setLabels(job.labels || []);
 
     if (job.client_id) {
       setLoadingClient(true);
@@ -105,20 +122,22 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange }: JobDeta
         const sorted = [...data].sort((a, b) =>
           new Date(a.entered_at).getTime() - new Date(b.entered_at).getTime()
         );
+        const now = Date.now();
         const processed: StageHistory[] = sorted.map((entry, idx) => {
           const next = sorted[idx + 1];
-          // Use exited_at from DB, or derive from next entry's entered_at if missing
+          const isCurrent = !entry.exited_at && !next;
+          // Derive exit: use DB value, then next entry's start, then now (for current stage)
           const resolvedExitedAt = entry.exited_at ?? (next ? next.entered_at : null);
           const enteredMs = entry.entered_at ? new Date(entry.entered_at).getTime() : null;
-          const exitedMs = resolvedExitedAt ? new Date(resolvedExitedAt).getTime() : null;
-          const durationMs = enteredMs && exitedMs ? exitedMs - enteredMs : null;
-          const durationHours = durationMs !== null ? Math.round(durationMs / (1000 * 60 * 60)) : null;
+          const exitedMs = resolvedExitedAt ? new Date(resolvedExitedAt).getTime() : (isCurrent ? now : null);
+          const durationMs = enteredMs != null && exitedMs != null ? exitedMs - enteredMs : null;
           return {
             stage_id: entry.stage_id,
             stage_name: stages.find(s => s.id === entry.stage_id)?.name || entry.stage_id,
             entered_at: entry.entered_at,
             exited_at: resolvedExitedAt,
-            duration_hours: durationHours,
+            is_current: isCurrent,
+            duration_ms: durationMs,
           };
         });
         setStageHistory(processed);
@@ -190,6 +209,29 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange }: JobDeta
     setTestimonials(prev => prev.filter(t => t.id !== id));
   };
 
+  const handleAddLabel = async () => {
+    const trimmed = newLabel.trim();
+    if (!trimmed || labels.includes(trimmed)) return;
+    const next = [...labels, trimmed];
+    setLabels(next);
+    setNewLabel("");
+    await authFetch(`/api/jobs/${job!.id}/labels`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ labels: next }),
+    });
+  };
+
+  const handleRemoveLabel = async (label: string) => {
+    const next = labels.filter(l => l !== label);
+    setLabels(next);
+    await authFetch(`/api/jobs/${job!.id}/labels`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ labels: next }),
+    });
+  };
+
   const done = checklist.filter(i => i.done).length;
 
   return (
@@ -212,12 +254,22 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange }: JobDeta
               {job.job_type} · {jobDate?.toLocaleDateString("pt-BR")}
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-          >
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setShowContract(true)}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 transition-colors"
+              title="Gerar contrato"
+            >
+              <FileText size={14} />
+              Gerar contrato
+            </button>
+            <button
+              onClick={onClose}
+              className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         {/* Stage pill + value */}
@@ -315,6 +367,44 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange }: JobDeta
                 </section>
               )}
 
+              {/* Labels */}
+              <section>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                  Etiquetas
+                </h3>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {labels.map(label => (
+                    <span
+                      key={label}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold text-white"
+                      style={{ backgroundColor: getLabelColor(label) }}
+                    >
+                      <Tag size={10} />
+                      {label}
+                      <button onClick={() => handleRemoveLabel(label)} className="ml-0.5 text-white/70 hover:text-white">
+                        <X size={10} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newLabel}
+                    onChange={e => setNewLabel(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleAddLabel()}
+                    placeholder="Nova etiqueta..."
+                    className="flex-1 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-1.5 text-xs text-gray-700 dark:text-gray-200 focus:border-indigo-500 focus:outline-none placeholder-gray-400 dark:placeholder-gray-500"
+                  />
+                  <button
+                    onClick={handleAddLabel}
+                    className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs hover:bg-indigo-700"
+                  >
+                    <Plus size={13} />
+                  </button>
+                </div>
+              </section>
+
               {/* Stage history */}
               <section>
                 <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
@@ -330,14 +420,14 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange }: JobDeta
                         <div className="flex items-center gap-2">
                           <Clock size={13} className="text-gray-400" />
                           <span className="text-sm text-gray-700 dark:text-gray-200">{entry.stage_name}</span>
-                          {!entry.exited_at && (
+                          {entry.is_current && (
                             <span className="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-700 dark:bg-green-900/40 dark:text-green-400">
                               atual
                             </span>
                           )}
                         </div>
                         <span className="text-xs font-semibold text-gray-500 dark:text-gray-400">
-                          {formatDuration(entry.duration_hours)}
+                          {formatDuration(entry.duration_ms)}
                         </span>
                       </div>
                     ))}
@@ -352,15 +442,13 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange }: JobDeta
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
                   Mover etapa
                 </h3>
-                <select
+                <SearchableSelect
                   value={job.production_stage || ""}
-                  onChange={e => onStageChange(job.id, e.target.value)}
-                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-                >
-                  {stages.map(s => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
-                </select>
+                  onChange={v => onStageChange(job.id, v)}
+                  options={stages.map(s => ({ value: s.id, label: s.name }))}
+                  placeholder="Selecionar etapa..."
+                  className="w-full"
+                />
               </section>
             </div>
           )}
@@ -478,6 +566,15 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange }: JobDeta
           )}
         </div>
       </div>
+
+      {/* Contract generator — full-screen, above drawer */}
+      {showContract && (
+        <ContractGenerator
+          job={job}
+          client={client}
+          onClose={() => setShowContract(false)}
+        />
+      )}
     </>
   );
 }

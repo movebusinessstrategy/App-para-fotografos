@@ -3,6 +3,7 @@ import 'dotenv/config';
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL!;
 const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY!;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!supabaseUrl || !supabaseKey) {
   throw new Error('VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY são obrigatórios no .env');
@@ -21,3 +22,10 @@ export const createSupabaseClient = (authorizationHeader?: string): SupabaseClie
 };
 
 export const supabase = createSupabaseClient();
+
+// Admin client: usa service_role key — bypassa RLS e pode convidar usuários
+export const supabaseAdmin: SupabaseClient | null = supabaseServiceKey
+  ? createClient(supabaseUrl, supabaseServiceKey, {
+      auth: { autoRefreshToken: false, persistSession: false }
+    })
+  : null;
