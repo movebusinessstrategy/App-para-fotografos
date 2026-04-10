@@ -110,7 +110,7 @@ export function StageManager({ open, stages, onClose, onUpdated, apiBasePath = "
                   value={newStage.name}
                   onChange={(e) => setNewStage((p) => ({ ...p, name: e.target.value }))}
                   placeholder="Nome da etapa"
-                  className="px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
+                  className="px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400"
                 />
                 <input
                   type="color"
@@ -120,7 +120,7 @@ export function StageManager({ open, stages, onClose, onUpdated, apiBasePath = "
                 />
                 <button
                   onClick={addStage}
-                  className="bg-indigo-600 dark:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-colors"
+                  className="bg-gold-600 dark:bg-gold-500 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 hover:bg-gold-700 dark:hover:bg-gold-600 transition-colors"
                 >
                   <Plus size={16} /> Adicionar
                 </button>
@@ -191,14 +191,14 @@ const SortableItem: React.FC<SortableItemProps> = ({ stage, onUpdate, onDelete }
       {...listeners}
       className={cn(
         "flex items-center gap-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 shadow-sm dark:shadow-black/20",
-        isDragging && "shadow-lg dark:shadow-black/40 ring-2 ring-indigo-500/50 dark:ring-indigo-400/50"
+        isDragging && "shadow-lg dark:shadow-black/40 ring-2 ring-gold-500/50 dark:ring-gold-400/50"
       )}
     >
       <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: stage.color }} />
       <input
         value={stage.name}
         onChange={(e) => onUpdate(stage.id, { name: e.target.value })}
-        className="flex-1 px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
+        className="flex-1 px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400"
       />
       <input
         type="color"

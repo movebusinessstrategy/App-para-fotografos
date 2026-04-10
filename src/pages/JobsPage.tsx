@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { Camera, Edit2, LayoutGrid, List, Plus, Search, Settings, Tag, Trash2, X } from "lucide-react";
+import { BarChart2, Camera, Edit2, LayoutGrid, List, Plus, Search, Settings, Tag, Trash2, X } from "lucide-react";
+import GerenciaPage from "./GerenciaPage";
 import { SearchableSelect } from "../components/ui/SearchableSelect";
 
 import { ConfirmModal } from "../components/ui/ConfirmModal";
@@ -28,7 +29,7 @@ export default function JobsPage() {
   const [stages, setStages] = useState<ProductionStageV2[]>([]);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"funil" | "lista">("funil");
+  const [activeTab, setActiveTab] = useState<"funil" | "lista" | "gerencia">("funil");
   const [customizerOpen, setCustomizerOpen] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editingJob, setEditingJob] = useState<Job | null>(null);
@@ -56,8 +57,8 @@ export default function JobsPage() {
 
       const jobsData = await jobsRes.json();
       const clientsData = await clientsRes.json();
-      setJobs(jobsData);
-      setClients(clientsData);
+      setJobs(Array.isArray(jobsData) ? jobsData : []);
+      setClients(Array.isArray(clientsData) ? clientsData : []);
 
       if (processesRes?.ok) {
         try { setProcesses(await processesRes.json()); } catch (_) {}
@@ -136,7 +137,7 @@ export default function JobsPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 dark:border-indigo-400" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-600 dark:border-gold-400" />
       </div>
     );
   }
@@ -188,20 +189,34 @@ export default function JobsPage() {
                 <List size={15} />
                 Lista
               </button>
+              <button
+                onClick={() => setActiveTab("gerencia")}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
+                  activeTab === "gerencia"
+                    ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
+                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                )}
+              >
+                <BarChart2 size={15} />
+                Gerência
+              </button>
             </div>
 
-            <button
-              onClick={() => { setEditingJob(null); setShowModal(true); }}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 dark:bg-indigo-500 text-white rounded-xl font-semibold hover:bg-indigo-700 dark:hover:bg-indigo-600 shadow-md shadow-indigo-100 dark:shadow-indigo-500/20 transition-all text-sm"
-            >
-              <Plus size={16} />
-              Novo trabalho
-            </button>
+            {activeTab !== "gerencia" && (
+              <button
+                onClick={() => { setEditingJob(null); setShowModal(true); }}
+                className="flex items-center gap-2 px-4 py-2 bg-gold-600 dark:bg-gold-500 text-white rounded-xl font-semibold hover:bg-gold-700 dark:hover:bg-gold-600 shadow-md shadow-gold-100 dark:shadow-gold-500/20 transition-all text-sm"
+              >
+                <Plus size={16} />
+                Novo trabalho
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Filters */}
-        <div className="flex flex-wrap items-center gap-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-3 shadow-sm">
+        {/* Filters — hidden on Gerência tab */}
+        {activeTab !== "gerencia" && <div className="flex flex-wrap items-center gap-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-3 shadow-sm">
           {/* Search */}
           <div className="relative flex-1 min-w-[200px]">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 pointer-events-none" />
@@ -210,7 +225,7 @@ export default function JobsPage() {
               placeholder="Buscar cliente..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-3 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500 focus:border-indigo-400 dark:focus:border-indigo-500 transition-colors"
+              className="w-full pl-9 pr-3 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500 focus:border-gold-400 dark:focus:border-gold-500 transition-colors"
             />
             {searchQuery && (
               <button onClick={() => setSearchQuery("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
@@ -240,10 +255,13 @@ export default function JobsPage() {
               Limpar
             </button>
           )}
-        </div>
+        </div>}
 
-        {/* Content */}
-        {activeTab === "funil" ? (
+        {/* Gerência tab */}
+        {activeTab === "gerencia" && <GerenciaPage />}
+
+        {/* Content — funil / lista */}
+        {activeTab !== "gerencia" && (activeTab === "funil" ? (
           processes.length > 0 ? (
             <ProductionBoard
               jobs={filteredJobs}
@@ -264,7 +282,7 @@ export default function JobsPage() {
               </p>
               <button
                 onClick={fetchData}
-                className="mt-2 px-4 py-2 bg-indigo-600 text-white text-sm rounded-xl hover:bg-indigo-700 transition-colors"
+                className="mt-2 px-4 py-2 bg-gold-600 text-white text-sm rounded-xl hover:bg-gold-700 transition-colors"
               >
                 Tentar novamente
               </button>
@@ -295,7 +313,7 @@ export default function JobsPage() {
                       <td className="px-6 py-4">
                         <button
                           onClick={() => setSelectedJob(job)}
-                          className="flex items-center gap-2 font-medium text-gray-900 dark:text-white hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors text-left"
+                          className="flex items-center gap-2 font-medium text-gray-900 dark:text-white hover:text-gold-600 dark:hover:text-gold-400 transition-colors text-left"
                         >
                           <Camera size={14} className="text-gray-400 flex-shrink-0" />
                           {job.client_name || clients.find(c => c.id === job.client_id)?.name || job.job_name || "Trabalho"}
@@ -356,7 +374,7 @@ export default function JobsPage() {
                         <div className="flex items-center gap-2 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
                           <button
                             onClick={() => { setEditingJob(job); setShowModal(true); }}
-                            className="p-2 text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 rounded-lg transition-colors"
+                            className="p-2 text-gray-500 dark:text-gray-400 hover:text-gold-600 dark:hover:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-500/10 rounded-lg transition-colors"
                             title="Editar"
                           >
                             <Edit2 size={15} />
@@ -384,7 +402,7 @@ export default function JobsPage() {
               </tbody>
             </table>
           </div>
-        )}
+        ))}
       </div>
 
       {/* Job form modal */}
@@ -405,6 +423,9 @@ export default function JobsPage() {
         onStageChange={(jobId, stageId) => {
           handleStageChange(jobId, stageId);
           setSelectedJob(prev => prev ? { ...prev, production_stage: stageId, production_stage_entered_at: new Date().toISOString() } : null);
+        }}
+        onLabelsChange={(jobId, labels) => {
+          setJobs(prev => prev.map(j => j.id === jobId ? { ...j, labels } : j));
         }}
       />
 

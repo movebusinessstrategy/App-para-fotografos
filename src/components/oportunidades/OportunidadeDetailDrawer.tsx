@@ -159,7 +159,7 @@ export function OportunidadeDetailDrawer({
               className={cn(
                 'flex-1 py-2.5 text-xs font-medium transition-colors border-b-2',
                 tab === 'historico'
-                  ? 'text-indigo-600 dark:text-indigo-400 border-indigo-500'
+                  ? 'text-gold-600 dark:text-gold-400 border-gold-500'
                   : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300'
               )}
             >
@@ -171,7 +171,7 @@ export function OportunidadeDetailDrawer({
               className={cn(
                 'flex-1 py-2.5 text-xs font-medium transition-colors border-b-2',
                 tab === 'anotacoes'
-                  ? 'text-indigo-600 dark:text-indigo-400 border-indigo-500'
+                  ? 'text-gold-600 dark:text-gold-400 border-gold-500'
                   : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300'
               )}
             >
@@ -187,7 +187,7 @@ export function OportunidadeDetailDrawer({
             <div className="space-y-3">
               {loadingJobs ? (
                 <div className="flex items-center justify-center py-12">
-                  <Loader2 size={22} className="animate-spin text-indigo-500" />
+                  <Loader2 size={22} className="animate-spin text-gold-500" />
                 </div>
               ) : jobs.length === 0 ? (
                 <div className="text-center py-12">
@@ -200,11 +200,11 @@ export function OportunidadeDetailDrawer({
               ) : (
                 <>
                   {/* Summary strip */}
-                  <div className="bg-indigo-50 dark:bg-indigo-500/10 rounded-xl p-3 flex items-center justify-between">
-                    <div className="text-xs text-indigo-700 dark:text-indigo-300">
+                  <div className="bg-gold-50 dark:bg-gold-500/10 rounded-xl p-3 flex items-center justify-between">
+                    <div className="text-xs text-gold-700 dark:text-gold-300">
                       <span className="font-semibold">{jobs.length} ensaio{jobs.length !== 1 ? 's' : ''}</span> com este cliente
                     </div>
-                    <div className="text-xs font-semibold text-indigo-700 dark:text-indigo-300">
+                    <div className="text-xs font-semibold text-gold-700 dark:text-gold-300">
                       Total: R$ {jobs.reduce((s, j) => s + (j.amount || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                     </div>
                   </div>

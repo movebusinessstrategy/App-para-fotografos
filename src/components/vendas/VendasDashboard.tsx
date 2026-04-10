@@ -73,7 +73,7 @@ export function VendasDashboard() {
           )}
           <button
             onClick={() => setNewDealOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold transition-colors"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold transition-colors"
           >
             <Plus size={16} />
             Novo Lead
@@ -89,7 +89,7 @@ export function VendasDashboard() {
             onClick={() => setTab(id)}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
               tab === id
-                ? "bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300"
+                ? "bg-gold-50 dark:bg-gold-900/30 text-gold-700 dark:text-gold-300"
                 : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
             }`}
           >
@@ -99,12 +99,12 @@ export function VendasDashboard() {
         ))}
       </div>
 
-      {/* Conteúdo */}
-      <div className="flex-1 overflow-hidden">
+      {/* Conteúdo — altura explícita para que InboxView/FunilTab possam usar h-full internamente */}
+      <div className="overflow-hidden" style={{ height: 'calc(100vh - 264px)', minHeight: '380px' }}>
         {loading ? (
           <div className="flex items-center justify-center h-full">
             <div className="flex flex-col items-center gap-3 text-gray-400">
-              <div className="w-8 h-8 border-2 border-gray-200 border-t-indigo-500 rounded-full animate-spin" />
+              <div className="w-8 h-8 border-2 border-gray-200 border-t-gold-500 rounded-full animate-spin" />
               <span className="text-sm">Carregando...</span>
             </div>
           </div>

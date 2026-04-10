@@ -75,7 +75,7 @@ function MemberModal({ member, onSave, onClose, saving }: MemberModalProps) {
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="Nome do membro"
-              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white outline-none focus:border-indigo-400 transition-colors"
+              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white outline-none focus:border-gold-400 transition-colors"
             />
           </div>
 
@@ -87,7 +87,7 @@ function MemberModal({ member, onSave, onClose, saving }: MemberModalProps) {
               onChange={e => setEmail(e.target.value)}
               placeholder="email@exemplo.com"
               type="email"
-              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white outline-none focus:border-indigo-400 transition-colors"
+              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white outline-none focus:border-gold-400 transition-colors"
             />
           </div>
 
@@ -102,7 +102,7 @@ function MemberModal({ member, onSave, onClose, saving }: MemberModalProps) {
                 onChange={e => setPassword(e.target.value)}
                 placeholder={isEdit ? "••••••••" : "Mínimo 6 caracteres"}
                 type={showPassword ? "text" : "password"}
-                className="w-full px-3 py-2 pr-10 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white outline-none focus:border-indigo-400 transition-colors"
+                className="w-full px-3 py-2 pr-10 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white outline-none focus:border-gold-400 transition-colors"
               />
               <button
                 type="button"
@@ -144,7 +144,7 @@ function MemberModal({ member, onSave, onClose, saving }: MemberModalProps) {
           <button
             onClick={() => onSave({ ...member, name, email, color, ...(password ? { password } : {}) })}
             disabled={!name.trim() || saving || (!isEdit && password.length > 0 && password.length < 6)}
-            className="flex-1 py-2 text-sm bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-semibold disabled:opacity-50 transition-colors"
+            className="flex-1 py-2 text-sm bg-gold-600 hover:bg-gold-700 text-white rounded-xl font-semibold disabled:opacity-50 transition-colors"
           >
             {saving ? "Salvando..." : isEdit ? "Salvar" : "Adicionar"}
           </button>
@@ -260,7 +260,7 @@ export default function AdminPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-600" />
       </div>
     );
   }
@@ -272,7 +272,7 @@ export default function AdminPage() {
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-2xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
-              <Shield size={22} className="text-indigo-500" />
+              <Shield size={22} className="text-gold-500" />
               Administração
             </h3>
             <p className="text-gray-500 dark:text-gray-400 text-sm mt-0.5">
@@ -282,7 +282,7 @@ export default function AdminPage() {
           {tab === "members" && (
             <button
               onClick={() => setModal({})}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
             >
               <Plus size={15} />
               Novo membro
@@ -320,7 +320,7 @@ export default function AdminPage() {
                 <p className="text-gray-500 dark:text-gray-400 text-sm">Nenhum membro adicionado.</p>
                 <button
                   onClick={() => setModal({})}
-                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl transition-colors"
+                  className="flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold rounded-xl transition-colors"
                 >
                   <Plus size={15} />
                   Adicionar primeiro membro
@@ -362,7 +362,7 @@ export default function AdminPage() {
                           </span>
                           <div className="mt-1 h-1.5 w-24 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
                             <div
-                              className="h-full rounded-full bg-indigo-500 transition-all"
+                              className="h-full rounded-full bg-gold-500 transition-all"
                               style={{ width: `${(allowed / total) * 100}%` }}
                             />
                           </div>
@@ -375,10 +375,10 @@ export default function AdminPage() {
                                 onClick={() => handleInvite(member)}
                                 disabled={inviting === member.id}
                                 title="Enviar convite por e-mail"
-                                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 disabled:opacity-60"
+                                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors bg-gold-50 dark:bg-gold-900/30 text-gold-600 dark:text-gold-400 hover:bg-gold-100 dark:hover:bg-gold-900/50 disabled:opacity-60"
                               >
                                 {inviting === member.id ? (
-                                  <div className="w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
+                                  <div className="w-3 h-3 border-2 border-gold-400 border-t-transparent rounded-full animate-spin" />
                                 ) : (
                                   <Mail size={13} />
                                 )}
@@ -387,7 +387,7 @@ export default function AdminPage() {
                             )}
                             <button
                               onClick={() => setModal(member)}
-                              className="p-2 text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg transition-colors"
+                              className="p-2 text-gray-400 hover:text-gold-600 dark:hover:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-900/20 rounded-lg transition-colors"
                             >
                               <Edit2 size={14} />
                             </button>

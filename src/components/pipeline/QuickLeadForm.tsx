@@ -32,7 +32,7 @@ export function QuickLeadForm({ onCreated, firstStageName }: QuickLeadFormProps)
     onCreated();
   };
 
-  const inputClasses = "px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 focus:border-transparent";
+  const inputClasses = "px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 focus:border-transparent";
 
   return (
     <form 
@@ -75,7 +75,7 @@ export function QuickLeadForm({ onCreated, firstStageName }: QuickLeadFormProps)
       <button
         type="submit"
         disabled={saving}
-        className="bg-indigo-600 dark:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-indigo-700 dark:hover:bg-indigo-600 disabled:opacity-50 flex items-center gap-1 transition-colors"
+        className="bg-gold-600 dark:bg-gold-500 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-gold-700 dark:hover:bg-gold-600 disabled:opacity-50 flex items-center gap-1 transition-colors"
       >
         <Plus size={16} /> Criar
       </button>

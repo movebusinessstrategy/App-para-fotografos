@@ -280,7 +280,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-const inputCls = "w-full px-2.5 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:border-indigo-400 dark:focus:border-indigo-500 outline-none transition-colors";
+const inputCls = "w-full px-2.5 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:border-gold-400 dark:focus:border-gold-500 outline-none transition-colors";
 
 // ─── Main Component ────────────────────────────────────────────────────────────
 
@@ -380,7 +380,7 @@ export function ContractGenerator({ job, client, onClose }: ContractGeneratorPro
       {/* Top bar */}
       <div className="flex items-center justify-between border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 px-5 py-3 flex-shrink-0">
         <div className="flex items-center gap-2">
-          <FileText size={18} className="text-indigo-600 dark:text-indigo-400" />
+          <FileText size={18} className="text-gold-600 dark:text-gold-400" />
           <div>
             <h2 className="text-base font-bold text-gray-900 dark:text-white">Gerar Contrato</h2>
             <p className="text-xs text-gray-500 dark:text-gray-400">{form.clientName || 'Cliente'} · {form.serviceDate || '—'}</p>
@@ -389,7 +389,7 @@ export function ContractGenerator({ job, client, onClose }: ContractGeneratorPro
         <div className="flex items-center gap-2">
           <button
             onClick={handlePrint}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-md shadow-indigo-100 dark:shadow-indigo-500/20"
+            className="flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-md shadow-gold-100 dark:shadow-gold-500/20"
           >
             <Printer size={15} />
             Imprimir / Salvar PDF

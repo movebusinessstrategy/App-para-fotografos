@@ -88,7 +88,7 @@ export function AniversarianteCard({ aniversariante: a, onWhatsApp, onCupom, onC
           <button
             onClick={() => onCupom(a)}
             title="Gerar Cupom"
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-700 dark:hover:bg-indigo-500/10 dark:hover:border-indigo-500/40 dark:hover:text-indigo-400 transition-all"
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gold-50 hover:border-gold-300 hover:text-gold-700 dark:hover:bg-gold-500/10 dark:hover:border-gold-500/40 dark:hover:text-gold-400 transition-all"
           >
             <Ticket size={13} />
             <span className="hidden sm:inline">Cupom</span>
@@ -96,7 +96,7 @@ export function AniversarianteCard({ aniversariante: a, onWhatsApp, onCupom, onC
           <button
             onClick={() => onCriarOportunidade(a)}
             title="Criar Oportunidade"
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-xs font-medium text-white transition-colors"
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-gold-600 hover:bg-gold-700 text-xs font-medium text-white transition-colors"
           >
             <Plus size={13} />
             <span className="hidden sm:inline">Oferta</span>

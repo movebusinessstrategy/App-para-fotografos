@@ -2486,14 +2486,56 @@ async function startServer() {
     res.json(processes);
   });
 
+  app.put('/api/production/processes/reorder', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { processIds } = req.body as { processIds: string[] };
+    if (!Array.isArray(processIds)) return res.status(400).json({ error: 'processIds deve ser array' });
+    await Promise.all(processIds.map((pid: string, i: number) =>
+      supabase.from('production_processes').update({ position: i }).eq('id', pid).eq('user_id', userId)
+    ));
+    res.json({ success: true });
+  });
+
   app.put('/api/production/processes/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { name } = req.body;
+    const { name, is_special } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'Nome obrigatório' });
+    const updatePayload: any = { name: name.trim() };
+    if (is_special !== undefined) updatePayload.is_special = is_special;
     const { error } = await supabase
       .from('production_processes')
-      .update({ name: name.trim() })
+      .update(updatePayload)
+      .eq('id', req.params.id)
+      .eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  // Update process color
+  app.patch('/api/production/processes/:id/color', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { color } = req.body;
+    if (!color) return res.status(400).json({ error: 'Cor obrigatória' });
+    const { error } = await supabase
+      .from('production_processes')
+      .update({ color })
+      .eq('id', req.params.id)
+      .eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  // Toggle special flag without requiring name
+  app.patch('/api/production/processes/:id/special', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { is_special } = req.body;
+    const { error } = await supabase
+      .from('production_processes')
+      .update({ is_special: !!is_special })
       .eq('id', req.params.id)
       .eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
@@ -2531,6 +2573,8 @@ async function startServer() {
     await supabase.from('production_processes').delete().eq('id', id).eq('user_id', userId);
     res.json({ success: true });
   });
+
+
 
   app.post('/api/production/stages-v2', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
@@ -2725,6 +2769,87 @@ async function startServer() {
       .update({ is_active: false })
       .eq('id', req.params.id)
       .eq('owner_user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  // ============ TASKS ============
+
+  app.get('/api/tasks', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase
+      .from('tasks')
+      .select('*')
+      .eq('user_id', userId)
+      .order('due_date', { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  });
+
+  app.post('/api/tasks', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { title, description, assignee_id, job_id, stage_id, due_date } = req.body;
+    if (!title?.trim()) return res.status(400).json({ error: 'Título obrigatório' });
+    if (!due_date) return res.status(400).json({ error: 'Prazo obrigatório' });
+    const { data, error } = await supabase
+      .from('tasks')
+      .insert({
+        user_id: userId,
+        title: title.trim(),
+        description: description?.trim() || null,
+        assignee_id: assignee_id || null,
+        job_id: job_id || null,
+        stage_id: stage_id || null,
+        due_date,
+      })
+      .select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.put('/api/tasks/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { title, description, assignee_id, job_id, stage_id, due_date } = req.body;
+    const { error } = await supabase
+      .from('tasks')
+      .update({
+        title: title?.trim(),
+        description: description?.trim() || null,
+        assignee_id: assignee_id || null,
+        job_id: job_id || null,
+        stage_id: stage_id || null,
+        due_date,
+      })
+      .eq('id', req.params.id)
+      .eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  app.patch('/api/tasks/:id/complete', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { completed } = req.body;
+    const { error } = await supabase
+      .from('tasks')
+      .update({ completed_at: completed ? new Date().toISOString() : null })
+      .eq('id', req.params.id)
+      .eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  app.delete('/api/tasks/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { error } = await supabase
+      .from('tasks')
+      .delete()
+      .eq('id', req.params.id)
+      .eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
   });

@@ -64,6 +64,7 @@ export interface ProductionProcess {
   name: string;
   position: number;
   color: string;
+  is_special?: boolean;
 }
 
 export interface ProductionStageV2 {
@@ -248,6 +249,19 @@ export interface Cupom {
   data_validade: string;
   usado: boolean;
   created_at: string;
+}
+
+export interface Task {
+  id: string;
+  user_id: string;
+  title: string;
+  description?: string | null;
+  assignee_id?: string | null;
+  job_id?: number | null;
+  stage_id?: string | null;
+  due_date: string;
+  created_at: string;
+  completed_at?: string | null;
 }
 
 export interface Aniversariante {

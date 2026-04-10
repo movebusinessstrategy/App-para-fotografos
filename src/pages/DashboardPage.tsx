@@ -117,7 +117,7 @@ function Dashboard({
       case "active":
         return "text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/20 border-amber-100 dark:border-amber-500/30";
       default:
-        return "text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/20 border-indigo-100 dark:border-indigo-500/30";
+        return "text-gold-600 dark:text-gold-400 bg-gold-50 dark:bg-gold-500/20 border-gold-100 dark:border-gold-500/30";
     }
   };
 
@@ -239,7 +239,7 @@ function Dashboard({
             "flex items-center gap-2 px-4 py-2 rounded-xl font-semibold transition-all",
             hideValues
               ? "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700"
-              : "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-500/30"
+              : "bg-gold-50 dark:bg-gold-500/20 text-gold-600 dark:text-gold-400 hover:bg-gold-100 dark:hover:bg-gold-500/30"
           )}
           title={hideValues ? "Mostrar valores" : "Esconder valores"}
         >
@@ -272,7 +272,7 @@ function Dashboard({
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Gráfico de faturamento - mantém o gradiente colorido */}
-        <div className="lg:col-span-2 rounded-[28px] p-6 md:p-8 shadow-lg overflow-hidden relative bg-gradient-to-br from-indigo-600 via-blue-600 to-violet-600">
+        <div className="lg:col-span-2 rounded-[28px] p-6 md:p-8 shadow-lg overflow-hidden relative bg-gradient-to-br from-gold-600 via-blue-600 to-violet-600">
           <div className="absolute inset-0 opacity-20 pointer-events-none">
             <div className="absolute -top-10 -right-10 w-56 h-56 rounded-full bg-white/20 blur-2xl" />
             <div className="absolute bottom-0 left-0 w-72 h-72 rounded-full bg-cyan-300/20 blur-3xl" />
@@ -417,7 +417,7 @@ function Dashboard({
                     ? "bg-red-50/50 dark:bg-red-500/10 border-red-100 dark:border-red-500/30 hover:border-red-200 dark:hover:border-red-500/50"
                     : opp.priority === "active"
                       ? "bg-amber-50/50 dark:bg-amber-500/10 border-amber-100 dark:border-amber-500/30 hover:border-amber-200 dark:hover:border-amber-500/50"
-                      : "bg-gray-50 dark:bg-gray-800 border-gray-100 dark:border-gray-700 hover:border-indigo-200 dark:hover:border-indigo-500/50"
+                      : "bg-gray-50 dark:bg-gray-800 border-gray-100 dark:border-gray-700 hover:border-gold-200 dark:hover:border-gold-500/50"
                 )}
               >
                 {/* Modal de confirmação inline */}
@@ -482,7 +482,7 @@ function Dashboard({
                             const client = clients.find((c) => c.id === opp.client_id) || null;
                             onContactOpp(opp, client);
                           }}
-                          className="flex items-center gap-1.5 px-3 py-1 bg-indigo-600 dark:bg-indigo-500 text-white text-[10px] font-bold rounded-lg hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-all shadow-sm"
+                          className="flex items-center gap-1.5 px-3 py-1 bg-gold-600 dark:bg-gold-500 text-white text-[10px] font-bold rounded-lg hover:bg-gold-700 dark:hover:bg-gold-600 transition-all shadow-sm"
                         >
                           <MessageSquare size={12} />
                           Contatar
@@ -503,7 +503,7 @@ function Dashboard({
         <div className="lg:col-span-2 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
           <div className="p-6 border-b border-gray-50 dark:border-gray-800 flex items-center justify-between">
             <h3 className="font-bold text-gray-800 dark:text-white">Trabalhos Recentes</h3>
-            <button className="text-sm text-indigo-600 dark:text-indigo-400 font-medium hover:underline">Ver todos</button>
+            <button className="text-sm text-gold-600 dark:text-gold-400 font-medium hover:underline">Ver todos</button>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left">
@@ -666,7 +666,7 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 dark:border-indigo-400" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-600 dark:border-gold-400" />
       </div>
     );
   }

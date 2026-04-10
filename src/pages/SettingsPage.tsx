@@ -30,7 +30,7 @@ export default function SettingsPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 dark:border-indigo-400" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-600 dark:border-gold-400" />
       </div>
     );
   }
@@ -160,7 +160,7 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
           </div>
         <button 
           onClick={() => { setEditingRule(null); setShowModal(true); }}
-          className="bg-indigo-600 dark:bg-indigo-500 text-white px-4 py-2 rounded-xl font-semibold flex items-center gap-2 hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-colors"
+          className="bg-gold-600 dark:bg-gold-500 text-white px-4 py-2 rounded-xl font-semibold flex items-center gap-2 hover:bg-gold-700 dark:hover:bg-gold-600 transition-colors"
         >
           <Plus size={20} /> Nova Regra
         </button>
@@ -170,7 +170,7 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
       <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm dark:shadow-lg dark:shadow-black/10 p-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-indigo-50 dark:bg-indigo-500/20 rounded-xl flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+            <div className="w-12 h-12 bg-gold-50 dark:bg-gold-500/20 rounded-xl flex items-center justify-center text-gold-600 dark:text-gold-400">
               <Calendar size={24} />
             </div>
             <div>
@@ -204,14 +204,14 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
             </div>
           </div>
           {loading ? (
-            <div className="animate-spin text-indigo-600 dark:text-indigo-400">
+            <div className="animate-spin text-gold-600 dark:text-gold-400">
               <RefreshCw size={20} />
             </div>
           ) : googleConnected ? (
             <div className="flex items-center gap-4">
               <button 
                 onClick={handleSyncAll}
-                className="flex items-center gap-2 px-4 py-2 bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 rounded-xl font-bold hover:bg-indigo-100 dark:hover:bg-indigo-500/30 transition-colors text-sm"
+                className="flex items-center gap-2 px-4 py-2 bg-gold-50 dark:bg-gold-500/20 text-gold-600 dark:text-gold-400 rounded-xl font-bold hover:bg-gold-100 dark:hover:bg-gold-500/30 transition-colors text-sm"
               >
                 <RefreshCw size={16} /> Sincronizar Tudo
               </button>
@@ -256,7 +256,7 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
                   <span className="font-bold text-gray-900 dark:text-white">{rule.trigger_job_type}</span>
                 </td>
                 <td className="px-6 py-4">
-                  <span className="text-indigo-600 dark:text-indigo-400 font-medium">{rule.target_job_type}</span>
+                  <span className="text-gold-600 dark:text-gold-400 font-medium">{rule.target_job_type}</span>
                 </td>
                 <td className="px-6 py-4 text-gray-500 dark:text-gray-400">{rule.days_offset} dias</td>
                 <td className="px-6 py-4">
@@ -273,7 +273,7 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
                   <div className="flex justify-end gap-2">
                     <button 
                       onClick={() => { setEditingRule(rule); setShowModal(true); }}
-                      className="p-2 text-gray-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 rounded-lg transition-colors"
+                      className="p-2 text-gray-400 dark:text-gray-500 hover:text-gold-600 dark:hover:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-500/10 rounded-lg transition-colors"
                     >
                       <Edit2 size={16} />
                     </button>
@@ -361,7 +361,7 @@ function RuleModal({ rule, onClose, onSave }: { rule: OpportunityRule | null, on
             <select 
               value={formData.trigger_job_type}
               onChange={e => setFormData({...formData, trigger_job_type: e.target.value})}
-              className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
+              className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400"
             >
               <option value="Gestante">Gestante</option>
               <option value="Newborn">Newborn</option>
@@ -379,7 +379,7 @@ function RuleModal({ rule, onClose, onSave }: { rule: OpportunityRule | null, on
               type="text" 
               value={formData.target_job_type}
               onChange={e => setFormData({...formData, target_job_type: e.target.value})}
-              className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
+              className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400"
             />
           </div>
           <div>
@@ -389,7 +389,7 @@ function RuleModal({ rule, onClose, onSave }: { rule: OpportunityRule | null, on
               type="number" 
               value={formData.days_offset}
               onChange={e => setFormData({...formData, days_offset: Number(e.target.value)})}
-              className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
+              className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400"
             />
           </div>
           <div className="flex items-center gap-2">
@@ -398,13 +398,13 @@ function RuleModal({ rule, onClose, onSave }: { rule: OpportunityRule | null, on
               id="is_active"
               checked={formData.is_active}
               onChange={e => setFormData({...formData, is_active: e.target.checked})}
-              className="w-4 h-4 text-indigo-600 dark:text-indigo-400 border-gray-300 dark:border-gray-600 rounded focus:ring-indigo-500 dark:focus:ring-indigo-400 bg-white dark:bg-gray-800"
+              className="w-4 h-4 text-gold-600 dark:text-gold-400 border-gray-300 dark:border-gray-600 rounded focus:ring-gold-500 dark:focus:ring-gold-400 bg-white dark:bg-gray-800"
             />
             <label htmlFor="is_active" className="text-sm font-medium text-gray-700 dark:text-gray-300">Regra Ativa</label>
           </div>
           <div className="flex justify-end gap-3 pt-4">
             <button type="button" onClick={onClose} className="px-6 py-2 text-gray-500 dark:text-gray-400 font-medium hover:text-gray-700 dark:hover:text-gray-200 transition-colors">Cancelar</button>
-            <button type="submit" className="px-8 py-2 bg-indigo-600 dark:bg-indigo-500 text-white rounded-xl font-bold hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-colors">
+            <button type="submit" className="px-8 py-2 bg-gold-600 dark:bg-gold-500 text-white rounded-xl font-bold hover:bg-gold-700 dark:hover:bg-gold-600 transition-colors">
               Salvar Regra
             </button>
           </div>

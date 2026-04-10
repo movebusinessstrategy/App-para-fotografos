@@ -105,8 +105,8 @@ export function CrmPanel({ phone, contactName, deals, stages, onDealUpdated }: P
       {!deal ? (
         /* Sem deal — botão criar */
         <div className="flex flex-col items-center justify-center flex-1 gap-4 px-5 text-center">
-          <div className="w-12 h-12 rounded-full bg-indigo-50 dark:bg-indigo-900/30 flex items-center justify-center">
-            <UserPlus size={22} className="text-indigo-500" />
+          <div className="w-12 h-12 rounded-full bg-gold-50 dark:bg-gold-900/30 flex items-center justify-center">
+            <UserPlus size={22} className="text-gold-500" />
           </div>
           <div>
             <p className="text-sm font-semibold text-gray-700 dark:text-gray-300">Sem lead no pipeline</p>
@@ -115,7 +115,7 @@ export function CrmPanel({ phone, contactName, deals, stages, onDealUpdated }: P
           <button
             onClick={handleCreateDeal}
             disabled={creating}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
           >
             {creating ? <Loader2 size={14} className="animate-spin" /> : <UserPlus size={14} />}
             Adicionar ao funil
@@ -192,7 +192,7 @@ export function CrmPanel({ phone, contactName, deals, stages, onDealUpdated }: P
           {/* Valor */}
           <div className="px-4 py-3">
             <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Valor Estimado</p>
-            <p className="text-xl font-bold text-indigo-600">
+            <p className="text-xl font-bold text-gold-600">
               {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(deal.value || 0)}
             </p>
           </div>
@@ -207,12 +207,12 @@ export function CrmPanel({ phone, contactName, deals, stages, onDealUpdated }: P
               onChange={(e) => setNoteText(e.target.value)}
               placeholder="Escreva sobre essa conversa..."
               rows={4}
-              className="w-full text-sm text-gray-700 dark:text-gray-200 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl px-3 py-2.5 outline-none resize-none focus:border-indigo-400 transition-colors"
+              className="w-full text-sm text-gray-700 dark:text-gray-200 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl px-3 py-2.5 outline-none resize-none focus:border-gold-400 transition-colors"
             />
             <button
               onClick={handleSaveNote}
               disabled={savingNote || noteText === (deal.notes || "")}
-              className="flex items-center justify-center gap-2 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-sm font-semibold rounded-lg transition-colors"
+              className="flex items-center justify-center gap-2 py-2 bg-gold-600 hover:bg-gold-700 disabled:opacity-40 text-white text-sm font-semibold rounded-lg transition-colors"
             >
               {savingNote ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
               Salvar

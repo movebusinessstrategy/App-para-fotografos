@@ -22,8 +22,8 @@ export function FiltrosPeriodo({ value, onChange }: FiltrosPeriodoProps) {
           className={cn(
             'px-4 py-2 rounded-xl text-sm font-medium transition-all',
             value === opt.value
-              ? 'bg-indigo-600 text-white shadow-sm'
-              : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-600'
+              ? 'bg-gold-600 text-white shadow-sm'
+              : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:border-gold-300 dark:hover:border-gold-600'
           )}
         >
           {opt.label}

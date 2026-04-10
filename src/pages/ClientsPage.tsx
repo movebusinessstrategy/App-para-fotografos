@@ -50,16 +50,16 @@ interface FilterDropdownProps {
   activeColor?: string;
 }
 
-function FilterDropdown({ label, value, options, onChange, icon, activeColor = "indigo" }: FilterDropdownProps) {
+function FilterDropdown({ label, value, options, onChange, icon, activeColor = "gold" }: FilterDropdownProps) {
   const selectedOption = options.find(opt => opt.value === value);
   const isActive = value !== 'all' && value !== '';
 
   const colorClasses: Record<string, { bg: string; text: string; border: string; hover: string }> = {
-    indigo: { 
-      bg: 'bg-indigo-50 dark:bg-indigo-500/20', 
-      text: 'text-indigo-700 dark:text-indigo-400', 
-      border: 'border-indigo-200 dark:border-indigo-500/30', 
-      hover: 'hover:bg-indigo-100 dark:hover:bg-indigo-500/30' 
+    gold: { 
+      bg: 'bg-gold-50 dark:bg-gold-500/20', 
+      text: 'text-gold-700 dark:text-gold-400', 
+      border: 'border-gold-200 dark:border-gold-500/30', 
+      hover: 'hover:bg-gold-100 dark:hover:bg-gold-500/30' 
     },
     amber: { 
       bg: 'bg-amber-50 dark:bg-amber-500/20', 
@@ -93,7 +93,7 @@ function FilterDropdown({ label, value, options, onChange, icon, activeColor = "
     },
   };
 
-  const colors = colorClasses[activeColor] || colorClasses.indigo;
+  const colors = colorClasses[activeColor] || colorClasses.gold;
 
   return (
     <Select.Root value={value} onValueChange={onChange}>
@@ -102,7 +102,7 @@ function FilterDropdown({ label, value, options, onChange, icon, activeColor = "
           "flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 border cursor-pointer outline-none",
           "data-[state=open]:ring-2 data-[state=open]:ring-offset-1 dark:data-[state=open]:ring-offset-gray-900",
           isActive 
-            ? `${colors.bg} ${colors.text} ${colors.border} shadow-sm data-[state=open]:ring-indigo-300 dark:data-[state=open]:ring-indigo-500/50` 
+            ? `${colors.bg} ${colors.text} ${colors.border} shadow-sm data-[state=open]:ring-gold-300 dark:data-[state=open]:ring-gold-500/50` 
             : "bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 data-[state=open]:ring-gray-300 dark:data-[state=open]:ring-gray-600"
         )}
       >
@@ -190,7 +190,7 @@ export default function ClientsPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 dark:border-indigo-400" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-600 dark:border-gold-400" />
       </div>
     );
   }
@@ -844,7 +844,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
             <button 
               type="button"
               onClick={onUpdate}
-              className="p-2 text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-white dark:hover:bg-gray-700 rounded-lg transition-all"
+              className="p-2 text-gray-500 dark:text-gray-400 hover:text-gold-600 dark:hover:text-gold-400 hover:bg-white dark:hover:bg-gray-700 rounded-lg transition-all"
               title="Atualizar lista"
             >
               <RefreshCw size={18} />
@@ -852,12 +852,12 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
             <button 
               type="button"
               onClick={handleExportCSV}
-              className="p-2 text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-white dark:hover:bg-gray-700 rounded-lg transition-all"
+              className="p-2 text-gray-500 dark:text-gray-400 hover:text-gold-600 dark:hover:text-gold-400 hover:bg-white dark:hover:bg-gray-700 rounded-lg transition-all"
               title="Exportar CSV"
             >
               <Download size={18} />
             </button>
-            <label className="p-2 text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-white dark:hover:bg-gray-700 rounded-lg transition-all cursor-pointer" title="Importar CSV">
+            <label className="p-2 text-gray-500 dark:text-gray-400 hover:text-gold-600 dark:hover:text-gold-400 hover:bg-white dark:hover:bg-gray-700 rounded-lg transition-all cursor-pointer" title="Importar CSV">
               <Upload size={18} />
               <input type="file" accept=".csv" onChange={handleImportCSV} className="hidden" />
             </label>
@@ -866,7 +866,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
           <button 
             type="button"
             onClick={() => { setSelectedClient(null); setShowModal(true); }}
-            className="bg-indigo-600 dark:bg-indigo-500 text-white px-5 py-2.5 rounded-xl font-semibold flex items-center gap-2 hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-all shadow-lg shadow-indigo-200 dark:shadow-indigo-500/20"
+            className="bg-gold-600 dark:bg-gold-500 text-white px-5 py-2.5 rounded-xl font-semibold flex items-center gap-2 hover:bg-gold-700 dark:hover:bg-gold-600 transition-all shadow-lg shadow-gold-200 dark:shadow-gold-500/20"
           >
             <Plus size={20} />
             Novo Cliente
@@ -886,7 +886,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                   value={searchName}
                   onChange={(e) => setSearchName(e.target.value)}
                   placeholder="Buscar cliente..."
-                  className="pl-10 pr-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl outline-none text-sm text-gray-700 dark:text-gray-200 w-64 focus:border-indigo-300 dark:focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 dark:focus:ring-indigo-500/20 transition-all placeholder:text-gray-400 dark:placeholder:text-gray-500"
+                  className="pl-10 pr-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl outline-none text-sm text-gray-700 dark:text-gray-200 w-64 focus:border-gold-300 dark:focus:border-gold-500 focus:ring-2 focus:ring-gold-100 dark:focus:ring-gold-500/20 transition-all placeholder:text-gray-400 dark:placeholder:text-gray-500"
                 />
                 {searchName && (
                   <button 
@@ -905,14 +905,14 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                 className={cn(
                   "flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all border",
                   showFilters || activeFiltersCount > 0
-                    ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-400 border-indigo-200 dark:border-indigo-500/30"
+                    ? "bg-gold-50 dark:bg-gold-500/20 text-gold-700 dark:text-gold-400 border-gold-200 dark:border-gold-500/30"
                     : "bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700"
                 )}
               >
                 <SlidersHorizontal size={16} />
                 Filtros
                 {activeFiltersCount > 0 && (
-                  <span className="bg-indigo-600 dark:bg-indigo-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                  <span className="bg-gold-600 dark:bg-gold-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
                     {activeFiltersCount}
                   </span>
                 )}
@@ -958,7 +958,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                     options={jobTypeOptions}
                     onChange={setJobTypeFilter}
                     icon={<Camera size={16} />}
-                    activeColor="indigo"
+                    activeColor="gold"
                   />
 
                   <FilterDropdown
@@ -1016,14 +1016,14 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                         type="date"
                         value={dateRangeStart}
                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDateRangeStart(e.target.value)}
-                        className="px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-indigo-400 dark:focus:border-indigo-500"
+                        className="px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400 dark:focus:border-gold-500"
                       />
                       <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">até</span>
                       <input
                         type="date"
                         value={dateRangeEnd}
                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDateRangeEnd(e.target.value)}
-                        className="px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-indigo-400 dark:focus:border-indigo-500"
+                        className="px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400 dark:focus:border-gold-500"
                       />
                     </div>
                   )}
@@ -1033,7 +1033,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                     <select
                       value={itemsPerPage}
                       onChange={(e) => setItemsPerPage(Number(e.target.value))}
-                      className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-200 outline-none focus:border-indigo-300 dark:focus:border-indigo-500"
+                      className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-200 outline-none focus:border-gold-300 dark:focus:border-gold-500"
                     >
                       <option value={50}>50</option>
                       <option value={100}>100</option>
@@ -1048,8 +1048,8 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
         </AnimatePresence>
 
         {selectedClientIds.length > 0 && (
-          <div className="flex items-center justify-between px-6 py-3 bg-indigo-50 dark:bg-indigo-500/10 border-b border-indigo-100 dark:border-indigo-500/20">
-            <div className="flex items-center gap-2 text-sm font-medium text-indigo-700 dark:text-indigo-400">
+          <div className="flex items-center justify-between px-6 py-3 bg-gold-50 dark:bg-gold-500/10 border-b border-gold-100 dark:border-gold-500/20">
+            <div className="flex items-center gap-2 text-sm font-medium text-gold-700 dark:text-gold-400">
               <CheckCircle2 size={16} />
               {selectedClientIds.length} cliente(s) selecionado(s)
             </div>
@@ -1057,7 +1057,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
               <button
                 type="button"
                 onClick={handleExportSelectedCSV}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-indigo-600 dark:text-indigo-400 bg-white dark:bg-gray-800 border border-indigo-200 dark:border-indigo-500/30 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-500/10 transition-all"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gold-600 dark:text-gold-400 bg-white dark:bg-gray-800 border border-gold-200 dark:border-gold-500/30 rounded-lg hover:bg-gold-50 dark:hover:bg-gold-500/10 transition-all"
               >
                 <Download size={14} />
                 Exportar
@@ -1091,7 +1091,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                     type="checkbox"
                     checked={allVisibleSelected}
                     onChange={toggleSelectAllVisible}
-                    className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500 dark:bg-gray-700"
+                    className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-gold-600 focus:ring-gold-500 dark:bg-gray-700"
                   />
                 </th>
                 <th className="px-6 py-4 font-medium">Nome / Nível</th>
@@ -1109,7 +1109,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                       type="checkbox"
                       checked={selectedClientIds.includes(client.id)}
                       onChange={() => toggleClientSelection(client.id)}
-                      className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500 dark:bg-gray-700"
+                      className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-gold-600 focus:ring-gold-500 dark:bg-gray-700"
                     />
                   </td>
 
@@ -1134,7 +1134,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                       <button 
                         type="button"
                         onClick={() => copyToClipboard(client.phone)}
-                        className="p-1 text-gray-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 opacity-0 group-hover/phone:opacity-100 transition-opacity"
+                        className="p-1 text-gray-400 dark:text-gray-500 hover:text-gold-600 dark:hover:text-gold-400 opacity-0 group-hover/phone:opacity-100 transition-opacity"
                         title="Copiar WhatsApp"
                       >
                         <Copy size={14} />
@@ -1142,7 +1142,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                     </div>
                     <div className="text-xs text-gray-500 dark:text-gray-400">{client.email}</div>
                     {getLatestActivityDate(client) && (
-                      <div className="text-[10px] text-indigo-500 dark:text-indigo-400 font-medium mt-1">
+                      <div className="text-[10px] text-gold-500 dark:text-gold-400 font-medium mt-1">
                         Última atividade: {format(getLatestActivityDate(client)!, 'dd/MM/yyyy')}
                       </div>
                     )}
@@ -1169,7 +1169,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                       <button 
                         type="button"
                         onClick={() => { setSelectedClient(client); setShowModal(true); }}
-                        className="p-2 text-gray-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 rounded-lg"
+                        className="p-2 text-gray-400 dark:text-gray-500 hover:text-gold-600 dark:hover:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-500/10 rounded-lg"
                         title="Editar Perfil"
                       >
                         <Edit2 size={18} />
@@ -1226,7 +1226,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                     className={cn(
                       "w-10 h-10 text-sm font-medium rounded-xl transition-all",
                       safeCurrentPage === page
-                        ? "bg-indigo-600 dark:bg-indigo-500 text-white shadow-lg shadow-indigo-200 dark:shadow-indigo-500/20"
+                        ? "bg-gold-600 dark:bg-gold-500 text-white shadow-lg shadow-gold-200 dark:shadow-gold-500/20"
                         : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
                     )}
                   >
@@ -1414,7 +1414,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
           <div className="flex items-center gap-4">
             <h3 className="text-xl font-bold text-gray-900 dark:text-white">{initialClient ? 'Perfil do Cliente' : 'Novo Cliente'}</h3>
             {client?.tier && (
-              <span className="text-xs font-bold px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-400 uppercase">
+              <span className="text-xs font-bold px-2 py-0.5 rounded border border-gold-200 dark:border-gold-500/30 bg-gold-50 dark:bg-gold-500/20 text-gold-700 dark:text-gold-400 uppercase">
                 Nível {client.tier}
               </span>
             )}
@@ -1432,7 +1432,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
               className={cn(
                 "px-4 py-3 text-sm font-semibold transition-colors border-b-2",
                 activeTab === 'info' 
-                  ? "border-indigo-600 dark:border-indigo-400 text-indigo-600 dark:text-indigo-400" 
+                  ? "border-gold-600 dark:border-gold-400 text-gold-600 dark:text-gold-400" 
                   : "border-transparent text-gray-400 dark:text-gray-500"
               )}
             >
@@ -1444,7 +1444,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
               className={cn(
                 "px-4 py-3 text-sm font-semibold transition-colors border-b-2",
                 activeTab === 'history' 
-                  ? "border-indigo-600 dark:border-indigo-400 text-indigo-600 dark:text-indigo-400" 
+                  ? "border-gold-600 dark:border-gold-400 text-gold-600 dark:text-gold-400" 
                   : "border-transparent text-gray-400 dark:text-gray-500"
               )}
             >
@@ -1456,7 +1456,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
               className={cn(
                 "px-4 py-3 text-sm font-semibold transition-colors border-b-2",
                 activeTab === 'opportunities' 
-                  ? "border-indigo-600 dark:border-indigo-400 text-indigo-600 dark:text-indigo-400" 
+                  ? "border-gold-600 dark:border-gold-400 text-gold-600 dark:text-gold-400" 
                   : "border-transparent text-gray-400 dark:text-gray-500"
               )}
             >
@@ -1476,7 +1476,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                     type="text" 
                     value={formData.name}
                     onChange={e => setFormData({...formData, name: e.target.value})}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                   />
                 </div>
                 <div>
@@ -1486,7 +1486,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                     value={formData.cpf}
                     onChange={e => setFormData({...formData, cpf: e.target.value})}
                     placeholder="000.000.000-00"
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500"
                   />
                 </div>
                 
@@ -1496,7 +1496,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                     type="text" 
                     value={formData.phone}
                     onChange={e => setFormData({...formData, phone: e.target.value})}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                   />
                 </div>
                 <div>
@@ -1505,7 +1505,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                     type="email" 
                     value={formData.email}
                     onChange={e => setFormData({...formData, email: e.target.value})}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                   />
                 </div>
                 <div>
@@ -1515,7 +1515,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                     value={formData.instagram}
                     onChange={e => setFormData({...formData, instagram: e.target.value})}
                     placeholder="@usuario"
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500"
                   />
                 </div>
 
@@ -1525,7 +1525,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                     type="date" 
                     value={formData.birth_date}
                     onChange={e => setFormData({...formData, birth_date: e.target.value})}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                   />
                 </div>
                 <div>
@@ -1534,7 +1534,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                     type="number" 
                     value={formData.age}
                     onChange={e => setFormData({...formData, age: e.target.value === '' ? '' : Number(e.target.value)})}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                   />
                 </div>
                 <div>
@@ -1543,7 +1543,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                     type="text" 
                     value={formData.child_name}
                     onChange={e => setFormData({...formData, child_name: e.target.value})}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                   />
                 </div>
 
@@ -1553,7 +1553,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                     type="text" 
                     value={formData.cep}
                     onChange={e => setFormData({...formData, cep: e.target.value})}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                   />
                 </div>
                 <div className="md:col-span-2">
@@ -1562,7 +1562,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                     type="text" 
                     value={formData.address}
                     onChange={e => setFormData({...formData, address: e.target.value})}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                   />
                 </div>
 
@@ -1572,7 +1572,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                     type="text" 
                     value={formData.neighborhood}
                     onChange={e => setFormData({...formData, neighborhood: e.target.value})}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                   />
                 </div>
                 <div>
@@ -1581,7 +1581,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                     type="text" 
                     value={formData.city}
                     onChange={e => setFormData({...formData, city: e.target.value})}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                   />
                 </div>
                 <div>
@@ -1591,7 +1591,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                     value={formData.state}
                     onChange={e => setFormData({...formData, state: e.target.value})}
                     maxLength={2}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white uppercase"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white uppercase"
                   />
                 </div>
 
@@ -1601,7 +1601,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                     type="date" 
                     value={formData.closing_date}
                     onChange={e => setFormData({...formData, closing_date: e.target.value})}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                   />
                 </div>
                 <div>
@@ -1609,7 +1609,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                   <select 
                     value={formData.lead_source}
                     onChange={e => setFormData({...formData, lead_source: e.target.value})}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                   >
                     <option>Instagram</option>
                     <option>WhatsApp</option>
@@ -1624,7 +1624,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                   <select 
                     value={formData.status}
                     onChange={e => setFormData({...formData, status: e.target.value})}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                   >
                     <option value="active">Ativo</option>
                     <option value="inactive">Inativo</option>
@@ -1638,12 +1638,12 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                   rows={3}
                   value={formData.notes}
                   onChange={e => setFormData({...formData, notes: e.target.value})}
-                  className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 outline-none resize-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none resize-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                 />
               </div>
               <div className="flex justify-end gap-3 pt-4">
                 <button type="button" onClick={onClose} className="px-6 py-2 text-gray-600 dark:text-gray-400 font-medium hover:text-gray-800 dark:hover:text-gray-200">Cancelar</button>
-                <button type="submit" className="px-8 py-2 bg-indigo-600 dark:bg-indigo-500 text-white rounded-xl font-bold hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-colors">
+                <button type="submit" className="px-8 py-2 bg-gold-600 dark:bg-gold-500 text-white rounded-xl font-bold hover:bg-gold-700 dark:hover:bg-gold-600 transition-colors">
                   {initialClient ? 'Salvar Alterações' : 'Salvar Cliente'}
                 </button>
               </div>
@@ -1655,7 +1655,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                 <button 
                   type="button"
                   onClick={() => { setEditingJob(null); setShowJobModal(true); }}
-                  className="text-sm bg-indigo-600 dark:bg-indigo-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-colors"
+                  className="text-sm bg-gold-600 dark:bg-gold-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 hover:bg-gold-700 dark:hover:bg-gold-600 transition-colors"
                 >
                   <Plus size={16} /> Registrar Novo Trabalho
                 </button>
@@ -1663,9 +1663,9 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
 
               <div className="space-y-3">
                 {client?.jobs?.map(job => (
-                  <div key={job.id} className="flex items-center justify-between p-4 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-xl shadow-sm hover:border-indigo-200 dark:hover:border-indigo-500/30 transition-colors">
+                  <div key={job.id} className="flex items-center justify-between p-4 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-xl shadow-sm hover:border-gold-200 dark:hover:border-gold-500/30 transition-colors">
                     <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 bg-indigo-50 dark:bg-indigo-500/20 rounded-lg flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                      <div className="w-10 h-10 bg-gold-50 dark:bg-gold-500/20 rounded-lg flex items-center justify-center text-gold-600 dark:text-gold-400">
                         <Camera size={20} />
                       </div>
                       <div>
@@ -1714,7 +1714,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                         <button 
                           type="button"
                           onClick={() => handleEditJob(job)}
-                          className="p-1.5 text-gray-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 rounded-lg transition-colors"
+                          className="p-1.5 text-gray-400 dark:text-gray-500 hover:text-gold-600 dark:hover:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-500/10 rounded-lg transition-colors"
                           title="Editar"
                         >
                           <Edit2 size={16} />
@@ -1763,7 +1763,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                             ? "bg-red-100 dark:bg-red-500/20 text-red-600 dark:text-red-400" 
                             : opp.priority === 'active' 
                               ? "bg-amber-100 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400" 
-                              : "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400"
+                              : "bg-gold-50 dark:bg-gold-500/20 text-gold-600 dark:text-gold-400"
                         )}>
                           <Sparkles size={20} />
                         </div>
@@ -1780,7 +1780,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                           ? "bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-400" 
                           : opp.priority === 'active' 
                             ? "bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400" 
-                            : "bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-400"
+                            : "bg-gold-100 dark:bg-gold-500/20 text-gold-700 dark:text-gold-400"
                       )}>
                         {opp.priority === 'urgent' ? 'Urgente' : opp.priority === 'active' ? 'Ativo' : 'Futuro'}
                       </div>
@@ -1811,7 +1811,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                               onContactOpp(opp, client);
                             }
                           }}
-                          className="flex items-center gap-1.5 px-3 py-1 bg-indigo-600 dark:bg-indigo-500 text-white text-[10px] font-bold rounded-lg hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-all shadow-sm"
+                          className="flex items-center gap-1.5 px-3 py-1 bg-gold-600 dark:bg-gold-500 text-white text-[10px] font-bold rounded-lg hover:bg-gold-700 dark:hover:bg-gold-600 transition-all shadow-sm"
                         >
                           <MessageSquare size={12} />
                           Contatar

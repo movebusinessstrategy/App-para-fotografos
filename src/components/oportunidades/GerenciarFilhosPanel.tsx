@@ -147,7 +147,7 @@ export function GerenciarFilhosPanel() {
       {/* Seletor de cliente */}
       <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5">
         <h3 className="font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-          <Search size={16} className="text-indigo-500" />
+          <Search size={16} className="text-gold-500" />
           Selecionar Cliente
         </h3>
 
@@ -156,8 +156,8 @@ export function GerenciarFilhosPanel() {
             className={cn(
               'flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition-all',
               dropdownOpen
-                ? 'border-indigo-400 dark:border-indigo-500 ring-2 ring-indigo-100 dark:ring-indigo-500/20'
-                : 'border-gray-200 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-600'
+                ? 'border-gold-400 dark:border-gold-500 ring-2 ring-gold-100 dark:ring-gold-500/20'
+                : 'border-gray-200 dark:border-gray-700 hover:border-gold-300 dark:hover:border-gold-600'
             )}
             onClick={() => setDropdownOpen(o => !o)}
           >
@@ -230,7 +230,7 @@ export function GerenciarFilhosPanel() {
               <button
                 onClick={handleSaveMae}
                 disabled={savingMae || !maeBirthDate}
-                className="mt-5 flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded-xl transition-colors"
+                className="mt-5 flex items-center gap-1.5 px-4 py-2 bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white text-sm font-medium rounded-xl transition-colors"
               >
                 <Check size={14} />
                 {savingMae ? 'Salvando...' : 'Salvar'}
@@ -241,10 +241,10 @@ export function GerenciarFilhosPanel() {
           {/* Lista de filhos */}
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5">
             <h3 className="font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-              <Baby size={16} className="text-indigo-500" />
+              <Baby size={16} className="text-gold-500" />
               Filhos de {selectedClient.name}
               {filhos.length > 0 && (
-                <span className="ml-auto text-xs bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded-full font-medium">
+                <span className="ml-auto text-xs bg-gold-50 dark:bg-gold-500/20 text-gold-700 dark:text-gold-300 px-2 py-0.5 rounded-full font-medium">
                   {filhos.length}
                 </span>
               )}
@@ -265,8 +265,8 @@ export function GerenciarFilhosPanel() {
                   return (
                     <div key={f.id} className="flex items-center justify-between p-3 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700">
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-500/20 flex items-center justify-center">
-                          <Baby size={14} className="text-indigo-600" />
+                        <div className="w-8 h-8 rounded-lg bg-gold-50 dark:bg-gold-500/20 flex items-center justify-center">
+                          <Baby size={14} className="text-gold-600" />
                         </div>
                         <div>
                           <p className="text-sm font-medium text-gray-900 dark:text-white">
@@ -333,7 +333,7 @@ export function GerenciarFilhosPanel() {
               <button
                 type="submit"
                 disabled={saving}
-                className="mt-3 flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded-xl transition-colors"
+                className="mt-3 flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white text-sm font-medium rounded-xl transition-colors"
               >
                 <Plus size={15} />
                 {saving ? 'Salvando...' : 'Adicionar Filho(a)'}

@@ -297,7 +297,7 @@ function WhatsAppPanel({ status, qrCode, loading, error, onConnect, onDisconnect
       <div>
         <p className="text-base font-semibold text-gray-900 dark:text-gray-100">Conectar WhatsApp</p>
         <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          Vincule seu número para receber e enviar mensagens direto no FocalPoint.
+          Vincule seu número para receber e enviar mensagens direto no FotoMOVE.
         </p>
       </div>
 
@@ -339,7 +339,7 @@ function InstagramPanel({ status, onRefresh }: { status: ConnStatus; onRefresh: 
           <CheckCircle size={36} className="text-pink-500" />
         </div>
         <p className="text-base font-semibold text-gray-900 dark:text-gray-100">Instagram conectado!</p>
-        <p className="text-sm text-gray-500 dark:text-gray-400">DMs chegando no FocalPoint.</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">DMs chegando no FotoMOVE.</p>
       </div>
     );
   }
@@ -352,7 +352,7 @@ function InstagramPanel({ status, onRefresh }: { status: ConnStatus; onRefresh: 
       <div>
         <p className="text-base font-semibold text-gray-900 dark:text-gray-100">Conectar Instagram DM</p>
         <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          Receba e responda DMs diretamente no FocalPoint.
+          Receba e responda DMs diretamente no FotoMOVE.
         </p>
       </div>
       <div className="w-full rounded-xl border border-amber-200 bg-amber-50 p-4 text-left dark:border-amber-800 dark:bg-amber-900/20">

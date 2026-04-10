@@ -38,7 +38,7 @@ const BADGE_COLORS = [
   "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300",
   "bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-300",
   "bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300",
-  "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300",
+  "bg-gold-100 text-gold-700 dark:bg-gold-900/40 dark:text-gold-300",
   "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300",
 ];
 

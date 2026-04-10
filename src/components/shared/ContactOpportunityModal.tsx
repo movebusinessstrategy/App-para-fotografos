@@ -93,14 +93,14 @@ export default function ContactOpportunityModal({ opportunity, client, onClose, 
           animate={{ opacity: 1, scale: 1 }}
           className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl dark:shadow-black/40 w-full max-w-md overflow-hidden border border-transparent dark:border-gray-800"
         >
-          <div className="p-6 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between bg-indigo-50 dark:bg-indigo-950/50">
+          <div className="p-6 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between bg-gold-50 dark:bg-gold-950/50">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-indigo-100 dark:bg-indigo-900/50 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+              <div className="w-10 h-10 rounded-full bg-gold-100 dark:bg-gold-900/50 flex items-center justify-center text-gold-600 dark:text-gold-400">
                 <Sparkles size={20} />
               </div>
               <div>
                 <h3 className="font-bold text-gray-900 dark:text-white">Nova Oportunidade</h3>
-                <p className="text-xs text-indigo-600 dark:text-indigo-400 font-medium uppercase tracking-wider">{opportunity.type}</p>
+                <p className="text-xs text-gold-600 dark:text-gold-400 font-medium uppercase tracking-wider">{opportunity.type}</p>
               </div>
             </div>
             <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">
@@ -137,7 +137,7 @@ export default function ContactOpportunityModal({ opportunity, client, onClose, 
                     "p-2 rounded-lg transition-all",
                     copied 
                       ? "bg-green-500 text-white" 
-                      : "bg-white dark:bg-gray-800 text-gray-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 border border-gray-200 dark:border-gray-700"
+                      : "bg-white dark:bg-gray-800 text-gray-400 dark:text-gray-500 hover:text-gold-600 dark:hover:text-gold-400 border border-gray-200 dark:border-gray-700"
                   )}
                 >
                   {copied ? <Check size={16} /> : <Copy size={16} />}
@@ -157,7 +157,7 @@ export default function ContactOpportunityModal({ opportunity, client, onClose, 
                 </button>
                 <button
                   onClick={() => window.open(`tel:${client?.phone}`, "_self")}
-                  className="flex items-center justify-center gap-2 py-3 bg-indigo-600 dark:bg-indigo-500 text-white rounded-xl font-bold hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-all shadow-sm"
+                  className="flex items-center justify-center gap-2 py-3 bg-gold-600 dark:bg-gold-500 text-white rounded-xl font-bold hover:bg-gold-700 dark:hover:bg-gold-600 transition-all shadow-sm"
                 >
                   <Phone size={18} />
                   Ligar
@@ -195,7 +195,7 @@ export default function ContactOpportunityModal({ opportunity, client, onClose, 
               <button
                 onClick={handleConvert}
                 disabled={converting}
-                className="flex-1 py-3 bg-indigo-600 dark:bg-indigo-500 text-white rounded-xl font-bold hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-all shadow-md flex items-center justify-center disabled:opacity-50"
+                className="flex-1 py-3 bg-gold-600 dark:bg-gold-500 text-white rounded-xl font-bold hover:bg-gold-700 dark:hover:bg-gold-600 transition-all shadow-md flex items-center justify-center disabled:opacity-50"
               >
                 {converting ? (
                   <RefreshCw size={18} className="animate-spin" />

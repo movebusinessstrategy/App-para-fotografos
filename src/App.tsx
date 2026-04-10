@@ -28,9 +28,9 @@ export default function App() {
         <AuthProvider>
           <Suspense
             fallback={
-              <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
+              <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#1a1207] via-[#2d1f08] to-[#1a1207]">
                 <div className="flex flex-col items-center gap-4">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-400" />
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-400" />
                   <p className="text-white/70">Carregando...</p>
                 </div>
               </div>

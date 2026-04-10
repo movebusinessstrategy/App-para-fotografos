@@ -146,8 +146,8 @@ export function OportunidadesList({ data, loading, onSendToKanban, onDiscard, co
                 </div>
               </div>
               <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 p-3 flex items-center gap-3">
-                <div className="w-8 h-8 bg-indigo-50 dark:bg-indigo-500/20 rounded-lg flex items-center justify-center flex-shrink-0">
-                  <BarChart2 size={15} className="text-indigo-600" />
+                <div className="w-8 h-8 bg-gold-50 dark:bg-gold-500/20 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <BarChart2 size={15} className="text-gold-600" />
                 </div>
                 <div>
                   <p className="text-xs text-gray-500 dark:text-gray-400">Aproveitamento</p>
@@ -162,11 +162,11 @@ export function OportunidadesList({ data, loading, onSendToKanban, onDiscard, co
                   <span className="text-xs font-medium text-gray-600 dark:text-gray-400">
                     {aproveitadas} de {total} oportunidades aproveitadas
                   </span>
-                  <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">{taxa}%</span>
+                  <span className="text-xs font-bold text-gold-600 dark:text-gold-400">{taxa}%</span>
                 </div>
                 <div className="h-2 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 rounded-full transition-all duration-500"
+                    className="h-full bg-gradient-to-r from-violet-500 to-gold-500 rounded-full transition-all duration-500"
                     style={{ width: `${taxa}%` }}
                   />
                 </div>
@@ -252,7 +252,7 @@ export function OportunidadesList({ data, loading, onSendToKanban, onDiscard, co
                   key={op.id}
                   onClick={() => setSelectedOp(op)}
                   className={cn(
-                    'bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 border-l-4 p-4 transition-all cursor-pointer hover:shadow-md hover:border-r-indigo-100 dark:hover:border-r-indigo-900/30 group',
+                    'bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 border-l-4 p-4 transition-all cursor-pointer hover:shadow-md hover:border-r-gold-100 dark:hover:border-r-gold-900/30 group',
                     pCfg.border
                   )}
                 >
@@ -326,7 +326,7 @@ export function OportunidadesList({ data, loading, onSendToKanban, onDiscard, co
                       )}
                     </div>
 
-                    <ChevronRight size={15} className="text-gray-300 dark:text-gray-600 group-hover:text-indigo-400 transition-colors flex-shrink-0 ml-1" />
+                    <ChevronRight size={15} className="text-gray-300 dark:text-gray-600 group-hover:text-gold-400 transition-colors flex-shrink-0 ml-1" />
                   </div>
                 </div>
               );

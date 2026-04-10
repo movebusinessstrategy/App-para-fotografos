@@ -45,7 +45,7 @@ export function GerarCupomModal({ aniversariante, onClose, onSuccess }: GerarCup
       <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-md shadow-2xl">
         <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-800">
           <div className="flex items-center gap-3">
-            <Ticket size={20} className="text-indigo-500" />
+            <Ticket size={20} className="text-gold-500" />
             <h2 className="font-bold text-gray-900 dark:text-white">Gerar Cupom</h2>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400">
@@ -64,7 +64,7 @@ export function GerarCupomModal({ aniversariante, onClose, onSuccess }: GerarCup
                 <Ticket size={28} className="text-emerald-600" />
               </div>
               <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Cupom gerado com sucesso!</p>
-              <p className="text-3xl font-bold text-indigo-600 tracking-widest font-mono">{cupomGerado.codigo}</p>
+              <p className="text-3xl font-bold text-gold-600 tracking-widest font-mono">{cupomGerado.codigo}</p>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
                 {tipoDesconto === 'PERCENTUAL' ? `${valorDesconto}% de desconto` : `R$ ${valorDesconto} de desconto`}
                 {' '} · válido até {new Date(dataValidade + 'T12:00:00').toLocaleDateString('pt-BR')}
@@ -79,7 +79,7 @@ export function GerarCupomModal({ aniversariante, onClose, onSuccess }: GerarCup
                     <button
                       key={t}
                       onClick={() => setTipoDesconto(t)}
-                      className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-all ${tipoDesconto === t ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300'}`}
+                      className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-all ${tipoDesconto === t ? 'bg-gold-600 border-gold-600 text-white' : 'border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300'}`}
                     >
                       {t === 'PERCENTUAL' ? '% Percentual' : 'R$ Valor Fixo'}
                     </button>
@@ -112,7 +112,7 @@ export function GerarCupomModal({ aniversariante, onClose, onSuccess }: GerarCup
               <button
                 onClick={handleGerar}
                 disabled={loading}
-                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-medium text-sm transition-colors"
+                className="w-full py-3 bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white rounded-xl font-medium text-sm transition-colors"
               >
                 {loading ? 'Gerando...' : 'Gerar Cupom'}
               </button>

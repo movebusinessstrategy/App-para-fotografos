@@ -90,7 +90,7 @@ export default function JobFormModal({
               <select
                 value={clientId || ""}
                 onChange={(e) => setClientId(e.target.value ? Number(e.target.value) : undefined)}
-                className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
+                className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400"
               >
                 <option value="" className="dark:bg-gray-800">Tarefa (Sem Cliente vinculado)</option>
                 {clients.map((c) => (
@@ -111,7 +111,7 @@ export default function JobFormModal({
                 placeholder="Ex: Ensaio Gestante Maria"
                 value={formData.job_name}
                 onChange={(e) => setFormData({ ...formData, job_name: e.target.value })}
-                className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
+                className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400"
               />
             </div>
 
@@ -121,7 +121,7 @@ export default function JobFormModal({
                 <select
                   value={formData.job_type}
                   onChange={(e) => setFormData({ ...formData, job_type: e.target.value })}
-                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
+                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400"
                 >
                   <option className="dark:bg-gray-800">Gestante</option>
                   <option className="dark:bg-gray-800">Newborn</option>
@@ -140,7 +140,7 @@ export default function JobFormModal({
                 <select
                   value={formData.status}
                   onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
+                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400"
                 >
                   <option value="scheduled" className="dark:bg-gray-800">Agendado</option>
                   <option value="completed" className="dark:bg-gray-800">Concluído</option>
@@ -157,7 +157,7 @@ export default function JobFormModal({
                   type="date"
                   value={formData.job_date}
                   onChange={(e) => setFormData({ ...formData, job_date: e.target.value })}
-                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 [color-scheme:light] dark:[color-scheme:dark]"
+                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 [color-scheme:light] dark:[color-scheme:dark]"
                 />
               </div>
               <div>
@@ -167,7 +167,7 @@ export default function JobFormModal({
                   type="time"
                   value={formData.job_time}
                   onChange={(e) => setFormData({ ...formData, job_time: e.target.value })}
-                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 [color-scheme:light] dark:[color-scheme:dark]"
+                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 [color-scheme:light] dark:[color-scheme:dark]"
                 />
               </div>
               <div>
@@ -176,7 +176,7 @@ export default function JobFormModal({
                   type="time"
                   value={formData.job_end_time}
                   onChange={(e) => setFormData({ ...formData, job_end_time: e.target.value })}
-                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 [color-scheme:light] dark:[color-scheme:dark]"
+                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 [color-scheme:light] dark:[color-scheme:dark]"
                 />
               </div>
             </div>
@@ -190,7 +190,7 @@ export default function JobFormModal({
                   onChange={(e) =>
                     setFormData({ ...formData, amount: e.target.value === "" ? "" : (Number(e.target.value) as number) })
                   }
-                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 [color-scheme:light] dark:[color-scheme:dark]"
+                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 [color-scheme:light] dark:[color-scheme:dark]"
                 />
               </div>
               <div>
@@ -198,7 +198,7 @@ export default function JobFormModal({
                 <select
                   value={formData.payment_method}
                   onChange={(e) => setFormData({ ...formData, payment_method: e.target.value })}
-                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
+                  className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400"
                 >
                   <option className="dark:bg-gray-800">Pix</option>
                   <option className="dark:bg-gray-800">Cartão</option>
@@ -214,7 +214,7 @@ export default function JobFormModal({
                 rows={2}
                 value={formData.notes}
                 onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 resize-none"
+                className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 resize-none"
                 placeholder="Detalhes adicionais..."
               />
             </div>
@@ -229,7 +229,7 @@ export default function JobFormModal({
             </button>
             <button
               type="submit"
-              className="px-8 py-2 bg-indigo-600 dark:bg-indigo-500 text-white rounded-xl font-bold hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-colors"
+              className="px-8 py-2 bg-gold-600 dark:bg-gold-500 text-white rounded-xl font-bold hover:bg-gold-700 dark:hover:bg-gold-600 transition-colors"
             >
               {job ? "Salvar Alterações" : "Registrar Trabalho"}
             </button>
