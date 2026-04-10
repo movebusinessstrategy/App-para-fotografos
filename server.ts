@@ -4299,6 +4299,184 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // ============ WHATSAPP MESSAGING ============
+  const WA_WEBHOOK_VERIFY_TOKEN = process.env.WA_WEBHOOK_VERIFY_TOKEN || 'fotomove_webhook_2026';
+
+  // Webhook verification (GET) — Meta calls this to confirm the endpoint
+  app.get('/api/whatsapp/webhook', (req, res) => {
+    const mode = req.query['hub.mode'];
+    const token = req.query['hub.verify_token'];
+    const challenge = req.query['hub.challenge'];
+    if (mode === 'subscribe' && token === WA_WEBHOOK_VERIFY_TOKEN) {
+      console.log('[WhatsApp Webhook] Verified');
+      res.status(200).send(challenge as string);
+    } else {
+      res.status(403).send('Forbidden');
+    }
+  });
+
+  // Webhook receive (POST) — Meta sends incoming messages here
+  app.post('/api/whatsapp/webhook', async (req, res) => {
+    res.status(200).json({ status: 'ok' }); // always respond immediately
+    try {
+      const entry = req.body?.entry?.[0];
+      const changes = entry?.changes?.[0];
+      const value = changes?.value;
+      if (!value?.messages?.length) return;
+
+      const message = value.messages[0];
+      if (message.type !== 'text') return;
+
+      const phoneNumberId = value.metadata?.phone_number_id;
+      const fromNumber = message.from;
+      const msgBody = message.text?.body || '';
+      const msgId = message.id;
+
+      // Find which photographer owns this phone_number_id
+      const { data: waAccount } = await supabaseAdmin
+        .from('whatsapp_business_accounts')
+        .select('user_id')
+        .eq('phone_number_id', phoneNumberId)
+        .maybeSingle();
+
+      if (!waAccount) return;
+
+      // Try to match client by last 8 digits of phone
+      const last8 = fromNumber.replace(/\D/g, '').slice(-8);
+      const { data: clients } = await supabaseAdmin
+        .from('clients')
+        .select('id, phone')
+        .ilike('phone', `%${last8}`);
+
+      const clientId = clients?.[0]?.id || null;
+
+      await supabaseAdmin.from('whatsapp_messages').insert({
+        user_id: waAccount.user_id,
+        client_id: clientId,
+        direction: 'inbound',
+        from_number: fromNumber,
+        to_number: phoneNumberId,
+        wa_message_id: msgId,
+        body: msgBody,
+        status: 'received',
+      });
+    } catch (err) {
+      console.error('[WhatsApp Webhook] Error:', err);
+    }
+  });
+
+  // Send message
+  app.post('/api/whatsapp/send', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { to, body, client_id } = req.body;
+
+    if (!to || !body) return res.status(400).json({ error: 'to e body são obrigatórios' });
+
+    const { data: waAccount } = await supabase
+      .from('whatsapp_business_accounts')
+      .select('phone_number_id, phone_number, access_token')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (!waAccount) return res.status(400).json({ error: 'WhatsApp Business não conectado' });
+
+    const cleanPhone = to.replace(/\D/g, '');
+
+    try {
+      const metaRes = await fetch(
+        `https://graph.facebook.com/v21.0/${waAccount.phone_number_id}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${waAccount.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            messaging_product: 'whatsapp',
+            to: cleanPhone,
+            type: 'text',
+            text: { body },
+          }),
+        }
+      );
+      const metaData = await metaRes.json();
+
+      if (metaData.error) {
+        console.error('[WhatsApp] Send error:', metaData.error);
+        return res.status(400).json({ error: metaData.error.message });
+      }
+
+      await supabase.from('whatsapp_messages').insert({
+        user_id: userId,
+        client_id: client_id || null,
+        direction: 'outbound',
+        from_number: waAccount.phone_number,
+        to_number: cleanPhone,
+        wa_message_id: metaData.messages?.[0]?.id,
+        body,
+        status: 'sent',
+      });
+
+      res.json({ success: true, message_id: metaData.messages?.[0]?.id });
+    } catch (err: any) {
+      console.error('[WhatsApp] Send error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // List conversations (last message per phone number)
+  app.get('/api/whatsapp/conversations', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    const { data, error } = await supabase
+      .from('whatsapp_messages')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(500);
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Group by partner phone — first occurrence = last message
+    const seen = new Set<string>();
+    const conversations: any[] = [];
+    for (const msg of data || []) {
+      const partner = msg.direction === 'outbound' ? msg.to_number : msg.from_number;
+      if (!seen.has(partner)) {
+        seen.add(partner);
+        conversations.push({
+          phone: partner,
+          client_id: msg.client_id,
+          last_message: msg.body,
+          last_direction: msg.direction,
+          last_at: msg.created_at,
+        });
+      }
+    }
+
+    res.json(conversations);
+  });
+
+  // Messages for a specific phone conversation
+  app.get('/api/whatsapp/messages/:phone', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const phone = req.params.phone;
+
+    const { data, error } = await supabase
+      .from('whatsapp_messages')
+      .select('*')
+      .eq('user_id', userId)
+      .or(`to_number.eq.${phone},from_number.eq.${phone}`)
+      .order('created_at', { ascending: true });
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    res.json(data);
+  });
+
   // ============ VITE / STATIC FILES ============
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
