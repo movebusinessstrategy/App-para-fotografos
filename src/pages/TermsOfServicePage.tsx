@@ -153,7 +153,7 @@ export default function TermsOfServicePage() {
               </p>
               <div className="mt-3 p-4 bg-white/5 border border-white/10 rounded-lg">
                 <p><strong className="text-white">FotoMOVE</strong></p>
-                <p>E-mail: <a href="mailto:contato@fotomove.com.br" className="text-[#D4A94A] hover:underline">contato@fotomove.com.br</a></p>
+                <p>E-mail: <a href="mailto:contato@movebusiness.com.br" className="text-[#D4A94A] hover:underline">contato@movebusiness.com.br</a></p>
               </div>
             </section>
 
