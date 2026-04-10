@@ -9,14 +9,17 @@ import { ConfirmModal } from "../components/ui/ConfirmModal";
 // ── Módulos disponíveis para controle de acesso ──────────────────────────────
 
 const MODULES = [
-  { key: "dashboard",   label: "Dashboard" },
-  { key: "clients",     label: "Clientes" },
-  { key: "jobs",        label: "Produção" },
-  { key: "vendas",      label: "Vendas" },
-  { key: "calendar",    label: "Agenda" },
-  { key: "finance",     label: "Financeiro" },
-  { key: "oportunidades", label: "Oportunidades" },
-  { key: "contratos",   label: "Contratos" },
+  { key: "dashboard",        label: "Dashboard",                    group: "Módulos" },
+  { key: "clients",          label: "Clientes",                     group: "Módulos" },
+  { key: "jobs",             label: "Produção",                     group: "Módulos" },
+  { key: "vendas",           label: "Vendas",                       group: "Módulos" },
+  { key: "calendar",         label: "Agenda",                       group: "Módulos" },
+  { key: "finance",          label: "Financeiro",                   group: "Módulos" },
+  { key: "oportunidades",    label: "Oportunidades",                group: "Módulos" },
+  { key: "contratos",        label: "Contratos",                    group: "Módulos" },
+  { key: "vendas_add_stage", label: "Vendas — Adicionar etapa",     group: "Ações" },
+  { key: "vendas_edit_stage",label: "Vendas — Editar/excluir etapa",group: "Ações" },
+  { key: "calendar_create",  label: "Agenda — Criar tarefa",        group: "Ações" },
 ];
 
 const COLORS = [
@@ -448,31 +451,44 @@ export default function AdminPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                    {MODULES.map(mod => (
-                      <tr key={mod.key} className="hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors">
-                        <td className="px-6 py-3 text-sm font-medium text-gray-700 dark:text-gray-200">
-                          {mod.label}
-                        </td>
-                        {members.map(member => {
-                          const allowed = member.permissions?.[mod.key] !== false;
-                          return (
-                            <td key={member.id} className="px-4 py-3 text-center">
-                              <button
-                                onClick={() => togglePermission(member, mod.key)}
-                                className={`w-6 h-6 rounded-md flex items-center justify-center mx-auto transition-all border-2 ${
-                                  allowed
-                                    ? "border-transparent text-white shadow-sm"
-                                    : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
-                                }`}
-                                style={allowed ? { backgroundColor: member.color } : {}}
-                              >
-                                {allowed && <Check size={13} strokeWidth={3} />}
-                              </button>
+                    {MODULES.map((mod, idx) => {
+                      const prevGroup = idx > 0 ? MODULES[idx - 1].group : null;
+                      const isGroupHeader = mod.group !== prevGroup;
+                      return (
+                        <React.Fragment key={mod.key}>
+                          {isGroupHeader && (
+                            <tr className="bg-gray-50 dark:bg-gray-800/60">
+                              <td colSpan={members.length + 1} className="px-6 py-2 text-[11px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest">
+                                {mod.group}
+                              </td>
+                            </tr>
+                          )}
+                          <tr className="hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors">
+                            <td className="px-6 py-3 text-sm font-medium text-gray-700 dark:text-gray-200">
+                              {mod.label}
                             </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
+                            {members.map(member => {
+                              const allowed = member.permissions?.[mod.key] !== false;
+                              return (
+                                <td key={member.id} className="px-4 py-3 text-center">
+                                  <button
+                                    onClick={() => togglePermission(member, mod.key)}
+                                    className={`w-6 h-6 rounded-md flex items-center justify-center mx-auto transition-all border-2 ${
+                                      allowed
+                                        ? "border-transparent text-white shadow-sm"
+                                        : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+                                    }`}
+                                    style={allowed ? { backgroundColor: member.color } : {}}
+                                  >
+                                    {allowed && <Check size={13} strokeWidth={3} />}
+                                  </button>
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        </React.Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

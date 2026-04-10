@@ -114,6 +114,22 @@ export default function JobsPage() {
     }
   };
 
+  const handleRemoveFromProduction = async (jobId: number) => {
+    setJobs(prev => prev.map(j => j.id === jobId
+      ? { ...j, production_stage: null, production_stage_entered_at: null }
+      : j
+    ));
+    try {
+      await authFetch(`/api/jobs/${jobId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ production_stage: null }),
+      });
+    } catch (err) {
+      console.error("Erro ao remover da produção:", err);
+    }
+  };
+
   const handleDelete = (id: number) => {
     setConfirmModal({
       open: true,
@@ -272,6 +288,7 @@ export default function JobsPage() {
               onJobClick={job => setSelectedJob(job)}
               onStagesUpdate={setStages}
               onAssigneeChange={handleAssigneeChange}
+              onRemoveFromProduction={handleRemoveFromProduction}
             />
           ) : (
             <div className="flex flex-col items-center justify-center py-24 gap-3">
@@ -426,6 +443,10 @@ export default function JobsPage() {
         }}
         onLabelsChange={(jobId, labels) => {
           setJobs(prev => prev.map(j => j.id === jobId ? { ...j, labels } : j));
+        }}
+        onRemoveFromProduction={(jobId) => {
+          handleRemoveFromProduction(jobId);
+          setSelectedJob(null);
         }}
       />
 

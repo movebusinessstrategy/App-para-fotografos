@@ -20,6 +20,8 @@ const PipelineSettings = lazy(() => import("./pages/PipelineSettings"));
 const OportunidadesPage = lazy(() => import("./pages/OportunidadesPage"));
 const ContractsPage = lazy(() => import("./pages/ContractsPage"));
 const AdminPage = lazy(() => import("./pages/AdminPage"));
+const PrivacyPolicyPage = lazy(() => import("./pages/PrivacyPolicyPage"));
+const TermsOfServicePage = lazy(() => import("./pages/TermsOfServicePage"));
 
 export default function App() {
   return (
@@ -41,6 +43,8 @@ export default function App() {
               <Route path="/login" element={<Login />} />
               <Route path="/cadastro" element={<Cadastro />} />
               <Route path="/recuperar-senha" element={<RecuperarSenha />} />
+              <Route path="/privacidade" element={<PrivacyPolicyPage />} />
+              <Route path="/termos" element={<TermsOfServicePage />} />
 
               {/* Rotas protegidas */}
               <Route

@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Calendar, Camera, Clock, Pencil, Check, X, MoveRight, Tag, UserCircle, Star, GripHorizontal } from "lucide-react";
+import { Calendar, Camera, Clock, Pencil, Check, X, MoveRight, Tag, UserCircle, Star, GripHorizontal, Trash2 } from "lucide-react";
 import { Job, ProductionProcess, ProductionStageV2, TeamMember } from "../../types";
 import { parseDate } from "../../utils/date";
 import { cn } from "../../utils/cn";
 import { MoveStageModal } from "./MoveStageModal";
+import { ConfirmModal } from "../ui/ConfirmModal";
 import { authFetch } from "../../utils/authFetch";
 import {
   DndContext, DragEndEvent, DragOverlay, DragStartEvent,
@@ -35,6 +36,7 @@ interface ProductionBoardProps {
   onJobClick: (job: JobWithProduction) => void;
   onStagesUpdate: (stages: ProductionStageV2[]) => void;
   onAssigneeChange: (jobId: number, assigneeId: string | null) => void;
+  onRemoveFromProduction: (jobId: number) => void;
 }
 
 const formatCurrency = (value: number) =>
@@ -70,7 +72,7 @@ function getLabelColor(label: string): string {
 function StageColumn({
   stage, jobs, process, allStages, allProcesses, dragOverStage,
   onDragStart, onDragOver, onDragLeave, onDrop, onJobClick, onMoveClick,
-  onNameSave, onHoursSave, teamMembers, onAssigneeChange,
+  onNameSave, onHoursSave, teamMembers, onAssigneeChange, onRemoveFromProduction,
 }: {
   stage: ProductionStageV2;
   jobs: JobWithProduction[];
@@ -88,11 +90,13 @@ function StageColumn({
   onHoursSave: (stageId: string, hours: number) => void;
   teamMembers: TeamMember[];
   onAssigneeChange: (jobId: number, assigneeId: string | null) => void;
+  onRemoveFromProduction: (jobId: number) => void;
 }) {
   const [editingName, setEditingName] = useState(false);
   const [editingHours, setEditingHours] = useState(false);
   const [nameVal, setNameVal] = useState(stage.name);
   const [hoursVal, setHoursVal] = useState(String(stage.expected_hours || ''));
+  const [confirmRemoveJob, setConfirmRemoveJob] = useState<JobWithProduction | null>(null);
   const isOver = dragOverStage === stage.id;
   const dotColor = stage.color || process?.color || '#94a3b8';
 
@@ -236,12 +240,21 @@ function StageColumn({
                 )}
               </div>
 
-              <button
-                onClick={e => { e.stopPropagation(); onMoveClick(job); }}
-                className="w-full mt-1 flex items-center justify-center gap-1 py-1 rounded-lg text-[11px] font-medium text-gray-400 hover:bg-gold-50 dark:hover:bg-gold-900/20 hover:text-gold-600 dark:hover:text-gold-400 transition-colors opacity-0 group-hover/card:opacity-100"
-              >
-                <MoveRight size={12} /> Mover para...
-              </button>
+              <div className="mt-1 flex gap-1 opacity-0 group-hover/card:opacity-100 transition-opacity">
+                <button
+                  onClick={e => { e.stopPropagation(); onMoveClick(job); }}
+                  className="flex-1 flex items-center justify-center gap-1 py-1 rounded-lg text-[11px] font-medium text-gray-400 hover:bg-gold-50 dark:hover:bg-gold-900/20 hover:text-gold-600 dark:hover:text-gold-400 transition-colors"
+                >
+                  <MoveRight size={12} /> Mover para...
+                </button>
+                <button
+                  onClick={e => { e.stopPropagation(); setConfirmRemoveJob(job); }}
+                  className="flex items-center justify-center px-2.5 py-1 rounded-lg text-[11px] font-medium text-gray-400 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                  title="Remover da produção"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
             </div>
           );
         })}
@@ -254,6 +267,16 @@ function StageColumn({
           </div>
         )}
       </div>
+
+      <ConfirmModal
+        open={!!confirmRemoveJob}
+        title="Remover da produção"
+        message={`Remover "${confirmRemoveJob?.client_name || confirmRemoveJob?.job_name || 'este trabalho'}" da produção? O cliente e o trabalho continuam salvos.`}
+        confirmText="Remover"
+        variant="danger"
+        onConfirm={() => { onRemoveFromProduction(confirmRemoveJob!.id); setConfirmRemoveJob(null); }}
+        onCancel={() => setConfirmRemoveJob(null)}
+      />
     </div>
   );
 }
@@ -261,51 +284,65 @@ function StageColumn({
 // ── Assignee avatar dropdown ──────────────────────────────────────────────────
 function AssigneeAvatar({ assignee, teamMembers, onAssign }: { assignee: TeamMember | undefined; teamMembers: TeamMember[]; onAssign: (id: string | null) => void }) {
   const [open, setOpen] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   if (teamMembers.length === 0) return null;
 
   return (
-    <div className="relative flex-shrink-0" onClick={e => e.stopPropagation()}>
-      <button
-        onClick={() => setOpen(v => !v)}
-        title={assignee ? assignee.name : 'Atribuir responsável'}
-        className={cn('w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shadow-md ring-2 ring-white dark:ring-gray-800 transition-transform hover:scale-110',
-          assignee ? 'text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
-        )}
-        style={assignee ? { backgroundColor: assignee.color } : {}}
-      >
-        {assignee ? getMemberInitials(assignee.name) : <UserCircle size={16} />}
-      </button>
+    <>
+      <div className="relative flex-shrink-0" onClick={e => e.stopPropagation()}>
+        <button
+          onClick={() => setOpen(v => !v)}
+          title={assignee ? assignee.name : 'Atribuir responsável'}
+          className={cn('w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shadow-md ring-2 ring-white dark:ring-gray-800 transition-transform hover:scale-110',
+            assignee ? 'text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+          )}
+          style={assignee ? { backgroundColor: assignee.color } : {}}
+        >
+          {assignee ? getMemberInitials(assignee.name) : <UserCircle size={16} />}
+        </button>
 
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-10 z-50 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 py-1.5 min-w-[160px]">
-            <p className="px-3 py-1 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Responsável</p>
-            {teamMembers.map(m => (
-              <button key={m.id} onClick={() => { onAssign(m.id === assignee?.id ? null : m.id); setOpen(false); }}
-                className="w-full flex items-center gap-2 px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors text-left"
-              >
-                <div className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0" style={{ backgroundColor: m.color }}>
-                  {getMemberInitials(m.name)}
-                </div>
-                <span className="text-sm text-gray-700 dark:text-gray-200 truncate">{m.name}</span>
-                {m.id === assignee?.id && <Check size={13} className="ml-auto text-gold-500 flex-shrink-0" />}
-              </button>
-            ))}
-            {assignee && (
-              <>
-                <div className="border-t border-gray-100 dark:border-gray-700 my-1" />
-                <button onClick={() => { onAssign(null); setOpen(false); }}
-                  className="w-full flex items-center gap-2 px-3 py-2 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-left text-red-500"
+        {open && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+            <div className="absolute right-0 top-10 z-50 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 py-1.5 min-w-[160px]">
+              <p className="px-3 py-1 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Responsável</p>
+              {teamMembers.map(m => (
+                <button key={m.id} onClick={() => { onAssign(m.id === assignee?.id ? null : m.id); setOpen(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors text-left"
                 >
-                  <X size={13} /><span className="text-sm">Remover</span>
+                  <div className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0" style={{ backgroundColor: m.color }}>
+                    {getMemberInitials(m.name)}
+                  </div>
+                  <span className="text-sm text-gray-700 dark:text-gray-200 truncate">{m.name}</span>
+                  {m.id === assignee?.id && <Check size={13} className="ml-auto text-gold-500 flex-shrink-0" />}
                 </button>
-              </>
-            )}
-          </div>
-        </>
-      )}
-    </div>
+              ))}
+              {assignee && (
+                <>
+                  <div className="border-t border-gray-100 dark:border-gray-700 my-1" />
+                  <button
+                    onClick={() => { setOpen(false); setConfirmRemove(true); }}
+                    className="w-full flex items-center gap-2 px-3 py-2 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-left text-red-500"
+                  >
+                    <X size={13} /><span className="text-sm">Remover</span>
+                  </button>
+                </>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
+      <ConfirmModal
+        open={confirmRemove}
+        title="Remover responsável"
+        message={`Remover ${assignee?.name} desta etapa?`}
+        confirmText="Remover"
+        variant="danger"
+        onConfirm={() => { onAssign(null); setConfirmRemove(false); }}
+        onCancel={() => setConfirmRemove(false)}
+      />
+    </>
   );
 }
 
@@ -313,7 +350,7 @@ function AssigneeAvatar({ assignee, teamMembers, onAssign }: { assignee: TeamMem
 function ProcessKanban({
   process, stages, jobs, teamMembers, dragOverStage,
   onDragStart, onDragOver, onDragLeave, onDrop,
-  onJobClick, onMoveClick, onNameSave, onHoursSave, onAssigneeChange, allProcesses,
+  onJobClick, onMoveClick, onNameSave, onHoursSave, onAssigneeChange, onRemoveFromProduction, allProcesses,
 }: {
   process: ProductionProcess;
   stages: ProductionStageV2[];
@@ -329,6 +366,7 @@ function ProcessKanban({
   onNameSave: (stageId: string, name: string) => void;
   onHoursSave: (stageId: string, hours: number) => void;
   onAssigneeChange: (jobId: number, assigneeId: string | null) => void;
+  onRemoveFromProduction: (jobId: number) => void;
   allProcesses: ProductionProcess[];
 }) {
   const procStages = stages.filter(s => s.process_id === process.id).sort((a, b) => a.position - b.position);
@@ -354,6 +392,7 @@ function ProcessKanban({
             onHoursSave={onHoursSave}
             teamMembers={teamMembers}
             onAssigneeChange={onAssigneeChange}
+            onRemoveFromProduction={onRemoveFromProduction}
           />
         </React.Fragment>
       ))}
@@ -440,7 +479,7 @@ const SortableProcessTab: React.FC<SortableProcessTabProps> = ({
 }
 
 // ── Main board ────────────────────────────────────────────────────────────────
-export function ProductionBoard({ jobs, processes, stages, teamMembers, onChangeStage, onJobClick, onStagesUpdate, onAssigneeChange }: ProductionBoardProps) {
+export function ProductionBoard({ jobs, processes, stages, teamMembers, onChangeStage, onJobClick, onStagesUpdate, onAssigneeChange, onRemoveFromProduction }: ProductionBoardProps) {
   const [orderedProcesses, setOrderedProcesses] = useState<ProductionProcess[]>(processes);
   useEffect(() => { setOrderedProcesses(processes); }, [processes]);
 
@@ -507,7 +546,7 @@ export function ProductionBoard({ jobs, processes, stages, teamMembers, onChange
     jobs, teamMembers, dragOverStage, allProcesses: processes,
     onDragStart: handleDragStart, onDragOver: handleDragOver, onDragLeave: handleDragLeave, onDrop: handleDrop,
     onJobClick, onMoveClick: (job: JobWithProduction) => setMovingJob(job),
-    onNameSave: handleNameSave, onHoursSave: handleHoursSave, onAssigneeChange,
+    onNameSave: handleNameSave, onHoursSave: handleHoursSave, onAssigneeChange, onRemoveFromProduction,
   };
 
   const activeProcess = processes.find(p => p.id === openProcess);
