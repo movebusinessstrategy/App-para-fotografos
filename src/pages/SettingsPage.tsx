@@ -105,11 +105,11 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
     setWaConnecting(true);
     FB.login(
       (response: any) => {
-        if (response.authResponse?.access_token) {
+        if (response.authResponse?.accessToken) {
           authFetch('/api/meta/whatsapp/exchange-token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ access_token: response.authResponse.access_token }),
+            body: JSON.stringify({ access_token: response.authResponse.accessToken }),
           })
             .then((res) => res.json())
             .then((data) => {

@@ -4209,15 +4209,23 @@ async function startServer() {
 
     try {
       // 1. Inspeciona o token para extrair WABA IDs autorizados
+      const appToken = encodeURIComponent(`${META_APP_ID}|${META_APP_SECRET}`);
       const debugRes = await fetch(
-        `https://graph.facebook.com/v21.0/debug_token?input_token=${token}&access_token=${META_APP_ID}|${META_APP_SECRET}`
+        `https://graph.facebook.com/v21.0/debug_token?input_token=${encodeURIComponent(token)}&access_token=${appToken}`
       );
       const debugData = await debugRes.json();
+      console.log('[Meta] debug_token response:', JSON.stringify(debugData));
+
+      if (debugData.error) {
+        console.error('[Meta] debug_token error:', debugData.error);
+        return res.status(400).json({ error: `Meta API error: ${debugData.error.message}` });
+      }
 
       const wabaScope = (debugData.data?.granular_scopes || []).find(
         (s: any) => s.scope === 'whatsapp_business_management'
       );
       const wabaId = wabaScope?.target_ids?.[0] || null;
+      console.log('[Meta] WABA scope:', wabaScope, '| wabaId:', wabaId);
 
       // 3. Busca número de telefone do WABA
       let phoneNumberId: string | null = null;
