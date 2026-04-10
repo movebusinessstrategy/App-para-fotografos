@@ -4209,7 +4209,7 @@ async function startServer() {
     try {
       // 1. Troca o code pelo access_token
       const tokenRes = await fetch(
-        `https://graph.facebook.com/v21.0/oauth/access_token?client_id=${META_APP_ID}&client_secret=${META_APP_SECRET}&code=${encodeURIComponent(code)}&redirect_uri=${encodeURIComponent('https://www.facebook.com/connect/login_success.html')}`
+        `https://graph.facebook.com/v21.0/oauth/access_token?client_id=${META_APP_ID}&client_secret=${META_APP_SECRET}&code=${encodeURIComponent(code)}&redirect_uri=${encodeURIComponent('https://app-para-fotografos.vercel.app/')}`
       );
       const tokenData = await tokenRes.json();
 
