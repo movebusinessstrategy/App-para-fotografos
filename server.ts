@@ -4194,6 +4194,113 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // ============ META WHATSAPP BUSINESS ============
+  const META_APP_ID = process.env.META_APP_ID || '';
+  const META_APP_SECRET = process.env.META_APP_SECRET || '';
+
+  app.post('/api/meta/whatsapp/exchange-token', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { code } = req.body;
+
+    if (!code) return res.status(400).json({ error: 'code é obrigatório' });
+    if (!META_APP_ID || !META_APP_SECRET) return res.status(500).json({ error: 'META_APP_ID/META_APP_SECRET não configurados' });
+
+    try {
+      // 1. Troca o code pelo access_token
+      const tokenRes = await fetch(
+        `https://graph.facebook.com/v21.0/oauth/access_token?client_id=${META_APP_ID}&client_secret=${META_APP_SECRET}&code=${encodeURIComponent(code)}`
+      );
+      const tokenData = await tokenRes.json();
+
+      if (!tokenData.access_token) {
+        console.error('[Meta] Token exchange failed:', tokenData);
+        return res.status(400).json({ error: 'Falha ao obter token', details: tokenData });
+      }
+
+      // 2. Inspeciona o token para extrair WABA IDs autorizados
+      const debugRes = await fetch(
+        `https://graph.facebook.com/v21.0/debug_token?input_token=${tokenData.access_token}&access_token=${META_APP_ID}|${META_APP_SECRET}`
+      );
+      const debugData = await debugRes.json();
+
+      const wabaScope = (debugData.data?.granular_scopes || []).find(
+        (s: any) => s.scope === 'whatsapp_business_management'
+      );
+      const wabaId = wabaScope?.target_ids?.[0] || null;
+
+      // 3. Busca número de telefone do WABA
+      let phoneNumberId: string | null = null;
+      let phoneNumber: string | null = null;
+      let displayName: string | null = null;
+
+      if (wabaId) {
+        const phoneRes = await fetch(
+          `https://graph.facebook.com/v21.0/${wabaId}/phone_numbers?access_token=${tokenData.access_token}`
+        );
+        const phoneData = await phoneRes.json();
+        if (phoneData.data?.length > 0) {
+          const phone = phoneData.data[0];
+          phoneNumberId = phone.id;
+          phoneNumber = phone.display_phone_number;
+          displayName = phone.verified_name;
+        }
+      }
+
+      // 4. Salva ou atualiza no banco
+      const { error } = await supabase
+        .from('whatsapp_business_accounts')
+        .upsert(
+          {
+            user_id: userId,
+            waba_id: wabaId,
+            phone_number_id: phoneNumberId,
+            phone_number: phoneNumber,
+            display_name: displayName,
+            access_token: tokenData.access_token,
+            connected_at: new Date().toISOString(),
+          },
+          { onConflict: 'user_id' }
+        );
+
+      if (error) return res.status(500).json({ error: error.message });
+
+      res.json({ success: true, waba_id: wabaId, phone_number: phoneNumber, display_name: displayName });
+    } catch (err: any) {
+      console.error('[Meta] exchange-token error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/meta/whatsapp/status', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    const { data, error } = await supabase
+      .from('whatsapp_business_accounts')
+      .select('waba_id, phone_number_id, phone_number, display_name, connected_at')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    res.json({ connected: !!data, account: data || null });
+  });
+
+  app.delete('/api/meta/whatsapp/disconnect', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    const { error } = await supabase
+      .from('whatsapp_business_accounts')
+      .delete()
+      .eq('user_id', userId);
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    res.json({ success: true });
+  });
+
   // ============ VITE / STATIC FILES ============
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

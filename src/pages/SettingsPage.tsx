@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { AlertCircle, Calendar, CheckCircle2, Edit2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { AlertCircle, Calendar, CheckCircle2, Edit2, MessageCircle, Phone, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 import { ConfirmModal } from "../components/ui/ConfirmModal";
 import { authFetch } from "../utils/authFetch";
@@ -44,6 +44,10 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
   const [showModal, setShowModal] = useState(false);
   const [googleConnected, setGoogleConnected] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [waConnected, setWaConnected] = useState(false);
+  const [waAccount, setWaAccount] = useState<{ phone_number: string | null; display_name: string | null; connected_at: string } | null>(null);
+  const [waLoading, setWaLoading] = useState(true);
+  const [waConnecting, setWaConnecting] = useState(false);
   const [confirmModal, setConfirmModal] = useState<{
     open: boolean;
     onConfirm: () => void;
@@ -70,6 +74,84 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
     }
   };
 
+  const checkWaStatus = async () => {
+    try {
+      const res = await authFetch('/api/meta/whatsapp/status');
+      const data = await res.json();
+      setWaConnected(data.connected);
+      setWaAccount(data.account);
+    } catch (err) {
+      console.error('Erro ao checar WhatsApp status:', err);
+    } finally {
+      setWaLoading(false);
+    }
+  };
+
+  const handleConnectWhatsApp = () => {
+    const appId = import.meta.env.VITE_META_APP_ID;
+    const configId = import.meta.env.VITE_META_WA_CONFIG_ID;
+
+    if (!configId) {
+      alert('VITE_META_WA_CONFIG_ID não configurado no .env');
+      return;
+    }
+
+    const FB = (window as any).FB;
+    if (!FB) {
+      alert('SDK do Facebook não carregado. Tente recarregar a página.');
+      return;
+    }
+
+    setWaConnecting(true);
+    FB.login(
+      (response: any) => {
+        if (response.authResponse?.code) {
+          authFetch('/api/meta/whatsapp/exchange-token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: response.authResponse.code }),
+          })
+            .then((res) => res.json())
+            .then((data) => {
+              if (data.success) {
+                checkWaStatus();
+              } else {
+                alert('Erro ao conectar WhatsApp: ' + (data.error || 'desconhecido'));
+              }
+            })
+            .catch((err) => {
+              console.error(err);
+              alert('Erro ao processar conexão do WhatsApp.');
+            })
+            .finally(() => setWaConnecting(false));
+        } else {
+          console.log('[Meta] Login cancelado ou sem code:', response);
+          setWaConnecting(false);
+        }
+      },
+      {
+        config_id: configId,
+        response_type: 'code',
+        override_default_response_type: true,
+        extras: { setup: {}, featureType: '', sessionInfoVersion: '3' },
+      }
+    );
+  };
+
+  const handleDisconnectWhatsApp = () => {
+    setConfirmModal({
+      open: true,
+      title: 'Desconectar WhatsApp Business',
+      message: 'Deseja remover a conexão com o WhatsApp Business? As automações de mensagens serão desativadas.',
+      variant: 'warning',
+      onConfirm: async () => {
+        await authFetch('/api/meta/whatsapp/disconnect', { method: 'DELETE' });
+        setWaConnected(false);
+        setWaAccount(null);
+      },
+    });
+  };
+
   const checkGoogleStatus = async () => {
     try {
       const res = await authFetch('/api/auth/google/status');
@@ -85,14 +167,33 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
   useEffect(() => {
     checkGoogleStatus();
     fetchGoogleConfig();
+    checkWaStatus();
 
     const handleMessage = (event: MessageEvent) => {
       if (event.data?.type === 'GOOGLE_AUTH_SUCCESS') {
         checkGoogleStatus();
       }
     };
-
     window.addEventListener('message', handleMessage);
+
+    // Carrega o SDK do Facebook (necessário para Embedded Signup)
+    if (!document.getElementById('facebook-jssdk')) {
+      (window as any).fbAsyncInit = function () {
+        (window as any).FB.init({
+          appId: import.meta.env.VITE_META_APP_ID,
+          autoLogAppEvents: true,
+          xfbml: true,
+          version: 'v21.0',
+        });
+      };
+      const script = document.createElement('script');
+      script.id = 'facebook-jssdk';
+      script.src = 'https://connect.facebook.net/pt_BR/sdk.js';
+      script.async = true;
+      script.defer = true;
+      document.body.appendChild(script);
+    }
+
     return () => window.removeEventListener('message', handleMessage);
   }, []);
 
@@ -233,6 +334,59 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
               className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 px-4 py-2 rounded-xl font-bold hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors flex items-center gap-2"
             >
               Conectar Google Calendar
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* WhatsApp Business Integration */}
+      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm dark:shadow-lg dark:shadow-black/10 p-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-emerald-50 dark:bg-emerald-500/20 rounded-xl flex items-center justify-center">
+              <MessageCircle size={24} className="text-emerald-600 dark:text-emerald-400" />
+            </div>
+            <div>
+              <h4 className="font-bold text-gray-800 dark:text-white">WhatsApp Business</h4>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                Conecte sua conta oficial do WhatsApp Business para enviar mensagens e follow-ups automáticos.
+              </p>
+              {waConnected && waAccount && (
+                <div className="mt-1.5 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                  <Phone size={12} />
+                  <span className="font-medium text-gray-700 dark:text-gray-300">{waAccount.display_name || 'Conta conectada'}</span>
+                  {waAccount.phone_number && (
+                    <span className="text-gray-400 dark:text-gray-500">· {waAccount.phone_number}</span>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {waLoading ? (
+            <div className="animate-spin text-emerald-600 dark:text-emerald-400">
+              <RefreshCw size={20} />
+            </div>
+          ) : waConnected ? (
+            <div className="flex items-center gap-3">
+              <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 text-sm font-bold bg-emerald-50 dark:bg-emerald-500/20 px-3 py-1 rounded-full">
+                <CheckCircle2 size={16} /> Conectado
+              </span>
+              <button
+                onClick={handleDisconnectWhatsApp}
+                className="text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 text-sm font-bold transition-colors"
+              >
+                Desconectar
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={handleConnectWhatsApp}
+              disabled={waConnecting}
+              className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors text-sm"
+            >
+              {waConnecting ? <RefreshCw size={16} className="animate-spin" /> : <MessageCircle size={16} />}
+              {waConnecting ? 'Conectando...' : 'Conectar WhatsApp Business'}
             </button>
           )}
         </div>
