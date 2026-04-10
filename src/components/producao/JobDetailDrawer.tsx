@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   X, User, Phone, Mail, Instagram, MapPin, Calendar,
   CheckSquare, Square, Trash2, Plus, Image, Clock,
-  ChevronRight, Tag, FileText
+  ChevronRight, Tag, FileText, LogOut
 } from "lucide-react";
 import { SearchableSelect } from "../ui/SearchableSelect";
 import { ContractGenerator } from "../contracts/ContractGenerator";
@@ -55,6 +55,7 @@ interface JobDetailDrawerProps {
   onClose: () => void;
   onStageChange: (jobId: number, stageId: string) => void;
   onLabelsChange?: (jobId: number, labels: string[]) => void;
+  onRemoveFromProduction?: (jobId: number) => void;
 }
 
 const formatCurrency = (v: number) =>
@@ -73,8 +74,9 @@ const formatDuration = (ms: number | null | undefined) => {
   return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
 };
 
-export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsChange }: JobDetailDrawerProps) {
+export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsChange, onRemoveFromProduction }: JobDetailDrawerProps) {
   const [tab, setTab] = useState<"details" | "testimonials">("details");
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const [client, setClient] = useState<ClientDetail | null>(null);
   const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
   const [testimonials, setTestimonials] = useState<Testimonial[]>([]);
@@ -266,6 +268,16 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
               <FileText size={14} />
               Gerar contrato
             </button>
+            {onRemoveFromProduction && (
+              <button
+                onClick={() => setConfirmRemove(true)}
+                className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                title="Remover da produção"
+              >
+                <LogOut size={14} />
+                Remover
+              </button>
+            )}
             <button
               onClick={onClose}
               className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-200"
@@ -567,6 +579,34 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
           client={client}
           onClose={() => setShowContract(false)}
         />
+      )}
+
+      {/* Confirm remove from production */}
+      {confirmRemove && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setConfirmRemove(false)} />
+          <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-xl border border-gray-200 dark:border-gray-800 w-full max-w-sm p-6">
+            <h3 className="text-base font-bold text-gray-900 dark:text-white mb-2">Remover da produção</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-5">
+              Remover <span className="font-semibold text-gray-700 dark:text-gray-200">{job.client_name || job.job_name}</span> da produção?
+              <br />O cliente e o trabalho continuam salvos.
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmRemove(false)}
+                className="flex-1 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => { onRemoveFromProduction!(job.id); setConfirmRemove(false); onClose(); }}
+                className="flex-1 py-2 text-sm bg-red-500 hover:bg-red-600 text-white rounded-xl font-semibold transition-colors"
+              >
+                Remover
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

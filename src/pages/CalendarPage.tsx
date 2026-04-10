@@ -9,6 +9,7 @@ import { authFetch } from "../utils/authFetch";
 import { cn } from "../utils/cn";
 import { parseDate } from "../utils/date";
 import { Client, Job } from "../types";
+import { useAuth } from "../contexts/AuthContext";
 
 export default function CalendarPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -48,6 +49,9 @@ export default function CalendarPage() {
 
 // --- Calendar Component ---
 function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Client[], onUpdate: () => void }) {
+  const { canAccess } = useAuth();
+  const canCreate = canAccess('calendar_create');
+
   const [currentDate, setCurrentDate] = useState(new Date());
   const [view, setView] = useState<'day' | 'week' | 'month'>('month');
   const [editingJob, setEditingJob] = useState<Job | null>(null);
@@ -75,6 +79,7 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
   };
 
   const handleDayClick = (date: Date) => {
+    if (!canCreate) return;
     setEditingJob(null);
     setSelectedDate(format(date, 'yyyy-MM-dd'));
     setShowJobModal(true);
@@ -337,13 +342,15 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
         </div>
 
         <div className="flex flex-wrap items-center gap-4">
-          <button 
-            onClick={() => { setEditingJob(null); setSelectedDate(undefined); setShowJobModal(true); }}
-            className="flex items-center gap-2 px-4 py-2 bg-gold-600 dark:bg-gold-500 text-white rounded-xl font-bold hover:bg-gold-700 dark:hover:bg-gold-600 shadow-md shadow-gold-100 dark:shadow-gold-500/20 transition-all"
-          >
-            <Plus size={20} />
-            Novo Compromisso
-          </button>
+          {canCreate && (
+            <button
+              onClick={() => { setEditingJob(null); setSelectedDate(undefined); setShowJobModal(true); }}
+              className="flex items-center gap-2 px-4 py-2 bg-gold-600 dark:bg-gold-500 text-white rounded-xl font-bold hover:bg-gold-700 dark:hover:bg-gold-600 shadow-md shadow-gold-100 dark:shadow-gold-500/20 transition-all"
+            >
+              <Plus size={20} />
+              Novo Compromisso
+            </button>
+          )}
 
           {/* View Toggle */}
           <div className="flex bg-white dark:bg-gray-900 p-1 rounded-xl border border-gray-100 dark:border-gray-800 shadow-sm">

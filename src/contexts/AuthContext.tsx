@@ -50,6 +50,8 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
       }
     } catch {
       // silencia — se falhar, trata como dono
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -57,20 +59,23 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
-      setLoading(false);
-      if (session) fetchMe();
+      if (session) {
+        fetchMe(); // loading=false só depois do fetchMe
+      } else {
+        setLoading(false);
+      }
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         setSession(session);
         setUser(session?.user ?? null);
-        setLoading(false);
         if (session) {
-          fetchMe();
+          fetchMe(); // loading=false dentro do fetchMe
         } else {
           setIsMember(false);
           setPermissions(null);
+          setLoading(false);
         }
       }
     );

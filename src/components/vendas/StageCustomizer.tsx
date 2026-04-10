@@ -20,6 +20,7 @@ import { X, GripVertical, Trash2, Plus, Check, Pencil } from "lucide-react";
 import { PipelineStage } from "../../types";
 import { authFetch } from "../../utils/authFetch";
 import { ConfirmModal } from "../ui/ConfirmModal";
+import { useAuth } from "../../contexts/AuthContext";
 
 interface StageCustomizerProps {
   open: boolean;
@@ -34,6 +35,10 @@ export function StageCustomizer({
   onClose,
   onUpdated,
 }: StageCustomizerProps) {
+  const { canAccess } = useAuth();
+  const canAdd = canAccess('vendas_add_stage');
+  const canEdit = canAccess('vendas_edit_stage');
+
   const [localStages, setLocalStages] = useState<PipelineStage[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
@@ -227,6 +232,7 @@ export function StageCustomizer({
                           isEditing={editingId === stage.id}
                           editingName={editingName}
                           saving={saving}
+                          canEdit={canEdit}
                           onStartEdit={() => startEditing(stage)}
                           onEditingNameChange={setEditingName}
                           onSaveEdit={saveEdit}
@@ -249,23 +255,27 @@ export function StageCustomizer({
               </DndContext>
 
               {/* Adicionar etapa */}
-              <div className="flex gap-2 mt-4 pt-2">
-                <input
-                  value={newStageName}
-                  onChange={(e) => setNewStageName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && addStage()}
-                  placeholder="Nome da nova etapa..."
-                  className="flex-1 px-3 py-2 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:border-gray-400 dark:focus:border-gray-600"
-                />
-                <button
-                  onClick={addStage}
-                  disabled={!newStageName.trim() || saving}
-                  className="px-3 py-2 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-lg text-sm hover:bg-gray-800 dark:hover:bg-gray-100 disabled:opacity-50 flex items-center gap-1 transition-colors"
-                >
-                  <Plus size={16} />
-                  Adicionar
-                </button>
-              </div>
+              {canAdd ? (
+                <div className="flex gap-2 mt-4 pt-2">
+                  <input
+                    value={newStageName}
+                    onChange={(e) => setNewStageName(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && addStage()}
+                    placeholder="Nome da nova etapa..."
+                    className="flex-1 px-3 py-2 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:border-gray-400 dark:focus:border-gray-600"
+                  />
+                  <button
+                    onClick={addStage}
+                    disabled={!newStageName.trim() || saving}
+                    className="px-3 py-2 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-lg text-sm hover:bg-gray-800 dark:hover:bg-gray-100 disabled:opacity-50 flex items-center gap-1 transition-colors"
+                  >
+                    <Plus size={16} />
+                    Adicionar
+                  </button>
+                </div>
+              ) : (
+                <p className="mt-3 text-xs text-gray-400 dark:text-gray-500 italic">Sem permissão para adicionar etapas.</p>
+              )}
             </div>
 
             {/* Etapas finais */}
@@ -320,6 +330,7 @@ interface SortableStageItemProps {
   isEditing: boolean;
   editingName: string;
   saving: boolean;
+  canEdit: boolean;
   onStartEdit: () => void;
   onEditingNameChange: (name: string) => void;
   onSaveEdit: () => void;
@@ -332,6 +343,7 @@ function SortableStageItem({
   isEditing,
   editingName,
   saving,
+  canEdit,
   onStartEdit,
   onEditingNameChange,
   onSaveEdit,
@@ -398,21 +410,25 @@ function SortableStageItem({
       ) : (
         <>
           <span className="flex-1 text-sm text-gray-900 dark:text-white">{stage.name}</span>
-          <button
-            onClick={onStartEdit}
-            className="p-1.5 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded opacity-0 group-hover:opacity-100 transition-all"
-            title="Editar nome"
-          >
-            <Pencil size={14} />
-          </button>
-          <button
-            onClick={onDelete}
-            disabled={saving}
-            className="p-1.5 text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded opacity-0 group-hover:opacity-100 transition-all"
-            title="Excluir etapa"
-          >
-            <Trash2 size={14} />
-          </button>
+          {canEdit && (
+            <>
+              <button
+                onClick={onStartEdit}
+                className="p-1.5 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded opacity-0 group-hover:opacity-100 transition-all"
+                title="Editar nome"
+              >
+                <Pencil size={14} />
+              </button>
+              <button
+                onClick={onDelete}
+                disabled={saving}
+                className="p-1.5 text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded opacity-0 group-hover:opacity-100 transition-all"
+                title="Excluir etapa"
+              >
+                <Trash2 size={14} />
+              </button>
+            </>
+          )}
         </>
       )}
     </div>
