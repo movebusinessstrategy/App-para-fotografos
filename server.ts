@@ -4201,26 +4201,16 @@ async function startServer() {
   app.post('/api/meta/whatsapp/exchange-token', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { code } = req.body;
+    const { access_token, code } = req.body;
+    const token = access_token || code;
 
-    if (!code) return res.status(400).json({ error: 'code é obrigatório' });
+    if (!token) return res.status(400).json({ error: 'access_token é obrigatório' });
     if (!META_APP_ID || !META_APP_SECRET) return res.status(500).json({ error: 'META_APP_ID/META_APP_SECRET não configurados' });
 
     try {
-      // 1. Troca o code pelo access_token
-      const tokenRes = await fetch(
-        `https://graph.facebook.com/v21.0/oauth/access_token?client_id=${META_APP_ID}&client_secret=${META_APP_SECRET}&code=${encodeURIComponent(code)}&redirect_uri=${encodeURIComponent('https://www.facebook.com/connect/login_success.html')}`
-      );
-      const tokenData = await tokenRes.json();
-
-      if (!tokenData.access_token) {
-        console.error('[Meta] Token exchange failed:', tokenData);
-        return res.status(400).json({ error: 'Falha ao obter token', details: tokenData });
-      }
-
-      // 2. Inspeciona o token para extrair WABA IDs autorizados
+      // 1. Inspeciona o token para extrair WABA IDs autorizados
       const debugRes = await fetch(
-        `https://graph.facebook.com/v21.0/debug_token?input_token=${tokenData.access_token}&access_token=${META_APP_ID}|${META_APP_SECRET}`
+        `https://graph.facebook.com/v21.0/debug_token?input_token=${token}&access_token=${META_APP_ID}|${META_APP_SECRET}`
       );
       const debugData = await debugRes.json();
 
@@ -4236,7 +4226,7 @@ async function startServer() {
 
       if (wabaId) {
         const phoneRes = await fetch(
-          `https://graph.facebook.com/v21.0/${wabaId}/phone_numbers?access_token=${tokenData.access_token}`
+          `https://graph.facebook.com/v21.0/${wabaId}/phone_numbers?access_token=${token}`
         );
         const phoneData = await phoneRes.json();
         if (phoneData.data?.length > 0) {
@@ -4257,7 +4247,7 @@ async function startServer() {
             phone_number_id: phoneNumberId,
             phone_number: phoneNumber,
             display_name: displayName,
-            access_token: tokenData.access_token,
+            access_token: token,
             connected_at: new Date().toISOString(),
           },
           { onConflict: 'user_id' }

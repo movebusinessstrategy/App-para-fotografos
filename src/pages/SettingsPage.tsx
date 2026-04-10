@@ -105,11 +105,11 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
     setWaConnecting(true);
     FB.login(
       (response: any) => {
-        if (response.authResponse?.code) {
+        if (response.authResponse?.access_token) {
           authFetch('/api/meta/whatsapp/exchange-token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code: response.authResponse.code }),
+            body: JSON.stringify({ access_token: response.authResponse.access_token }),
           })
             .then((res) => res.json())
             .then((data) => {
@@ -125,13 +125,13 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
             })
             .finally(() => setWaConnecting(false));
         } else {
-          console.log('[Meta] Login cancelado ou sem code:', response);
+          console.log('[Meta] Login cancelado ou sem token:', response);
           setWaConnecting(false);
         }
       },
       {
         config_id: configId,
-        response_type: 'code',
+        response_type: 'token',
         override_default_response_type: true,
         extras: { setup: {}, featureType: '', sessionInfoVersion: '3' },
       }
