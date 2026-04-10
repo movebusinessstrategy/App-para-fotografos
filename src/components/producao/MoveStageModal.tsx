@@ -115,7 +115,7 @@ export function MoveStageModal({ job, processes, stages, onMove, onClose }: Move
             <button
               onClick={handleMove}
               disabled={!selectedStage || selectedStage === job.production_stage}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-xl transition-colors"
+              className="flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-xl transition-colors"
             >
               <MoveRight size={15} />
               Mover

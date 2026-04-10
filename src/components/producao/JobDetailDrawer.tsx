@@ -54,6 +54,7 @@ interface JobDetailDrawerProps {
   stages: { id: string; name: string }[];
   onClose: () => void;
   onStageChange: (jobId: number, stageId: string) => void;
+  onLabelsChange?: (jobId: number, labels: string[]) => void;
 }
 
 const formatCurrency = (v: number) =>
@@ -72,8 +73,8 @@ const formatDuration = (ms: number | null | undefined) => {
   return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
 };
 
-export function JobDetailDrawer({ job, stages, onClose, onStageChange }: JobDetailDrawerProps) {
-  const [tab, setTab] = useState<"details" | "checklist" | "testimonials">("details");
+export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsChange }: JobDetailDrawerProps) {
+  const [tab, setTab] = useState<"details" | "testimonials">("details");
   const [client, setClient] = useState<ClientDetail | null>(null);
   const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
   const [testimonials, setTestimonials] = useState<Testimonial[]>([]);
@@ -220,6 +221,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange }: JobDeta
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ labels: next }),
     });
+    onLabelsChange?.(job!.id, next);
   };
 
   const handleRemoveLabel = async (label: string) => {
@@ -230,6 +232,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange }: JobDeta
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ labels: next }),
     });
+    onLabelsChange?.(job!.id, next);
   };
 
   const done = checklist.filter(i => i.done).length;
@@ -257,7 +260,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange }: JobDeta
           <div className="flex items-center gap-1">
             <button
               onClick={() => setShowContract(true)}
-              className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 transition-colors"
+              className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-gold-600 dark:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-500/10 transition-colors"
               title="Gerar contrato"
             >
               <FileText size={14} />
@@ -284,10 +287,9 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange }: JobDeta
 
         {/* Tabs */}
         <div className="flex border-b border-gray-200 dark:border-gray-700">
-          {(["details", "checklist", "testimonials"] as const).map((t) => {
-            const labels: Record<string, string> = {
+          {(["details", "testimonials"] as const).map((t) => {
+            const tabLabels: Record<string, string> = {
               details: "Detalhes",
-              checklist: `Checklist${checklist.length > 0 ? ` ${done}/${checklist.length}` : ""}`,
               testimonials: `Depoimentos${testimonials.length > 0 ? ` (${testimonials.length})` : ""}`,
             };
             return (
@@ -296,11 +298,11 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange }: JobDeta
                 onClick={() => setTab(t)}
                 className={`flex-1 py-3 text-xs font-semibold transition-colors ${
                   tab === t
-                    ? "border-b-2 border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400"
+                    ? "border-b-2 border-gold-500 text-gold-600 dark:border-gold-400 dark:text-gold-400"
                     : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
                 }`}
               >
-                {labels[t]}
+                {tabLabels[t]}
               </button>
             );
           })}
@@ -394,13 +396,58 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange }: JobDeta
                     onChange={e => setNewLabel(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && handleAddLabel()}
                     placeholder="Nova etiqueta..."
-                    className="flex-1 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-1.5 text-xs text-gray-700 dark:text-gray-200 focus:border-indigo-500 focus:outline-none placeholder-gray-400 dark:placeholder-gray-500"
+                    className="flex-1 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-1.5 text-xs text-gray-700 dark:text-gray-200 focus:border-gold-500 focus:outline-none placeholder-gray-400 dark:placeholder-gray-500"
                   />
                   <button
                     onClick={handleAddLabel}
-                    className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs hover:bg-indigo-700"
+                    className="px-3 py-1.5 rounded-lg bg-gold-600 text-white text-xs hover:bg-gold-700"
                   >
                     <Plus size={13} />
+                  </button>
+                </div>
+              </section>
+
+              {/* Checklist — inline after labels */}
+              <section>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 flex items-center gap-1.5">
+                  <CheckSquare size={12} />
+                  Checklist
+                  {checklist.length > 0 && (
+                    <span className="ml-auto text-[11px] font-bold text-gold-600 dark:text-gold-400">
+                      {done}/{checklist.length}
+                    </span>
+                  )}
+                </h3>
+                {checklist.length > 0 && (
+                  <div className="space-y-1.5 mb-2">
+                    {checklist.map(item => (
+                      <div key={item.id} className="flex items-center gap-2.5 rounded-lg border border-gray-100 dark:border-gray-700 px-3 py-2">
+                        <button onClick={() => handleToggle(item)} className="flex-shrink-0">
+                          {item.done
+                            ? <CheckSquare size={16} className="text-gold-500 dark:text-gold-400" />
+                            : <Square size={16} className="text-gray-400" />}
+                        </button>
+                        <span className={`flex-1 text-sm ${item.done ? "line-through text-gray-400" : "text-gray-700 dark:text-gray-200"}`}>
+                          {item.text}
+                        </span>
+                        <button onClick={() => handleDeleteItem(item.id)} className="text-gray-300 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400 flex-shrink-0">
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newItem}
+                    onChange={e => setNewItem(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && handleAddItem()}
+                    placeholder="Adicionar item ao checklist..."
+                    className="flex-1 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-400 focus:border-gold-500 focus:outline-none"
+                  />
+                  <button onClick={handleAddItem} className="px-3 py-1.5 rounded-lg bg-gold-600 text-white text-xs hover:bg-gold-700 flex-shrink-0">
+                    <Plus size={14} />
                   </button>
                 </div>
               </section>
@@ -450,60 +497,6 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange }: JobDeta
                   className="w-full"
                 />
               </section>
-            </div>
-          )}
-
-          {/* ── CHECKLIST TAB ── */}
-          {tab === "checklist" && (
-            <div className="p-5">
-              <div className="mb-4 flex gap-2">
-                <input
-                  type="text"
-                  value={newItem}
-                  onChange={e => setNewItem(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && handleAddItem()}
-                  placeholder="Novo item..."
-                  className="flex-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:placeholder-gray-500"
-                />
-                <button
-                  onClick={handleAddItem}
-                  className="rounded-lg bg-blue-600 px-3 py-2 text-white hover:bg-blue-700"
-                >
-                  <Plus size={16} />
-                </button>
-              </div>
-
-              {checklist.length === 0 ? (
-                <p className="text-center text-sm text-gray-400 py-8">Nenhum item ainda.</p>
-              ) : (
-                <div className="space-y-2">
-                  {checklist.map(item => (
-                    <div
-                      key={item.id}
-                      className="flex items-center gap-3 rounded-lg border border-gray-200 px-3 py-2.5 dark:border-gray-700"
-                    >
-                      <button onClick={() => handleToggle(item)}>
-                        {item.done
-                          ? <CheckSquare size={18} className="text-blue-600 dark:text-blue-400" />
-                          : <Square size={18} className="text-gray-400" />
-                        }
-                      </button>
-                      <span className={`flex-1 text-sm ${item.done ? "line-through text-gray-400" : "text-gray-700 dark:text-gray-200"}`}>
-                        {item.text}
-                      </span>
-                      <button
-                        onClick={() => handleDeleteItem(item.id)}
-                        className="text-gray-300 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  ))}
-                  <p className="pt-2 text-right text-xs text-gray-400">
-                    {done}/{checklist.length} concluídos
-                  </p>
-                </div>
-              )}
             </div>
           )}
 

@@ -8,17 +8,18 @@
   --font-serif: "Cormorant Garamond", serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
   
-  --color-gold-50: #fbf7ef;
-  --color-gold-100: #f4ebd6;
-  --color-gold-200: #e9d5ab;
-  --color-gold-300: #dbba79;
-  --color-gold-400: #d0a153;
-  --color-gold-500: #c58a3d;
-  --color-gold-600: #ad6f31;
-  --color-gold-700: #8d552a;
-  --color-gold-800: #744528;
-  --color-gold-900: #613b24;
-  --color-gold-950: #381f12;
+  /* FotoMOVE brand colors — #F1C665 (light) · #D4A94A (primary) */
+  --color-gold-50: #fdf9ee;
+  --color-gold-100: #faf1d0;
+  --color-gold-200: #f5e3a0;
+  --color-gold-300: #f1cc6e;
+  --color-gold-400: #F1C665;
+  --color-gold-500: #D4A94A;
+  --color-gold-600: #b08830;
+  --color-gold-700: #8a6620;
+  --color-gold-800: #664c18;
+  --color-gold-900: #443210;
+  --color-gold-950: #261c08;
 
   --color-luxury-black: #0A0A0A;
   --color-luxury-charcoal: #1A1A1A;

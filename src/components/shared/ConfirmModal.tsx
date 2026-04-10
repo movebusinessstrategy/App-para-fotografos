@@ -37,7 +37,7 @@ const variantStyles: Record<Variant, {
     bg: "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400",
     text: "text-blue-700 dark:text-blue-400",
     icon: <Info size={22} />,
-    confirmBtn: "bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600",
+    confirmBtn: "bg-gold-600 hover:bg-gold-700 dark:bg-gold-500 dark:hover:bg-gold-600",
   },
 };
 

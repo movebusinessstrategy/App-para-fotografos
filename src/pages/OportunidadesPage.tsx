@@ -39,13 +39,15 @@ export default function OportunidadesPage() {
   const { data: aniversariantes, loading: anivLoading, refetch: refetchAniv } = useAniversariantes(periodo);
   const { data: oportunidades, loading: opsLoading, refetch: refetchOps, update: updateOp } = useOportunidades();
 
-  useEffect(() => {
+  const refetchDashboard = () => {
     setDashLoading(true);
     oportunidadesApi.getDashboard()
       .then(setDashboard)
       .catch(console.error)
       .finally(() => setDashLoading(false));
-  }, []);
+  };
+
+  useEffect(() => { refetchDashboard(); }, []);
 
   useEffect(() => {
     if (tab === 'smash') {
@@ -94,10 +96,12 @@ export default function OportunidadesPage() {
       }),
     });
     await updateOp(op.id, { status: 'em_kanban' });
+    refetchDashboard();
   };
 
   const handleDiscard = async (id: string) => {
     await updateOp(id, { status: 'dismissed' });
+    refetchDashboard();
   };
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
@@ -118,8 +122,8 @@ export default function OportunidadesPage() {
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Newborn, Aniversário, Smash the Cake, Acompanhamentos e mais</p>
         </div>
         <button
-          onClick={() => { refetchAniv(); refetchOps(); }}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors"
+          onClick={() => { refetchAniv(); refetchOps(); refetchDashboard(); }}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gold-600 hover:bg-gold-700 text-white text-sm font-medium transition-colors"
         >
           <RefreshCw size={15} />
           Atualizar
@@ -353,7 +357,7 @@ export default function OportunidadesPage() {
                         notas: `${f.nome} completa 1 ano em ${f.diasParaAniversario === 0 ? 'hoje' : `${f.diasParaAniversario} dias`}`,
                       } as any).then(refetchOps).catch(console.error);
                     }}
-                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-xs font-medium text-white transition-colors"
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-gold-600 hover:bg-gold-700 text-xs font-medium text-white transition-colors"
                   >
                     <Zap size={12} />
                     Criar Oferta
@@ -404,8 +408,8 @@ export default function OportunidadesPage() {
               <div key={i} className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-4">
                 <div className="flex items-center justify-between gap-4">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-indigo-50 dark:bg-indigo-500/20 rounded-xl flex items-center justify-center">
-                      <Baby size={18} className="text-indigo-600" />
+                    <div className="w-10 h-10 bg-gold-50 dark:bg-gold-500/20 rounded-xl flex items-center justify-center">
+                      <Baby size={18} className="text-gold-600" />
                     </div>
                     <div>
                       <p className="font-semibold text-gray-900 dark:text-white text-sm">{f.nome}</p>
@@ -424,7 +428,7 @@ export default function OportunidadesPage() {
                         notas: `${f.nome} está com ${f.idadeMeses} meses de vida`,
                       } as any).then(refetchOps).catch(console.error);
                     }}
-                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-xs font-medium text-white transition-colors"
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-gold-600 hover:bg-gold-700 text-xs font-medium text-white transition-colors"
                   >
                     <Zap size={12} />
                     Criar Oferta

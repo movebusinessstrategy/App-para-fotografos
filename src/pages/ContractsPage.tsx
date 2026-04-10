@@ -50,7 +50,7 @@ export default function ContractsPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-600" />
       </div>
     );
   }
@@ -74,7 +74,7 @@ export default function ContractsPage() {
             placeholder="Buscar trabalho ou cliente..."
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-8 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 placeholder-gray-400 focus:border-indigo-400 outline-none transition-colors"
+            className="w-full pl-9 pr-8 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 placeholder-gray-400 focus:border-gold-400 outline-none transition-colors"
           />
           {searchQuery && (
             <button onClick={() => setSearchQuery("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
@@ -116,7 +116,7 @@ export default function ContractsPage() {
                       <button
                         onClick={() => handleGenerate(job)}
                         disabled={loadingContract}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-xs font-semibold rounded-lg transition-colors shadow-sm"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gold-600 hover:bg-gold-700 disabled:opacity-60 text-white text-xs font-semibold rounded-lg transition-colors shadow-sm"
                       >
                         {loadingContract ? (
                           <div className="h-3 w-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />

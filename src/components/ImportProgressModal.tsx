@@ -93,7 +93,7 @@ export default function ImportProgressModal({
                       : hasErrors
                         ? "bg-amber-50 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400"
                         : "bg-green-50 dark:bg-green-950/50 text-green-600 dark:text-green-400"
-                    : "bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400"
+                    : "bg-gold-50 dark:bg-gold-950/50 text-gold-600 dark:text-gold-400"
                 }`}
               >
                 {done ? (
@@ -118,7 +118,7 @@ export default function ImportProgressModal({
             <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400">
               {!done ? (
                 <>
-                  <Loader2 className="animate-spin text-indigo-600 dark:text-indigo-400" size={18} />
+                  <Loader2 className="animate-spin text-gold-600 dark:text-gold-400" size={18} />
                   <span>
                     Processando {Math.min(processed, total)} de {total} registros...
                   </span>
@@ -143,7 +143,7 @@ export default function ImportProgressModal({
                         : hasErrors
                           ? "bg-gradient-to-r from-amber-400 via-amber-500 to-orange-500 dark:from-amber-500 dark:via-amber-600 dark:to-orange-600"
                           : "bg-gradient-to-r from-green-400 via-emerald-500 to-teal-500 dark:from-green-500 dark:via-emerald-600 dark:to-teal-600"
-                      : "bg-gradient-to-r from-indigo-500 via-violet-500 to-blue-500 dark:from-indigo-400 dark:via-violet-400 dark:to-blue-400"
+                      : "bg-gradient-to-r from-gold-500 via-violet-500 to-blue-500 dark:from-gold-400 dark:via-violet-400 dark:to-blue-400"
                   }`}
                   style={{ width: `${percent}%` }}
                   initial={{ width: 0 }}
@@ -243,7 +243,7 @@ export default function ImportProgressModal({
                   className={`px-5 py-2.5 rounded-xl font-semibold transition-colors ${
                     allFailed
                       ? "bg-red-600 dark:bg-red-500 text-white hover:bg-red-700 dark:hover:bg-red-600"
-                      : "bg-indigo-600 dark:bg-indigo-500 text-white hover:bg-indigo-700 dark:hover:bg-indigo-600"
+                      : "bg-gold-600 dark:bg-gold-500 text-white hover:bg-gold-700 dark:hover:bg-gold-600"
                   }`}
                 >
                   Fechar

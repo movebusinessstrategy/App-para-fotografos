@@ -113,7 +113,7 @@ function ClientSearch({ clients, selectedId, onChange }: ClientSearchProps) {
                   type="button"
                   onClick={() => handleSelect(c.id)}
                   className={`w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${
-                    isSelected ? "bg-indigo-50 dark:bg-indigo-500/10" : ""
+                    isSelected ? "bg-gold-50 dark:bg-gold-500/10" : ""
                   }`}
                 >
                   <div className="flex-1 min-w-0">
@@ -125,7 +125,7 @@ function ClientSearch({ clients, selectedId, onChange }: ClientSearchProps) {
                       <span className="text-xs text-gray-400">{c.phone}</span>
                     )}
                   </div>
-                  {isSelected && <Check size={13} className="text-indigo-500 flex-shrink-0" />}
+                  {isSelected && <Check size={13} className="text-gold-500 flex-shrink-0" />}
                 </button>
               );
             })}
@@ -382,11 +382,11 @@ export function DealDetailDrawer({
                       onChange={e => setDealValueStr(e.target.value)}
                       placeholder="0"
                       autoFocus
-                      className="w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded px-2 py-1 text-sm text-gray-900 dark:text-white outline-none focus:border-indigo-400 dark:focus:border-indigo-500"
+                      className="w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded px-2 py-1 text-sm text-gray-900 dark:text-white outline-none focus:border-gold-400 dark:focus:border-gold-500"
                       onKeyDown={e => { if (e.key === "Enter") saveValue(); if (e.key === "Escape") setEditingValue(false); }}
                     />
                     <div className="flex gap-1">
-                      <button onClick={saveValue} className="flex-1 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded font-medium">✓</button>
+                      <button onClick={saveValue} className="flex-1 py-1 bg-gold-600 hover:bg-gold-700 text-white text-xs rounded font-medium">✓</button>
                       <button onClick={() => setEditingValue(false)} className="flex-1 py-1 border border-gray-200 dark:border-gray-700 text-gray-500 text-xs rounded">✕</button>
                     </div>
                   </div>
@@ -418,7 +418,7 @@ export function DealDetailDrawer({
                       onKeyDown={e => { if (e.key === "Escape") setEditingDate(false); }}
                     />
                     <div className="flex gap-1">
-                      <button onClick={saveDate} className="flex-1 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded font-medium">✓</button>
+                      <button onClick={saveDate} className="flex-1 py-1 bg-gold-600 hover:bg-gold-700 text-white text-xs rounded font-medium">✓</button>
                       <button onClick={() => setEditingDate(false)} className="flex-1 py-1 border border-gray-200 dark:border-gray-700 text-gray-500 text-xs rounded">✕</button>
                     </div>
                   </div>
@@ -449,7 +449,7 @@ export function DealDetailDrawer({
                         onClick={() => savePriority(opt.value)}
                         className={`w-full text-left px-2 py-1 rounded text-xs font-medium transition-colors ${
                           dealPriority === opt.value
-                            ? "bg-indigo-600 text-white"
+                            ? "bg-gold-600 text-white"
                             : "hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
                         }`}
                       >

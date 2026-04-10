@@ -37,7 +37,7 @@ export function DashboardCards({ anivHoje, anivSemana, totalPendentes, taxaConve
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
       <Card icon={<Gift size={22} className="text-pink-600" />} label="Aniversariantes Hoje" value={anivHoje} color="bg-pink-50 dark:bg-pink-500/20" />
-      <Card icon={<Calendar size={22} className="text-indigo-600" />} label="Aniversariantes Semana" value={anivSemana} color="bg-indigo-50 dark:bg-indigo-500/20" />
+      <Card icon={<Calendar size={22} className="text-gold-600" />} label="Aniversariantes Semana" value={anivSemana} color="bg-gold-50 dark:bg-gold-500/20" />
       <Card icon={<Target size={22} className="text-amber-600" />} label="Oportunidades Pendentes" value={totalPendentes} color="bg-amber-50 dark:bg-amber-500/20" />
       <Card icon={<TrendingUp size={22} className="text-emerald-600" />} label="Taxa de Conversão" value={`${taxaConversao}%`} color="bg-emerald-50 dark:bg-emerald-500/20" />
     </div>

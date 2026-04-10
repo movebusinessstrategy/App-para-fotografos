@@ -35,7 +35,7 @@ function initials(name?: string | null, phone?: string) {
 }
 
 const COLORS = [
-  "bg-indigo-500", "bg-violet-500", "bg-emerald-500",
+  "bg-gold-500", "bg-violet-500", "bg-emerald-500",
   "bg-sky-500", "bg-rose-500", "bg-amber-500", "bg-teal-500",
 ];
 
@@ -106,7 +106,7 @@ export function ConversationList({ conversations, selectedPhone, loading, onSele
                 key={conv.phone}
                 onClick={() => onSelect(conv)}
                 className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors border-b border-gray-50 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-700/50 ${
-                  isSelected ? "bg-indigo-50 dark:bg-indigo-900/20 border-l-2 border-l-indigo-500" : ""
+                  isSelected ? "bg-gold-50 dark:bg-gold-900/20 border-l-2 border-l-gold-500" : ""
                 }`}
               >
                 {/* Avatar */}
@@ -119,7 +119,7 @@ export function ConversationList({ conversations, selectedPhone, loading, onSele
                 {/* Info */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-1">
-                    <span className={`text-sm font-semibold truncate ${isSelected ? "text-indigo-700 dark:text-indigo-300" : "text-gray-900 dark:text-white"}`}>
+                    <span className={`text-sm font-semibold truncate ${isSelected ? "text-gold-700 dark:text-gold-300" : "text-gray-900 dark:text-white"}`}>
                       {name}
                     </span>
                     <span className="text-[11px] text-gray-400 flex-shrink-0">
@@ -131,7 +131,7 @@ export function ConversationList({ conversations, selectedPhone, loading, onSele
                       {conv.last_message || ""}
                     </span>
                     {(conv.unread_count ?? 0) > 0 && (
-                      <span className="flex-shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-indigo-600 text-white text-[10px] font-bold flex items-center justify-center">
+                      <span className="flex-shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-gold-600 text-white text-[10px] font-bold flex items-center justify-center">
                         {conv.unread_count}
                       </span>
                     )}

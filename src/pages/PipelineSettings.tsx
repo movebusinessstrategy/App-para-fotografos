@@ -282,7 +282,7 @@ export default function PipelineSettings() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 dark:border-indigo-400"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-600 dark:border-gold-400"></div>
       </div>
     )
   }
@@ -375,7 +375,7 @@ export default function PipelineSettings() {
                     type="text"
                     value={editName}
                     onChange={(e) => setEditName(e.target.value)}
-                    className="flex-1 px-3 py-1.5 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 focus:border-indigo-500 dark:focus:border-indigo-400"
+                    className="flex-1 px-3 py-1.5 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 focus:border-gold-500 dark:focus:border-gold-400"
                     autoFocus
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') handleUpdateStage(stage.id)
@@ -401,7 +401,7 @@ export default function PipelineSettings() {
                       setEditingId(stage.id)
                       setEditName(stage.name)
                     }}
-                    className="p-1.5 text-gray-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 rounded-lg transition-colors"
+                    className="p-1.5 text-gray-400 dark:text-gray-500 hover:text-gold-600 dark:hover:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-500/10 rounded-lg transition-colors"
                     title="Editar"
                   >
                     <Pencil className="w-4 h-4" />
@@ -455,7 +455,7 @@ export default function PipelineSettings() {
                 value={newStageName}
                 onChange={(e) => setNewStageName(e.target.value)}
                 placeholder="Nome do novo estágio..."
-                className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 focus:border-indigo-500 dark:focus:border-indigo-400"
+                className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 focus:border-gold-500 dark:focus:border-gold-400"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') handleAddStage()
                 }}
@@ -463,7 +463,7 @@ export default function PipelineSettings() {
               <button
                 onClick={handleAddStage}
                 disabled={saving || !newStageName.trim()}
-                className="px-4 py-2 bg-indigo-600 dark:bg-indigo-500 text-white rounded-lg hover:bg-indigo-700 dark:hover:bg-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
+                className="px-4 py-2 bg-gold-600 dark:bg-gold-500 text-white rounded-lg hover:bg-gold-700 dark:hover:bg-gold-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
               >
                 <Plus className="w-4 h-4" />
                 Adicionar

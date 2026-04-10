@@ -43,16 +43,23 @@ const Login = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4">
-      <div className="w-full max-w-md bg-white dark:bg-gray-900 rounded-xl shadow-lg dark:shadow-2xl dark:shadow-black/20 p-8 border border-transparent dark:border-gray-800">
+    <div className="min-h-screen flex items-center justify-center p-4" style={{ background: "linear-gradient(135deg, #1a1207 0%, #2d1f08 40%, #1a1207 100%)" }}>
+      <div className="w-full max-w-md bg-white dark:bg-gray-900 rounded-2xl shadow-2xl p-8 border border-gray-100 dark:border-gray-800">
         {/* Header */}
-        <div className="text-center mb-6">
-          <div className="mx-auto mb-4 h-12 w-12 rounded-xl bg-purple-600 dark:bg-purple-500 flex items-center justify-center">
-            <span className="text-white font-bold text-xl">FP</span>
+        <div className="text-center mb-7">
+          <div className="flex items-center justify-center gap-2.5 mb-5">
+            <svg width="40" height="40" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M17 4C17 4 7 5.5 4.5 17H17V4Z" fill="#F1C665"/>
+              <path d="M19 4C19 4 29 5.5 31.5 17H19V4Z" fill="#D4A94A"/>
+              <path d="M17 32C17 32 7 30.5 4.5 19H17V32Z" fill="#D4A94A"/>
+              <path d="M19 32C19 32 29 30.5 31.5 19H19V32Z" fill="#F1C665"/>
+            </svg>
+            <span className="text-2xl font-extrabold tracking-tight text-gray-900 dark:text-white">
+              Foto<span style={{ color: "#D4A94A" }}>MOVE</span>
+            </span>
           </div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Entrar no FocalPoint</h1>
-          <p className="text-gray-500 dark:text-gray-400 mt-1">
-            Digite suas credenciais para acessar sua conta
+          <p className="text-gray-500 dark:text-gray-400 text-sm">
+            Entre na sua conta para continuar
           </p>
         </div>
 
@@ -77,7 +84,7 @@ const Login = () => {
               onChange={(e) => setEmail(e.target.value)}
               required
               disabled={loading}
-              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:border-transparent outline-none transition disabled:bg-gray-100 dark:disabled:bg-gray-800/50 disabled:cursor-not-allowed"
+              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-gold-400 dark:focus:ring-gold-400 focus:border-transparent outline-none transition disabled:bg-gray-100 dark:disabled:bg-gray-800/50 disabled:cursor-not-allowed"
             />
           </div>
 
@@ -94,7 +101,7 @@ const Login = () => {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 disabled={loading}
-                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:border-transparent outline-none transition disabled:bg-gray-100 dark:disabled:bg-gray-800/50 disabled:cursor-not-allowed pr-10"
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-gold-400 dark:focus:ring-gold-400 focus:border-transparent outline-none transition disabled:bg-gray-100 dark:disabled:bg-gray-800/50 disabled:cursor-not-allowed pr-10"
               />
               <button
                 type="button"
@@ -109,7 +116,7 @@ const Login = () => {
           <div className="text-right">
             <Link
               to="/recuperar-senha"
-              className="text-sm text-purple-600 dark:text-purple-400 hover:text-purple-700 dark:hover:text-purple-300 hover:underline transition-colors"
+              className="text-sm text-gold-500 dark:text-gold-400 hover:text-gold-600 dark:hover:text-gold-300 hover:underline transition-colors"
             >
               Esqueceu a senha?
             </Link>
@@ -118,7 +125,7 @@ const Login = () => {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-2 px-4 bg-purple-600 dark:bg-purple-500 hover:bg-purple-700 dark:hover:bg-purple-600 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+            className="w-full py-2 px-4 bg-gold-500 dark:bg-gold-400 hover:bg-gold-600 dark:hover:bg-gold-500 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
           >
             {loading ? (
               <>
@@ -134,7 +141,7 @@ const Login = () => {
             Não tem uma conta?{" "}
             <Link
               to="/cadastro"
-              className="text-purple-600 dark:text-purple-400 hover:text-purple-700 dark:hover:text-purple-300 hover:underline font-medium transition-colors"
+              className="text-gold-500 dark:text-gold-400 hover:text-gold-600 dark:hover:text-gold-300 hover:underline font-medium transition-colors"
             >
               Criar conta
             </Link>

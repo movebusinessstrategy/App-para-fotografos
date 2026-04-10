@@ -38,7 +38,7 @@ export default function CalendarPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 dark:border-indigo-400" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-600 dark:border-gold-400" />
       </div>
     );
   }
@@ -144,8 +144,8 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
                   <div className={cn(
                     "text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full",
                     isSameDay(day, new Date()) 
-                      ? "bg-indigo-600 dark:bg-indigo-500 text-white" 
-                      : "text-gray-400 dark:text-gray-500 group-hover/day:text-indigo-600 dark:group-hover/day:text-indigo-400"
+                      ? "bg-gold-600 dark:bg-gold-500 text-white" 
+                      : "text-gray-400 dark:text-gray-500 group-hover/day:text-gold-600 dark:group-hover/day:text-gold-400"
                   )}>
                     {format(day, 'd')}
                   </div>
@@ -158,9 +158,9 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
                       draggable
                       onDragStart={(e) => handleDragStart(e, job)}
                       onClick={(e) => handleJobClick(job, e)}
-                      className="w-full text-left text-[10px] p-1 bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 rounded border border-indigo-100 dark:border-indigo-500/30 truncate font-medium flex items-center gap-1 hover:bg-indigo-100 dark:hover:bg-indigo-500/30 transition-colors cursor-move"
+                      className="w-full text-left text-[10px] p-1 bg-gold-50 dark:bg-gold-500/20 text-gold-700 dark:text-gold-300 rounded border border-gold-100 dark:border-gold-500/30 truncate font-medium flex items-center gap-1 hover:bg-gold-100 dark:hover:bg-gold-500/30 transition-colors cursor-move"
                     >
-                      {job.google_event_id && <CalendarIcon size={10} className="text-indigo-400 dark:text-indigo-400 shrink-0" />}
+                      {job.google_event_id && <CalendarIcon size={10} className="text-gold-400 dark:text-gold-400 shrink-0" />}
                       {job.job_time && (
                         <span className="font-bold shrink-0">
                           {job.job_time}{job.job_end_time ? `-${job.job_end_time}` : ''}
@@ -202,7 +202,7 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
             >
               <div className={cn(
                 "p-4 border-b border-gray-50 dark:border-gray-800 text-center relative",
-                isSameDay(day, new Date()) ? "bg-indigo-50 dark:bg-indigo-500/10" : "bg-gray-50/50 dark:bg-gray-800/50"
+                isSameDay(day, new Date()) ? "bg-gold-50 dark:bg-gold-500/10" : "bg-gray-50/50 dark:bg-gray-800/50"
               )}>
                 <Plus size={16} className="absolute top-4 right-4 text-gray-300 dark:text-gray-600 opacity-0 group-hover/day:opacity-100 transition-opacity" />
                 <div className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-1">
@@ -211,7 +211,7 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
                 <div className={cn(
                   "text-xl font-bold inline-flex items-center justify-center w-10 h-10 rounded-full",
                   isSameDay(day, new Date()) 
-                    ? "bg-indigo-600 dark:bg-indigo-500 text-white" 
+                    ? "bg-gold-600 dark:bg-gold-500 text-white" 
                     : "text-gray-700 dark:text-gray-200"
                 )}>
                   {format(day, 'd')}
@@ -224,15 +224,15 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
                     draggable
                     onDragStart={(e) => handleDragStart(e, job)}
                     onClick={(e) => handleJobClick(job, e)}
-                    className="w-full text-left p-3 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-xl shadow-sm hover:border-indigo-200 dark:hover:border-indigo-500/30 hover:shadow-md transition-all group cursor-move"
+                    className="w-full text-left p-3 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-xl shadow-sm hover:border-gold-200 dark:hover:border-gold-500/30 hover:shadow-md transition-all group cursor-move"
                   >
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/20 px-2 py-0.5 rounded-full uppercase">
+                      <span className="text-[10px] font-bold text-gold-600 dark:text-gold-400 bg-gold-50 dark:bg-gold-500/20 px-2 py-0.5 rounded-full uppercase">
                         {job.job_time || '00:00'}{job.job_end_time ? ` - ${job.job_end_time}` : ''}
                       </span>
-                      {job.google_event_id && <CalendarIcon size={12} className="text-indigo-400" />}
+                      {job.google_event_id && <CalendarIcon size={12} className="text-gold-400" />}
                     </div>
-                    <div className="font-bold text-gray-900 dark:text-white text-sm mb-1 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                    <div className="font-bold text-gray-900 dark:text-white text-sm mb-1 group-hover:text-gold-600 dark:group-hover:text-gold-400 transition-colors">
                       {job.client_name || job.job_name || 'Tarefa'}
                     </div>
                     <div className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1">
@@ -264,7 +264,7 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
       <div className="max-w-2xl mx-auto space-y-4">
         <div className="bg-white dark:bg-gray-900 p-6 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <div className="text-4xl font-bold text-indigo-600 dark:text-indigo-400">
+            <div className="text-4xl font-bold text-gold-600 dark:text-gold-400">
               {format(currentDate, 'd')}
             </div>
             <div>
@@ -287,7 +287,7 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
             <button 
               key={job.id}
               onClick={(e) => handleJobClick(job, e)}
-              className="w-full text-left p-5 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl shadow-sm hover:border-indigo-200 dark:hover:border-indigo-500/30 hover:shadow-md transition-all flex items-center gap-6 group"
+              className="w-full text-left p-5 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl shadow-sm hover:border-gold-200 dark:hover:border-gold-500/30 hover:shadow-md transition-all flex items-center gap-6 group"
             >
               <div className="w-24 text-center border-r border-gray-100 dark:border-gray-800 pr-6">
                 <div className="text-xl font-bold text-gray-900 dark:text-white">{job.job_time || '00:00'}</div>
@@ -296,10 +296,10 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-1">
-                  <h4 className="text-lg font-bold text-gray-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                  <h4 className="text-lg font-bold text-gray-900 dark:text-white group-hover:text-gold-600 dark:group-hover:text-gold-400 transition-colors">
                     {job.client_name || job.job_name || 'Tarefa'}
                   </h4>
-                  {job.google_event_id && <CalendarIcon size={16} className="text-indigo-400" />}
+                  {job.google_event_id && <CalendarIcon size={16} className="text-gold-400" />}
                 </div>
                 <div className="flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
                   <div className="flex items-center gap-1.5">
@@ -314,7 +314,7 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
                   )}
                 </div>
               </div>
-              <ChevronRight className="text-gray-300 dark:text-gray-600 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors" />
+              <ChevronRight className="text-gray-300 dark:text-gray-600 group-hover:text-gold-600 dark:group-hover:text-gold-400 transition-colors" />
             </button>
           ))}
           {dayJobs.length === 0 && (
@@ -339,7 +339,7 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
         <div className="flex flex-wrap items-center gap-4">
           <button 
             onClick={() => { setEditingJob(null); setSelectedDate(undefined); setShowJobModal(true); }}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 dark:bg-indigo-500 text-white rounded-xl font-bold hover:bg-indigo-700 dark:hover:bg-indigo-600 shadow-md shadow-indigo-100 dark:shadow-indigo-500/20 transition-all"
+            className="flex items-center gap-2 px-4 py-2 bg-gold-600 dark:bg-gold-500 text-white rounded-xl font-bold hover:bg-gold-700 dark:hover:bg-gold-600 shadow-md shadow-gold-100 dark:shadow-gold-500/20 transition-all"
           >
             <Plus size={20} />
             Novo Compromisso
@@ -352,7 +352,7 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
               className={cn(
                 "px-4 py-1.5 text-sm font-bold rounded-lg transition-all",
                 view === 'day' 
-                  ? "bg-indigo-600 dark:bg-indigo-500 text-white shadow-md" 
+                  ? "bg-gold-600 dark:bg-gold-500 text-white shadow-md" 
                   : "text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
               )}
             >
@@ -363,7 +363,7 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
               className={cn(
                 "px-4 py-1.5 text-sm font-bold rounded-lg transition-all",
                 view === 'week' 
-                  ? "bg-indigo-600 dark:bg-indigo-500 text-white shadow-md" 
+                  ? "bg-gold-600 dark:bg-gold-500 text-white shadow-md" 
                   : "text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
               )}
             >
@@ -374,7 +374,7 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
               className={cn(
                 "px-4 py-1.5 text-sm font-bold rounded-lg transition-all",
                 view === 'month' 
-                  ? "bg-indigo-600 dark:bg-indigo-500 text-white shadow-md" 
+                  ? "bg-gold-600 dark:bg-gold-500 text-white shadow-md" 
                   : "text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
               )}
             >
@@ -399,7 +399,7 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
           
           <button 
             onClick={() => setCurrentDate(new Date())}
-            className="px-4 py-2 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl text-sm font-bold text-indigo-600 dark:text-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-800 shadow-sm transition-all"
+            className="px-4 py-2 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl text-sm font-bold text-gold-600 dark:text-gold-400 hover:bg-gray-50 dark:hover:bg-gray-800 shadow-sm transition-all"
           >
             Hoje
           </button>

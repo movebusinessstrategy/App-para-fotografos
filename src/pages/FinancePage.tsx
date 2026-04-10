@@ -32,7 +32,7 @@ export default function FinancePage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 dark:border-indigo-400" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-600 dark:border-gold-400" />
       </div>
     );
   }
@@ -672,10 +672,10 @@ function FinanceHeader({
   jobTypeOptions: string[],
 }) {
   return (
-    <div className="relative overflow-hidden rounded-[32px] border border-white/70 dark:border-gray-700/50 bg-gradient-to-br from-slate-900 via-indigo-900 to-sky-900 px-6 py-7 text-white shadow-[0_24px_80px_rgba(30,41,59,0.28)] md:px-8">
+    <div className="relative overflow-hidden rounded-[32px] border border-white/70 dark:border-gray-700/50 bg-gradient-to-br from-slate-900 via-gold-900 to-sky-900 px-6 py-7 text-white shadow-[0_24px_80px_rgba(30,41,59,0.28)] md:px-8">
       <div className="absolute inset-0 opacity-40">
         <div className="absolute -top-20 left-10 h-52 w-52 rounded-full bg-cyan-300/20 blur-3xl" />
-        <div className="absolute right-0 top-0 h-56 w-56 rounded-full bg-indigo-200/20 blur-3xl" />
+        <div className="absolute right-0 top-0 h-56 w-56 rounded-full bg-gold-200/20 blur-3xl" />
         <div className="absolute bottom-0 left-1/3 h-40 w-40 rounded-full bg-emerald-300/10 blur-3xl" />
       </div>
 
@@ -812,7 +812,7 @@ function FinanceSummaryCards({
 }) {
   const cards = [
     { title: 'Faturamento total', value: formatCurrency(totals.grossRevenue), icon: <BadgeDollarSign size={18} />, accent: 'primary' as const, note: 'Entrada bruta do período' },
-    { title: 'Manter no banco', value: formatCurrency(totals.keepInBank), icon: <Landmark size={18} />, accent: 'indigo' as const, note: 'Reserva operacional' },
+    { title: 'Manter no banco', value: formatCurrency(totals.keepInBank), icon: <Landmark size={18} />, accent: 'gold' as const, note: 'Reserva operacional' },
     { title: 'Caixa de emergência', value: formatCurrency(totals.emergencyFund), icon: <Shield size={18} />, accent: 'teal' as const, note: 'Proteção de caixa' },
     { title: 'Investimentos', value: formatCurrency(totals.investments), icon: <TrendingUp size={18} />, accent: 'sky' as const, note: 'Expansão e melhorias' },
     { title: 'Reinvestimento', value: formatCurrency(totals.reinvestment), icon: <RefreshCw size={18} />, accent: 'amber' as const, note: 'Crescimento contínuo' },
@@ -852,11 +852,11 @@ function FinanceSummaryCard({
   value: string,
   note: string,
   icon: React.ReactNode,
-  accent?: 'primary' | 'indigo' | 'teal' | 'sky' | 'amber' | 'violet' | 'orange' | 'emerald' | 'slate' | 'rose',
+  accent?: 'primary' | 'gold' | 'teal' | 'sky' | 'amber' | 'violet' | 'orange' | 'emerald' | 'slate' | 'rose',
 }) {
   const accentStyles = {
-    primary: 'border-indigo-200/70 dark:border-indigo-500/30 bg-gradient-to-br from-indigo-600 via-indigo-600 to-blue-600 text-white shadow-[0_20px_45px_rgba(79,70,229,0.22)]',
-    indigo: 'border-indigo-100 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-900 dark:text-white',
+    primary: 'border-gold-200/70 dark:border-gold-500/30 bg-gradient-to-br from-gold-600 via-gold-600 to-blue-600 text-white shadow-[0_20px_45px_rgba(79,70,229,0.22)]',
+    gold: 'border-gold-100 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-900 dark:text-white',
     teal: 'border-teal-100 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-900 dark:text-white',
     sky: 'border-sky-100 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-900 dark:text-white',
     amber: 'border-amber-100 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-900 dark:text-white',
@@ -869,7 +869,7 @@ function FinanceSummaryCard({
 
   const dotStyles = {
     primary: 'bg-white/20 text-white',
-    indigo: 'bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400',
+    gold: 'bg-gold-50 dark:bg-gold-500/20 text-gold-600 dark:text-gold-400',
     teal: 'bg-teal-50 dark:bg-teal-500/20 text-teal-600 dark:text-teal-400',
     sky: 'bg-sky-50 dark:bg-sky-500/20 text-sky-600 dark:text-sky-400',
     amber: 'bg-amber-50 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400',
@@ -888,7 +888,7 @@ function FinanceSummaryCard({
       <div className="absolute right-0 top-0 h-24 w-24 rounded-full bg-current/5 blur-2xl" />
       <div className="relative z-10 flex items-start justify-between gap-4">
         <div>
-          <p className={cn("text-sm font-medium", accent === 'primary' ? "text-indigo-100" : "text-gray-500 dark:text-gray-400")}>{title}</p>
+          <p className={cn("text-sm font-medium", accent === 'primary' ? "text-gold-100" : "text-gray-500 dark:text-gray-400")}>{title}</p>
           <p className="mt-3 text-[1.7rem] font-bold tracking-tight">{value}</p>
           <p className={cn("mt-2 text-xs", accent === 'primary' ? "text-white/70" : "text-gray-400 dark:text-gray-500")}>{note}</p>
         </div>
@@ -1042,7 +1042,7 @@ function FinanceChartCard({
           <h4 className="text-lg font-bold text-gray-900 dark:text-white">{title}</h4>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{subtitle}</p>
         </div>
-        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400">
+        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gold-50 dark:bg-gold-500/20 text-gold-600 dark:text-gold-400">
           {icon}
         </div>
       </div>
@@ -1093,7 +1093,7 @@ function FinanceInsights({
       value: strongestCategory ? strongestCategory.name : 'Sem dados',
       detail: strongestCategory ? formatCurrency(strongestCategory.value) : 'Nenhuma distribuição encontrada',
       icon: <PieChartIcon size={18} />,
-      tone: 'indigo',
+      tone: 'gold',
     },
     {
       title: 'Caixa total protegido',
@@ -1133,7 +1133,7 @@ function FinanceInsights({
   ] as const;
 
   const toneStyles = {
-    indigo: 'bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400',
+    gold: 'bg-gold-50 dark:bg-gold-500/20 text-gold-600 dark:text-gold-400',
     teal: 'bg-teal-50 dark:bg-teal-500/20 text-teal-600 dark:text-teal-400',
     sky: 'bg-sky-50 dark:bg-sky-500/20 text-sky-600 dark:text-sky-400',
     emerald: 'bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400',
@@ -1211,7 +1211,7 @@ function FinanceTable({
           <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
             {rows.map((row, index) => (
               <tr key={row.key} className={cn(
-                "transition-colors hover:bg-indigo-50/40 dark:hover:bg-indigo-500/10",
+                "transition-colors hover:bg-gold-50/40 dark:hover:bg-gold-500/10",
                 index % 2 === 0 ? "bg-white dark:bg-gray-900" : "bg-gray-50/35 dark:bg-gray-800/35"
               )}>
                 <td className="px-5 py-4">

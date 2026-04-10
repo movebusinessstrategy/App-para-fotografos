@@ -121,19 +121,19 @@ function Stat({ label, value, highlight, warn }: { label: string; value: string 
     <div
       className={cn(
         "flex-1 min-w-[180px] bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-xl px-4 py-3",
-        highlight && "bg-indigo-50 dark:bg-indigo-950/30 border-indigo-100 dark:border-indigo-900/50",
+        highlight && "bg-gold-50 dark:bg-gold-950/30 border-gold-100 dark:border-gold-900/50",
         warn && "bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900/50"
       )}
     >
       <p className={cn(
         "text-xs font-semibold uppercase",
-        highlight ? "text-indigo-600 dark:text-indigo-400" : warn ? "text-amber-600 dark:text-amber-400" : "text-gray-500 dark:text-gray-400"
+        highlight ? "text-gold-600 dark:text-gold-400" : warn ? "text-amber-600 dark:text-amber-400" : "text-gray-500 dark:text-gray-400"
       )}>
         {label}
       </p>
       <p className={cn(
         "text-lg font-bold",
-        highlight ? "text-indigo-700 dark:text-indigo-300" : warn ? "text-amber-700 dark:text-amber-300" : "text-gray-800 dark:text-white"
+        highlight ? "text-gold-700 dark:text-gold-300" : warn ? "text-amber-700 dark:text-amber-300" : "text-gray-800 dark:text-white"
       )}>
         {value}
       </p>

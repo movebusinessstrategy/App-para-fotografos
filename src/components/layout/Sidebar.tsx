@@ -7,7 +7,6 @@ import {
   FileText,
   LayoutDashboard,
   Settings,
-  Settings2,
   Shield,
   Trello,
   TrendingUp,
@@ -23,7 +22,6 @@ const ALL_NAV_ITEMS = [
   { to: "/clients",       label: "Clientes",         icon: Users,           module: "clients" },
   { to: "/jobs",          label: "Produção",         icon: Camera,          module: "jobs" },
   { to: "/vendas",        label: "Vendas",           icon: Trello,          module: "vendas" },
-  { to: "/pipeline-settings", label: "Configurar Funil", icon: Settings2,  module: "vendas" },
   { to: "/calendar",      label: "Agenda",           icon: Calendar,        module: "calendar" },
   { to: "/finance",       label: "Financeiro",       icon: DollarSign,      module: "finance" },
   { to: "/oportunidades", label: "Oportunidades",    icon: TrendingUp,      module: "oportunidades" },
@@ -73,11 +71,17 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
       >
         {/* Header */}
         <div className="p-6 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-indigo-600 dark:bg-indigo-500 rounded-xl flex items-center justify-center text-white">
-              <Camera size={24} />
-            </div>
-            <h1 className="text-xl font-bold tracking-tight text-gray-900 dark:text-white">FocalPoint</h1>
+          <div className="flex items-center gap-2.5">
+            {/* FotoMOVE icon — 4 curved quadrants */}
+            <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M17 4C17 4 7 5.5 4.5 17H17V4Z" fill="#F1C665"/>
+              <path d="M19 4C19 4 29 5.5 31.5 17H19V4Z" fill="#D4A94A"/>
+              <path d="M17 32C17 32 7 30.5 4.5 19H17V32Z" fill="#D4A94A"/>
+              <path d="M19 32C19 32 29 30.5 31.5 19H19V32Z" fill="#F1C665"/>
+            </svg>
+            <span className="text-xl font-extrabold tracking-tight text-gray-900 dark:text-white">
+              Foto<span style={{ color: "#D4A94A" }}>MOVE</span>
+            </span>
           </div>
           <button
             onClick={onClose}
@@ -89,9 +93,9 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
 
         {/* Badge de membro */}
         {isMember && (
-          <div className="mx-4 mb-2 px-3 py-1.5 bg-indigo-50 dark:bg-indigo-900/30 rounded-lg flex items-center gap-2">
-            <Shield size={13} className="text-indigo-500 flex-shrink-0" />
-            <span className="text-xs font-medium text-indigo-600 dark:text-indigo-400">Acesso de membro</span>
+          <div className="mx-4 mb-2 px-3 py-1.5 bg-gold-50 dark:bg-gold-900/30 rounded-lg flex items-center gap-2">
+            <Shield size={13} className="text-gold-500 flex-shrink-0" />
+            <span className="text-xs font-medium text-gold-600 dark:text-gold-400">Acesso de membro</span>
           </div>
         )}
 
@@ -107,7 +111,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
                 cn(
                   "flex items-center gap-3 w-full px-4 py-3.5 rounded-xl transition-all duration-200",
                   isActive
-                    ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 font-semibold"
+                    ? "bg-gold-50 dark:bg-gold-500/20 text-gold-700 dark:text-gold-300 font-semibold"
                     : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white"
                 )
               }
@@ -129,7 +133,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
                 cn(
                   "flex items-center gap-3 w-full px-4 py-3.5 rounded-xl transition-all duration-200",
                   isActive
-                    ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 font-semibold"
+                    ? "bg-gold-50 dark:bg-gold-500/20 text-gold-700 dark:text-gold-300 font-semibold"
                     : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white"
                 )
               }

@@ -37,7 +37,7 @@ export default function Header({ title, userInitial, onSignOut, onMenuClick }: H
           <input
             type="text"
             placeholder="Buscar..."
-            className="pl-10 pr-4 py-2 bg-gray-100 dark:bg-gray-800 border-none rounded-full text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 w-48 lg:w-64"
+            className="pl-10 pr-4 py-2 bg-gray-100 dark:bg-gray-800 border-none rounded-full text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-gold-500 w-48 lg:w-64"
           />
         </div>
 
@@ -60,7 +60,7 @@ export default function Header({ title, userInitial, onSignOut, onMenuClick }: H
 
         {/* Avatar e Logout */}
         <div className="flex items-center gap-2 md:gap-3">
-          <div className="w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-900 flex items-center justify-center text-indigo-700 dark:text-indigo-300 font-bold text-xs">
+          <div className="w-8 h-8 rounded-full bg-gold-100 dark:bg-gold-900 flex items-center justify-center text-gold-700 dark:text-gold-300 font-bold text-xs">
             {userInitial || "U"}
           </div>
           <button 
@@ -81,7 +81,7 @@ export default function Header({ title, userInitial, onSignOut, onMenuClick }: H
               type="text"
               placeholder="Buscar..."
               autoFocus
-              className="w-full pl-10 pr-4 py-2 bg-gray-100 dark:bg-gray-800 border-none rounded-full text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-indigo-500"
+              className="w-full pl-10 pr-4 py-2 bg-gray-100 dark:bg-gray-800 border-none rounded-full text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-gold-500"
             />
           </div>
         </div>

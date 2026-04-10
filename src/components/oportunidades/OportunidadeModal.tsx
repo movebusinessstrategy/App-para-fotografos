@@ -13,13 +13,13 @@ import { cn } from '../../utils/cn';
 const STATUSES = [
   { key: 'pendente',   label: 'Pendente',   color: 'amber'   },
   { key: 'contatado',  label: 'Contatado',  color: 'blue'    },
-  { key: 'negociando', label: 'Negociando', color: 'indigo'  },
+  { key: 'negociando', label: 'Negociando', color: 'gold'  },
 ] as const;
 
 const STATUS_COLORS: Record<string, string> = {
   pendente:   'bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30',
   contatado:  'bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30',
-  negociando: 'bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/30',
+  negociando: 'bg-gold-100 dark:bg-gold-500/20 text-gold-700 dark:text-gold-300 border-gold-200 dark:border-gold-500/30',
   convertido: 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30',
   converted:  'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30',
   perdido:    'bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-300 border-red-200 dark:border-red-500/30',
@@ -320,8 +320,8 @@ export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalP
 
           {/* Converter em Job — mini form */}
           {showConvert && !terminal && (
-            <form onSubmit={handleConverter} className="bg-indigo-50 dark:bg-indigo-500/10 rounded-xl p-4 space-y-3 border border-indigo-100 dark:border-indigo-500/20">
-              <p className="text-sm font-semibold text-indigo-700 dark:text-indigo-300 flex items-center gap-2">
+            <form onSubmit={handleConverter} className="bg-gold-50 dark:bg-gold-500/10 rounded-xl p-4 space-y-3 border border-gold-100 dark:border-gold-500/20">
+              <p className="text-sm font-semibold text-gold-700 dark:text-gold-300 flex items-center gap-2">
                 <CheckCircle2 size={15} />
                 Converter em Job
               </p>
@@ -352,7 +352,7 @@ export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalP
                   Cancelar
                 </button>
                 <button type="submit" disabled={converting}
-                  className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium flex items-center justify-center gap-2">
+                  className="flex-1 py-2 rounded-lg bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white text-sm font-medium flex items-center justify-center gap-2">
                   {converting && <Loader2 size={13} className="animate-spin" />}
                   Criar Job
                 </button>
@@ -476,7 +476,7 @@ export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalP
                 <button
                   onClick={handleSave}
                   disabled={saving}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-medium transition-colors"
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white text-xs font-medium transition-colors"
                 >
                   {saving ? <Loader2 size={12} className="animate-spin" /> : saved ? <CheckCircle2 size={12} /> : null}
                   {saved ? 'Salvo!' : saving ? 'Salvando...' : 'Salvar Anotações'}

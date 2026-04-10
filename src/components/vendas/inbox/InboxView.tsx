@@ -123,7 +123,7 @@ export function InboxView({ deals, stages, onDealUpdated }: Props) {
             <button
               onClick={() => fetchConversations(true)}
               disabled={refreshing}
-              className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-indigo-500 transition-colors"
+              className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gold-500 transition-colors"
               title="Atualizar"
             >
               <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
@@ -144,8 +144,8 @@ export function InboxView({ deals, stages, onDealUpdated }: Props) {
             <ChatView phone={selected.phone} contactName={selected.contact_name} />
           ) : (
             <div className="flex flex-col items-center justify-center h-full gap-4 text-gray-400 bg-gray-50 dark:bg-gray-900">
-              <div className="w-16 h-16 rounded-full bg-indigo-50 dark:bg-indigo-900/30 flex items-center justify-center">
-                <MessageCircle size={30} className="text-indigo-400" strokeWidth={1.5} />
+              <div className="w-16 h-16 rounded-full bg-gold-50 dark:bg-gold-900/30 flex items-center justify-center">
+                <MessageCircle size={30} className="text-gold-400" strokeWidth={1.5} />
               </div>
               <div className="text-center">
                 <p className="text-base font-semibold text-gray-600 dark:text-gray-300">Selecione uma conversa</p>
