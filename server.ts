@@ -1453,7 +1453,7 @@ async function startServer() {
   app.get('/api/inbox/messages/:phone', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const phone = req.params.phone.replace(/\D/g, ''); // normaliza: remove +, espaços, etc
+    const phone = normalizeBrazilianPhone(req.params.phone.replace(/\D/g, '')); // normaliza + trata 9 BR
     const limit = Number(req.query.limit) || 60;
     try {
       const { data, error } = await supabase
