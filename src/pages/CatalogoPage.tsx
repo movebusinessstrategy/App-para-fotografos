@@ -154,36 +154,50 @@ function CategoriaModal({ item, onSave, onClose }: {
           </div>
           <div>
             <FieldLabel>Cor</FieldLabel>
-            {/* Preview da cor selecionada */}
-            <div className="flex items-center gap-3 mb-3 p-3 rounded-xl bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700">
-              <span className="w-6 h-6 rounded-full flex-shrink-0 shadow-sm border border-black/10" style={{ background: cor }} />
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                {CORES.find((c) => c.hex === cor)?.label ?? "Personalizado"}
-              </span>
-            </div>
-            {/* Grade de cores */}
-            <div className="grid grid-cols-6 gap-2">
+            {/* Grade de presets */}
+            <div className="grid grid-cols-6 gap-2 mb-3">
               {CORES.map((c) => (
                 <button key={c.hex} type="button" onClick={() => setCor(c.hex)}
                   title={c.label}
                   style={{ background: c.hex }}
                   className={`
-                    group relative w-full aspect-square rounded-xl transition-all duration-150 border-2 shadow-sm
+                    relative w-full aspect-square rounded-xl transition-all duration-150 border-2 shadow-sm
                     ${cor === c.hex
-                      ? "border-gray-900 dark:border-white scale-105 shadow-md"
+                      ? "border-gray-900 dark:border-white scale-110 shadow-md"
                       : "border-transparent hover:border-gray-400 dark:hover:border-gray-500 hover:scale-105"}
                     ${c.hex === "#F8FAFC" ? "border-gray-200 dark:border-gray-600" : ""}
                   `}
                 >
                   {cor === c.hex && (
                     <span className="absolute inset-0 flex items-center justify-center">
-                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                        <path d="M2 7l4 4 6-7" stroke={c.hex === "#F8FAFC" || c.hex === "#EAB308" ? "#111" : "#fff"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                        <path d="M2 7l4 4 6-7" stroke={c.hex === "#F8FAFC" || c.hex === "#EAB308" ? "#111" : "#fff"} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
                       </svg>
                     </span>
                   )}
                 </button>
               ))}
+            </div>
+            {/* Cor personalizada */}
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700">
+              <label className="relative cursor-pointer flex-shrink-0" title="Escolher cor personalizada">
+                <span className="block w-8 h-8 rounded-lg border-2 border-gray-300 dark:border-gray-600 shadow-sm overflow-hidden" style={{ background: cor }}>
+                  <input type="color" value={cor} onChange={(e) => setCor(e.target.value)}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                </span>
+              </label>
+              <div className="flex-1">
+                <p className="text-xs text-gray-400 dark:text-gray-500 mb-0.5">Personalizada</p>
+                <input
+                  type="text"
+                  value={cor}
+                  onChange={(e) => { const v = e.target.value; if (/^#[0-9A-Fa-f]{0,6}$/.test(v)) setCor(v); }}
+                  onBlur={(e) => { if (!/^#[0-9A-Fa-f]{6}$/.test(e.target.value)) setCor("#6B7280"); }}
+                  maxLength={7}
+                  placeholder="#000000"
+                  className="text-sm font-mono text-gray-700 dark:text-gray-300 bg-transparent outline-none w-full"
+                />
+              </div>
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-2">
@@ -688,16 +702,17 @@ const ComboModal: React.FC<{
           {/* Adicionar item */}
           <div>
             <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">Itens do combo</p>
-            <div className="flex gap-2 mb-3 flex-wrap">
+            <div className="flex items-center gap-2 mb-3">
               <select value={niTipo} onChange={(e) => { setNiTipo(e.target.value as "produto" | "servico"); setNiId(""); }}
-                className="px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400 flex-shrink-0">
+                className="px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400 flex-shrink-0 w-28">
                 <option value="servico">Serviço</option>
                 <option value="produto">Produto</option>
               </select>
-              <div className="flex-1 min-w-[160px]">
+              <div className="flex-1">
                 <SearchableSelect value={niId} onChange={setNiId} options={itemOpts} placeholder="Selecionar..." />
               </div>
-              <NumInput value={niQtd} onChange={setNiQtd} className="w-16 text-center" placeholder="Qtd" />
+              <input type="number" min={1} value={niQtd} onChange={(e) => setNiQtd(Math.max(1, parseInt(e.target.value) || 1))}
+                className="w-16 px-2 py-2 text-sm text-center border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400 flex-shrink-0" />
               <button type="button" onClick={addItem} disabled={!niId}
                 className="px-3 py-2 rounded-xl bg-gold-600 hover:bg-gold-700 disabled:opacity-40 text-white text-sm font-medium flex-shrink-0">
                 <Plus size={16} />
@@ -851,6 +866,33 @@ function ConfirmDialog({ title, message, onConfirm, onCancel, loading }: {
             className="px-4 py-2 text-sm rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-medium flex items-center gap-2">
             {loading ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
             Excluir
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// ERROR MODAL
+// ═══════════════════════════════════════════════════════════
+function ErrorModal({ message, onClose }: { message: string; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-sm shadow-2xl p-6 flex flex-col gap-5">
+        <div className="flex items-start gap-4">
+          <div className="p-2.5 rounded-xl bg-red-50 dark:bg-red-900/20 flex-shrink-0">
+            <AlertCircle size={20} className="text-red-500" />
+          </div>
+          <div className="flex-1">
+            <h3 className="font-bold text-gray-900 dark:text-white mb-1">Erro ao salvar</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 break-words">{message}</p>
+          </div>
+        </div>
+        <div className="flex justify-end">
+          <button onClick={onClose}
+            className="px-5 py-2 text-sm rounded-xl bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 font-medium">
+            Fechar
           </button>
         </div>
       </div>
@@ -1025,15 +1067,6 @@ export default function CatalogoPage() {
           <Plus size={16} />{novoLabel}
         </button>
       </div>
-
-      {/* Erro de save */}
-      {saveError && (
-        <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 text-sm">
-          <AlertCircle size={16} className="flex-shrink-0" />
-          <span className="flex-1">{saveError}</span>
-          <button onClick={() => setSaveError("")} className="flex-shrink-0 hover:text-red-900"><X size={14} /></button>
-        </div>
-      )}
 
       {/* Abas + Busca */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1329,6 +1362,7 @@ export default function CatalogoPage() {
           loading={confirmLoading}
         />
       )}
+      {saveError && <ErrorModal message={saveError} onClose={() => setSaveError("")} />}
     </div>
   );
 }
