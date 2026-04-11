@@ -278,3 +278,124 @@ export interface Aniversariante {
   sexo?: string;
   nivel?: string;
 }
+
+// ============ CATÁLOGO: PRODUTOS, SERVIÇOS E COMBOS ============
+
+export interface Fornecedor {
+  id: string;
+  user_id?: string;
+  nome: string;
+  cnpj?: string;
+  contato?: string;
+  whatsapp?: string;
+  email?: string;
+  prazo_entrega?: number;
+  observacoes?: string;
+  created_at: string;
+  updated_at?: string;
+}
+
+export type CategoriaProduto =
+  | 'album_fotolivro'
+  | 'impressao_fineart'
+  | 'pendrive_midia'
+  | 'moldura_quadro'
+  | 'props_acessorios'
+  | 'figurino_roupa'
+  | 'embalagem_caixa'
+  | 'outros';
+
+export type UnidadeProduto = 'un' | 'cx' | 'pct' | 'par' | 'kit';
+
+export const CATEGORIA_LABELS: Record<CategoriaProduto, string> = {
+  album_fotolivro: 'Álbum / Fotolivro',
+  impressao_fineart: 'Impressão Fine Art',
+  pendrive_midia: 'Pendrive / Mídia',
+  moldura_quadro: 'Moldura / Quadro',
+  props_acessorios: 'Props / Acessórios',
+  figurino_roupa: 'Figurino / Roupa',
+  embalagem_caixa: 'Embalagem / Caixa',
+  outros: 'Outros',
+};
+
+export const TIPO_ENSAIO_LABELS: Record<string, string> = {
+  anunciacao: 'Anunciação',
+  newborn: 'Newborn',
+  smash_the_cake: 'Smash the Cake',
+  parto: 'Parto',
+  gestante: 'Gestante',
+  cha_revelacao: 'Chá Revelação',
+  cha_de_bebe: 'Chá de Bebê',
+  ensaio_feminino: 'Ensaio Feminino',
+  pre_party_15_anos: 'Pré-Party 15 Anos',
+  corporativo: 'Corporativo',
+  batizado: 'Batizado',
+  festa_aniversario: 'Festa de Aniversário',
+  ensaio_aniversario: 'Ensaio de Aniversário',
+  acompanhamento: 'Acompanhamento',
+  sessao_unica: 'Sessão Única',
+  revelacao: 'Revelação',
+};
+
+export interface Produto {
+  id: string;
+  user_id?: string;
+  nome: string;
+  descricao?: string;
+  categoria: CategoriaProduto;
+  fornecedor_id?: string;
+  fornecedor_nome?: string;
+  preco_custo: number;
+  preco_venda: number;
+  margem_lucro?: number;
+  unidade: UnidadeProduto;
+  estoque?: number;
+  ncm?: string;
+  cfop?: string;
+  ativo: boolean;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface Servico {
+  id: string;
+  user_id?: string;
+  nome: string;
+  descricao?: string;
+  tipo_ensaio: string;
+  preco_base: number;
+  inclui_edicao: boolean;
+  qtd_fotos_entrega?: number;
+  cnae?: string;
+  codigo_servico?: string;
+  iss_aliquota?: number;
+  ativo: boolean;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface ComboItem {
+  id: string;
+  combo_id: string;
+  tipo: 'produto' | 'servico';
+  item_id: string;
+  nome: string;
+  quantidade: number;
+  preco_unitario: number;
+}
+
+export interface Combo {
+  id: string;
+  user_id?: string;
+  nome: string;
+  descricao?: string;
+  itens: ComboItem[];
+  desconto: number;
+  total_produtos: number;
+  total_servicos: number;
+  subtotal: number;
+  preco_final: number;
+  ativo: boolean;
+  created_at: string;
+  updated_at?: string;
+}

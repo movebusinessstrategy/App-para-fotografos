@@ -2342,6 +2342,176 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // ============ CATÁLOGO: FORNECEDORES ============
+
+  app.get('/api/fornecedores', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase.from('fornecedores').select('*').eq('user_id', userId).order('nome');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  });
+
+  app.post('/api/fornecedores', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase.from('fornecedores').insert({ ...req.body, user_id: userId }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.put('/api/fornecedores/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase.from('fornecedores').update({ ...req.body, updated_at: new Date().toISOString() }).eq('id', req.params.id).eq('user_id', userId).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.delete('/api/fornecedores/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { error } = await supabase.from('fornecedores').delete().eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  // ============ CATÁLOGO: PRODUTOS ============
+
+  app.get('/api/produtos', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase
+      .from('produtos')
+      .select('*, fornecedores(nome)')
+      .eq('user_id', userId)
+      .order('nome');
+    if (error) return res.status(500).json({ error: error.message });
+    const mapped = (data || []).map((p: any) => ({
+      ...p,
+      fornecedor_nome: p.fornecedores?.nome || null,
+      fornecedores: undefined,
+    }));
+    res.json(mapped);
+  });
+
+  app.post('/api/produtos', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const body = req.body;
+    const margem = body.preco_venda > 0
+      ? ((body.preco_venda - body.preco_custo) / body.preco_venda * 100)
+      : 0;
+    const { data, error } = await supabase.from('produtos').insert({
+      ...body, user_id: userId, margem_lucro: Math.round(margem * 100) / 100
+    }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.put('/api/produtos/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const body = req.body;
+    const margem = body.preco_venda > 0
+      ? ((body.preco_venda - body.preco_custo) / body.preco_venda * 100)
+      : 0;
+    const { data, error } = await supabase.from('produtos').update({
+      ...body, margem_lucro: Math.round(margem * 100) / 100, updated_at: new Date().toISOString()
+    }).eq('id', req.params.id).eq('user_id', userId).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.delete('/api/produtos/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { error } = await supabase.from('produtos').delete().eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  // ============ CATÁLOGO: SERVIÇOS ============
+
+  app.get('/api/servicos', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase.from('servicos').select('*').eq('user_id', userId).order('nome');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  });
+
+  app.post('/api/servicos', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase.from('servicos').insert({ ...req.body, user_id: userId }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.put('/api/servicos/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase.from('servicos').update({ ...req.body, updated_at: new Date().toISOString() }).eq('id', req.params.id).eq('user_id', userId).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.delete('/api/servicos/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { error } = await supabase.from('servicos').delete().eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  // ============ CATÁLOGO: COMBOS ============
+
+  app.get('/api/combos', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data: combos, error } = await supabase.from('combos').select('*').eq('user_id', userId).order('nome');
+    if (error) return res.status(500).json({ error: error.message });
+    if (!combos?.length) return res.json([]);
+    const { data: itens } = await supabase.from('combo_items').select('*').in('combo_id', combos.map((c: any) => c.id));
+    const result = combos.map((c: any) => ({ ...c, itens: (itens || []).filter((i: any) => i.combo_id === c.id) }));
+    res.json(result);
+  });
+
+  app.post('/api/combos', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { itens, ...comboBody } = req.body;
+    const { data: combo, error } = await supabase.from('combos').insert({ ...comboBody, user_id: userId }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    if (itens?.length) {
+      await supabase.from('combo_items').insert(itens.map((i: any) => ({ ...i, combo_id: combo.id })));
+    }
+    res.json({ ...combo, itens: itens || [] });
+  });
+
+  app.put('/api/combos/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { itens, ...comboBody } = req.body;
+    const { data: combo, error } = await supabase.from('combos').update({ ...comboBody, updated_at: new Date().toISOString() }).eq('id', req.params.id).eq('user_id', userId).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    // Reinsere itens
+    await supabase.from('combo_items').delete().eq('combo_id', req.params.id);
+    if (itens?.length) {
+      await supabase.from('combo_items').insert(itens.map((i: any) => ({ ...i, id: undefined, combo_id: combo.id })));
+    }
+    res.json({ ...combo, itens: itens || [] });
+  });
+
+  app.delete('/api/combos/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { error } = await supabase.from('combos').delete().eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
   // ============ OPPORTUNITY RULES ROUTES ============
   app.get('/api/opportunity-rules', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
