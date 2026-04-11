@@ -128,6 +128,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
   const [jobItemType, setJobItemType] = useState<'combo' | 'produto' | 'servico'>('servico');
   const [jobItemSearch, setJobItemSearch] = useState('');
   const [jobItemOpen, setJobItemOpen] = useState(false);
+  const [jobItemQty, setJobItemQty] = useState(1);
   const [catalogProdutos, setCatalogProdutos] = useState<any[]>([]);
   const [catalogServicos, setCatalogServicos] = useState<any[]>([]);
   const [catalogCombos, setCatalogCombos] = useState<any[]>([]);
@@ -174,7 +175,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
     setStageHistory([]);
     setLabels(job.labels || []);
     setDealItems([]); setJobItems([]); setPayments([]);
-    setShowAddJobItem(false);
+    setShowAddJobItem(false); setJobItemQty(1);
 
     if (job.client_id) {
       setLoadingClient(true);
@@ -250,10 +251,11 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
 
   const handleAddJobItem = async (catalogId: string, nome: string, value: number) => {
     if (!job) return;
-    setJobItemOpen(false); setJobItemSearch(''); setShowAddJobItem(false);
+    const qty = Math.max(1, jobItemQty);
+    setJobItemOpen(false); setJobItemSearch(''); setShowAddJobItem(false); setJobItemQty(1);
     const res = await authFetch(`/api/jobs/${job.id}/items`, {
       method: 'POST',
-      body: JSON.stringify({ catalog_type: jobItemType, catalog_id: catalogId, catalog_name: nome, catalog_value: value, quantidade: 1 }),
+      body: JSON.stringify({ catalog_type: jobItemType, catalog_id: catalogId, catalog_name: nome, catalog_value: value, quantidade: qty }),
     });
     if (res.ok) loadFinanceiro(job.id);
   };
@@ -634,7 +636,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
           {/* ── FINANCEIRO TAB ── */}
           {tab === "financeiro" && (() => {
             const totalItens = [...dealItems, ...jobItems].reduce((s, i) => s + i.catalog_value * i.quantidade, 0);
-            const totalGeral = jobAmount || totalItens;
+            const totalGeral = totalItens > 0 ? totalItens : jobAmount;
             const totalPago = payments.reduce((s, p) => s + p.amount, 0);
             const restante = Math.max(0, totalGeral - totalPago);
             const pct = totalGeral > 0 ? Math.min(100, (totalPago / totalGeral) * 100) : 0;
@@ -795,7 +797,30 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                               </div>
                             )}
                           </div>
-                          <button onMouseDown={e => e.preventDefault()} onClick={() => setShowAddJobItem(false)}
+                          {/* Quantidade */}
+                          <div className="flex items-center justify-between px-1">
+                            <span className="text-xs text-gray-500 dark:text-gray-400">Quantidade</span>
+                            <div className="flex items-center gap-1">
+                              <button
+                                onMouseDown={e => e.preventDefault()}
+                                onClick={() => setJobItemQty(q => Math.max(1, q - 1))}
+                                className="w-6 h-6 rounded-md border border-gray-200 dark:border-gray-600 flex items-center justify-center text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm font-bold"
+                              >−</button>
+                              <input
+                                type="number"
+                                min={1}
+                                value={jobItemQty}
+                                onChange={e => setJobItemQty(Math.max(1, parseInt(e.target.value) || 1))}
+                                className="w-10 text-center text-sm font-semibold border border-gray-200 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gold-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                              />
+                              <button
+                                onMouseDown={e => e.preventDefault()}
+                                onClick={() => setJobItemQty(q => q + 1)}
+                                className="w-6 h-6 rounded-md border border-gray-200 dark:border-gray-600 flex items-center justify-center text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm font-bold"
+                              >+</button>
+                            </div>
+                          </div>
+                          <button onMouseDown={e => e.preventDefault()} onClick={() => { setShowAddJobItem(false); setJobItemQty(1); }}
                             className="w-full text-[11px] text-gray-400 hover:text-gray-600 py-0.5">Cancelar</button>
                         </div>
                       )}

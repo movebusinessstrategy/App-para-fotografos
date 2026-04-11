@@ -2242,7 +2242,7 @@ async function startServer() {
     const jobId = Number(req.params.id);
 
     // Verifica ownership do job
-    const { data: job } = await supabase.from('jobs').select('id, amount, notes, payment_method').eq('id', jobId).eq('user_id', userId).single();
+    const { data: job } = await supabase.from('jobs').select('id, amount, notes, payment_method, payment_status').eq('id', jobId).eq('user_id', userId).single();
     if (!job) return res.status(404).json({ error: 'Job not found' });
 
     // Busca deal vinculado (converted_job_id = jobId)
@@ -2297,7 +2297,22 @@ async function startServer() {
 
     const totalPago = payments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
 
-    res.json({ dealItems, jobItems, payments, totalPago, jobAmount: job.amount });
+    // Recalcula o total real a partir dos itens (auto-corrige payment_status desatualizado)
+    const dealItemsTotal = dealItems.reduce((s: number, i: any) => s + (i.unit_price || 0) * (i.quantidade || 1), 0);
+    const jobItemsTotal = jobItems.reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
+    const realTotal = (dealItemsTotal + jobItemsTotal) > 0 ? (dealItemsTotal + jobItemsTotal) : job.amount;
+    const correctStatus = totalPago <= 0 ? 'pending' : (realTotal > 0 && totalPago >= realTotal) ? 'paid' : 'partial';
+
+    // Corrige silenciosamente se o status ou amount estiver desatualizado
+    const amountChanged = realTotal > 0 && Math.abs(realTotal - job.amount) > 0.01;
+    const statusChanged = correctStatus !== job.payment_status;
+    if (amountChanged || statusChanged) {
+      const upd: any = { payment_status: correctStatus };
+      if (amountChanged) upd.amount = realTotal;
+      await supabase.from('jobs').update(upd).eq('id', jobId).eq('user_id', userId);
+    }
+
+    res.json({ dealItems, jobItems, payments, totalPago, jobAmount: realTotal });
   });
 
   // POST /api/jobs/:id/payments — registrar um pagamento
@@ -2326,7 +2341,7 @@ async function startServer() {
     // Recalcula total pago e atualiza payment_status no job
     const { data: allPayments } = await adminClient.from('job_payments').select('amount').eq('job_id', jobId);
     const totalPago = (allPayments || []).reduce((s: number, p: any) => s + (p.amount || 0), 0);
-    const newStatus = totalPago <= 0 ? 'pending' : totalPago >= job.amount ? 'paid' : 'partial';
+    const newStatus = totalPago <= 0 ? 'pending' : (job.amount > 0 && totalPago >= job.amount) ? 'paid' : 'partial';
     await supabase.from('jobs').update({ payment_status: newStatus }).eq('id', jobId).eq('user_id', userId);
 
     res.json({ payment, totalPago, newStatus });
@@ -2349,7 +2364,7 @@ async function startServer() {
 
     const { data: remaining } = await adminClient.from('job_payments').select('amount').eq('job_id', payment.job_id);
     const totalPago = (remaining || []).reduce((s: number, p: any) => s + (p.amount || 0), 0);
-    const newStatus = totalPago <= 0 ? 'pending' : totalPago >= job.amount ? 'paid' : 'partial';
+    const newStatus = totalPago <= 0 ? 'pending' : (job.amount > 0 && totalPago >= job.amount) ? 'paid' : 'partial';
     await supabase.from('jobs').update({ payment_status: newStatus }).eq('id', payment.job_id).eq('user_id', userId);
 
     res.json({ success: true, totalPago, newStatus });
@@ -2375,15 +2390,23 @@ async function startServer() {
 
     if (error) return res.status(500).json({ error: error.message });
 
-    // Recalcula amount do job (deal_items + job_items)
+    // Recalcula amount corretamente: baseAmount (job.amount antes de qualquer job_item) + todos os job_items
     const { data: jItems } = await adminClient.from('job_items').select('catalog_value, quantidade').eq('job_id', jobId);
-    const newAmount = (jItems || []).reduce((s: number, i: any) => s + i.catalog_value * i.quantidade, 0) + job.amount;
-    // Só atualiza se job_items existiam antes (para não sobrescrever o valor original)
-    if ((jItems || []).length > 0) {
-      await supabase.from('jobs').update({ amount: newAmount }).eq('id', jobId).eq('user_id', userId);
-    }
+    const allJobItemsTotal = (jItems || []).reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
+    // Subtrai o item recém-inserido para descobrir o total anterior de job_items, depois calcula base
+    const newItemTotal = (item.catalog_value || 0) * (item.quantidade || 1);
+    const previousJobItemsTotal = allJobItemsTotal - newItemTotal;
+    const baseAmount = job.amount - previousJobItemsTotal; // amount original do deal
+    const newAmount = baseAmount + allJobItemsTotal;
+    await supabase.from('jobs').update({ amount: newAmount }).eq('id', jobId).eq('user_id', userId);
 
-    res.json({ item });
+    // Atualiza payment_status com base no novo total
+    const { data: allPayments } = await adminClient.from('job_payments').select('amount').eq('job_id', jobId);
+    const totalPago = (allPayments || []).reduce((s: number, p: any) => s + (p.amount || 0), 0);
+    const newStatus = totalPago <= 0 ? 'pending' : (newAmount > 0 && totalPago >= newAmount) ? 'paid' : 'partial';
+    await supabase.from('jobs').update({ payment_status: newStatus }).eq('id', jobId).eq('user_id', userId);
+
+    res.json({ item, newAmount });
   });
 
   // DELETE /api/job-items/:id
@@ -2392,14 +2415,26 @@ async function startServer() {
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
 
-    const { data: item } = await adminClient.from('job_items').select('id, job_id').eq('id', req.params.id).single();
+    const { data: item } = await adminClient.from('job_items').select('id, job_id, catalog_value, quantidade').eq('id', req.params.id).single();
     if (!item) return res.status(404).json({ error: 'Not found' });
 
-    const { data: job } = await supabase.from('jobs').select('id').eq('id', item.job_id).eq('user_id', userId).single();
+    const { data: job } = await supabase.from('jobs').select('id, amount').eq('id', item.job_id).eq('user_id', userId).single();
     if (!job) return res.status(403).json({ error: 'Forbidden' });
 
     await adminClient.from('job_items').delete().eq('id', req.params.id);
-    res.json({ success: true });
+
+    // Recalcula amount removendo o item deletado
+    const removedTotal = (item.catalog_value || 0) * (item.quantidade || 1);
+    const newAmount = Math.max(0, job.amount - removedTotal);
+    await supabase.from('jobs').update({ amount: newAmount }).eq('id', item.job_id).eq('user_id', userId);
+
+    // Atualiza payment_status
+    const { data: allPayments } = await adminClient.from('job_payments').select('amount').eq('job_id', item.job_id);
+    const totalPago = (allPayments || []).reduce((s: number, p: any) => s + (p.amount || 0), 0);
+    const newStatus = totalPago <= 0 ? 'pending' : newAmount > 0 && totalPago >= newAmount ? 'paid' : 'partial';
+    await supabase.from('jobs').update({ payment_status: newStatus }).eq('id', item.job_id).eq('user_id', userId);
+
+    res.json({ success: true, newAmount });
   });
 
   // ============ FUNNEL & LEADS ROUTES ============
@@ -4097,6 +4132,469 @@ async function startServer() {
     }
     const analytics = computePipelineAnalytics(deals, stages, events);
     res.json(analytics);
+  });
+
+  // ============ MÓDULO FINANCEIRO ============
+
+  const finAdmin = () => supabaseAdmin!;
+  const finClient = (req: any) => (req as any).supabase as SupabaseClient;
+  const finUser = (req: any) => (req as any).userId as string;
+
+  // ─── Helpers ───────────────────────────────────────────────────────────────
+  async function atualizarStatusAtrasados(supabase: SupabaseClient, userId: string) {
+    const hoje = new Date().toISOString().slice(0, 10);
+    await supabase.from('fin_receitas').update({ status: 'atrasado' })
+      .eq('user_id', userId).eq('status', 'pendente').lt('data_vencimento', hoje);
+    await supabase.from('fin_despesas').update({ status: 'atrasado' })
+      .eq('user_id', userId).eq('status', 'pendente').lt('data_vencimento', hoje);
+  }
+
+  // ─── Categorias ────────────────────────────────────────────────────────────
+  app.get('/api/fin/categorias', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { data } = await supabase.from('fin_categorias').select('*').eq('user_id', userId).eq('ativo', true).order('ordem');
+    res.json(data || []);
+  });
+
+  app.post('/api/fin/categorias', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { nome, tipo, cor, ordem } = req.body;
+    const { data, error } = await supabase.from('fin_categorias').insert({ user_id: userId, nome, tipo, cor: cor || '#6366f1', ordem: ordem || 0 }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.put('/api/fin/categorias/:id', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { error } = await supabase.from('fin_categorias').update(req.body).eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  app.delete('/api/fin/categorias/:id', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const [{ count: cr }, { count: dp }] = await Promise.all([
+      supabase.from('fin_receitas').select('id', { count: 'exact', head: true }).eq('categoria_id', req.params.id).eq('user_id', userId),
+      supabase.from('fin_despesas').select('id', { count: 'exact', head: true }).eq('categoria_id', req.params.id).eq('user_id', userId),
+    ]);
+    if ((cr || 0) + (dp || 0) > 0) return res.status(400).json({ error: 'Categoria em uso. Migre os lançamentos primeiro.' });
+    await supabase.from('fin_categorias').update({ ativo: false }).eq('id', req.params.id).eq('user_id', userId);
+    res.json({ success: true });
+  });
+
+  // ─── Contas bancárias ───────────────────────────────────────────────────────
+  app.get('/api/fin/contas', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { data: contas } = await supabase.from('fin_contas').select('*').eq('user_id', userId).eq('ativo', true).order('created_at');
+    // Calcular saldo atual para cada conta
+    const result = await Promise.all((contas || []).map(async (c: any) => {
+      const [{ data: rec }, { data: dep }] = await Promise.all([
+        supabase.from('fin_receitas').select('valor_bruto').eq('conta_id', c.id).eq('status', 'recebido').eq('user_id', userId),
+        supabase.from('fin_despesas').select('valor').eq('conta_id', c.id).eq('status', 'pago').eq('user_id', userId),
+      ]);
+      const entradas = (rec || []).reduce((s: number, r: any) => s + r.valor_bruto, 0);
+      const saidas = (dep || []).reduce((s: number, d: any) => s + d.valor, 0);
+      return { ...c, saldo_atual: c.saldo_inicial + entradas - saidas };
+    }));
+    res.json(result);
+  });
+
+  app.post('/api/fin/contas', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { data, error } = await supabase.from('fin_contas').insert({ ...req.body, user_id: userId }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.put('/api/fin/contas/:id', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { error } = await supabase.from('fin_contas').update(req.body).eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  app.delete('/api/fin/contas/:id', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    await supabase.from('fin_contas').update({ ativo: false }).eq('id', req.params.id).eq('user_id', userId);
+    res.json({ success: true });
+  });
+
+  // ─── Meios de recebimento ───────────────────────────────────────────────────
+  app.get('/api/fin/meios', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { data } = await supabase.from('fin_meios').select('*').eq('user_id', userId).eq('ativo', true).order('created_at');
+    res.json(data || []);
+  });
+
+  app.post('/api/fin/meios', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { data, error } = await supabase.from('fin_meios').insert({ ...req.body, user_id: userId }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.put('/api/fin/meios/:id', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { error } = await supabase.from('fin_meios').update(req.body).eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  app.delete('/api/fin/meios/:id', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    await supabase.from('fin_meios').update({ ativo: false }).eq('id', req.params.id).eq('user_id', userId);
+    res.json({ success: true });
+  });
+
+  // ─── Receitas ───────────────────────────────────────────────────────────────
+  app.get('/api/fin/receitas', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    await atualizarStatusAtrasados(supabase, userId);
+    const q = supabase.from('fin_receitas').select('*').eq('user_id', userId).order('data_vencimento');
+    if (req.query.status) (q as any).eq('status', req.query.status);
+    const { data } = await q;
+    res.json(data || []);
+  });
+
+  app.post('/api/fin/receitas', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const body = { ...req.body, user_id: userId, updated_at: new Date().toISOString() };
+    // Calcular valor_liquido automaticamente se meio informado
+    if (body.meio_id && body.valor_bruto) {
+      const { data: meio } = await supabase.from('fin_meios').select('taxa_percentual,taxa_fixa').eq('id', body.meio_id).single();
+      if (meio) {
+        body.taxa_meio = (body.valor_bruto * meio.taxa_percentual / 100) + meio.taxa_fixa;
+        body.valor_liquido = body.valor_bruto - body.taxa_meio;
+      }
+    }
+    if (!body.valor_liquido) body.valor_liquido = body.valor_bruto;
+    const { data, error } = await supabase.from('fin_receitas').insert(body).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.put('/api/fin/receitas/:id', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { error } = await supabase.from('fin_receitas').update({ ...req.body, updated_at: new Date().toISOString() }).eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  app.delete('/api/fin/receitas/:id', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    await supabase.from('fin_receitas').delete().eq('id', req.params.id).eq('user_id', userId);
+    res.json({ success: true });
+  });
+
+  app.post('/api/fin/receitas/:id/receber', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { data_pagamento, conta_id } = req.body;
+    const { data: receita } = await supabase.from('fin_receitas').select('meio_id,valor_bruto').eq('id', req.params.id).eq('user_id', userId).single();
+    if (!receita) return res.status(404).json({ error: 'Receita não encontrada' });
+    let dataRecebimentoReal = data_pagamento;
+    if (receita.meio_id) {
+      const { data: meio } = await supabase.from('fin_meios').select('prazo_recebimento').eq('id', receita.meio_id).single();
+      if (meio?.prazo_recebimento > 0) {
+        const d = new Date(data_pagamento + 'T12:00:00');
+        d.setDate(d.getDate() + meio.prazo_recebimento);
+        dataRecebimentoReal = d.toISOString().slice(0, 10);
+      }
+    }
+    const { error } = await supabase.from('fin_receitas').update({ status: 'recebido', data_pagamento, data_recebimento_real: dataRecebimentoReal, conta_id: conta_id || null, updated_at: new Date().toISOString() }).eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  // ─── Despesas ───────────────────────────────────────────────────────────────
+  app.get('/api/fin/despesas', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    await atualizarStatusAtrasados(supabase, userId);
+    const { data } = await supabase.from('fin_despesas').select('*').eq('user_id', userId).order('data_vencimento');
+    res.json(data || []);
+  });
+
+  app.post('/api/fin/despesas', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { data, error } = await supabase.from('fin_despesas').insert({ ...req.body, user_id: userId, updated_at: new Date().toISOString() }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.put('/api/fin/despesas/:id', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { error } = await supabase.from('fin_despesas').update({ ...req.body, updated_at: new Date().toISOString() }).eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  app.delete('/api/fin/despesas/:id', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    await supabase.from('fin_despesas').delete().eq('id', req.params.id).eq('user_id', userId);
+    res.json({ success: true });
+  });
+
+  app.post('/api/fin/despesas/:id/pagar', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { data_pagamento, conta_id } = req.body;
+    const { error } = await supabase.from('fin_despesas').update({ status: 'pago', data_pagamento, conta_id: conta_id || null, updated_at: new Date().toISOString() }).eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  // ─── Sincronizar jobs → receitas (importação automática) ───────────────────
+  app.post('/api/fin/sync-jobs', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const adminClient = supabaseAdmin || supabase;
+
+    // Busca todos os jobs do usuário
+    const { data: jobs } = await supabase.from('jobs').select('id,client_id,job_name,job_date,amount,payment_status,payment_method').eq('user_id', userId);
+    if (!jobs?.length) return res.json({ criadas: 0 });
+
+    // IDs de jobs já com receita
+    const { data: jaExistentes } = await supabase.from('fin_receitas').select('job_id').eq('user_id', userId).not('job_id', 'is', null);
+    const jobIdsExistentes = new Set((jaExistentes || []).map((r: any) => r.job_id));
+
+    let criadas = 0;
+    const hoje = new Date().toISOString().slice(0, 10);
+
+    for (const job of jobs) {
+      if (jobIdsExistentes.has(job.id)) continue;
+
+      // Busca pagamentos do job
+      const { data: payments } = await adminClient.from('job_payments').select('*').eq('job_id', job.id).order('created_at');
+
+      const dataVencimento = job.job_date || hoje;
+      const clienteNome = job.job_name || `Job #${job.id}`;
+
+      if (payments && payments.length > 0) {
+        // Cria receita para cada pagamento registrado
+        for (const pay of payments) {
+          await supabase.from('fin_receitas').insert({
+            user_id: userId, job_id: job.id,
+            cliente_id: job.client_id, cliente_nome: clienteNome,
+            descricao: `${job.job_name} — ${pay.description || 'Pagamento'}`,
+            valor_bruto: pay.amount, taxa_meio: 0, valor_liquido: pay.amount,
+            data_vencimento: pay.payment_date || dataVencimento,
+            data_pagamento: pay.payment_date,
+            status: 'recebido', parcela: 1, total_parcelas: 1,
+            origem_automatica: true, updated_at: new Date().toISOString(),
+          });
+          criadas++;
+        }
+        // Se há saldo restante (payment_status = partial), gera receita pendente
+        const totalPago = payments.reduce((s: number, p: any) => s + p.amount, 0);
+        const restante = (job.amount || 0) - totalPago;
+        if (restante > 1) {
+          const status = dataVencimento < hoje ? 'atrasado' : 'pendente';
+          await supabase.from('fin_receitas').insert({
+            user_id: userId, job_id: job.id,
+            cliente_id: job.client_id, cliente_nome: clienteNome,
+            descricao: `${job.job_name} — Saldo restante`,
+            valor_bruto: restante, taxa_meio: 0, valor_liquido: restante,
+            data_vencimento: dataVencimento, status,
+            parcela: 1, total_parcelas: 1, origem_automatica: true, updated_at: new Date().toISOString(),
+          });
+          criadas++;
+        }
+      } else {
+        // Nenhum pagamento — cria receita pendente com valor total
+        if ((job.amount || 0) > 0) {
+          const status = job.payment_status === 'paid' ? 'recebido' : (dataVencimento < hoje ? 'atrasado' : 'pendente');
+          await supabase.from('fin_receitas').insert({
+            user_id: userId, job_id: job.id,
+            cliente_id: job.client_id, cliente_nome: clienteNome,
+            descricao: job.job_name || `Job #${job.id}`,
+            valor_bruto: job.amount, taxa_meio: 0, valor_liquido: job.amount,
+            data_vencimento: dataVencimento,
+            data_pagamento: status === 'recebido' ? hoje : null,
+            status, parcela: 1, total_parcelas: 1,
+            origem_automatica: true, updated_at: new Date().toISOString(),
+          });
+          criadas++;
+        }
+      }
+    }
+    res.json({ criadas });
+  });
+
+  // ─── Dashboard financeiro ───────────────────────────────────────────────────
+  app.get('/api/fin/dashboard', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    await atualizarStatusAtrasados(supabase, userId);
+    const hoje = new Date();
+    const mesAtual = hoje.toISOString().slice(0, 7); // YYYY-MM
+
+    const [{ data: receitas }, { data: despesas }, { data: contas }] = await Promise.all([
+      supabase.from('fin_receitas').select('*').eq('user_id', userId),
+      supabase.from('fin_despesas').select('*').eq('user_id', userId),
+      supabase.from('fin_contas').select('*').eq('user_id', userId).eq('ativo', true),
+    ]);
+
+    const r = receitas || []; const d = despesas || [];
+
+    // Saldo total das contas
+    const saldoTotal = (contas || []).reduce((s: number, c: any) => {
+      const entradas = r.filter((x: any) => x.conta_id === c.id && x.status === 'recebido').reduce((a: number, x: any) => a + x.valor_bruto, 0);
+      const saidas = d.filter((x: any) => x.conta_id === c.id && x.status === 'pago').reduce((a: number, x: any) => a + x.valor, 0);
+      return s + c.saldo_inicial + entradas - saidas;
+    }, 0);
+
+    // A receber este mês
+    const aReceber = r.filter((x: any) => x.data_vencimento?.startsWith(mesAtual) && ['pendente','atrasado'].includes(x.status)).reduce((s: number, x: any) => s + x.valor_liquido, 0);
+    // A pagar este mês
+    const aPagar = d.filter((x: any) => x.data_vencimento?.startsWith(mesAtual) && ['pendente','atrasado'].includes(x.status)).reduce((s: number, x: any) => s + x.valor, 0);
+
+    // Fluxo de caixa 12 meses
+    const fluxo: any[] = [];
+    for (let i = 0; i < 12; i++) {
+      const dt = new Date(hoje.getFullYear(), hoje.getMonth() + i, 1);
+      const mes = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
+      const label = dt.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' });
+      const entradas = r.filter((x: any) => x.data_vencimento?.startsWith(mes)).reduce((s: number, x: any) => s + x.valor_liquido, 0);
+      const saidas = d.filter((x: any) => x.data_vencimento?.startsWith(mes)).reduce((s: number, x: any) => s + x.valor, 0);
+      const recebidas = r.filter((x: any) => x.data_vencimento?.startsWith(mes) && x.status === 'recebido').reduce((s: number, x: any) => s + x.valor_liquido, 0);
+      fluxo.push({ mes, label, entradas, saidas, recebidas, resultado: entradas - saidas });
+    }
+
+    // Próximos recebimentos
+    const proxRecebimentos = r
+      .filter((x: any) => ['pendente','atrasado'].includes(x.status))
+      .sort((a: any, b: any) => a.data_vencimento?.localeCompare(b.data_vencimento))
+      .slice(0, 5);
+
+    // Próximos pagamentos
+    const proxPagamentos = d
+      .filter((x: any) => ['pendente','atrasado'].includes(x.status))
+      .sort((a: any, b: any) => a.data_vencimento?.localeCompare(b.data_vencimento))
+      .slice(0, 5);
+
+    res.json({ saldoTotal, aReceber, aPagar, resultado: aReceber - aPagar, fluxo, proxRecebimentos, proxPagamentos, contas: contas || [] });
+  });
+
+  // ─── DRE ───────────────────────────────────────────────────────────────────
+  app.get('/api/fin/dre', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { mes, ano } = req.query;
+    const periodo = `${ano}-${String(mes).padStart(2, '0')}`;
+
+    const [{ data: receitas }, { data: despesas }, { data: categorias }, { data: grupos }] = await Promise.all([
+      supabase.from('fin_receitas').select('*').eq('user_id', userId).like('data_vencimento', `${periodo}%`).eq('status', 'recebido'),
+      supabase.from('fin_despesas').select('*').eq('user_id', userId).like('data_vencimento', `${periodo}%`).eq('status', 'pago'),
+      supabase.from('fin_categorias').select('*').eq('user_id', userId).eq('ativo', true),
+      supabase.from('fin_grupos_dre').select('*').eq('user_id', userId).order('ordem'),
+    ]);
+
+    const receitaBruta = (receitas || []).reduce((s: number, r: any) => s + r.valor_bruto, 0);
+    const taxasTotal = (receitas || []).reduce((s: number, r: any) => s + (r.taxa_meio || 0), 0);
+
+    const linhas: any[] = [];
+    let acumulado = receitaBruta;
+
+    for (const grupo of (grupos || [])) {
+      const catsDeste = (categorias || []).filter((c: any) => c.grupo_dre_id === grupo.id);
+      let totalGrupo = 0;
+      if (grupo.campos_automaticos?.includes('taxas_recebimento')) totalGrupo += taxasTotal;
+      for (const cat of catsDeste) {
+        const isReceita = cat.tipo === 'receita';
+        const valor = isReceita
+          ? (receitas || []).filter((r: any) => r.categoria_id === cat.id).reduce((s: number, r: any) => s + r.valor_bruto, 0)
+          : (despesas || []).filter((d: any) => d.categoria_id === cat.id).reduce((s: number, d: any) => s + d.valor, 0);
+        if (valor > 0) linhas.push({ tipo: 'categoria', grupoDreNome: grupo.nome, categoriaNome: cat.nome, operacao: grupo.operacao, valor, percentualReceita: receitaBruta > 0 ? valor / receitaBruta * 100 : 0 });
+        totalGrupo += valor;
+      }
+      if (totalGrupo > 0) {
+        if (grupo.operacao === 'subtrai') acumulado -= totalGrupo; else acumulado += totalGrupo;
+        if (grupo.total_parcial_apos) linhas.push({ tipo: 'subtotal', label: grupo.total_parcial_apos, valor: acumulado, percentualReceita: receitaBruta > 0 ? acumulado / receitaBruta * 100 : 0 });
+      }
+    }
+
+    res.json({ receitaBruta, taxasTotal, linhas, resultadoFinal: acumulado });
+  });
+
+  // ─── OFX ───────────────────────────────────────────────────────────────────
+  app.post('/api/fin/ofx/import', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { conteudo, conta_id } = req.body;
+    if (!conteudo || !conta_id) return res.status(400).json({ error: 'conteudo e conta_id obrigatórios' });
+
+    // Parser OFX simples
+    const transacoes: any[] = [];
+    const stmtMatches = conteudo.matchAll(/<STMTTRN>([\s\S]*?)<\/STMTTRN>/g);
+    for (const match of stmtMatches) {
+      const block = match[1];
+      const get = (tag: string) => { const m = block.match(new RegExp(`<${tag}>([^<\\n]+)`)); return m ? m[1].trim() : ''; };
+      const fitId = get('FITID'); if (!fitId) continue;
+      const trnType = get('TRNTYPE');
+      const dtPosted = get('DTPOSTED');
+      const trnAmt = parseFloat(get('TRNAMT').replace(',', '.')) || 0;
+      const memo = get('MEMO') || get('NAME') || '';
+      const data = dtPosted ? `${dtPosted.slice(0,4)}-${dtPosted.slice(4,6)}-${dtPosted.slice(6,8)}` : new Date().toISOString().slice(0,10);
+      const tipo = trnAmt >= 0 ? 'credito' : 'debito';
+      transacoes.push({ user_id: userId, conta_id, fit_id: fitId, tipo, valor: Math.abs(trnAmt), data, descricao: memo });
+    }
+
+    let importadas = 0; let duplicadas = 0;
+    for (const t of transacoes) {
+      const { error } = await supabase.from('fin_transacoes_ofx').insert(t);
+      if (error?.code === '23505') duplicadas++; else if (!error) importadas++;
+    }
+    res.json({ importadas, duplicadas, total: transacoes.length });
+  });
+
+  app.get('/api/fin/ofx/transacoes', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const q = supabase.from('fin_transacoes_ofx').select('*').eq('user_id', userId).order('data', { ascending: false });
+    if (req.query.conta_id) (q as any).eq('conta_id', req.query.conta_id);
+    const { data } = await q;
+    res.json(data || []);
+  });
+
+  app.post('/api/fin/ofx/conciliar', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { transacao_id, receita_id, despesa_id, ignorar } = req.body;
+    if (ignorar) {
+      await supabase.from('fin_transacoes_ofx').update({ status_conciliacao: 'ignorado' }).eq('id', transacao_id).eq('user_id', userId);
+      return res.json({ success: true });
+    }
+    const updates: any = { status_conciliacao: 'conciliado' };
+    const { data: tx } = await supabase.from('fin_transacoes_ofx').select('data,valor').eq('id', transacao_id).single();
+    if (receita_id) {
+      updates.receita_id = receita_id;
+      await supabase.from('fin_receitas').update({ status: 'recebido', data_pagamento: tx?.data, updated_at: new Date().toISOString() }).eq('id', receita_id).eq('user_id', userId);
+    }
+    if (despesa_id) {
+      updates.despesa_id = despesa_id;
+      await supabase.from('fin_despesas').update({ status: 'pago', data_pagamento: tx?.data, updated_at: new Date().toISOString() }).eq('id', despesa_id).eq('user_id', userId);
+    }
+    await supabase.from('fin_transacoes_ofx').update(updates).eq('id', transacao_id).eq('user_id', userId);
+    res.json({ success: true });
+  });
+
+  // ─── Grupos DRE ────────────────────────────────────────────────────────────
+  app.get('/api/fin/grupos-dre', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { data } = await supabase.from('fin_grupos_dre').select('*').eq('user_id', userId).order('ordem');
+    res.json(data || []);
+  });
+
+  app.post('/api/fin/grupos-dre', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { data, error } = await supabase.from('fin_grupos_dre').insert({ ...req.body, user_id: userId }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.put('/api/fin/grupos-dre/:id', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { error } = await supabase.from('fin_grupos_dre').update(req.body).eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  app.delete('/api/fin/grupos-dre/:id', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    await supabase.from('fin_grupos_dre').delete().eq('id', req.params.id).eq('user_id', userId);
+    res.json({ success: true });
   });
 
   // ============ EXTENSÃO CHROME — endpoints ============
