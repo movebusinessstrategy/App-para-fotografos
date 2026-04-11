@@ -106,14 +106,22 @@ export function ChatView({ phone, contactName }: Props) {
     setMessages((prev) => [...prev, tmpMsg]);
 
     try {
-      await authFetch("/api/inbox/send", {
+      const res = await authFetch("/api/inbox/send", {
         method: "POST",
         body: JSON.stringify({ phone, text: msg }),
       });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setMessages((prev) => prev.filter((m) => m.message_id !== tmpId));
+        setText(msg);
+        alert(`Erro ao enviar: ${err.error || res.statusText}`);
+        return;
+      }
       await fetchMessages(true);
     } catch {
       setMessages((prev) => prev.filter((m) => m.message_id !== tmpId));
       setText(msg);
+      alert("Erro de conexão ao enviar mensagem.");
     } finally {
       setSending(false);
     }
