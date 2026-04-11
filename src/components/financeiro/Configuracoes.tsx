@@ -159,6 +159,63 @@ export default function Configuracoes() {
     if (res.ok) setContas(prev => prev.filter(c => c.id !== id));
   };
 
+  // ── Grupos DRE ──────────────────────────────────────────────
+  const [novoGrupo, setNovoGrupo] = useState({
+    nome: '', tipo: 'despesa', operacao: 'subtrai', ordem: 0, total_parcial_apos: '',
+  });
+  const [editandoGrupo, setEditandoGrupo] = useState<GrupoDRE | null>(null);
+
+  const addGrupo = async () => {
+    if (!novoGrupo.nome) return;
+    setSaving(true);
+    try {
+      const res = await authFetch('/api/fin/grupos-dre', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nome: novoGrupo.nome,
+          tipo: novoGrupo.tipo,
+          operacao: novoGrupo.operacao,
+          ordem: Number(novoGrupo.ordem),
+          total_parcial_apos: novoGrupo.total_parcial_apos || null,
+        }),
+      });
+      if (res.ok) {
+        const novo = await res.json();
+        setGruposDRE(prev => [...prev, novo].sort((a, b) => a.ordem - b.ordem));
+        setNovoGrupo({ nome: '', tipo: 'despesa', operacao: 'subtrai', ordem: 0, total_parcial_apos: '' });
+      }
+    } finally { setSaving(false); }
+  };
+
+  const saveGrupo = async () => {
+    if (!editandoGrupo) return;
+    setSaving(true);
+    try {
+      const res = await authFetch(`/api/fin/grupos-dre/${editandoGrupo.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nome: editandoGrupo.nome,
+          tipo: editandoGrupo.tipo,
+          operacao: editandoGrupo.operacao,
+          ordem: Number(editandoGrupo.ordem),
+          total_parcial_apos: editandoGrupo.total_parcial_apos || null,
+        }),
+      });
+      if (res.ok) {
+        setGruposDRE(prev => prev.map(g => g.id === editandoGrupo.id ? editandoGrupo : g).sort((a, b) => a.ordem - b.ordem));
+        setEditandoGrupo(null);
+      }
+    } finally { setSaving(false); }
+  };
+
+  const delGrupo = async (id: string) => {
+    if (!confirm('Excluir grupo DRE?')) return;
+    const res = await authFetch(`/api/fin/grupos-dre/${id}`, { method: 'DELETE' });
+    if (res.ok) setGruposDRE(prev => prev.filter(g => g.id !== id));
+  };
+
   const SECOES: Array<{ key: SecaoAtiva; label: string; icon: React.ElementType }> = [
     { key: 'categorias', label: 'Categorias', icon: Tag },
     { key: 'meios', label: 'Meios de Pagamento', icon: CreditCard },
@@ -430,9 +487,10 @@ export default function Configuracoes() {
           {/* ── GRUPOS DRE ────────────────────────────────── */}
           {secao === 'dre' && (
             <div className="space-y-4">
+              {/* Seed */}
               {gruposDRE.length === 0 && (
-                <div className="text-center py-6">
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">Nenhum grupo DRE configurado.</p>
+                <div className="text-center py-4 bg-violet-50 dark:bg-violet-900/10 rounded-xl border border-violet-200 dark:border-violet-800">
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">Nenhum grupo configurado. Comece com a estrutura padrão.</p>
                   <button
                     onClick={async () => {
                       setSaving(true);
@@ -454,24 +512,166 @@ export default function Configuracoes() {
                   </button>
                 </div>
               )}
-              {gruposDRE.length > 0 && (
-                <div className="space-y-2">
-                  {gruposDRE.sort((a, b) => a.ordem - b.ordem).map(g => (
-                    <div key={g.id} className="flex items-center justify-between px-4 py-3 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs font-bold text-gray-400 dark:text-gray-500 w-5 text-center">{g.ordem}</span>
-                        <div>
-                          <p className="text-sm font-medium text-gray-800 dark:text-gray-200">{g.nome}</p>
-                          <p className="text-xs text-gray-500 dark:text-gray-400">
-                            {g.tipo} · {g.operacao}
-                            {g.total_parcial_apos ? ` → ${g.total_parcial_apos}` : ''}
-                          </p>
+
+              {/* Lista */}
+              <div className="space-y-2">
+                {gruposDRE.sort((a, b) => a.ordem - b.ordem).map(g => (
+                  <div key={g.id} className="rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 overflow-hidden">
+                    {editandoGrupo?.id === g.id ? (
+                      /* Modo edição */
+                      <div className="p-4 space-y-3">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="col-span-2">
+                            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Nome</label>
+                            <input
+                              value={editandoGrupo.nome}
+                              onChange={e => setEditandoGrupo(prev => prev ? { ...prev, nome: e.target.value } : null)}
+                              className="w-full text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Tipo</label>
+                            <select
+                              value={editandoGrupo.tipo}
+                              onChange={e => setEditandoGrupo(prev => prev ? { ...prev, tipo: e.target.value } : null)}
+                              className="w-full text-sm px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                            >
+                              <option value="receita">Receita</option>
+                              <option value="deducao">Dedução</option>
+                              <option value="custo">Custo</option>
+                              <option value="despesa">Despesa</option>
+                              <option value="imposto">Imposto</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Operação</label>
+                            <select
+                              value={editandoGrupo.operacao}
+                              onChange={e => setEditandoGrupo(prev => prev ? { ...prev, operacao: e.target.value } : null)}
+                              className="w-full text-sm px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                            >
+                              <option value="soma">Soma (+)</option>
+                              <option value="subtrai">Subtrai (−)</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Ordem</label>
+                            <input
+                              type="number" min={1}
+                              value={editandoGrupo.ordem}
+                              onChange={e => setEditandoGrupo(prev => prev ? { ...prev, ordem: Number(e.target.value) } : null)}
+                              className="w-full text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Total parcial após (opcional)</label>
+                            <input
+                              value={editandoGrupo.total_parcial_apos || ''}
+                              onChange={e => setEditandoGrupo(prev => prev ? { ...prev, total_parcial_apos: e.target.value } : null)}
+                              placeholder="ex: Receita Líquida"
+                              className="w-full text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex gap-2 justify-end">
+                          <button onClick={() => setEditandoGrupo(null)} className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700">
+                            <X className="w-3.5 h-3.5" /> Cancelar
+                          </button>
+                          <button onClick={saveGrupo} disabled={saving} className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50">
+                            <Save className="w-3.5 h-3.5" /> Salvar
+                          </button>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    ) : (
+                      /* Modo leitura */
+                      <div className="flex items-center justify-between px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs font-bold text-gray-400 dark:text-gray-500 w-5 text-center">{g.ordem}</span>
+                          <div>
+                            <p className="text-sm font-medium text-gray-800 dark:text-gray-200">{g.nome}</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                              {g.tipo} · {g.operacao === 'subtrai' ? 'Subtrai (−)' : 'Soma (+)'}
+                              {g.total_parcial_apos ? ` → ${g.total_parcial_apos}` : ''}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => setEditandoGrupo(g)} className="p-1.5 rounded-lg text-gray-400 hover:text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/20">
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => delGrupo(g.id)} className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Formulário novo grupo */}
+              <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-600 p-4 space-y-3">
+                <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Adicionar grupo</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="col-span-2">
+                    <input
+                      value={novoGrupo.nome}
+                      onChange={e => setNovoGrupo(f => ({ ...f, nome: e.target.value }))}
+                      placeholder="Nome do grupo (ex: (-) Custos Diretos)"
+                      className="w-full text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                  </div>
+                  <div>
+                    <select
+                      value={novoGrupo.tipo}
+                      onChange={e => setNovoGrupo(f => ({ ...f, tipo: e.target.value }))}
+                      className="w-full text-sm px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    >
+                      <option value="receita">Receita</option>
+                      <option value="deducao">Dedução</option>
+                      <option value="custo">Custo</option>
+                      <option value="despesa">Despesa</option>
+                      <option value="imposto">Imposto</option>
+                    </select>
+                  </div>
+                  <div>
+                    <select
+                      value={novoGrupo.operacao}
+                      onChange={e => setNovoGrupo(f => ({ ...f, operacao: e.target.value }))}
+                      className="w-full text-sm px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    >
+                      <option value="soma">Soma (+)</option>
+                      <option value="subtrai">Subtrai (−)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <input
+                      type="number" min={1}
+                      value={novoGrupo.ordem}
+                      onChange={e => setNovoGrupo(f => ({ ...f, ordem: Number(e.target.value) }))}
+                      placeholder="Ordem"
+                      className="w-full text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                  </div>
+                  <div>
+                    <input
+                      value={novoGrupo.total_parcial_apos}
+                      onChange={e => setNovoGrupo(f => ({ ...f, total_parcial_apos: e.target.value }))}
+                      placeholder="Total parcial após (opcional)"
+                      className="w-full text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                  </div>
                 </div>
-              )}
+                <div className="flex justify-end">
+                  <button
+                    onClick={addGrupo}
+                    disabled={saving || !novoGrupo.nome}
+                    className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+                  >
+                    <Plus className="w-4 h-4" /> Adicionar
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </>
