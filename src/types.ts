@@ -173,6 +173,22 @@ export interface Deal {
   created_at: string;
   updated_at: string;
   client_name?: string | null;
+  catalog_type?: 'combo' | 'produto' | 'servico' | null;
+  catalog_id?: string | null;
+  catalog_name?: string | null;
+  catalog_value?: number | null;
+  items?: DealItem[];
+}
+
+export interface DealItem {
+  id: string;
+  deal_id: number;
+  catalog_type: 'combo' | 'produto' | 'servico';
+  catalog_id: string;
+  catalog_name: string;
+  catalog_value: number;
+  quantidade: number;
+  created_at: string;
 }
 
 export interface StageHistoryEntry {
@@ -346,6 +362,7 @@ export interface Produto {
   margem_lucro?: number;
   unidade: UnidadeProduto;
   estoque?: number;
+  prazo_entrega?: number;
   ncm?: string;
   cfop?: string;
   origem?: string;

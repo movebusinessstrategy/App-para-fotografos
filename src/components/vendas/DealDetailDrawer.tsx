@@ -3,10 +3,10 @@ import React, { useState, useEffect, useRef } from "react";
 import { format } from "date-fns";
 import {
   X, Trash2, CheckCircle, XCircle, User, Phone, Mail, Instagram,
-  Edit3, Link2, Trophy, Pencil, Search, Check
+  Edit3, Link2, Trophy, Pencil, Search, Check, Package, Layers, Briefcase, ChevronDown, Plus
 } from "lucide-react";
 import { ConfirmModal } from "../ui/ConfirmModal";
-import { Deal, Client, PipelineStage, DealActivity, StageHistoryEntry } from "../../types";
+import { Deal, Client, PipelineStage, DealActivity, StageHistoryEntry, Produto, Servico, Combo, DealItem } from "../../types";
 import { authFetch } from "../../utils/authFetch";
 import { DealConversionModal } from "../pipeline/DealConversionModal";
 
@@ -187,6 +187,102 @@ export function DealDetailDrawer({
   const [confirmModal, setConfirmModal] = useState<{
     open: boolean; onConfirm: () => void; title: string; message: string; variant?: "danger" | "warning";
   }>({ open: false, onConfirm: () => {}, title: "", message: "" });
+
+  // ── Catálogo vinculado (múltiplos itens) ──────────────────────────────────
+  const [catalogType, setCatalogType] = useState<'combo' | 'produto' | 'servico'>('combo');
+  const [catalogSearch, setCatalogSearch] = useState('');
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [catalogSaving, setCatalogSaving] = useState(false);
+  const [catalogProdutos, setCatalogProdutos] = useState<Produto[]>([]);
+  const [catalogServicos, setCatalogServicos] = useState<Servico[]>([]);
+  const [catalogCombos, setCatalogCombos] = useState<Combo[]>([]);
+  // Lista local de itens (reflete deal.items, atualizada otimisticamente)
+  const [localItems, setLocalItems] = useState<DealItem[]>([]);
+  const [showAddItem, setShowAddItem] = useState(false);
+  const catalogRef = useRef<HTMLDivElement>(null);
+
+  // Inicializa/sincroniza itens do deal
+  useEffect(() => {
+    setLocalItems(deal?.items || []);
+    setShowAddItem(false);
+  }, [deal?.id, deal?.items]);
+
+  useEffect(() => {
+    authFetch('/api/produtos').then(r => r.json()).then(d => setCatalogProdutos(Array.isArray(d) ? d : [])).catch(() => {});
+    authFetch('/api/servicos').then(r => r.json()).then(d => setCatalogServicos(Array.isArray(d) ? d : [])).catch(() => {});
+    authFetch('/api/combos').then(r => r.json()).then(d => setCatalogCombos(Array.isArray(d) ? d : [])).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (catalogRef.current && !catalogRef.current.contains(e.target as Node)) {
+        setCatalogOpen(false);
+        setCatalogSearch('');
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const catalogItems = catalogType === 'produto'
+    ? catalogProdutos.filter(p => p.ativo).map(p => ({ id: p.id, nome: p.nome, value: p.preco_venda }))
+    : catalogType === 'servico'
+    ? catalogServicos.filter(s => s.ativo).map(s => ({ id: s.id, nome: s.nome, value: s.preco_base }))
+    : catalogCombos.filter(c => c.ativo).map(c => ({ id: c.id, nome: c.nome, value: c.preco_final }));
+
+  const filteredCatalog = catalogSearch
+    ? catalogItems.filter(i => i.nome.toLowerCase().includes(catalogSearch.toLowerCase()))
+    : catalogItems;
+
+  const itemsTotal = localItems.reduce((sum, i) => sum + (i.catalog_value * i.quantidade), 0);
+
+  const addDealItem = async (id: string, nome: string, value: number) => {
+    if (!deal) return;
+    // Otimistic update
+    const tempItem: DealItem = {
+      id: `temp-${Date.now()}`, deal_id: Number(deal.id),
+      catalog_type: catalogType, catalog_id: id, catalog_name: nome,
+      catalog_value: value, quantidade: 1, created_at: new Date().toISOString(),
+    };
+    setLocalItems(prev => [...prev, tempItem]);
+    setCatalogOpen(false);
+    setCatalogSearch('');
+    setShowAddItem(false);
+    setCatalogSaving(true);
+    try {
+      const res = await authFetch(`/api/deals/${deal.id}/items`, {
+        method: 'POST',
+        body: JSON.stringify({ catalog_type: catalogType, catalog_id: id, catalog_name: nome, catalog_value: value, quantidade: 1 }),
+      });
+      const data = await res.json();
+      if (data.item) {
+        setLocalItems(prev => prev.map(i => i.id === tempItem.id ? data.item : i));
+      }
+      onUpdate({ silent: true });
+    } catch {
+      setLocalItems(prev => prev.filter(i => i.id !== tempItem.id));
+    } finally {
+      setCatalogSaving(false);
+    }
+  };
+
+  const removeDealItem = async (itemId: string) => {
+    setLocalItems(prev => prev.filter(i => i.id !== itemId));
+    try {
+      await authFetch(`/api/deal-items/${itemId}`, { method: 'DELETE' });
+      onUpdate({ silent: true });
+    } catch {
+      // Recarrega se der erro
+      onUpdate({ silent: true });
+    }
+  };
+
+  const CATALOG_CONFIG = {
+    combo:   { label: 'Combo',   icon: <Layers size={14} />,   color: 'text-amber-600 dark:text-amber-400',  bg: 'bg-amber-50 dark:bg-amber-900/20',   border: 'border-amber-200 dark:border-amber-700' },
+    produto: { label: 'Produto', icon: <Package size={14} />,  color: 'text-blue-600 dark:text-blue-400',    bg: 'bg-blue-50 dark:bg-blue-900/20',     border: 'border-blue-200 dark:border-blue-700' },
+    servico: { label: 'Serviço', icon: <Briefcase size={14} />, color: 'text-purple-600 dark:text-purple-400', bg: 'bg-purple-50 dark:bg-purple-900/20', border: 'border-purple-200 dark:border-purple-700' },
+  };
+  // ─────────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     if (deal) {
@@ -391,9 +487,16 @@ export function DealDetailDrawer({
                     </div>
                   </div>
                 ) : (
-                  <p className="text-base font-bold text-gray-900 dark:text-white">
-                    R$ {(deal.value || 0).toLocaleString("pt-BR")}
-                  </p>
+                  <div>
+                    <p className="text-base font-bold text-gray-900 dark:text-white">
+                      R$ {(deal.value || 0).toLocaleString("pt-BR")}
+                    </p>
+                    {localItems.length > 0 && itemsTotal !== deal.value && (
+                      <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">
+                        Itens: R$ {itemsTotal.toLocaleString("pt-BR")}
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -532,6 +635,139 @@ export function DealDetailDrawer({
                   )}
                 </>
               )}
+            </div>
+
+            {/* ── Pacote / Serviço vinculado (múltiplos itens) ── */}
+            <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase flex items-center gap-1">
+                  <Package size={12} /> Pacote / Itens
+                  {localItems.length > 0 && (
+                    <span className="ml-1 px-1.5 py-0.5 rounded-full bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 text-[10px] font-bold">
+                      {localItems.length}
+                    </span>
+                  )}
+                </label>
+                <button
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={() => { setShowAddItem(v => !v); setCatalogOpen(false); setCatalogSearch(''); }}
+                  className="flex items-center gap-1 text-xs font-medium text-gold-600 dark:text-gold-400 hover:text-gold-700 dark:hover:text-gold-300 transition-colors"
+                >
+                  <Plus size={13} /> Adicionar
+                </button>
+              </div>
+
+              {/* Lista de itens vinculados */}
+              {localItems.length > 0 && (
+                <div className="space-y-2 mb-3">
+                  {localItems.map(item => {
+                    const cfg = CATALOG_CONFIG[item.catalog_type as keyof typeof CATALOG_CONFIG] || CATALOG_CONFIG.produto;
+                    return (
+                      <div key={item.id} className={`flex items-center gap-2 p-2.5 rounded-xl border ${cfg.bg} ${cfg.border}`}>
+                        <span className={`flex-shrink-0 ${cfg.color}`}>{cfg.icon}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{item.catalog_name}</p>
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                            {item.quantidade}x · R$ {item.catalog_value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </p>
+                        </div>
+                        <span className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex-shrink-0">
+                          R$ {(item.catalog_value * item.quantidade).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </span>
+                        <button
+                          onMouseDown={e => e.preventDefault()}
+                          onClick={() => removeDealItem(item.id)}
+                          className="p-1 text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors flex-shrink-0"
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                  {/* Total */}
+                  <div className="flex items-center justify-between px-2.5 py-2 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
+                    <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Total dos itens</span>
+                    <span className="text-sm font-bold text-gray-900 dark:text-white">
+                      R$ {itemsTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Seletor para adicionar item */}
+              {showAddItem && (
+                <div ref={catalogRef} className="space-y-2 border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800">
+                  <p className="text-[11px] font-semibold text-gray-400 dark:text-gray-500 uppercase">Tipo</p>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {(['combo', 'produto', 'servico'] as const).map(t => {
+                      const cfg = CATALOG_CONFIG[t];
+                      const active = catalogType === t;
+                      return (
+                        <button key={t} onMouseDown={e => e.preventDefault()}
+                          onClick={() => { setCatalogType(t); setCatalogOpen(true); setCatalogSearch(''); }}
+                          className={`flex flex-col items-center gap-1 py-2 px-1 rounded-xl border text-center transition-all ${
+                            active ? `${cfg.bg} ${cfg.border} ${cfg.color}` : 'border-gray-200 dark:border-gray-700 text-gray-400 hover:border-gray-300 dark:hover:border-gray-600'
+                          }`}>
+                          {cfg.icon}
+                          <span className="text-[10px] font-semibold">{cfg.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Busca */}
+                  <div className="relative">
+                    <div className="flex items-center gap-2 border border-gray-200 dark:border-gray-700 rounded-xl px-3 py-2 bg-gray-50 dark:bg-gray-900 focus-within:border-gold-400 dark:focus-within:border-gold-500 transition-colors">
+                      <Search size={13} className="text-gray-400 flex-shrink-0" />
+                      <input
+                        value={catalogSearch}
+                        onChange={e => { setCatalogSearch(e.target.value); setCatalogOpen(true); }}
+                        onFocus={() => setCatalogOpen(true)}
+                        placeholder={`Buscar ${CATALOG_CONFIG[catalogType].label.toLowerCase()}...`}
+                        className="flex-1 text-sm bg-transparent outline-none text-gray-800 dark:text-gray-100 placeholder-gray-400"
+                      />
+                    </div>
+                    {catalogOpen && (
+                      <div className="absolute z-30 top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl overflow-hidden">
+                        {filteredCatalog.length === 0 ? (
+                          <div className="flex flex-col items-center gap-1 py-6 text-gray-400">
+                            <Package size={20} strokeWidth={1.5} />
+                            <p className="text-xs">Nenhum {CATALOG_CONFIG[catalogType].label.toLowerCase()} encontrado</p>
+                          </div>
+                        ) : (
+                          <div className="max-h-48 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700/50">
+                            {filteredCatalog.map(item => (
+                              <button key={item.id}
+                                onMouseDown={e => e.preventDefault()}
+                                onClick={() => addDealItem(item.id, item.nome, item.value)}
+                                className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-gray-50 dark:hover:bg-gray-700/60 transition-colors text-left">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className={CATALOG_CONFIG[catalogType].color}>{CATALOG_CONFIG[catalogType].icon}</span>
+                                  <span className="text-sm text-gray-800 dark:text-gray-100 truncate">{item.nome}</span>
+                                </div>
+                                <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 ml-2 flex-shrink-0">
+                                  R$ {item.value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <button onMouseDown={e => e.preventDefault()} onClick={() => { setShowAddItem(false); setCatalogOpen(false); setCatalogSearch(''); }}
+                    className="w-full text-[11px] text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 py-1 transition-colors">
+                    Cancelar
+                  </button>
+                </div>
+              )}
+
+              {localItems.length === 0 && !showAddItem && (
+                <p className="text-[11px] text-gray-400 dark:text-gray-500 text-center py-2">
+                  Nenhum item vinculado. Clique em "Adicionar" para vincular combos, produtos ou serviços.
+                </p>
+              )}
+              {catalogSaving && <p className="text-[11px] text-gray-400 mt-1 text-center">Salvando...</p>}
             </div>
 
             {/* Histórico do Lead */}
