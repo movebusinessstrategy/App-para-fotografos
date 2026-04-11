@@ -285,7 +285,9 @@ export interface Fornecedor {
   id: string;
   user_id?: string;
   nome: string;
+  tipo_pessoa?: 'PF' | 'PJ';
   cnpj?: string;
+  cpf?: string;
   contato?: string;
   whatsapp?: string;
   email?: string;
@@ -295,28 +297,22 @@ export interface Fornecedor {
   updated_at?: string;
 }
 
-export type CategoriaProduto =
-  | 'album_fotolivro'
-  | 'impressao_fineart'
-  | 'pendrive_midia'
-  | 'moldura_quadro'
-  | 'props_acessorios'
-  | 'figurino_roupa'
-  | 'embalagem_caixa'
-  | 'outros';
+export interface CategoriaCatalogo {
+  id: string;
+  user_id?: string;
+  nome: string;
+  cor?: string;
+  created_at: string;
+}
+
+export interface TipoEnsaio {
+  id: string;
+  user_id?: string;
+  nome: string;
+  created_at: string;
+}
 
 export type UnidadeProduto = 'un' | 'cx' | 'pct' | 'par' | 'kit';
-
-export const CATEGORIA_LABELS: Record<CategoriaProduto, string> = {
-  album_fotolivro: 'Álbum / Fotolivro',
-  impressao_fineart: 'Impressão Fine Art',
-  pendrive_midia: 'Pendrive / Mídia',
-  moldura_quadro: 'Moldura / Quadro',
-  props_acessorios: 'Props / Acessórios',
-  figurino_roupa: 'Figurino / Roupa',
-  embalagem_caixa: 'Embalagem / Caixa',
-  outros: 'Outros',
-};
 
 export const TIPO_ENSAIO_LABELS: Record<string, string> = {
   anunciacao: 'Anunciação',
@@ -342,7 +338,7 @@ export interface Produto {
   user_id?: string;
   nome: string;
   descricao?: string;
-  categoria: CategoriaProduto;
+  categoria: string;
   fornecedor_id?: string;
   fornecedor_nome?: string;
   preco_custo: number;
@@ -352,6 +348,7 @@ export interface Produto {
   estoque?: number;
   ncm?: string;
   cfop?: string;
+  origem?: string;
   ativo: boolean;
   created_at: string;
   updated_at?: string;

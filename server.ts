@@ -2512,6 +2512,89 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // ============ CATÁLOGO: CATEGORIAS PRODUTO ============
+
+  app.get('/api/categorias-produto', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase.from('categorias_produto').select('*').eq('user_id', userId).order('nome');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  });
+
+  app.post('/api/categorias-produto', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase.from('categorias_produto').insert({ ...req.body, user_id: userId }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.put('/api/categorias-produto/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase.from('categorias_produto').update(req.body).eq('id', req.params.id).eq('user_id', userId).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.delete('/api/categorias-produto/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { error } = await supabase.from('categorias_produto').delete().eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  // ============ CATÁLOGO: TIPOS DE ENSAIO ============
+
+  app.get('/api/tipos-ensaio', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase.from('tipos_ensaio').select('*').eq('user_id', userId).order('nome');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  });
+
+  app.post('/api/tipos-ensaio', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase.from('tipos_ensaio').insert({ ...req.body, user_id: userId }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.put('/api/tipos-ensaio/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase.from('tipos_ensaio').update(req.body).eq('id', req.params.id).eq('user_id', userId).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.delete('/api/tipos-ensaio/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { error } = await supabase.from('tipos_ensaio').delete().eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  // ============ CNPJ LOOKUP (proxy BrasilAPI) ============
+
+  app.get('/api/cnpj/:cnpj', requireAuth, async (req, res) => {
+    const cnpj = req.params.cnpj.replace(/\D/g, '');
+    if (cnpj.length !== 14) return res.status(400).json({ error: 'CNPJ inválido' });
+    try {
+      const resp = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`);
+      if (!resp.ok) return res.status(404).json({ error: 'CNPJ não encontrado na Receita Federal' });
+      const data = await resp.json();
+      res.json(data);
+    } catch {
+      res.status(500).json({ error: 'Erro ao consultar Receita Federal' });
+    }
+  });
+
   // ============ OPPORTUNITY RULES ROUTES ============
   app.get('/api/opportunity-rules', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
