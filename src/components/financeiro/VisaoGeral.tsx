@@ -79,6 +79,7 @@ export default function VisaoGeral() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -93,7 +94,14 @@ export default function VisaoGeral() {
   const syncJobs = async () => {
     setSyncing(true);
     try {
-      await authFetch('/api/fin/sync-jobs', { method: 'POST' });
+      const res = await authFetch('/api/fin/sync-jobs', { method: 'POST' });
+      const data = await res.json();
+      const msgs: string[] = [];
+      if ((data.criadas || 0) > 0) msgs.push(`${data.criadas} receita(s) criada(s)`);
+      if ((data.atualizadas || 0) > 0) msgs.push(`${data.atualizadas} receita(s) atualizada(s)`);
+      if (msgs.length === 0) msgs.push('Tudo já está sincronizado');
+      setSyncMsg(msgs.join(' · '));
+      setTimeout(() => setSyncMsg(''), 4000);
       await load();
     } finally {
       setSyncing(false);
@@ -120,14 +128,21 @@ export default function VisaoGeral() {
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Visão Geral</h2>
           <p className="text-sm text-gray-500 dark:text-gray-400">Resumo financeiro do mês atual</p>
         </div>
-        <button
-          onClick={syncJobs}
-          disabled={syncing}
-          className="flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
-        >
-          <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-          Sincronizar Jobs
-        </button>
+        <div className="flex items-center gap-3">
+          {syncMsg && (
+            <span className="text-xs text-green-600 dark:text-green-400 font-medium animate-pulse">
+              {syncMsg}
+            </span>
+          )}
+          <button
+            onClick={syncJobs}
+            disabled={syncing}
+            className="flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
+            Sincronizar Jobs
+          </button>
+        </div>
       </div>
 
       {/* KPI Grid */}

@@ -4405,10 +4405,41 @@ async function startServer() {
     const jobIdsExistentes = new Set((jaExistentes || []).map((r: any) => r.job_id));
 
     let criadas = 0;
+    let atualizadas = 0;
     const hoje = new Date().toISOString().slice(0, 10);
 
     for (const job of jobs) {
-      if (jobIdsExistentes.has(job.id)) continue;
+      if (jobIdsExistentes.has(job.id)) {
+        // Job já sincronizado — atualiza status das receitas se o job mudou de estado
+        if (job.payment_status === 'paid') {
+          const { count } = await supabase.from('fin_receitas')
+            .update({ status: 'recebido', data_pagamento: hoje, updated_at: new Date().toISOString() })
+            .eq('user_id', userId).eq('job_id', job.id).in('status', ['pendente', 'atrasado'])
+            .select('id', { count: 'exact', head: true });
+          if ((count || 0) > 0) atualizadas += count as number;
+        } else if (job.payment_status === 'partial') {
+          // Busca pagamentos registrados para criar receitas de parcelas pagas ainda não existentes
+          const { data: payments } = await adminClient.from('job_payments').select('*').eq('job_id', job.id);
+          const { data: receitasDoJob } = await supabase.from('fin_receitas').select('descricao,valor_bruto').eq('user_id', userId).eq('job_id', job.id);
+          const valoresCriados = new Set((receitasDoJob || []).map((r: any) => r.valor_bruto));
+          for (const pay of (payments || [])) {
+            if (!valoresCriados.has(pay.amount)) {
+              await supabase.from('fin_receitas').insert({
+                user_id: userId, job_id: job.id,
+                cliente_id: job.client_id, cliente_nome: job.job_name || `Job #${job.id}`,
+                descricao: `${job.job_name} — ${pay.description || 'Pagamento parcial'}`,
+                valor_bruto: pay.amount, taxa_meio: 0, valor_liquido: pay.amount,
+                data_vencimento: pay.payment_date || job.job_date || hoje,
+                data_pagamento: pay.payment_date,
+                status: 'recebido', parcela: 1, total_parcelas: 1,
+                origem_automatica: true, updated_at: new Date().toISOString(),
+              });
+              criadas++;
+            }
+          }
+        }
+        continue;
+      }
 
       // Busca pagamentos do job
       const { data: payments } = await adminClient.from('job_payments').select('*').eq('job_id', job.id).order('created_at');
@@ -4464,7 +4495,7 @@ async function startServer() {
         }
       }
     }
-    res.json({ criadas });
+    res.json({ criadas, atualizadas });
   });
 
   // ─── Dashboard financeiro ───────────────────────────────────────────────────
