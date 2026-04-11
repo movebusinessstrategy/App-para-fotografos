@@ -448,6 +448,10 @@ export default function JobsPage() {
           handleRemoveFromProduction(jobId);
           setSelectedJob(null);
         }}
+        onJobUpdate={(jobId, patch) => {
+          setJobs(prev => prev.map(j => j.id === jobId ? { ...j, ...patch } : j));
+          setSelectedJob(prev => prev && prev.id === jobId ? { ...prev, ...patch } : prev);
+        }}
       />
 
       <ConfirmModal

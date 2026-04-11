@@ -80,6 +80,7 @@ interface JobDetailDrawerProps {
   onStageChange: (jobId: number, stageId: string) => void;
   onLabelsChange?: (jobId: number, labels: string[]) => void;
   onRemoveFromProduction?: (jobId: number) => void;
+  onJobUpdate?: (jobId: number, patch: { amount?: number; payment_status?: string; amount_paid?: number }) => void;
 }
 
 const formatCurrency = (v: number) =>
@@ -98,7 +99,7 @@ const formatDuration = (ms: number | null | undefined) => {
   return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
 };
 
-export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsChange, onRemoveFromProduction }: JobDetailDrawerProps) {
+export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsChange, onRemoveFromProduction, onJobUpdate }: JobDetailDrawerProps) {
   const [tab, setTab] = useState<"details" | "financeiro" | "testimonials">("details");
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [client, setClient] = useState<ClientDetail | null>(null);
@@ -144,6 +145,14 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
         setJobItems(data.jobItems || []);
         setPayments(data.payments || []);
         setJobAmount(data.jobAmount || 0);
+        // Propaga correções de amount/payment_status/amount_paid para o card no board
+        if (onJobUpdate && (data.jobAmount != null || data.payment_status)) {
+          onJobUpdate(jobId, {
+            amount: data.jobAmount,
+            payment_status: data.payment_status,
+            amount_paid: data.totalPago,
+          });
+        }
       }
     } catch { }
     finally { setLoadingFin(false); }
@@ -265,6 +274,25 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
     setJobItems(prev => prev.filter(i => i.id !== id));
     await authFetch(`/api/job-items/${id}`, { method: 'DELETE' });
     loadFinanceiro(job.id);
+  };
+
+  const handleUpdateJobItemQty = async (id: string, newQty: number) => {
+    if (!job || newQty < 1) return;
+    // Atualização otimista
+    setJobItems(prev => prev.map(i => i.id === id ? { ...i, quantidade: newQty } : i));
+    const res = await authFetch(`/api/job-items/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quantidade: newQty }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setJobAmount(data.newAmount || 0);
+      if (onJobUpdate) onJobUpdate(job.id, { amount: data.newAmount, payment_status: data.payment_status });
+    } else {
+      // Reverte em caso de erro
+      loadFinanceiro(job.id);
+    }
   };
 
   if (!job) return null;
@@ -412,7 +440,12 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
             <ChevronRight size={12} /> {currentStageName}
           </span>
           <span className="text-sm font-bold text-gray-800 dark:text-gray-100">
-            {formatCurrency(job.amount)}
+            {(() => {
+              const amountPaid = job.amount_paid || 0;
+              const restante = job.amount - amountPaid;
+              if (job.payment_status === 'paid') return formatCurrency(job.amount);
+              return formatCurrency(restante >= 0 ? restante : job.amount);
+            })()}
           </span>
         </div>
 
@@ -635,8 +668,11 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
 
           {/* ── FINANCEIRO TAB ── */}
           {tab === "financeiro" && (() => {
-            const totalItens = [...dealItems, ...jobItems].reduce((s, i) => s + i.catalog_value * i.quantidade, 0);
-            const totalGeral = totalItens > 0 ? totalItens : jobAmount;
+            const dealItemsTotal = dealItems.reduce((s, i) => s + i.catalog_value * i.quantidade, 0);
+            const addedItemsTotal = jobItems.reduce((s, i) => s + i.catalog_value * i.quantidade, 0);
+            // Jobs com deal: soma os itens frescos da resposta (nunca depende de job.amount)
+            // Jobs sem deal: usa jobAmount do servidor (base manual + extras)
+            const totalGeral = dealItems.length > 0 ? dealItemsTotal + addedItemsTotal : jobAmount;
             const totalPago = payments.reduce((s, p) => s + p.amount, 0);
             const restante = Math.max(0, totalGeral - totalPago);
             const pct = totalGeral > 0 ? Math.min(100, (totalPago / totalGeral) * 100) : 0;
@@ -734,13 +770,41 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                             return (
                               <div key={item.id} className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${cfg.bg} ${cfg.border}`}>
                                 <span className={`flex-shrink-0 ${cfg.color}`}>{cfg.icon}</span>
-                                <span className="flex-1 text-sm text-gray-800 dark:text-gray-100 truncate">{item.catalog_name}</span>
-                                <span className="text-xs text-gray-400">{item.quantidade}x</span>
-                                <span className="text-xs font-semibold text-gray-700 dark:text-gray-300 mr-1">
+                                <span className="flex-1 text-sm text-gray-800 dark:text-gray-100 truncate min-w-0">{item.catalog_name}</span>
+                                {/* Stepper de quantidade editável */}
+                                <div className="flex items-center gap-0.5 flex-shrink-0">
+                                  <button
+                                    onMouseDown={e => e.preventDefault()}
+                                    onClick={() => handleUpdateJobItemQty(item.id, item.quantidade - 1)}
+                                    disabled={item.quantidade <= 1}
+                                    className="w-5 h-5 rounded flex items-center justify-center text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 text-xs font-bold"
+                                  >−</button>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    value={item.quantidade}
+                                    onChange={e => {
+                                      const v = parseInt(e.target.value) || 1;
+                                      setJobItems(prev => prev.map(i => i.id === item.id ? { ...i, quantidade: Math.max(1, v) } : i));
+                                    }}
+                                    onBlur={e => {
+                                      const v = Math.max(1, parseInt(e.target.value) || 1);
+                                      if (v !== item.quantidade) handleUpdateJobItemQty(item.id, v);
+                                    }}
+                                    onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                                    className="w-8 text-center text-xs font-semibold text-gray-700 dark:text-gray-200 bg-transparent border-0 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                  />
+                                  <button
+                                    onMouseDown={e => e.preventDefault()}
+                                    onClick={() => handleUpdateJobItemQty(item.id, item.quantidade + 1)}
+                                    className="w-5 h-5 rounded flex items-center justify-center text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 text-xs font-bold"
+                                  >+</button>
+                                </div>
+                                <span className="text-xs font-semibold text-gray-700 dark:text-gray-300 mr-1 flex-shrink-0">
                                   {formatCurrency(item.catalog_value * item.quantidade)}
                                 </span>
                                 <button onMouseDown={e => e.preventDefault()} onClick={() => handleDeleteJobItem(item.id)}
-                                  className="text-gray-300 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400">
+                                  className="text-gray-300 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400 flex-shrink-0">
                                   <X size={13} />
                                 </button>
                               </div>

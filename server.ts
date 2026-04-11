@@ -1930,11 +1930,27 @@ async function startServer() {
       .eq('user_id', userId)
       .order('job_date', { ascending: false });
 
-    const jobsFormatted = (jobs || []).map(j => ({
+    // Agrega pagamentos por job (1 query extra para todos os jobs)
+    const jobIds = (jobs || []).map((j: any) => j.id);
+    const amountPaidByJob = new Map<number, number>();
+    if (jobIds.length > 0) {
+      try {
+        const adminClient = supabaseAdmin || supabase;
+        const { data: pmts } = await adminClient
+          .from('job_payments')
+          .select('job_id, amount')
+          .in('job_id', jobIds);
+        (pmts || []).forEach((p: any) => {
+          amountPaidByJob.set(p.job_id, (amountPaidByJob.get(p.job_id) || 0) + (p.amount || 0));
+        });
+      } catch {}
+    }
+
+    const jobsFormatted = (jobs || []).map((j: any) => ({
       ...j,
       client_name: (j.clients as any)?.name || null,
-      // Default unassigned jobs to the first production stage
       production_stage: j.production_stage || 'prod-emp-1',
+      amount_paid: amountPaidByJob.get(j.id) || 0,
     }));
 
     res.json(jobsFormatted);
@@ -2298,21 +2314,27 @@ async function startServer() {
     const totalPago = payments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
 
     // Recalcula o total real a partir dos itens (auto-corrige payment_status desatualizado)
-    const dealItemsTotal = dealItems.reduce((s: number, i: any) => s + (i.unit_price || 0) * (i.quantidade || 1), 0);
+    const dealItemsTotal = dealItems.reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
     const jobItemsTotal = jobItems.reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
-    const realTotal = (dealItemsTotal + jobItemsTotal) > 0 ? (dealItemsTotal + jobItemsTotal) : job.amount;
+    // Deal jobs: total = deal_items + job_items (job.amount is always recomputed)
+    // Non-deal jobs: total = job.amount (base manual) + job_items (extras), never overwrite job.amount
+    const realTotal = deal?.id
+      ? dealItemsTotal + jobItemsTotal
+      : job.amount + jobItemsTotal;
     const correctStatus = totalPago <= 0 ? 'pending' : (realTotal > 0 && totalPago >= realTotal) ? 'paid' : 'partial';
 
     // Corrige silenciosamente se o status ou amount estiver desatualizado
-    const amountChanged = realTotal > 0 && Math.abs(realTotal - job.amount) > 0.01;
     const statusChanged = correctStatus !== job.payment_status;
-    if (amountChanged || statusChanged) {
+    // Para deal jobs: atualiza job.amount com o total recalculado
+    // Para non-deal jobs: NÃO sobrescreve job.amount (base manual imutável)
+    const dealAmountChanged = deal?.id && Math.abs(realTotal - job.amount) > 0.01;
+    if (dealAmountChanged || statusChanged) {
       const upd: any = { payment_status: correctStatus };
-      if (amountChanged) upd.amount = realTotal;
+      if (dealAmountChanged) upd.amount = realTotal;
       await supabase.from('jobs').update(upd).eq('id', jobId).eq('user_id', userId);
     }
 
-    res.json({ dealItems, jobItems, payments, totalPago, jobAmount: realTotal });
+    res.json({ dealItems, jobItems, payments, totalPago, jobAmount: realTotal, payment_status: correctStatus });
   });
 
   // POST /api/jobs/:id/payments — registrar um pagamento
@@ -2390,23 +2412,61 @@ async function startServer() {
 
     if (error) return res.status(500).json({ error: error.message });
 
-    // Recalcula amount corretamente: baseAmount (job.amount antes de qualquer job_item) + todos os job_items
-    const { data: jItems } = await adminClient.from('job_items').select('catalog_value, quantidade').eq('job_id', jobId);
-    const allJobItemsTotal = (jItems || []).reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
-    // Subtrai o item recém-inserido para descobrir o total anterior de job_items, depois calcula base
-    const newItemTotal = (item.catalog_value || 0) * (item.quantidade || 1);
-    const previousJobItemsTotal = allJobItemsTotal - newItemTotal;
-    const baseAmount = job.amount - previousJobItemsTotal; // amount original do deal
-    const newAmount = baseAmount + allJobItemsTotal;
-    await supabase.from('jobs').update({ amount: newAmount }).eq('id', jobId).eq('user_id', userId);
+    const result = await recalcJobFinancials(supabase, adminClient, jobId, userId);
+    res.json({ item, ...result });
+  });
 
-    // Atualiza payment_status com base no novo total
+  // Helper: recalcula amount e payment_status de um job a partir de todos os itens
+  async function recalcJobFinancials(supabase: SupabaseClient, adminClient: SupabaseClient, jobId: number, userId: string) {
+    const { data: job } = await supabase.from('jobs').select('id, amount').eq('id', jobId).eq('user_id', userId).single();
+    if (!job) return { newAmount: 0, payment_status: 'pending' };
+
+    // Busca deal vinculado
+    const { data: deal } = await supabase.from('deals').select('id').eq('converted_job_id', jobId).eq('user_id', userId).maybeSingle();
+
+    const { data: jItems } = await adminClient.from('job_items').select('catalog_value, quantidade').eq('job_id', jobId);
+    const jobItemsTotal = (jItems || []).reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
+
+    let realTotal: number;
+    if (deal?.id) {
+      // Job convertido de deal: base = soma dos deal_items (confiável, nunca corrompida)
+      const { data: dItems } = await adminClient.from('deal_items').select('catalog_value, quantidade').eq('deal_id', deal.id);
+      const dealTotal = (dItems || []).reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
+      realTotal = dealTotal + jobItemsTotal;
+      // Atualiza job.amount para refletir o total real (deal_items + job_items)
+      await supabase.from('jobs').update({ amount: realTotal }).eq('id', jobId).eq('user_id', userId);
+    } else {
+      // Job direto: base = job.amount original (imutável). Não sobrescrevemos job.amount.
+      // job.amount pode estar corrompido de operações anteriores; usamos ele como está.
+      realTotal = job.amount + jobItemsTotal;
+      // Não atualiza job.amount para não acumular erros
+    }
+
     const { data: allPayments } = await adminClient.from('job_payments').select('amount').eq('job_id', jobId);
     const totalPago = (allPayments || []).reduce((s: number, p: any) => s + (p.amount || 0), 0);
-    const newStatus = totalPago <= 0 ? 'pending' : (newAmount > 0 && totalPago >= newAmount) ? 'paid' : 'partial';
+    const newStatus = totalPago <= 0 ? 'pending' : (realTotal > 0 && totalPago >= realTotal) ? 'paid' : 'partial';
     await supabase.from('jobs').update({ payment_status: newStatus }).eq('id', jobId).eq('user_id', userId);
 
-    res.json({ item, newAmount });
+    return { newAmount: realTotal, payment_status: newStatus };
+  }
+
+  // PATCH /api/job-items/:id — atualizar quantidade
+  app.patch('/api/job-items/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+
+    const { data: item } = await adminClient.from('job_items').select('id, job_id, catalog_value, quantidade').eq('id', req.params.id).single();
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const { data: job } = await supabase.from('jobs').select('id').eq('id', item.job_id).eq('user_id', userId).single();
+    if (!job) return res.status(403).json({ error: 'Forbidden' });
+
+    const newQty = Math.max(1, parseInt(req.body.quantidade) || 1);
+    await adminClient.from('job_items').update({ quantidade: newQty }).eq('id', req.params.id);
+
+    const result = await recalcJobFinancials(supabase, adminClient, item.job_id, userId);
+    res.json({ success: true, ...result });
   });
 
   // DELETE /api/job-items/:id
@@ -2418,23 +2478,13 @@ async function startServer() {
     const { data: item } = await adminClient.from('job_items').select('id, job_id, catalog_value, quantidade').eq('id', req.params.id).single();
     if (!item) return res.status(404).json({ error: 'Not found' });
 
-    const { data: job } = await supabase.from('jobs').select('id, amount').eq('id', item.job_id).eq('user_id', userId).single();
+    const { data: job } = await supabase.from('jobs').select('id').eq('id', item.job_id).eq('user_id', userId).single();
     if (!job) return res.status(403).json({ error: 'Forbidden' });
 
     await adminClient.from('job_items').delete().eq('id', req.params.id);
 
-    // Recalcula amount removendo o item deletado
-    const removedTotal = (item.catalog_value || 0) * (item.quantidade || 1);
-    const newAmount = Math.max(0, job.amount - removedTotal);
-    await supabase.from('jobs').update({ amount: newAmount }).eq('id', item.job_id).eq('user_id', userId);
-
-    // Atualiza payment_status
-    const { data: allPayments } = await adminClient.from('job_payments').select('amount').eq('job_id', item.job_id);
-    const totalPago = (allPayments || []).reduce((s: number, p: any) => s + (p.amount || 0), 0);
-    const newStatus = totalPago <= 0 ? 'pending' : newAmount > 0 && totalPago >= newAmount ? 'paid' : 'partial';
-    await supabase.from('jobs').update({ payment_status: newStatus }).eq('id', item.job_id).eq('user_id', userId);
-
-    res.json({ success: true, newAmount });
+    const result = await recalcJobFinancials(supabase, adminClient, item.job_id, userId);
+    res.json({ success: true, ...result });
   });
 
   // ============ FUNNEL & LEADS ROUTES ============
@@ -4422,7 +4472,7 @@ async function startServer() {
     const supabase = finClient(req); const userId = finUser(req);
     await atualizarStatusAtrasados(supabase, userId);
     const hoje = new Date();
-    const mesAtual = hoje.toISOString().slice(0, 7); // YYYY-MM
+    const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
 
     const [{ data: receitas }, { data: despesas }, { data: contas }] = await Promise.all([
       supabase.from('fin_receitas').select('*').eq('user_id', userId),
@@ -4432,83 +4482,209 @@ async function startServer() {
 
     const r = receitas || []; const d = despesas || [];
 
+    // KPIs do mês atual
+    const receita_mes = r
+      .filter((x: any) => x.status === 'recebido' && (x.data_pagamento || x.data_vencimento)?.startsWith(mesAtual))
+      .reduce((s: number, x: any) => s + (x.valor_liquido || 0), 0);
+    const despesa_mes = d
+      .filter((x: any) => x.status === 'pago' && (x.data_pagamento || x.data_vencimento)?.startsWith(mesAtual))
+      .reduce((s: number, x: any) => s + (x.valor || 0), 0);
+    const receitas_pendentes = r
+      .filter((x: any) => x.status === 'pendente')
+      .reduce((s: number, x: any) => s + (x.valor_liquido || 0), 0);
+    const despesas_pendentes = d
+      .filter((x: any) => x.status === 'pendente')
+      .reduce((s: number, x: any) => s + (x.valor || 0), 0);
+    const receitas_atrasadas = r
+      .filter((x: any) => x.status === 'atrasado')
+      .reduce((s: number, x: any) => s + (x.valor_liquido || 0), 0);
+    const despesas_atrasadas = d
+      .filter((x: any) => x.status === 'atrasado')
+      .reduce((s: number, x: any) => s + (x.valor || 0), 0);
+
     // Saldo total das contas
-    const saldoTotal = (contas || []).reduce((s: number, c: any) => {
-      const entradas = r.filter((x: any) => x.conta_id === c.id && x.status === 'recebido').reduce((a: number, x: any) => a + x.valor_bruto, 0);
-      const saidas = d.filter((x: any) => x.conta_id === c.id && x.status === 'pago').reduce((a: number, x: any) => a + x.valor, 0);
-      return s + c.saldo_inicial + entradas - saidas;
+    const saldo_contas = (contas || []).reduce((s: number, c: any) => {
+      const entradas = r.filter((x: any) => x.conta_id === c.id && x.status === 'recebido').reduce((a: number, x: any) => a + (x.valor_liquido || 0), 0);
+      const saidas = d.filter((x: any) => x.conta_id === c.id && x.status === 'pago').reduce((a: number, x: any) => a + (x.valor || 0), 0);
+      return s + (c.saldo_inicial || 0) + entradas - saidas;
     }, 0);
 
-    // A receber este mês
-    const aReceber = r.filter((x: any) => x.data_vencimento?.startsWith(mesAtual) && ['pendente','atrasado'].includes(x.status)).reduce((s: number, x: any) => s + x.valor_liquido, 0);
-    // A pagar este mês
-    const aPagar = d.filter((x: any) => x.data_vencimento?.startsWith(mesAtual) && ['pendente','atrasado'].includes(x.status)).reduce((s: number, x: any) => s + x.valor, 0);
-
-    // Fluxo de caixa 12 meses
-    const fluxo: any[] = [];
-    for (let i = 0; i < 12; i++) {
-      const dt = new Date(hoje.getFullYear(), hoje.getMonth() + i, 1);
+    // Fluxo de caixa — últimos 12 meses (passado → presente)
+    const fluxo_12m: any[] = [];
+    for (let i = 11; i >= 0; i--) {
+      const dt = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
       const mes = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
       const label = dt.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' });
-      const entradas = r.filter((x: any) => x.data_vencimento?.startsWith(mes)).reduce((s: number, x: any) => s + x.valor_liquido, 0);
-      const saidas = d.filter((x: any) => x.data_vencimento?.startsWith(mes)).reduce((s: number, x: any) => s + x.valor, 0);
-      const recebidas = r.filter((x: any) => x.data_vencimento?.startsWith(mes) && x.status === 'recebido').reduce((s: number, x: any) => s + x.valor_liquido, 0);
-      fluxo.push({ mes, label, entradas, saidas, recebidas, resultado: entradas - saidas });
+      const receiMes = r
+        .filter((x: any) => x.status === 'recebido' && (x.data_pagamento || x.data_vencimento)?.startsWith(mes))
+        .reduce((s: number, x: any) => s + (x.valor_liquido || 0), 0);
+      const despMes = d
+        .filter((x: any) => x.status === 'pago' && (x.data_pagamento || x.data_vencimento)?.startsWith(mes))
+        .reduce((s: number, x: any) => s + (x.valor || 0), 0);
+      fluxo_12m.push({ mes: label, receitas: receiMes, despesas: despMes, lucro: receiMes - despMes });
     }
 
-    // Próximos recebimentos
-    const proxRecebimentos = r
-      .filter((x: any) => ['pendente','atrasado'].includes(x.status))
-      .sort((a: any, b: any) => a.data_vencimento?.localeCompare(b.data_vencimento))
-      .slice(0, 5);
+    // Próximos recebimentos (pendentes e atrasados, ordenados por vencimento)
+    const proximos_recebimentos = r
+      .filter((x: any) => ['pendente', 'atrasado'].includes(x.status))
+      .sort((a: any, b: any) => (a.data_vencimento || '').localeCompare(b.data_vencimento || ''))
+      .slice(0, 5)
+      .map((x: any) => ({ id: x.id, descricao: x.descricao, valor: x.valor_liquido, data_vencimento: x.data_vencimento, status: x.status }));
 
-    // Próximos pagamentos
-    const proxPagamentos = d
-      .filter((x: any) => ['pendente','atrasado'].includes(x.status))
-      .sort((a: any, b: any) => a.data_vencimento?.localeCompare(b.data_vencimento))
-      .slice(0, 5);
+    // Próximas despesas
+    const proximas_despesas = d
+      .filter((x: any) => ['pendente', 'atrasado'].includes(x.status))
+      .sort((a: any, b: any) => (a.data_vencimento || '').localeCompare(b.data_vencimento || ''))
+      .slice(0, 5)
+      .map((x: any) => ({ id: x.id, descricao: x.descricao, valor: x.valor, data_vencimento: x.data_vencimento, status: x.status }));
 
-    res.json({ saldoTotal, aReceber, aPagar, resultado: aReceber - aPagar, fluxo, proxRecebimentos, proxPagamentos, contas: contas || [] });
+    res.json({
+      kpis: { receita_mes, despesa_mes, lucro_mes: receita_mes - despesa_mes, saldo_contas, receitas_pendentes, despesas_pendentes, receitas_atrasadas, despesas_atrasadas },
+      fluxo_12m,
+      proximos_recebimentos,
+      proximas_despesas,
+    });
   });
 
   // ─── DRE ───────────────────────────────────────────────────────────────────
   app.get('/api/fin/dre', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
     const { mes, ano } = req.query;
-    const periodo = `${ano}-${String(mes).padStart(2, '0')}`;
 
-    const [{ data: receitas }, { data: despesas }, { data: categorias }, { data: grupos }] = await Promise.all([
-      supabase.from('fin_receitas').select('*').eq('user_id', userId).like('data_vencimento', `${periodo}%`).eq('status', 'recebido'),
-      supabase.from('fin_despesas').select('*').eq('user_id', userId).like('data_vencimento', `${periodo}%`).eq('status', 'pago'),
-      supabase.from('fin_categorias').select('*').eq('user_id', userId).eq('ativo', true),
+    // Filtro de período: "YYYY-MM" ou "YYYY"
+    const periodoFiltro = mes
+      ? `${ano}-${String(mes).padStart(2, '0')}`
+      : String(ano);
+    const periodoLabel = mes
+      ? new Date(Number(ano), Number(mes) - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
+      : `Ano ${ano}`;
+
+    const [{ data: grupos }, { data: categorias }, { data: receitas }, { data: despesas }] = await Promise.all([
       supabase.from('fin_grupos_dre').select('*').eq('user_id', userId).order('ordem'),
+      supabase.from('fin_categorias').select('*').eq('user_id', userId).eq('ativo', true),
+      supabase.from('fin_receitas').select('*').eq('user_id', userId).like('data_vencimento', `${periodoFiltro}%`).eq('status', 'recebido'),
+      supabase.from('fin_despesas').select('*').eq('user_id', userId).like('data_vencimento', `${periodoFiltro}%`).eq('status', 'pago'),
     ]);
 
-    const receitaBruta = (receitas || []).reduce((s: number, r: any) => s + r.valor_bruto, 0);
+    const receitaBruta = (receitas || []).reduce((s: number, r: any) => s + (r.valor_bruto || 0), 0);
     const taxasTotal = (receitas || []).reduce((s: number, r: any) => s + (r.taxa_meio || 0), 0);
 
     const linhas: any[] = [];
+    const totais_parciais: Record<string, number> = {};
     let acumulado = receitaBruta;
 
     for (const grupo of (grupos || [])) {
       const catsDeste = (categorias || []).filter((c: any) => c.grupo_dre_id === grupo.id);
-      let totalGrupo = 0;
-      if (grupo.campos_automaticos?.includes('taxas_recebimento')) totalGrupo += taxasTotal;
+      const categoriasLinha: any[] = [];
+      let total_grupo = 0;
+
+      // Campos automáticos (ex: taxas de recebimento)
+      if (grupo.campos_automaticos?.includes('taxas_recebimento') && taxasTotal > 0) {
+        categoriasLinha.push({ categoria_id: null, categoria_nome: 'Taxas de recebimento', total: taxasTotal });
+        total_grupo += taxasTotal;
+      }
+
       for (const cat of catsDeste) {
         const isReceita = cat.tipo === 'receita';
-        const valor = isReceita
-          ? (receitas || []).filter((r: any) => r.categoria_id === cat.id).reduce((s: number, r: any) => s + r.valor_bruto, 0)
-          : (despesas || []).filter((d: any) => d.categoria_id === cat.id).reduce((s: number, d: any) => s + d.valor, 0);
-        if (valor > 0) linhas.push({ tipo: 'categoria', grupoDreNome: grupo.nome, categoriaNome: cat.nome, operacao: grupo.operacao, valor, percentualReceita: receitaBruta > 0 ? valor / receitaBruta * 100 : 0 });
-        totalGrupo += valor;
+        const total = isReceita
+          ? (receitas || []).filter((r: any) => r.categoria_id === cat.id).reduce((s: number, r: any) => s + (r.valor_bruto || 0), 0)
+          : (despesas || []).filter((d: any) => d.categoria_id === cat.id).reduce((s: number, d: any) => s + (d.valor || 0), 0);
+        categoriasLinha.push({ categoria_id: cat.id, categoria_nome: cat.nome, total });
+        total_grupo += total;
       }
-      if (totalGrupo > 0) {
-        if (grupo.operacao === 'subtrai') acumulado -= totalGrupo; else acumulado += totalGrupo;
-        if (grupo.total_parcial_apos) linhas.push({ tipo: 'subtotal', label: grupo.total_parcial_apos, valor: acumulado, percentualReceita: receitaBruta > 0 ? acumulado / receitaBruta * 100 : 0 });
+
+      linhas.push({
+        grupo_id: grupo.id,
+        grupo_nome: grupo.nome,
+        tipo: grupo.tipo,
+        operacao: grupo.operacao,
+        ordem: grupo.ordem,
+        total_parcial_apos: grupo.total_parcial_apos || null,
+        categorias: categoriasLinha,
+        total_grupo,
+      });
+
+      if (grupo.operacao === 'subtrai') acumulado -= total_grupo;
+      else if (grupo.nome !== '(+) Receita Bruta') acumulado += total_grupo; // Receita Bruta já é o acumulado inicial
+
+      if (grupo.total_parcial_apos) {
+        totais_parciais[grupo.total_parcial_apos] = acumulado;
       }
     }
 
-    res.json({ receitaBruta, taxasTotal, linhas, resultadoFinal: acumulado });
+    res.json({ periodo: periodoLabel, linhas, totais_parciais, resultado_liquido: acumulado });
+  });
+
+  // ─── Relatórios ────────────────────────────────────────────────────────────
+  app.get('/api/fin/relatorios', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { tipo, ano, mes_inicio, mes_fim } = req.query as Record<string, string>;
+
+    const inicio = `${ano}-${String(mes_inicio).padStart(2, '0')}-01`;
+    const fim = `${ano}-${String(mes_fim).padStart(2, '0')}-31`;
+
+    if (tipo === 'receitas_categoria') {
+      const [{ data: receitas }, { data: categorias }] = await Promise.all([
+        supabase.from('fin_receitas').select('categoria_id, valor_liquido').eq('user_id', userId).eq('status', 'recebido').gte('data_vencimento', inicio).lte('data_vencimento', fim),
+        supabase.from('fin_categorias').select('id, nome').eq('user_id', userId),
+      ]);
+      const catMap = new Map((categorias || []).map((c: any) => [c.id, c.nome]));
+      const map = new Map<string, number>();
+      (receitas || []).forEach((r: any) => {
+        const cat = catMap.get(r.categoria_id) || 'Sem categoria';
+        map.set(cat, (map.get(cat) || 0) + (r.valor_liquido || 0));
+      });
+      return res.json([...map.entries()].sort((a, b) => b[1] - a[1]).map(([Categoria, Total]) => ({ Categoria, Total })));
+    }
+
+    if (tipo === 'despesas_categoria') {
+      const [{ data: despesas }, { data: categorias }] = await Promise.all([
+        supabase.from('fin_despesas').select('categoria_id, valor').eq('user_id', userId).eq('status', 'pago').gte('data_vencimento', inicio).lte('data_vencimento', fim),
+        supabase.from('fin_categorias').select('id, nome').eq('user_id', userId),
+      ]);
+      const catMap = new Map((categorias || []).map((c: any) => [c.id, c.nome]));
+      const map = new Map<string, number>();
+      (despesas || []).forEach((d: any) => {
+        const cat = catMap.get(d.categoria_id) || 'Sem categoria';
+        map.set(cat, (map.get(cat) || 0) + (d.valor || 0));
+      });
+      return res.json([...map.entries()].sort((a, b) => b[1] - a[1]).map(([Categoria, Total]) => ({ Categoria, Total })));
+    }
+
+    if (tipo === 'receitas_cliente') {
+      const { data: receitas } = await supabase.from('fin_receitas').select('cliente_nome, valor_liquido').eq('user_id', userId).eq('status', 'recebido').gte('data_vencimento', inicio).lte('data_vencimento', fim);
+      const map = new Map<string, number>();
+      (receitas || []).forEach((r: any) => {
+        const cli = r.cliente_nome || 'Sem cliente';
+        map.set(cli, (map.get(cli) || 0) + (r.valor_liquido || 0));
+      });
+      return res.json([...map.entries()].sort((a, b) => b[1] - a[1]).map(([Cliente, Total]) => ({ Cliente, Total })));
+    }
+
+    if (tipo === 'fluxo_mensal') {
+      const [{ data: receitas }, { data: despesas }] = await Promise.all([
+        supabase.from('fin_receitas').select('data_vencimento, valor_liquido').eq('user_id', userId).eq('status', 'recebido').gte('data_vencimento', inicio).lte('data_vencimento', fim),
+        supabase.from('fin_despesas').select('data_vencimento, valor').eq('user_id', userId).eq('status', 'pago').gte('data_vencimento', inicio).lte('data_vencimento', fim),
+      ]);
+      const mesesMap = new Map<string, { Receitas: number; Despesas: number; Lucro: number }>();
+      (receitas || []).forEach((r: any) => {
+        const mes = r.data_vencimento?.slice(0, 7) || '';
+        const e = mesesMap.get(mes) || { Receitas: 0, Despesas: 0, Lucro: 0 };
+        e.Receitas += (r.valor_liquido || 0);
+        e.Lucro += (r.valor_liquido || 0);
+        mesesMap.set(mes, e);
+      });
+      (despesas || []).forEach((d: any) => {
+        const mes = d.data_vencimento?.slice(0, 7) || '';
+        const e = mesesMap.get(mes) || { Receitas: 0, Despesas: 0, Lucro: 0 };
+        e.Despesas += (d.valor || 0);
+        e.Lucro -= (d.valor || 0);
+        mesesMap.set(mes, e);
+      });
+      return res.json([...mesesMap.entries()].sort().map(([Mês, v]) => ({ Mês, ...v })));
+    }
+
+    res.status(400).json({ error: 'tipo inválido' });
   });
 
   // ─── OFX ───────────────────────────────────────────────────────────────────
