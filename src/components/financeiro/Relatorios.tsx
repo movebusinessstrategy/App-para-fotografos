@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Download, BarChart3, TrendingUp, Users, Tag } from 'lucide-react';
+import { FinSelect } from './FinInputs';
 import { authFetch } from '../../utils/authFetch';
 import { fmtBRL, exportCSV } from './finUtils';
 
@@ -102,33 +103,33 @@ export default function Relatorios() {
         <div className="flex flex-wrap gap-3 items-end">
           <div>
             <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Ano</label>
-            <select
-              value={ano}
-              onChange={e => setAno(parseInt(e.target.value))}
-              className="text-sm px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-            >
-              {anos.map(a => <option key={a} value={a}>{a}</option>)}
-            </select>
+            <FinSelect
+              value={String(ano)}
+              onChange={v => setAno(parseInt(v))}
+              nullable={false}
+              options={anos.map(a => ({ value: String(a), label: String(a) }))}
+              className="w-24"
+            />
           </div>
           <div>
             <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">De</label>
-            <select
-              value={mesInicio}
-              onChange={e => setMesInicio(parseInt(e.target.value))}
-              className="text-sm px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-            >
-              {MESES.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
-            </select>
+            <FinSelect
+              value={String(mesInicio)}
+              onChange={v => setMesInicio(parseInt(v))}
+              nullable={false}
+              options={MESES.map((m, i) => ({ value: String(i + 1), label: m }))}
+              className="w-36"
+            />
           </div>
           <div>
             <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Até</label>
-            <select
-              value={mesFim}
-              onChange={e => setMesFim(parseInt(e.target.value))}
-              className="text-sm px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-            >
-              {MESES.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
-            </select>
+            <FinSelect
+              value={String(mesFim)}
+              onChange={v => setMesFim(parseInt(v))}
+              nullable={false}
+              options={MESES.map((m, i) => ({ value: String(i + 1), label: m }))}
+              className="w-36"
+            />
           </div>
           <button
             onClick={gerar}

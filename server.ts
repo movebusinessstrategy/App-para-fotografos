@@ -4365,7 +4365,15 @@ async function startServer() {
 
   app.post('/api/fin/despesas', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const { data, error } = await supabase.from('fin_despesas').insert({ ...req.body, user_id: userId, updated_at: new Date().toISOString() }).select().single();
+    // Mapeia campos do form para colunas do DB (remove colunas inexistentes)
+    const { recorrencia_tipo, recorrencia_qtd, observacoes, ...rest } = req.body;
+    const insertBody: any = {
+      ...rest,
+      frequencia_recorrencia: recorrencia_tipo || null,
+      user_id: userId,
+      updated_at: new Date().toISOString(),
+    };
+    const { data, error } = await supabase.from('fin_despesas').insert(insertBody).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
   });
@@ -4412,11 +4420,11 @@ async function startServer() {
       if (jobIdsExistentes.has(job.id)) {
         // Job já sincronizado — atualiza status das receitas se o job mudou de estado
         if (job.payment_status === 'paid') {
-          const { count } = await supabase.from('fin_receitas')
+          const { data: updated } = await supabase.from('fin_receitas')
             .update({ status: 'recebido', data_pagamento: hoje, updated_at: new Date().toISOString() })
             .eq('user_id', userId).eq('job_id', job.id).in('status', ['pendente', 'atrasado'])
-            .select('id', { count: 'exact', head: true });
-          if ((count || 0) > 0) atualizadas += count as number;
+            .select('id');
+          atualizadas += (updated?.length || 0);
         } else if (job.payment_status === 'partial') {
           // Busca pagamentos registrados para criar receitas de parcelas pagas ainda não existentes
           const { data: payments } = await adminClient.from('job_payments').select('*').eq('job_id', job.id);
