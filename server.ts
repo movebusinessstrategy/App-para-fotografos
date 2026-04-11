@@ -4454,9 +4454,67 @@ async function startServer() {
 
       if (error) return res.status(500).json({ error: error.message });
 
+      // 5. Assina webhook no nível da WABA (necessário para receber eventos)
+      if (wabaId && token) {
+        try {
+          const subRes = await fetch(
+            `https://graph.facebook.com/v21.0/${wabaId}/subscribed_apps`,
+            { method: 'POST', headers: { Authorization: `Bearer ${token}` } }
+          );
+          const subData = await subRes.json();
+          console.log('[Meta] WABA subscribed_apps:', JSON.stringify(subData));
+        } catch (subErr) {
+          console.error('[Meta] Falha ao assinar WABA webhook:', subErr);
+          // Não bloqueia — a conexão foi salva, usuário pode tentar manualmente
+        }
+      }
+
       res.json({ success: true, waba_id: wabaId, phone_number: phoneNumber, display_name: displayName });
     } catch (err: any) {
       console.error('[Meta] exchange-token error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Assina/verifica webhook no nível da WABA
+  app.post('/api/meta/whatsapp/subscribe-webhook', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    const { data: acc } = await supabase
+      .from('whatsapp_business_accounts')
+      .select('waba_id, access_token')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (!acc?.waba_id || !acc?.access_token) {
+      return res.status(400).json({ error: 'Conta WhatsApp não conectada' });
+    }
+
+    try {
+      // Verifica assinatura atual
+      const checkRes = await fetch(
+        `https://graph.facebook.com/v21.0/${acc.waba_id}/subscribed_apps`,
+        { headers: { Authorization: `Bearer ${acc.access_token}` } }
+      );
+      const checkData = await checkRes.json();
+
+      // Assina o app
+      const subRes = await fetch(
+        `https://graph.facebook.com/v21.0/${acc.waba_id}/subscribed_apps`,
+        { method: 'POST', headers: { Authorization: `Bearer ${acc.access_token}` } }
+      );
+      const subData = await subRes.json();
+
+      console.log('[Meta] subscribe-webhook:', JSON.stringify({ checkData, subData }));
+
+      res.json({
+        current_subscriptions: checkData,
+        subscribe_result: subData,
+        success: subData.success === true,
+      });
+    } catch (err: any) {
+      console.error('[Meta] subscribe-webhook error:', err);
       res.status(500).json({ error: err.message });
     }
   });
