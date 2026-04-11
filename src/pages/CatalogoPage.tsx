@@ -63,20 +63,27 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   return <label className={LABEL}>{children}</label>;
 }
 
-function ModalShell({ title, onClose, children, footer }: {
+function ModalShell({ title, onClose, children, footer, onSubmit }: {
   title: string; onClose: () => void;
   children: React.ReactNode; footer: React.ReactNode;
+  onSubmit?: React.FormEventHandler<HTMLFormElement>;
 }) {
+  const cls = "bg-white dark:bg-gray-900 rounded-2xl w-full max-w-lg shadow-xl flex flex-col max-h-[92vh]";
+  const inner = (
+    <>
+      <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
+        <h2 className="font-bold text-gray-900 dark:text-white">{title}</h2>
+        <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"><X size={18} /></button>
+      </div>
+      <div className="flex-1 overflow-y-auto px-6 py-4">{children}</div>
+      <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100 dark:border-gray-800 flex-shrink-0">{footer}</div>
+    </>
+  );
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-lg shadow-xl flex flex-col max-h-[92vh]">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
-          <h2 className="font-bold text-gray-900 dark:text-white">{title}</h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"><X size={18} /></button>
-        </div>
-        <div className="flex-1 overflow-y-auto px-6 py-4">{children}</div>
-        <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100 dark:border-gray-800 flex-shrink-0">{footer}</div>
-      </div>
+      {onSubmit
+        ? <form onSubmit={onSubmit} className={cls}>{inner}</form>
+        : <div className={cls}>{inner}</div>}
     </div>
   );
 }
@@ -138,7 +145,7 @@ function CategoriaModal({ item, onSave, onClose }: {
       <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-sm shadow-xl">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800">
           <h2 className="font-bold text-gray-900 dark:text-white">{item?.id ? "Editar Categoria" : "Nova Categoria"}</h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"><X size={18} /></button>
+          <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"><X size={18} /></button>
         </div>
         <form onSubmit={submit} className="px-6 py-4 space-y-4">
           <div>
@@ -211,7 +218,7 @@ function TipoEnsaioModal({ item, onSave, onClose }: {
       <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-sm shadow-xl">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800">
           <h2 className="font-bold text-gray-900 dark:text-white">{item?.id ? "Editar Tipo" : "Novo Tipo de Ensaio"}</h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"><X size={18} /></button>
+          <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"><X size={18} /></button>
         </div>
         <form onSubmit={submit} className="px-6 py-4 space-y-4">
           <div>
@@ -283,9 +290,10 @@ function FornecedorModal({ item, onSave, onClose }: {
     <ModalShell
       title={item?.id ? "Editar Fornecedor" : "Novo Fornecedor"}
       onClose={onClose}
+      onSubmit={submit}
       footer={<><CancelBtn onClick={onClose} /><SaveBtn saving={saving} /></>}
     >
-      <form id="fornecedor-form" onSubmit={submit} className="space-y-4">
+      <div className="space-y-4">
         {/* PF / PJ toggle */}
         <div>
           <FieldLabel>Tipo de pessoa</FieldLabel>
@@ -362,7 +370,7 @@ function FornecedorModal({ item, onSave, onClose }: {
           <FieldLabel>Observações</FieldLabel>
           <textarea rows={2} value={form.observacoes ?? ""} onChange={(e) => set("observacoes", e.target.value)} className={`${INPUT} resize-none`} />
         </div>
-      </form>
+      </div>
     </ModalShell>
   );
 }
@@ -400,12 +408,12 @@ function ProdutoModal({ item, fornecedores, categorias, onSave, onClose }: {
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-xl shadow-xl flex flex-col max-h-[92vh]">
+      <form onSubmit={submit} className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-xl shadow-xl flex flex-col max-h-[92vh]">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
           <h2 className="font-bold text-gray-900 dark:text-white">{item?.id ? "Editar Produto" : "Novo Produto"}</h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"><X size={18} /></button>
+          <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"><X size={18} /></button>
         </div>
-        <form onSubmit={submit} className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
           {/* Nome */}
           <div>
             <FieldLabel>Nome *</FieldLabel>
@@ -507,15 +515,12 @@ function ProdutoModal({ item, fornecedores, categorias, onSave, onClose }: {
             <input type="checkbox" checked={form.ativo ?? true} onChange={(e) => set("ativo", e.target.checked)} className="w-4 h-4 accent-gold-500" />
             <span className="text-sm text-gray-700 dark:text-gray-300">Produto ativo</span>
           </label>
-        </form>
+        </div>
         <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100 dark:border-gray-800 flex-shrink-0">
           <CancelBtn onClick={onClose} />
-          <button type="submit" form="produto-form" onClick={submit as unknown as React.MouseEventHandler} disabled={saving}
-            className="px-5 py-2 text-sm rounded-xl bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white font-medium flex items-center gap-2">
-            {saving && <Loader2 size={14} className="animate-spin" />}Salvar
-          </button>
+          <SaveBtn saving={saving} />
         </div>
-      </div>
+      </form>
     </div>
   );
 }
@@ -547,9 +552,10 @@ function ServicoModal({ item, tiposEnsaio, onSave, onClose }: {
     <ModalShell
       title={item?.id ? "Editar Serviço" : "Novo Serviço"}
       onClose={onClose}
+      onSubmit={submit}
       footer={<><CancelBtn onClick={onClose} /><SaveBtn saving={saving} /></>}
     >
-      <form onSubmit={submit} className="space-y-4">
+      <div className="space-y-4">
         <div>
           <FieldLabel>Nome do serviço *</FieldLabel>
           <input required value={form.nome ?? ""} onChange={(e) => set("nome", e.target.value)}
@@ -604,7 +610,7 @@ function ServicoModal({ item, tiposEnsaio, onSave, onClose }: {
           <input type="checkbox" checked={form.ativo ?? true} onChange={(e) => set("ativo", e.target.checked)} className="w-4 h-4 accent-gold-500" />
           <span className="text-sm text-gray-700 dark:text-gray-300">Serviço ativo</span>
         </label>
-      </form>
+      </div>
     </ModalShell>
   );
 }
@@ -656,10 +662,10 @@ const ComboModal: React.FC<{
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-2xl shadow-xl flex flex-col max-h-[92vh]">
+      <form onSubmit={submit} className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-2xl shadow-xl flex flex-col max-h-[92vh]">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
           <h2 className="font-bold text-gray-900 dark:text-white">{item?.id ? "Editar Combo" : "Novo Combo"}</h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"><X size={18} /></button>
+          <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"><X size={18} /></button>
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-5">
           <div className="grid grid-cols-2 gap-3">
@@ -734,12 +740,9 @@ const ComboModal: React.FC<{
         </div>
         <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100 dark:border-gray-800 flex-shrink-0">
           <CancelBtn onClick={onClose} />
-          <button onClick={submit as unknown as React.MouseEventHandler} disabled={saving}
-            className="px-5 py-2 text-sm rounded-xl bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white font-medium flex items-center gap-2">
-            {saving && <Loader2 size={14} className="animate-spin" />}Salvar
-          </button>
+          <SaveBtn saving={saving} />
         </div>
-      </div>
+      </form>
     </div>
   );
 };
