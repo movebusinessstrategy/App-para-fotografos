@@ -3876,6 +3876,32 @@ async function startServer() {
     res.json({ success: true, total });
   });
 
+  app.put('/api/deal-items/:itemId', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+    const itemId = req.params.itemId;
+    const { quantidade } = req.body;
+
+    if (!quantidade || quantidade < 1) return res.status(400).json({ error: 'quantidade deve ser >= 1' });
+
+    const { data: item } = await adminClient.from('deal_items').select('id, deal_id').eq('id', itemId).single();
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+
+    const { data: deal } = await supabase.from('deals').select('id').eq('id', item.deal_id).eq('user_id', userId).single();
+    if (!deal) return res.status(403).json({ error: 'Forbidden' });
+
+    const { error } = await adminClient.from('deal_items').update({ quantidade }).eq('id', itemId);
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Recalcula total
+    const { data: allItems } = await adminClient.from('deal_items').select('catalog_value, quantidade').eq('deal_id', item.deal_id);
+    const total = (allItems || []).reduce((sum: number, i: any) => sum + (i.catalog_value * i.quantidade), 0);
+    await supabase.from('deals').update({ value: total }).eq('id', item.deal_id).eq('user_id', userId);
+
+    res.json({ success: true, total });
+  });
+
   app.get('/api/pipeline/analytics', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
