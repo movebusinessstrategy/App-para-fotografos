@@ -102,7 +102,20 @@ function CancelBtn({ onClick }: { onClick: () => void }) {
 // ═══════════════════════════════════════════════════════════
 // MODAL: CATEGORIA
 // ═══════════════════════════════════════════════════════════
-const CORES = ["#6B7280","#EF4444","#F97316","#EAB308","#22C55E","#06B6D4","#3B82F6","#8B5CF6","#EC4899","#D4A94A"];
+const CORES: { hex: string; label: string }[] = [
+  { hex: "#6B7280", label: "Cinza" },
+  { hex: "#EF4444", label: "Vermelho" },
+  { hex: "#F97316", label: "Laranja" },
+  { hex: "#EAB308", label: "Amarelo" },
+  { hex: "#22C55E", label: "Verde" },
+  { hex: "#06B6D4", label: "Ciano" },
+  { hex: "#3B82F6", label: "Azul" },
+  { hex: "#8B5CF6", label: "Roxo" },
+  { hex: "#EC4899", label: "Rosa" },
+  { hex: "#D4A94A", label: "Dourado" },
+  { hex: "#0F172A", label: "Preto" },
+  { hex: "#F8FAFC", label: "Branco" },
+];
 
 function CategoriaModal({ item, onSave, onClose }: {
   item: Partial<CategoriaCatalogo> | null;
@@ -134,11 +147,35 @@ function CategoriaModal({ item, onSave, onClose }: {
           </div>
           <div>
             <FieldLabel>Cor</FieldLabel>
-            <div className="flex flex-wrap gap-2">
+            {/* Preview da cor selecionada */}
+            <div className="flex items-center gap-3 mb-3 p-3 rounded-xl bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700">
+              <span className="w-6 h-6 rounded-full flex-shrink-0 shadow-sm border border-black/10" style={{ background: cor }} />
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                {CORES.find((c) => c.hex === cor)?.label ?? "Personalizado"}
+              </span>
+            </div>
+            {/* Grade de cores */}
+            <div className="grid grid-cols-6 gap-2">
               {CORES.map((c) => (
-                <button key={c} type="button" onClick={() => setCor(c)}
-                  style={{ background: c }}
-                  className={`w-7 h-7 rounded-full transition-transform ${cor === c ? "scale-125 ring-2 ring-offset-2 ring-gray-400" : "hover:scale-110"}`} />
+                <button key={c.hex} type="button" onClick={() => setCor(c.hex)}
+                  title={c.label}
+                  style={{ background: c.hex }}
+                  className={`
+                    group relative w-full aspect-square rounded-xl transition-all duration-150 border-2 shadow-sm
+                    ${cor === c.hex
+                      ? "border-gray-900 dark:border-white scale-105 shadow-md"
+                      : "border-transparent hover:border-gray-400 dark:hover:border-gray-500 hover:scale-105"}
+                    ${c.hex === "#F8FAFC" ? "border-gray-200 dark:border-gray-600" : ""}
+                  `}
+                >
+                  {cor === c.hex && (
+                    <span className="absolute inset-0 flex items-center justify-center">
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                        <path d="M2 7l4 4 6-7" stroke={c.hex === "#F8FAFC" || c.hex === "#EAB308" ? "#111" : "#fff"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </span>
+                  )}
+                </button>
               ))}
             </div>
           </div>
@@ -840,6 +877,7 @@ export default function CatalogoPage() {
   const [tiposEnsaio, setTiposEnsaio] = useState<TipoEnsaio[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [saveError, setSaveError] = useState("");
 
   // Modais
   const [editProduto, setEditProduto] = useState<Partial<Produto> | null | false>(false);
@@ -906,30 +944,51 @@ export default function CatalogoPage() {
   };
 
   // ── Saves ──
-  const saveProduto = async (d: Partial<Produto>) => {
-    if (d.id) await catalogoApi.updateProduto(d.id, d); else await catalogoApi.createProduto(d);
-    setEditProduto(false); await load(true);
+  const makeSave = <T extends { id?: string }>(
+    updateFn: (id: string, d: T) => Promise<unknown>,
+    createFn: (d: T) => Promise<unknown>,
+    closeFn: () => void,
+  ) => async (d: T) => {
+    setSaveError("");
+    try {
+      if (d.id) await updateFn(d.id, d); else await createFn(d);
+      closeFn();
+      await load(true);
+    } catch (e: any) {
+      setSaveError(e.message || "Erro ao salvar");
+    }
   };
-  const saveFornecedor = async (d: Partial<Fornecedor>) => {
-    if (d.id) await catalogoApi.updateFornecedor(d.id, d); else await catalogoApi.createFornecedor(d);
-    setEditFornecedor(false); await load(true);
-  };
-  const saveServico = async (d: Partial<Servico>) => {
-    if (d.id) await catalogoApi.updateServico(d.id, d); else await catalogoApi.createServico(d);
-    setEditServico(false); await load(true);
-  };
-  const saveCombo = async (d: Partial<Combo>) => {
-    if (d.id) await catalogoApi.updateCombo(d.id, d); else await catalogoApi.createCombo(d);
-    setEditCombo(false); await load(true);
-  };
-  const saveCategoria = async (d: Partial<CategoriaCatalogo>) => {
-    if (d.id) await catalogoApi.updateCategoria(d.id, d); else await catalogoApi.createCategoria(d);
-    setEditCategoria(false); await load(true);
-  };
-  const saveTipo = async (d: Partial<TipoEnsaio>) => {
-    if (d.id) await catalogoApi.updateTipoEnsaio(d.id, d); else await catalogoApi.createTipoEnsaio(d);
-    setEditTipo(false); await load(true);
-  };
+
+  const saveProduto = makeSave<Partial<Produto>>(
+    (id, d) => catalogoApi.updateProduto(id, d),
+    (d) => catalogoApi.createProduto(d),
+    () => setEditProduto(false),
+  );
+  const saveFornecedor = makeSave<Partial<Fornecedor>>(
+    (id, d) => catalogoApi.updateFornecedor(id, d),
+    (d) => catalogoApi.createFornecedor(d),
+    () => setEditFornecedor(false),
+  );
+  const saveServico = makeSave<Partial<Servico>>(
+    (id, d) => catalogoApi.updateServico(id, d),
+    (d) => catalogoApi.createServico(d),
+    () => setEditServico(false),
+  );
+  const saveCombo = makeSave<Partial<Combo>>(
+    (id, d) => catalogoApi.updateCombo(id, d),
+    (d) => catalogoApi.createCombo(d),
+    () => setEditCombo(false),
+  );
+  const saveCategoria = makeSave<Partial<CategoriaCatalogo>>(
+    (id, d) => catalogoApi.updateCategoria(id, d),
+    (d) => catalogoApi.createCategoria(d),
+    () => setEditCategoria(false),
+  );
+  const saveTipo = makeSave<Partial<TipoEnsaio>>(
+    (id, d) => catalogoApi.updateTipoEnsaio(id, d),
+    (d) => catalogoApi.createTipoEnsaio(d),
+    () => setEditTipo(false),
+  );
 
   // ── Dados filtrados ──
   const q = search.toLowerCase();
@@ -963,6 +1022,15 @@ export default function CatalogoPage() {
           <Plus size={16} />{novoLabel}
         </button>
       </div>
+
+      {/* Erro de save */}
+      {saveError && (
+        <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 text-sm">
+          <AlertCircle size={16} className="flex-shrink-0" />
+          <span className="flex-1">{saveError}</span>
+          <button onClick={() => setSaveError("")} className="flex-shrink-0 hover:text-red-900"><X size={14} /></button>
+        </div>
+      )}
 
       {/* Abas + Busca */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1064,7 +1132,6 @@ export default function CatalogoPage() {
                     <table className="w-full text-sm">
                       <thead><tr className="border-b border-gray-100 dark:border-gray-800">
                         <th className={tableHeaderCls}>Nome</th>
-                        <th className={`${tableHeaderCls} text-center`}>Cor</th>
                         <th className={`${tableHeaderCls} text-center`}>Produtos</th>
                         <th className="px-5 py-3" />
                       </tr></thead>
@@ -1076,9 +1143,6 @@ export default function CatalogoPage() {
                                 <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: cat.cor ?? "#6B7280" }} />
                                 <span className="font-medium text-gray-900 dark:text-white">{cat.nome}</span>
                               </div>
-                            </td>
-                            <td className="px-5 py-3 text-center">
-                              <span className="text-xs text-gray-400 font-mono">{cat.cor ?? "#6B7280"}</span>
                             </td>
                             <td className="px-5 py-3 text-center text-gray-500 dark:text-gray-400">
                               {produtos.filter((p) => p.categoria === cat.nome).length}
