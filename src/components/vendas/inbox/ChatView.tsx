@@ -61,15 +61,19 @@ export function ChatView({ phone, contactName }: Props) {
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
-          // Merge: mantém mensagens otimistas (tmp-*) que ainda não estão no banco
+          // DB retornou mensagens: substitui completamente, preservando apenas
+          // otimistas (tmp-*) que ainda não chegaram no banco.
           setMessages((prev) => {
             const dbIds = new Set(data.map((m: Message) => m.message_id));
-            const optimistic = prev.filter((m) => m.message_id.startsWith('tmp-') && !dbIds.has(m.message_id));
-            return [...data, ...optimistic].sort(
+            const pendingOptimistic = prev.filter(
+              (m) => m.message_id.startsWith('tmp-') && !dbIds.has(m.message_id)
+            );
+            return [...data, ...pendingOptimistic].sort(
               (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
             );
           });
         }
+        // Se data vazio: não altera estado (evita limpar mensagens ao reiniciar)
       }
     } finally {
       if (!silent) setLoading(false);
@@ -127,13 +131,10 @@ export function ChatView({ phone, contactName }: Props) {
         alert(`Erro ao enviar: ${err.error || res.statusText}`);
         return;
       }
-      // Atualiza o ID da mensagem otimista para o ID real do Meta.
-      // Assim o polling não vai criar um duplicado (a merge já reconhece o mesmo ID).
-      const data = await res.json().catch(() => ({}));
-      const realId = data.message_id || tmpId;
-      setMessages((prev) =>
-        prev.map((m) => m.message_id === tmpId ? { ...m, message_id: realId, status: "sent" } : m)
-      );
+      // Remove a mensagem otimista e busca imediatamente do banco.
+      // Isso garante que só existe uma cópia (a real) — sem duplicatas.
+      setMessages((prev) => prev.filter((m) => m.message_id !== tmpId));
+      fetchMessages(true);
     } catch {
       setMessages((prev) => prev.filter((m) => m.message_id !== tmpId));
       setText(msg);
