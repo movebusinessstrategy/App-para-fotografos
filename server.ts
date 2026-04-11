@@ -2398,7 +2398,8 @@ async function startServer() {
   app.post('/api/produtos', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const body = req.body;
+    // Strip computed / read-only fields that don't exist as table columns
+    const { id: _id, user_id: _uid, fornecedor_nome: _fn, created_at: _ca, updated_at: _ua, margem_lucro: _ml, ...body } = req.body;
     const margem = body.preco_venda > 0
       ? ((body.preco_venda - body.preco_custo) / body.preco_venda * 100)
       : 0;
@@ -2412,7 +2413,8 @@ async function startServer() {
   app.put('/api/produtos/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const body = req.body;
+    // Strip computed / read-only fields that don't exist as table columns
+    const { id: _id, user_id: _uid, fornecedor_nome: _fn, created_at: _ca, updated_at: _ua, margem_lucro: _ml, ...body } = req.body;
     const margem = body.preco_venda > 0
       ? ((body.preco_venda - body.preco_custo) / body.preco_venda * 100)
       : 0;
@@ -2485,7 +2487,10 @@ async function startServer() {
     const { data: combo, error } = await supabase.from('combos').insert({ ...comboBody, user_id: userId }).select().single();
     if (error) return res.status(500).json({ error: error.message });
     if (itens?.length) {
-      await supabase.from('combo_items').insert(itens.map((i: any) => ({ ...i, combo_id: combo.id })));
+      const { error: itensError } = await supabase.from('combo_items').insert(
+        itens.map(({ id: _id, combo_id: _c, ...rest }: any) => ({ ...rest, combo_id: combo.id }))
+      );
+      if (itensError) return res.status(500).json({ error: itensError.message });
     }
     res.json({ ...combo, itens: itens || [] });
   });
