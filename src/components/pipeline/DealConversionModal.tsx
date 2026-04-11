@@ -129,6 +129,7 @@ export function DealConversionModal({
           createJob,
           client: conversionMode === "new" && createClient ? clientData : undefined,
           job: jobPayload,
+          sinalAmount: sinalAmount > 0 ? sinalAmount : undefined,
         }),
       });
       onConverted();

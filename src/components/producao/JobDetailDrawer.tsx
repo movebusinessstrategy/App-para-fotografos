@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   X, User, Phone, Mail, Instagram, MapPin, Calendar,
   CheckSquare, Square, Trash2, Plus, Image, Clock,
-  ChevronRight, Tag, FileText, LogOut
+  ChevronRight, Tag, FileText, LogOut,
+  DollarSign, Package, Layers, Briefcase, Search, CreditCard
 } from "lucide-react";
 import { SearchableSelect } from "../ui/SearchableSelect";
 import { ContractGenerator } from "../contracts/ContractGenerator";
@@ -49,6 +50,29 @@ interface ClientDetail {
   notes: string;
 }
 
+interface JobPayment {
+  id: string;
+  amount: number;
+  description: string | null;
+  payment_date: string;
+  payment_method: string;
+}
+
+interface CatalogItem {
+  id: string;
+  catalog_type: 'combo' | 'produto' | 'servico';
+  catalog_id: string;
+  catalog_name: string;
+  catalog_value: number;
+  quantidade: number;
+}
+
+const CATALOG_CFG = {
+  combo:   { icon: <Layers size={12} />,   color: 'text-amber-600 dark:text-amber-400',   bg: 'bg-amber-50 dark:bg-amber-900/20',   border: 'border-amber-200 dark:border-amber-700' },
+  produto: { icon: <Package size={12} />,  color: 'text-blue-600 dark:text-blue-400',     bg: 'bg-blue-50 dark:bg-blue-900/20',     border: 'border-blue-200 dark:border-blue-700' },
+  servico: { icon: <Briefcase size={12} />, color: 'text-purple-600 dark:text-purple-400', bg: 'bg-purple-50 dark:bg-purple-900/20', border: 'border-purple-200 dark:border-purple-700' },
+} as const;
+
 interface JobDetailDrawerProps {
   job: JobWithProduction | null;
   stages: { id: string; name: string }[];
@@ -75,7 +99,7 @@ const formatDuration = (ms: number | null | undefined) => {
 };
 
 export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsChange, onRemoveFromProduction }: JobDetailDrawerProps) {
-  const [tab, setTab] = useState<"details" | "testimonials">("details");
+  const [tab, setTab] = useState<"details" | "financeiro" | "testimonials">("details");
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [client, setClient] = useState<ClientDetail | null>(null);
   const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
@@ -90,6 +114,57 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
   const [newLabel, setNewLabel] = useState("");
   const [showContract, setShowContract] = useState(false);
 
+  // ── Financeiro ──
+  const [dealItems, setDealItems] = useState<CatalogItem[]>([]);
+  const [jobItems, setJobItems] = useState<CatalogItem[]>([]);
+  const [payments, setPayments] = useState<JobPayment[]>([]);
+  const [jobAmount, setJobAmount] = useState(0);
+  const [loadingFin, setLoadingFin] = useState(false);
+  // Adicionar pagamento
+  const [newPayment, setNewPayment] = useState({ amount: '', description: '', payment_date: new Date().toISOString().slice(0, 10), payment_method: 'Pix' });
+  const [savingPayment, setSavingPayment] = useState(false);
+  // Adicionar item ao job
+  const [showAddJobItem, setShowAddJobItem] = useState(false);
+  const [jobItemType, setJobItemType] = useState<'combo' | 'produto' | 'servico'>('servico');
+  const [jobItemSearch, setJobItemSearch] = useState('');
+  const [jobItemOpen, setJobItemOpen] = useState(false);
+  const [catalogProdutos, setCatalogProdutos] = useState<any[]>([]);
+  const [catalogServicos, setCatalogServicos] = useState<any[]>([]);
+  const [catalogCombos, setCatalogCombos] = useState<any[]>([]);
+  const jobItemRef = useRef<HTMLDivElement>(null);
+
+  const loadFinanceiro = async (jobId: number) => {
+    setLoadingFin(true);
+    try {
+      const res = await authFetch(`/api/jobs/${jobId}/financeiro`);
+      if (res.ok) {
+        const data = await res.json();
+        setDealItems(data.dealItems || []);
+        setJobItems(data.jobItems || []);
+        setPayments(data.payments || []);
+        setJobAmount(data.jobAmount || 0);
+      }
+    } catch { }
+    finally { setLoadingFin(false); }
+  };
+
+  useEffect(() => {
+    authFetch('/api/produtos').then(r => r.json()).then(d => setCatalogProdutos(Array.isArray(d) ? d : [])).catch(() => {});
+    authFetch('/api/servicos').then(r => r.json()).then(d => setCatalogServicos(Array.isArray(d) ? d : [])).catch(() => {});
+    authFetch('/api/combos').then(r => r.json()).then(d => setCatalogCombos(Array.isArray(d) ? d : [])).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (jobItemRef.current && !jobItemRef.current.contains(e.target as Node)) {
+        setJobItemOpen(false);
+        setJobItemSearch('');
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
   useEffect(() => {
     if (!job) return;
     setTab("details");
@@ -98,6 +173,8 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
     setTestimonials([]);
     setStageHistory([]);
     setLabels(job.labels || []);
+    setDealItems([]); setJobItems([]); setPayments([]);
+    setShowAddJobItem(false);
 
     if (job.client_id) {
       setLoadingClient(true);
@@ -117,6 +194,8 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
       .then(r => r.ok ? r.json() : [])
       .then(setTestimonials)
       .catch(() => {});
+
+    loadFinanceiro(job.id);
 
     authFetch(`/api/jobs/${job.id}/stage-history`)
       .then(r => r.ok ? r.json() : [])
@@ -147,6 +226,44 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
       })
       .catch(() => {});
   }, [job?.id]);
+
+  const handleAddPayment = async () => {
+    if (!job || !newPayment.amount || Number(newPayment.amount) <= 0) return;
+    setSavingPayment(true);
+    try {
+      const res = await authFetch(`/api/jobs/${job.id}/payments`, {
+        method: 'POST',
+        body: JSON.stringify({ ...newPayment, amount: Number(newPayment.amount) }),
+      });
+      if (res.ok) {
+        setNewPayment({ amount: '', description: '', payment_date: new Date().toISOString().slice(0, 10), payment_method: 'Pix' });
+        loadFinanceiro(job.id);
+      }
+    } finally { setSavingPayment(false); }
+  };
+
+  const handleDeletePayment = async (id: string) => {
+    if (!job) return;
+    await authFetch(`/api/job-payments/${id}`, { method: 'DELETE' });
+    setPayments(prev => prev.filter(p => p.id !== id));
+  };
+
+  const handleAddJobItem = async (catalogId: string, nome: string, value: number) => {
+    if (!job) return;
+    setJobItemOpen(false); setJobItemSearch(''); setShowAddJobItem(false);
+    const res = await authFetch(`/api/jobs/${job.id}/items`, {
+      method: 'POST',
+      body: JSON.stringify({ catalog_type: jobItemType, catalog_id: catalogId, catalog_name: nome, catalog_value: value, quantidade: 1 }),
+    });
+    if (res.ok) loadFinanceiro(job.id);
+  };
+
+  const handleDeleteJobItem = async (id: string) => {
+    if (!job) return;
+    setJobItems(prev => prev.filter(i => i.id !== id));
+    await authFetch(`/api/job-items/${id}`, { method: 'DELETE' });
+    loadFinanceiro(job.id);
+  };
 
   if (!job) return null;
 
@@ -299,9 +416,11 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
 
         {/* Tabs */}
         <div className="flex border-b border-gray-200 dark:border-gray-700">
-          {(["details", "testimonials"] as const).map((t) => {
+          {(["details", "financeiro", "testimonials"] as const).map((t) => {
+            const totalPago = payments.reduce((s, p) => s + p.amount, 0);
             const tabLabels: Record<string, string> = {
               details: "Detalhes",
+              financeiro: "Financeiro",
               testimonials: `Depoimentos${testimonials.length > 0 ? ` (${testimonials.length})` : ""}`,
             };
             return (
@@ -511,6 +630,268 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
               </section>
             </div>
           )}
+
+          {/* ── FINANCEIRO TAB ── */}
+          {tab === "financeiro" && (() => {
+            const totalItens = [...dealItems, ...jobItems].reduce((s, i) => s + i.catalog_value * i.quantidade, 0);
+            const totalGeral = jobAmount || totalItens;
+            const totalPago = payments.reduce((s, p) => s + p.amount, 0);
+            const restante = Math.max(0, totalGeral - totalPago);
+            const pct = totalGeral > 0 ? Math.min(100, (totalPago / totalGeral) * 100) : 0;
+            const barColor = pct >= 100 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-400' : 'bg-blue-400';
+
+            const jobCatalogList = jobItemType === 'produto'
+              ? catalogProdutos.filter((p: any) => p.ativo).map((p: any) => ({ id: p.id, nome: p.nome, value: p.preco_venda }))
+              : jobItemType === 'servico'
+              ? catalogServicos.filter((s: any) => s.ativo).map((s: any) => ({ id: s.id, nome: s.nome, value: s.preco_base }))
+              : catalogCombos.filter((c: any) => c.ativo).map((c: any) => ({ id: c.id, nome: c.nome, value: c.preco_final }));
+
+            const filteredJobCatalog = jobItemSearch
+              ? jobCatalogList.filter((i: any) => i.nome.toLowerCase().includes(jobItemSearch.toLowerCase()))
+              : jobCatalogList;
+
+            return (
+              <div className="p-5 space-y-5">
+                {loadingFin ? (
+                  <div className="space-y-2">
+                    {[1,2,3].map(i => <div key={i} className="h-12 rounded-xl animate-pulse bg-gray-100 dark:bg-gray-800" />)}
+                  </div>
+                ) : (
+                  <>
+                    {/* ── Resumo ── */}
+                    <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+                      <div className="grid grid-cols-3 divide-x divide-gray-200 dark:divide-gray-700">
+                        <div className="p-3 text-center">
+                          <p className="text-[10px] font-semibold text-gray-400 uppercase mb-1">Total</p>
+                          <p className="text-sm font-bold text-gray-900 dark:text-white">{formatCurrency(totalGeral)}</p>
+                        </div>
+                        <div className="p-3 text-center bg-emerald-50/50 dark:bg-emerald-900/10">
+                          <p className="text-[10px] font-semibold text-emerald-500 uppercase mb-1">Pago</p>
+                          <p className="text-sm font-bold text-emerald-700 dark:text-emerald-400">{formatCurrency(totalPago)}</p>
+                        </div>
+                        <div className={`p-3 text-center ${restante === 0 ? 'bg-emerald-50/30 dark:bg-emerald-900/10' : 'bg-orange-50/50 dark:bg-orange-900/10'}`}>
+                          <p className={`text-[10px] font-semibold uppercase mb-1 ${restante === 0 ? 'text-emerald-500' : 'text-orange-500'}`}>Restante</p>
+                          <p className={`text-sm font-bold ${restante === 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-orange-700 dark:text-orange-300'}`}>{formatCurrency(restante)}</p>
+                        </div>
+                      </div>
+                      {/* Barra */}
+                      <div className="px-4 py-3 border-t border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+                        <div className="flex justify-between text-[11px] mb-1.5">
+                          <span className="text-gray-400">Progresso do pagamento</span>
+                          <span className={`font-bold ${pct >= 100 ? 'text-emerald-600' : pct >= 50 ? 'text-amber-600' : 'text-blue-600'}`}>{pct.toFixed(0)}%</span>
+                        </div>
+                        <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                          <div className={`h-full rounded-full transition-all duration-500 ${barColor}`} style={{ width: `${pct}%` }} />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* ── Itens do negócio (deal) ── */}
+                    {dealItems.length > 0 && (
+                      <section>
+                        <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-2">
+                          Itens do negócio
+                        </h3>
+                        <div className="space-y-1.5">
+                          {dealItems.map(item => {
+                            const cfg = CATALOG_CFG[item.catalog_type] || CATALOG_CFG.produto;
+                            return (
+                              <div key={item.id} className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${cfg.bg} ${cfg.border}`}>
+                                <span className={`flex-shrink-0 ${cfg.color}`}>{cfg.icon}</span>
+                                <span className="flex-1 text-sm text-gray-800 dark:text-gray-100 truncate">{item.catalog_name}</span>
+                                <span className="text-xs text-gray-400">{item.quantidade}x</span>
+                                <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">
+                                  {formatCurrency(item.catalog_value * item.quantidade)}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </section>
+                    )}
+
+                    {/* ── Itens adicionados ao job ── */}
+                    <section>
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                          Itens adicionais
+                        </h3>
+                        <button
+                          onMouseDown={e => e.preventDefault()}
+                          onClick={() => setShowAddJobItem(v => !v)}
+                          className="flex items-center gap-1 text-xs font-semibold text-gold-600 dark:text-gold-400 hover:text-gold-700 dark:hover:text-gold-300"
+                        >
+                          <Plus size={12} /> Adicionar
+                        </button>
+                      </div>
+
+                      {jobItems.length > 0 && (
+                        <div className="space-y-1.5 mb-2">
+                          {jobItems.map(item => {
+                            const cfg = CATALOG_CFG[item.catalog_type] || CATALOG_CFG.produto;
+                            return (
+                              <div key={item.id} className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${cfg.bg} ${cfg.border}`}>
+                                <span className={`flex-shrink-0 ${cfg.color}`}>{cfg.icon}</span>
+                                <span className="flex-1 text-sm text-gray-800 dark:text-gray-100 truncate">{item.catalog_name}</span>
+                                <span className="text-xs text-gray-400">{item.quantidade}x</span>
+                                <span className="text-xs font-semibold text-gray-700 dark:text-gray-300 mr-1">
+                                  {formatCurrency(item.catalog_value * item.quantidade)}
+                                </span>
+                                <button onMouseDown={e => e.preventDefault()} onClick={() => handleDeleteJobItem(item.id)}
+                                  className="text-gray-300 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400">
+                                  <X size={13} />
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {jobItems.length === 0 && !showAddJobItem && (
+                        <p className="text-xs text-gray-400 dark:text-gray-500 text-center py-2">Nenhum item adicional</p>
+                      )}
+
+                      {/* Seletor de item */}
+                      {showAddJobItem && (
+                        <div ref={jobItemRef} className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800 space-y-2">
+                          <div className="grid grid-cols-3 gap-1">
+                            {(['combo', 'produto', 'servico'] as const).map(t => {
+                              const cfg = CATALOG_CFG[t];
+                              return (
+                                <button key={t} onMouseDown={e => e.preventDefault()}
+                                  onClick={() => { setJobItemType(t); setJobItemOpen(true); setJobItemSearch(''); }}
+                                  className={`flex items-center justify-center gap-1 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
+                                    jobItemType === t ? `${cfg.bg} ${cfg.border} ${cfg.color}` : 'border-gray-200 dark:border-gray-600 text-gray-400'
+                                  }`}>
+                                  {cfg.icon}
+                                  <span>{t === 'servico' ? 'Serviço' : t.charAt(0).toUpperCase() + t.slice(1)}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <div className="relative">
+                            <div className="flex items-center gap-2 border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-1.5 bg-gray-50 dark:bg-gray-900 focus-within:border-gold-400 transition-colors">
+                              <Search size={12} className="text-gray-400" />
+                              <input
+                                value={jobItemSearch}
+                                onChange={e => { setJobItemSearch(e.target.value); setJobItemOpen(true); }}
+                                onFocus={() => setJobItemOpen(true)}
+                                placeholder="Buscar..."
+                                className="flex-1 text-sm bg-transparent outline-none text-gray-800 dark:text-gray-100 placeholder-gray-400"
+                              />
+                            </div>
+                            {jobItemOpen && filteredJobCatalog.length > 0 && (
+                              <div className="absolute z-30 top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl overflow-hidden">
+                                <div className="max-h-40 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700/50">
+                                  {filteredJobCatalog.map((item: any) => (
+                                    <button key={item.id} onMouseDown={e => e.preventDefault()}
+                                      onClick={() => handleAddJobItem(item.id, item.nome, item.value)}
+                                      className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/60 text-left text-sm">
+                                      <span className="text-gray-800 dark:text-gray-100 truncate">{item.nome}</span>
+                                      <span className="text-xs font-semibold text-gray-400 ml-2 flex-shrink-0">{formatCurrency(item.value)}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                          <button onMouseDown={e => e.preventDefault()} onClick={() => setShowAddJobItem(false)}
+                            className="w-full text-[11px] text-gray-400 hover:text-gray-600 py-0.5">Cancelar</button>
+                        </div>
+                      )}
+                    </section>
+
+                    {/* ── Pagamentos ── */}
+                    <section>
+                      <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-2 flex items-center gap-1.5">
+                        <CreditCard size={12} /> Pagamentos recebidos
+                      </h3>
+
+                      {payments.length > 0 && (
+                        <div className="space-y-1.5 mb-3">
+                          {payments.map(p => (
+                            <div key={p.id} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-emerald-100 dark:border-emerald-800 bg-emerald-50/60 dark:bg-emerald-900/10">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">{formatCurrency(p.amount)}</span>
+                                  <span className="text-[10px] text-gray-400 bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded-full">{p.payment_method}</span>
+                                </div>
+                                <p className="text-xs text-gray-400 dark:text-gray-500 truncate">
+                                  {new Date(p.payment_date + 'T12:00:00').toLocaleDateString('pt-BR')}
+                                  {p.description && ` · ${p.description}`}
+                                </p>
+                              </div>
+                              <button onClick={() => handleDeletePayment(p.id)}
+                                className="text-gray-300 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400 flex-shrink-0">
+                                <X size={13} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Formulário novo pagamento */}
+                      <div className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800 space-y-2">
+                        <p className="text-[11px] font-semibold text-gray-400 uppercase">Registrar pagamento</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="text-[10px] text-gray-400 mb-0.5 block">Valor *</label>
+                            <input
+                              type="number"
+                              placeholder="0,00"
+                              value={newPayment.amount}
+                              onChange={e => setNewPayment(p => ({ ...p, amount: e.target.value }))}
+                              className="w-full border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 rounded-lg px-2 py-1.5 text-sm text-gray-900 dark:text-white outline-none focus:border-emerald-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-gray-400 mb-0.5 block">Data</label>
+                            <input
+                              type="date"
+                              value={newPayment.payment_date}
+                              onChange={e => setNewPayment(p => ({ ...p, payment_date: e.target.value }))}
+                              className="w-full border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 rounded-lg px-2 py-1.5 text-sm text-gray-900 dark:text-white outline-none focus:border-emerald-400 [color-scheme:light] dark:[color-scheme:dark]"
+                            />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="text-[10px] text-gray-400 mb-0.5 block">Forma</label>
+                            <select
+                              value={newPayment.payment_method}
+                              onChange={e => setNewPayment(p => ({ ...p, payment_method: e.target.value }))}
+                              className="w-full border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 rounded-lg px-2 py-1.5 text-sm text-gray-900 dark:text-white outline-none focus:border-emerald-400"
+                            >
+                              {['Pix', 'Cartão de Crédito', 'Cartão de Débito', 'Dinheiro', 'Transferência', 'Boleto'].map(m => (
+                                <option key={m}>{m}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-gray-400 mb-0.5 block">Descrição</label>
+                            <input
+                              placeholder="Sinal, parcela 2..."
+                              value={newPayment.description}
+                              onChange={e => setNewPayment(p => ({ ...p, description: e.target.value }))}
+                              onKeyDown={e => e.key === 'Enter' && handleAddPayment()}
+                              className="w-full border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 rounded-lg px-2 py-1.5 text-sm text-gray-900 dark:text-white outline-none focus:border-emerald-400"
+                            />
+                          </div>
+                        </div>
+                        <button
+                          onClick={handleAddPayment}
+                          disabled={savingPayment || !newPayment.amount || Number(newPayment.amount) <= 0}
+                          className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                        >
+                          <Plus size={14} /> Registrar Pagamento
+                        </button>
+                      </div>
+                    </section>
+                  </>
+                )}
+              </div>
+            );
+          })()}
 
           {/* ── TESTIMONIALS TAB ── */}
           {tab === "testimonials" && (
