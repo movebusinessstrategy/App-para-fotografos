@@ -1,17 +1,23 @@
-import React from "react";
-import { NavLink } from "react-router-dom";
+import React, { useState } from "react";
+import { NavLink, useLocation } from "react-router-dom";
 import {
   Calendar,
   Camera,
+  ChevronDown,
+  ChevronRight,
   DollarSign,
   FileText,
   LayoutDashboard,
+  Layers,
+  Package,
   Settings,
   Shield,
   Trello,
   TrendingUp,
   Users,
-  X
+  X,
+  Briefcase,
+  BookOpen,
 } from "lucide-react";
 
 import { cn } from "../../utils/cn";
@@ -39,6 +45,12 @@ const MEMBER_BOTTOM_ITEMS = [
   { to: "/settings", label: "Configurações",  icon: Settings },
 ];
 
+const CATALOGO_SUBITEMS = [
+  { to: "/catalogo?aba=produtos", label: "Produtos",   icon: Package,   aba: "produtos"   },
+  { to: "/catalogo?aba=servicos", label: "Serviços",   icon: Briefcase, aba: "servicos"   },
+  { to: "/catalogo?aba=combos",   label: "Combos",     icon: Layers,    aba: "combos"     },
+];
+
 interface SidebarProps {
   isOpen: boolean;
   onClose: () => void;
@@ -46,9 +58,15 @@ interface SidebarProps {
 
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const { canAccess, isMember } = useAuth();
+  const location = useLocation();
+
+  const isCatalogo = location.pathname === "/catalogo";
+  const [catalogoOpen, setCatalogoOpen] = useState(isCatalogo);
 
   const navItems = ALL_NAV_ITEMS.filter(item => canAccess(item.module));
   const bottomItems = isMember ? MEMBER_BOTTOM_ITEMS : OWNER_ITEMS;
+
+  const currentAba = new URLSearchParams(location.search).get("aba") ?? "produtos";
 
   return (
     <>
@@ -120,6 +138,52 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
               <span className="text-[15px]">{item.label}</span>
             </NavLink>
           ))}
+
+          {/* Pasta Catálogo */}
+          {canAccess("catalogo") && (
+            <div>
+              <button
+                onClick={() => setCatalogoOpen((v) => !v)}
+                className={cn(
+                  "flex items-center gap-3 w-full px-4 py-3.5 rounded-xl transition-all duration-200",
+                  isCatalogo
+                    ? "bg-gold-50 dark:bg-gold-500/20 text-gold-700 dark:text-gold-300 font-semibold"
+                    : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white"
+                )}
+              >
+                <BookOpen size={22} />
+                <span className="text-[15px] flex-1 text-left">Catálogo</span>
+                {catalogoOpen
+                  ? <ChevronDown size={15} className="opacity-50" />
+                  : <ChevronRight size={15} className="opacity-50" />
+                }
+              </button>
+
+              {catalogoOpen && (
+                <div className="ml-5 mt-0.5 space-y-0.5 border-l-2 border-gray-100 dark:border-gray-800 pl-3">
+                  {CATALOGO_SUBITEMS.map((sub) => {
+                    const isActive = isCatalogo && currentAba === sub.aba;
+                    return (
+                      <NavLink
+                        key={sub.aba}
+                        to={sub.to}
+                        onClick={onClose}
+                        className={cn(
+                          "flex items-center gap-2.5 w-full px-3 py-2.5 rounded-lg transition-all duration-200 text-[14px]",
+                          isActive
+                            ? "bg-gold-50 dark:bg-gold-500/20 text-gold-700 dark:text-gold-300 font-semibold"
+                            : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white"
+                        )}
+                      >
+                        <sub.icon size={16} />
+                        {sub.label}
+                      </NavLink>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
         </nav>
 
         {/* Rodapé */}

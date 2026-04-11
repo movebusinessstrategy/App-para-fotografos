@@ -22,6 +22,7 @@ const ContractsPage = lazy(() => import("./pages/ContractsPage"));
 const AdminPage = lazy(() => import("./pages/AdminPage"));
 const PrivacyPolicyPage = lazy(() => import("./pages/PrivacyPolicyPage"));
 const TermsOfServicePage = lazy(() => import("./pages/TermsOfServicePage"));
+const CatalogoPage = lazy(() => import("./pages/CatalogoPage"));
 
 export default function App() {
   return (
@@ -67,6 +68,7 @@ export default function App() {
                 />
                 <Route path="oportunidades" element={<OportunidadesPage />} />
                 <Route path="contratos" element={<ContractsPage />} />
+                <Route path="catalogo" element={<CatalogoPage />} />
                 <Route path="admin" element={<AdminPage />} />
               </Route>
             </Routes>
