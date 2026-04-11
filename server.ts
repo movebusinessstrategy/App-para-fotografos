@@ -747,7 +747,7 @@ async function startServer() {
           webhook: {
             enabled: true,
             url: `${serverUrl}/api/whatsapp/webhook`,
-            byEvents: true,
+            byEvents: false,
             base64: true,
             events: ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE']
           }
@@ -1249,6 +1249,14 @@ async function startServer() {
   });
 
   // Webhook para mensagens recebidas (Evolution API / Z-API / Meta Cloud API)
+  // Captura sub-rotas da Evolution API quando byEvents: true (ex: /webhook/connection-update)
+  app.post('/api/whatsapp/webhook/:event', async (req, res) => {
+    res.sendStatus(200); // sempre responde 200 para o provider não ficar retonando
+    const event = req.params.event;
+    if (event === 'connection-update') return; // só log silencioso
+    console.log(`[WA Webhook] Evento via sub-rota: ${event}`, JSON.stringify(req.body).slice(0, 200));
+  });
+
   app.post('/api/whatsapp/webhook', async (req, res) => {
     res.sendStatus(200); // always respond fast to avoid timeout
 
@@ -2472,10 +2480,13 @@ async function startServer() {
   app.get('/api/combos', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
+    // combo_items não tem user_id — usa admin para bypassar RLS
+    const itemsClient = supabaseAdmin || supabase;
     const { data: combos, error } = await supabase.from('combos').select('*').eq('user_id', userId).order('nome');
     if (error) return res.status(500).json({ error: error.message });
     if (!combos?.length) return res.json([]);
-    const { data: itens } = await supabase.from('combo_items').select('*').in('combo_id', combos.map((c: any) => c.id));
+    const { data: itens, error: itensError } = await itemsClient.from('combo_items').select('*').in('combo_id', combos.map((c: any) => c.id));
+    if (itensError) console.error('[combos GET] combo_items error:', itensError.message);
     const result = combos.map((c: any) => ({ ...c, itens: (itens || []).filter((i: any) => i.combo_id === c.id) }));
     res.json(result);
   });
@@ -2483,11 +2494,12 @@ async function startServer() {
   app.post('/api/combos', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
+    const itemsClient = supabaseAdmin || supabase;
     const { itens, ...comboBody } = req.body;
     const { data: combo, error } = await supabase.from('combos').insert({ ...comboBody, user_id: userId }).select().single();
     if (error) return res.status(500).json({ error: error.message });
     if (itens?.length) {
-      const { error: itensError } = await supabase.from('combo_items').insert(
+      const { error: itensError } = await itemsClient.from('combo_items').insert(
         itens.map(({ id: _id, combo_id: _c, ...rest }: any) => ({ ...rest, combo_id: combo.id }))
       );
       if (itensError) return res.status(500).json({ error: itensError.message });
@@ -2498,13 +2510,17 @@ async function startServer() {
   app.put('/api/combos/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
+    const itemsClient = supabaseAdmin || supabase;
     const { itens, ...comboBody } = req.body;
     const { data: combo, error } = await supabase.from('combos').update({ ...comboBody, updated_at: new Date().toISOString() }).eq('id', req.params.id).eq('user_id', userId).select().single();
     if (error) return res.status(500).json({ error: error.message });
-    // Reinsere itens
-    await supabase.from('combo_items').delete().eq('combo_id', req.params.id);
+    // Reinsere itens usando admin (bypassa RLS em combo_items)
+    await itemsClient.from('combo_items').delete().eq('combo_id', req.params.id);
     if (itens?.length) {
-      await supabase.from('combo_items').insert(itens.map((i: any) => ({ ...i, id: undefined, combo_id: combo.id })));
+      const { error: itensError } = await itemsClient.from('combo_items').insert(
+        itens.map(({ id: _id, combo_id: _c, ...rest }: any) => ({ ...rest, combo_id: combo.id }))
+      );
+      if (itensError) return res.status(500).json({ error: itensError.message });
     }
     res.json({ ...combo, itens: itens || [] });
   });
@@ -2585,19 +2601,70 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // ============ CNPJ LOOKUP (proxy BrasilAPI) ============
+  // ============ CNPJ LOOKUP (com fallback entre múltiplas APIs) ============
 
   app.get('/api/cnpj/:cnpj', requireAuth, async (req, res) => {
     const cnpj = req.params.cnpj.replace(/\D/g, '');
     if (cnpj.length !== 14) return res.status(400).json({ error: 'CNPJ inválido' });
-    try {
-      const resp = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`);
-      if (!resp.ok) return res.status(404).json({ error: 'CNPJ não encontrado na Receita Federal' });
-      const data = await resp.json();
-      res.json(data);
-    } catch {
-      res.status(500).json({ error: 'Erro ao consultar Receita Federal' });
+
+    // Normaliza resposta de qualquer API para o formato BrasilAPI
+    const normalize = (data: any, source: string): any => {
+      if (source === 'brasilapi') return data;
+      if (source === 'receitaws') {
+        return {
+          razao_social: data.nome,
+          nome_fantasia: data.fantasia,
+          email: data.email,
+          ddd_telefone_1: data.telefone,
+          logradouro: data.logradouro,
+          numero: data.numero,
+          complemento: data.complemento,
+          bairro: data.bairro,
+          municipio: data.municipio,
+          uf: data.uf,
+          cep: data.cep,
+          descricao_situacao_cadastral: data.situacao,
+        };
+      }
+      if (source === 'cnpjws') {
+        const est = data.estabelecimento || {};
+        return {
+          razao_social: data.razao_social,
+          nome_fantasia: est.nome_fantasia || data.razao_social,
+          email: est.email,
+          ddd_telefone_1: est.ddd1 && est.telefone1 ? `${est.ddd1} ${est.telefone1}` : undefined,
+          logradouro: est.logradouro,
+          numero: est.numero,
+          complemento: est.complemento,
+          bairro: est.bairro,
+          municipio: est.cidade?.nome,
+          uf: est.estado?.sigla,
+          cep: est.cep,
+          descricao_situacao_cadastral: est.situacao_cadastral,
+        };
+      }
+      return data;
+    };
+
+    const apis = [
+      { url: `https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, source: 'brasilapi' },
+      { url: `https://publica.cnpj.ws/cnpj/${cnpj}`, source: 'cnpjws' },
+      { url: `https://www.receitaws.com.br/v1/cnpj/${cnpj}`, source: 'receitaws' },
+    ];
+
+    for (const api of apis) {
+      try {
+        const resp = await fetch(api.url, { signal: AbortSignal.timeout(6000) });
+        if (!resp.ok) continue;
+        const data = await resp.json();
+        if (data.status === 'ERROR' || data.message) continue; // receitaws retorna status ERROR
+        return res.json(normalize(data, api.source));
+      } catch {
+        // tenta próxima API
+      }
     }
+
+    res.status(404).json({ error: 'CNPJ não encontrado. Verifique o número e tente novamente.' });
   });
 
   // ============ OPPORTUNITY RULES ROUTES ============
