@@ -1239,12 +1239,69 @@ async function startServer() {
     return res.json({ messages, provider: 'evolution' });
   });
 
-  // Webhook para mensagens recebidas (Evolution API chama este endpoint)
+  // Webhook para mensagens recebidas (Evolution API / Z-API / Meta Cloud API)
   app.post('/api/whatsapp/webhook', async (req, res) => {
+    res.sendStatus(200); // always respond fast to avoid timeout
+
     try {
       const payload = req.body;
 
-      // Capturar QR Code entregue via webhook (evento QRCODE_UPDATED)
+      // ── Meta WhatsApp Cloud API ──────────────────────────────────────────────
+      if (payload?.object === 'whatsapp_business_account') {
+        if (!supabaseAdmin) { console.error('[Webhook Meta] supabaseAdmin not initialized'); return; }
+
+        const entry = payload.entry?.[0];
+        const value = entry?.changes?.[0]?.value;
+        if (!value?.messages?.length) return;
+
+        const message = value.messages[0];
+        if (message.type !== 'text') return;
+
+        const phoneNumberId = value.metadata?.phone_number_id;
+        const fromNumber = message.from;
+        const msgBody = message.text?.body || '';
+        const msgId = message.id;
+
+        console.log(`[Webhook Meta] Mensagem de ${fromNumber} para phone_number_id ${phoneNumberId}: "${msgBody}"`);
+
+        const { data: waAccount, error: waErr } = await supabaseAdmin
+          .from('whatsapp_business_accounts')
+          .select('user_id')
+          .eq('phone_number_id', phoneNumberId)
+          .maybeSingle();
+
+        if (waErr) { console.error('[Webhook Meta] Erro ao buscar conta:', waErr.message); return; }
+        if (!waAccount) { console.error('[Webhook Meta] Nenhuma conta para phone_number_id:', phoneNumberId); return; }
+
+        const cleanFrom = fromNumber.replace(/\D/g, '');
+        const now = new Date().toISOString();
+
+        const { error: msgErr } = await supabaseAdmin.from('wa_messages').insert({
+          user_id: waAccount.user_id,
+          phone: cleanFrom,
+          message_id: msgId || `meta-in-${Date.now()}`,
+          body: msgBody,
+          from_me: false,
+          timestamp: now,
+          type: 'text',
+          status: 'received',
+        });
+        if (msgErr) console.error('[Webhook Meta] Erro ao salvar mensagem:', msgErr.message);
+
+        const { error: convErr } = await supabaseAdmin.from('wa_conversations').upsert({
+          user_id: waAccount.user_id,
+          phone: cleanFrom,
+          last_message: msgBody,
+          last_message_at: now,
+          unread_count: 1,
+        }, { onConflict: 'user_id,phone' });
+
+        if (convErr) console.error('[Webhook Meta] Erro ao atualizar conversa:', convErr.message);
+        else console.log(`[Webhook Meta] ✅ Mensagem salva — user ${waAccount.user_id}, phone ${cleanFrom}`);
+        return;
+      }
+
+      // ── Evolution API / Z-API ────────────────────────────────────────────────
       const instanceName = payload?.instance ?? payload?.instanceName ?? '';
       const eventType = payload?.event ?? payload?.type ?? '';
       if (eventType === 'qrcode.updated' || eventType === 'QRCODE_UPDATED') {
@@ -1253,7 +1310,7 @@ async function startServer() {
           qrCodeByInstance.set(instanceName, qrBase64);
           console.log(`[WA] QR recebido via webhook para instância: ${instanceName}`);
         }
-        return res.sendStatus(200);
+        return;
       }
 
       const rawEvents = Array.isArray(payload) ? payload : [payload];
@@ -1272,7 +1329,6 @@ async function startServer() {
           event?.senderPhone ?? event?.participantPhone ?? ''
         );
 
-        // Filtrar grupos (JID @g.us, chatId com hífen ou flag isGroup)
         const isGroup =
           rawPhone.includes('@g.us') ||
           /^\d+[-]\d+/.test(rawPhone) ||
@@ -1284,7 +1340,6 @@ async function startServer() {
         const text = extractWebhookText(event);
         if (!phone || !text) continue;
 
-        // Capturar nome do contato do payload do Z-API
         const name = String(
           event?.senderName ?? event?.pushName ?? event?.chatName ??
           event?.contact?.name ?? event?.name ?? ''
@@ -1312,10 +1367,8 @@ async function startServer() {
       if (processed > 0) {
         console.log(`[Webhook WA] Mensagens processadas: ${processed}`);
       }
-      res.sendStatus(200);
     } catch (error) {
       console.error('Erro no webhook:', error);
-      res.sendStatus(500);
     }
   });
 
@@ -4453,67 +4506,7 @@ async function startServer() {
     }
   });
 
-  // Webhook receive (POST) — Meta sends incoming messages here
-  app.post('/api/whatsapp/webhook', async (req, res) => {
-    res.status(200).json({ status: 'ok' }); // always respond immediately to Meta
-    try {
-      if (!supabaseAdmin) { console.error('[Webhook] supabaseAdmin not initialized'); return; }
-
-      const entry = req.body?.entry?.[0];
-      const changes = entry?.changes?.[0];
-      const value = changes?.value;
-      if (!value?.messages?.length) return;
-
-      const message = value.messages[0];
-      if (message.type !== 'text') return;
-
-      const phoneNumberId = value.metadata?.phone_number_id;
-      const fromNumber = message.from;
-      const msgBody = message.text?.body || '';
-      const msgId = message.id;
-
-      console.log(`[Webhook] Mensagem recebida de ${fromNumber} para phone_number_id ${phoneNumberId}: "${msgBody}"`);
-
-      // Find which photographer owns this phone_number_id
-      const { data: waAccount, error: waErr } = await supabaseAdmin
-        .from('whatsapp_business_accounts')
-        .select('user_id')
-        .eq('phone_number_id', phoneNumberId)
-        .maybeSingle();
-
-      if (waErr) { console.error('[Webhook] Erro ao buscar conta:', waErr.message); return; }
-      if (!waAccount) { console.error('[Webhook] Nenhuma conta encontrada para phone_number_id:', phoneNumberId); return; }
-
-      const cleanFrom = fromNumber.replace(/\D/g, '');
-      const now = new Date().toISOString();
-
-      const { error: msgErr } = await supabaseAdmin.from('wa_messages').insert({
-        user_id: waAccount.user_id,
-        phone: cleanFrom,
-        message_id: msgId || `meta-in-${Date.now()}`,
-        body: msgBody,
-        from_me: false,
-        timestamp: now,
-        type: 'text',
-        status: 'received',
-      });
-
-      if (msgErr) console.error('[Webhook] Erro ao salvar mensagem:', msgErr.message);
-
-      const { error: convErr } = await supabaseAdmin.from('wa_conversations').upsert({
-        user_id: waAccount.user_id,
-        phone: cleanFrom,
-        last_message: msgBody,
-        last_message_at: now,
-        unread_count: 1,
-      }, { onConflict: 'user_id,phone' });
-
-      if (convErr) console.error('[Webhook] Erro ao atualizar conversa:', convErr.message);
-      else console.log(`[Webhook] ✅ Mensagem salva — user ${waAccount.user_id}, phone ${cleanFrom}`);
-    } catch (err) {
-      console.error('[WhatsApp Webhook] Error:', err);
-    }
-  });
+  // (Meta POST webhook is handled by the unified handler above)
 
   // Send message
   app.post('/api/whatsapp/send', requireAuth, async (req, res) => {
