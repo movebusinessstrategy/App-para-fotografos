@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { TrendingUp, TrendingDown, Minus, ChevronDown, ChevronRight } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, ChevronRight, ChevronDown } from 'lucide-react';
+import { FinSelect } from './FinInputs';
 import { authFetch } from '../../utils/authFetch';
 import { fmtBRL, exportCSV } from './finUtils';
 
@@ -89,21 +90,20 @@ export default function DRE() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <select
-            value={mes ?? ''}
-            onChange={e => setMes(e.target.value ? parseInt(e.target.value) : null)}
-            className="text-sm px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-          >
-            <option value="">Ano inteiro</option>
-            {MESES.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
-          </select>
-          <select
-            value={ano}
-            onChange={e => setAno(parseInt(e.target.value))}
-            className="text-sm px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-          >
-            {anos.map(a => <option key={a} value={a}>{a}</option>)}
-          </select>
+          <FinSelect
+            value={mes != null ? String(mes) : ''}
+            onChange={v => setMes(v ? parseInt(v) : null)}
+            placeholder="Ano inteiro"
+            options={MESES.map((m, i) => ({ value: String(i + 1), label: m }))}
+            className="w-36"
+          />
+          <FinSelect
+            value={String(ano)}
+            onChange={v => setAno(parseInt(v))}
+            nullable={false}
+            options={anos.map(a => ({ value: String(a), label: String(a) }))}
+            className="w-24"
+          />
           <button
             onClick={exportar}
             className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"

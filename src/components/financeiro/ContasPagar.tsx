@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Plus, CheckCircle2, Search, Trash2, X, RefreshCw } from 'lucide-react';
+import { MoneyInput, NumInput, FinSelect, Toggle } from './FinInputs';
 import { authFetch } from '../../utils/authFetch';
 import {
   fmtBRL, fmtDate, STATUS_DESPESA_LABEL, STATUS_DESPESA_COLOR,
@@ -262,7 +263,8 @@ export default function ContasPagar() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="px-6 py-4 space-y-4">
+            <div className="px-6 py-4 space-y-4 max-h-[70vh] overflow-y-auto">
+              {/* Descrição */}
               <div>
                 <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Descrição *</label>
                 <input
@@ -270,19 +272,15 @@ export default function ContasPagar() {
                   onChange={e => setForm(f => ({ ...f, descricao: e.target.value }))}
                   className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
                   placeholder="Ex: Assinatura Adobe"
+                  autoFocus
                 />
               </div>
+
+              {/* Valor + Vencimento */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Valor *</label>
-                  <input
-                    value={form.valor}
-                    onChange={e => setForm(f => ({ ...f, valor: e.target.value }))}
-                    type="text"
-                    inputMode="decimal"
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-                    placeholder="0,00"
-                  />
+                  <MoneyInput value={form.valor} onChange={v => setForm(f => ({ ...f, valor: v }))} />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Vencimento</label>
@@ -294,30 +292,30 @@ export default function ContasPagar() {
                   />
                 </div>
               </div>
+
+              {/* Categoria + Meio */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Categoria</label>
-                  <select
+                  <FinSelect
                     value={form.categoria_id}
-                    onChange={e => setForm(f => ({ ...f, categoria_id: e.target.value }))}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-                  >
-                    <option value="">Selecionar</option>
-                    {categorias.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
-                  </select>
+                    onChange={v => setForm(f => ({ ...f, categoria_id: v }))}
+                    options={categorias.map(c => ({ value: c.id, label: c.nome }))}
+                    placeholder="Categoria"
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Forma de Pagto.</label>
-                  <select
+                  <FinSelect
                     value={form.meio_id}
-                    onChange={e => setForm(f => ({ ...f, meio_id: e.target.value }))}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-                  >
-                    <option value="">Selecionar</option>
-                    {meios.map(m => <option key={m.id} value={m.id}>{m.nome}</option>)}
-                  </select>
+                    onChange={v => setForm(f => ({ ...f, meio_id: v }))}
+                    options={meios.map(m => ({ value: m.id, label: m.nome }))}
+                    placeholder="Selecionar"
+                  />
                 </div>
               </div>
+
+              {/* Fornecedor */}
               <div>
                 <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Fornecedor</label>
                 <input
@@ -327,52 +325,40 @@ export default function ContasPagar() {
                   placeholder="Nome do fornecedor"
                 />
               </div>
-              <div className="flex items-center gap-2">
-                <input
-                  id="recorrente_d"
-                  type="checkbox"
+
+              {/* Recorrente toggle */}
+              <div className="flex items-center justify-between px-3 py-3 rounded-xl bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700">
+                <Toggle
                   checked={form.recorrente}
-                  onChange={e => setForm(f => ({ ...f, recorrente: e.target.checked }))}
-                  className="rounded border-gray-300 dark:border-gray-600 text-violet-600"
+                  onChange={v => setForm(f => ({ ...f, recorrente: v }))}
+                  label="Despesa recorrente"
+                  description="Repete automaticamente no período escolhido"
                 />
-                <label htmlFor="recorrente_d" className="text-sm text-gray-700 dark:text-gray-300">Recorrente</label>
               </div>
+
+              {/* Recorrência detalhes */}
               {form.recorrente && (
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 gap-3 pl-1">
                   <div>
                     <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Frequência</label>
-                    <select
+                    <FinSelect
                       value={form.recorrencia_tipo}
-                      onChange={e => setForm(f => ({ ...f, recorrencia_tipo: e.target.value }))}
-                      className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-                    >
-                      <option value="semanal">Semanal</option>
-                      <option value="mensal">Mensal</option>
-                      <option value="trimestral">Trimestral</option>
-                      <option value="anual">Anual</option>
-                    </select>
+                      onChange={v => setForm(f => ({ ...f, recorrencia_tipo: v }))}
+                      nullable={false}
+                      options={[
+                        { value: 'semanal', label: 'Semanal' },
+                        { value: 'mensal', label: 'Mensal' },
+                        { value: 'trimestral', label: 'Trimestral' },
+                        { value: 'anual', label: 'Anual' },
+                      ]}
+                    />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Repetições</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={form.recorrencia_qtd}
-                      onChange={e => setForm(f => ({ ...f, recorrencia_qtd: e.target.value }))}
-                      className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-                    />
+                    <NumInput value={form.recorrencia_qtd} onChange={v => setForm(f => ({ ...f, recorrencia_qtd: v }))} placeholder="1" allowDecimal={false} />
                   </div>
                 </div>
               )}
-              <div>
-                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Observações</label>
-                <textarea
-                  value={form.observacoes}
-                  onChange={e => setForm(f => ({ ...f, observacoes: e.target.value }))}
-                  rows={2}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none"
-                />
-              </div>
             </div>
             <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-2">
               <button
