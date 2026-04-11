@@ -4455,8 +4455,10 @@ async function startServer() {
 
   // Webhook receive (POST) — Meta sends incoming messages here
   app.post('/api/whatsapp/webhook', async (req, res) => {
-    res.status(200).json({ status: 'ok' }); // always respond immediately
+    res.status(200).json({ status: 'ok' }); // always respond immediately to Meta
     try {
+      if (!supabaseAdmin) { console.error('[Webhook] supabaseAdmin not initialized'); return; }
+
       const entry = req.body?.entry?.[0];
       const changes = entry?.changes?.[0];
       const value = changes?.value;
@@ -4470,19 +4472,22 @@ async function startServer() {
       const msgBody = message.text?.body || '';
       const msgId = message.id;
 
+      console.log(`[Webhook] Mensagem recebida de ${fromNumber} para phone_number_id ${phoneNumberId}: "${msgBody}"`);
+
       // Find which photographer owns this phone_number_id
-      const { data: waAccount } = await supabaseAdmin
+      const { data: waAccount, error: waErr } = await supabaseAdmin
         .from('whatsapp_business_accounts')
         .select('user_id')
         .eq('phone_number_id', phoneNumberId)
         .maybeSingle();
 
-      if (!waAccount || !supabaseAdmin) return;
+      if (waErr) { console.error('[Webhook] Erro ao buscar conta:', waErr.message); return; }
+      if (!waAccount) { console.error('[Webhook] Nenhuma conta encontrada para phone_number_id:', phoneNumberId); return; }
 
       const cleanFrom = fromNumber.replace(/\D/g, '');
       const now = new Date().toISOString();
 
-      await supabaseAdmin.from('wa_messages').insert({
+      const { error: msgErr } = await supabaseAdmin.from('wa_messages').insert({
         user_id: waAccount.user_id,
         phone: cleanFrom,
         message_id: msgId || `meta-in-${Date.now()}`,
@@ -4493,12 +4498,18 @@ async function startServer() {
         status: 'received',
       });
 
-      await supabaseAdmin.from('wa_conversations').upsert({
+      if (msgErr) console.error('[Webhook] Erro ao salvar mensagem:', msgErr.message);
+
+      const { error: convErr } = await supabaseAdmin.from('wa_conversations').upsert({
         user_id: waAccount.user_id,
         phone: cleanFrom,
         last_message: msgBody,
         last_message_at: now,
+        unread_count: 1,
       }, { onConflict: 'user_id,phone' });
+
+      if (convErr) console.error('[Webhook] Erro ao atualizar conversa:', convErr.message);
+      else console.log(`[Webhook] ✅ Mensagem salva — user ${waAccount.user_id}, phone ${cleanFrom}`);
     } catch (err) {
       console.error('[WhatsApp Webhook] Error:', err);
     }
