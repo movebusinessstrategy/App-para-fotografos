@@ -127,9 +127,12 @@ export function ChatView({ phone, contactName }: Props) {
         alert(`Erro ao enviar: ${err.error || res.statusText}`);
         return;
       }
-      // Confirma a mensagem otimista sem re-fetch (evita limpar o chat se fetch falhar)
+      // Atualiza o ID da mensagem otimista para o ID real do Meta.
+      // Assim o polling não vai criar um duplicado (a merge já reconhece o mesmo ID).
+      const data = await res.json().catch(() => ({}));
+      const realId = data.message_id || tmpId;
       setMessages((prev) =>
-        prev.map((m) => m.message_id === tmpId ? { ...m, status: "sent" } : m)
+        prev.map((m) => m.message_id === tmpId ? { ...m, message_id: realId, status: "sent" } : m)
       );
     } catch {
       setMessages((prev) => prev.filter((m) => m.message_id !== tmpId));
