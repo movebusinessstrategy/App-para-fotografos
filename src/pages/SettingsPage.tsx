@@ -48,6 +48,7 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
   const [waAccount, setWaAccount] = useState<{ phone_number: string | null; display_name: string | null; connected_at: string } | null>(null);
   const [waLoading, setWaLoading] = useState(true);
   const [waConnecting, setWaConnecting] = useState(false);
+  const [waSubscribing, setWaSubscribing] = useState(false);
   const [confirmModal, setConfirmModal] = useState<{
     open: boolean;
     onConfirm: () => void;
@@ -150,6 +151,23 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
         setWaAccount(null);
       },
     });
+  };
+
+  const handleSubscribeWebhook = async () => {
+    setWaSubscribing(true);
+    try {
+      const res = await authFetch('/api/meta/whatsapp/subscribe-webhook', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        alert('Webhook ativado com sucesso! Agora você receberá mensagens no Inbox.');
+      } else {
+        alert('Resposta do Meta: ' + JSON.stringify(data));
+      }
+    } catch (err) {
+      alert('Erro ao ativar webhook.');
+    } finally {
+      setWaSubscribing(false);
+    }
   };
 
   const checkGoogleStatus = async () => {
@@ -372,6 +390,15 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
               <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 text-sm font-bold bg-emerald-50 dark:bg-emerald-500/20 px-3 py-1 rounded-full">
                 <CheckCircle2 size={16} /> Conectado
               </span>
+              <button
+                onClick={handleSubscribeWebhook}
+                disabled={waSubscribing}
+                title="Ativa o recebimento de mensagens via webhook"
+                className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-sm font-bold transition-colors disabled:opacity-50 flex items-center gap-1"
+              >
+                {waSubscribing ? <RefreshCw size={13} className="animate-spin" /> : null}
+                Reparar Webhook
+              </button>
               <button
                 onClick={handleDisconnectWhatsApp}
                 className="text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 text-sm font-bold transition-colors"
