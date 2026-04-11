@@ -175,6 +175,15 @@ const normalizePhone = (value: unknown) => {
   return String(value).replace(/\D/g, '');
 };
 
+// Brasil: número com 10 dígitos locais (sem o 9) → normaliza para 11 dígitos
+// Ex: 554388416682 (12 total) → 5543988416682 (13 total)
+const normalizeBrazilianPhone = (digits: string): string => {
+  if (digits.startsWith('55') && digits.length === 12) {
+    return digits.slice(0, 4) + '9' + digits.slice(4);
+  }
+  return digits;
+};
+
 const parseWebhookTimestamp = (payload: any) => {
   const candidates = [payload?.momment, payload?.moment, payload?.timestamp, payload?.ts];
   for (const candidate of candidates) {
@@ -1273,7 +1282,7 @@ async function startServer() {
         if (waErr) { console.error('[Webhook Meta] Erro ao buscar conta:', waErr.message); return; }
         if (!waAccount) { console.error('[Webhook Meta] Nenhuma conta para phone_number_id:', phoneNumberId); return; }
 
-        const cleanFrom = fromNumber.replace(/\D/g, '');
+        const cleanFrom = normalizeBrazilianPhone(fromNumber.replace(/\D/g, ''));
         const now = new Date().toISOString();
 
         const { error: msgErr } = await supabaseAdmin.from('wa_messages').insert({
@@ -1519,7 +1528,7 @@ async function startServer() {
 
     if (!waAccount) return res.status(400).json({ error: 'WhatsApp Business não conectado. Vá em Configurações para conectar.' });
 
-    const cleanPhone = phone.replace(/\D/g, '');
+    const cleanPhone = normalizeBrazilianPhone(phone.replace(/\D/g, ''));
 
     try {
       const metaRes = await fetch(
@@ -1562,7 +1571,7 @@ async function startServer() {
         last_message_at: now,
       }, { onConflict: 'user_id,phone' });
 
-      res.json({ success: true });
+      res.json({ success: true, message_id: msgId });
     } catch (err: any) {
       console.error('[inbox/send] error:', err);
       res.status(500).json({ error: err.message });
