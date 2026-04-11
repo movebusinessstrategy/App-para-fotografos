@@ -72,7 +72,7 @@ export function DealCard({ deal, client, onClick }: DealCardProps) {
   const handleWhatsApp = (e: React.MouseEvent) => {
     e.stopPropagation();
     const clean = phone?.replace(/\D/g, '') || '';
-    navigate(`/vendas?tab=inbox&phone=${clean}`);
+    if (clean) navigate(`/vendas?tab=inbox&phone=${clean}`);
   };
 
   return (
