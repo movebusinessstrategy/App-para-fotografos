@@ -212,18 +212,22 @@ function StageColumn({
                         <Calendar size={10} /> {jobDate.toLocaleDateString('pt-BR')}
                       </p>
                     )}
-                    <span className="text-xs font-bold text-gray-700 dark:text-gray-200">{formatCurrency(job.amount)}</span>
+                    <span className="text-xs font-bold text-gray-700 dark:text-gray-200">
+                      {(() => {
+                        const amountPaid = job.amount_paid || 0;
+                        const restante = job.amount - amountPaid;
+                        // Se restante < 0: amount corrompido no banco (amount_paid > amount)
+                        // → mostra job.amount como fallback até o drawer auto-corrigir
+                        if (job.payment_status === 'paid') return formatCurrency(job.amount);
+                        return formatCurrency(restante >= 0 ? restante : job.amount);
+                      })()}
+                    </span>
                     {job.payment_status === 'paid' && (
                       <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400">
                         <CircleDollarSign size={9} /> Pago
                       </span>
                     )}
-                    {job.payment_status === 'partial' && (
-                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400">
-                        <CircleDollarSign size={9} /> Parcial
-                      </span>
-                    )}
-                    {(job.payment_status === 'pending' || !job.payment_status) && job.amount > 0 && (
+                    {(job.payment_status === 'pending' || job.payment_status === 'partial' || !job.payment_status) && job.amount > 0 && (
                       <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400">
                         <CircleDollarSign size={9} /> Pendente
                       </span>

@@ -47,6 +47,7 @@ export interface Job {
   job_end_time?: string;
   job_name: string;
   amount: number;
+  amount_paid?: number;
   payment_method: string;
   payment_status: string;
   status: 'scheduled' | 'completed' | 'cancelled';
