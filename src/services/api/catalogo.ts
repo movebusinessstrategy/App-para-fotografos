@@ -1,11 +1,19 @@
 import { authFetch } from '../../utils/authFetch';
 import { Fornecedor, Produto, Servico, Combo, CategoriaCatalogo, TipoEnsaio } from '../../types';
 
+async function handle<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || body.message || `Erro ${res.status}`);
+  }
+  return res.json();
+}
+
 export const catalogoApi = {
   // ── Fornecedores ────────────────────────────────────────────────
   getFornecedores: async (): Promise<Fornecedor[]> => {
     const res = await authFetch('/api/fornecedores');
-    return res.json();
+    return handle<Fornecedor[]>(res);
   },
 
   createFornecedor: async (data: Partial<Fornecedor>): Promise<Fornecedor> => {
@@ -13,7 +21,7 @@ export const catalogoApi = {
       method: 'POST',
       body: JSON.stringify(data),
     });
-    return res.json();
+    return handle<Fornecedor>(res);
   },
 
   updateFornecedor: async (id: string, data: Partial<Fornecedor>): Promise<Fornecedor> => {
@@ -21,17 +29,18 @@ export const catalogoApi = {
       method: 'PUT',
       body: JSON.stringify(data),
     });
-    return res.json();
+    return handle<Fornecedor>(res);
   },
 
   deleteFornecedor: async (id: string): Promise<void> => {
-    await authFetch(`/api/fornecedores/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/fornecedores/${id}`, { method: 'DELETE' });
+    await handle<void>(res);
   },
 
   // ── Produtos ─────────────────────────────────────────────────────
   getProdutos: async (): Promise<Produto[]> => {
     const res = await authFetch('/api/produtos');
-    return res.json();
+    return handle<Produto[]>(res);
   },
 
   createProduto: async (data: Partial<Produto>): Promise<Produto> => {
@@ -39,7 +48,7 @@ export const catalogoApi = {
       method: 'POST',
       body: JSON.stringify(data),
     });
-    return res.json();
+    return handle<Produto>(res);
   },
 
   updateProduto: async (id: string, data: Partial<Produto>): Promise<Produto> => {
@@ -47,17 +56,18 @@ export const catalogoApi = {
       method: 'PUT',
       body: JSON.stringify(data),
     });
-    return res.json();
+    return handle<Produto>(res);
   },
 
   deleteProduto: async (id: string): Promise<void> => {
-    await authFetch(`/api/produtos/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/produtos/${id}`, { method: 'DELETE' });
+    await handle<void>(res);
   },
 
   // ── Serviços ─────────────────────────────────────────────────────
   getServicos: async (): Promise<Servico[]> => {
     const res = await authFetch('/api/servicos');
-    return res.json();
+    return handle<Servico[]>(res);
   },
 
   createServico: async (data: Partial<Servico>): Promise<Servico> => {
@@ -65,7 +75,7 @@ export const catalogoApi = {
       method: 'POST',
       body: JSON.stringify(data),
     });
-    return res.json();
+    return handle<Servico>(res);
   },
 
   updateServico: async (id: string, data: Partial<Servico>): Promise<Servico> => {
@@ -73,51 +83,54 @@ export const catalogoApi = {
       method: 'PUT',
       body: JSON.stringify(data),
     });
-    return res.json();
+    return handle<Servico>(res);
   },
 
   deleteServico: async (id: string): Promise<void> => {
-    await authFetch(`/api/servicos/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/servicos/${id}`, { method: 'DELETE' });
+    await handle<void>(res);
   },
 
   // ── Categorias Produto ───────────────────────────────────────────
   getCategorias: async (): Promise<CategoriaCatalogo[]> => {
     const res = await authFetch('/api/categorias-produto');
-    return res.json();
+    return handle<CategoriaCatalogo[]>(res);
   },
 
   createCategoria: async (data: Partial<CategoriaCatalogo>): Promise<CategoriaCatalogo> => {
     const res = await authFetch('/api/categorias-produto', { method: 'POST', body: JSON.stringify(data) });
-    return res.json();
+    return handle<CategoriaCatalogo>(res);
   },
 
   updateCategoria: async (id: string, data: Partial<CategoriaCatalogo>): Promise<CategoriaCatalogo> => {
     const res = await authFetch(`/api/categorias-produto/${id}`, { method: 'PUT', body: JSON.stringify(data) });
-    return res.json();
+    return handle<CategoriaCatalogo>(res);
   },
 
   deleteCategoria: async (id: string): Promise<void> => {
-    await authFetch(`/api/categorias-produto/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/categorias-produto/${id}`, { method: 'DELETE' });
+    await handle<void>(res);
   },
 
   // ── Tipos de Ensaio ──────────────────────────────────────────────
   getTiposEnsaio: async (): Promise<TipoEnsaio[]> => {
     const res = await authFetch('/api/tipos-ensaio');
-    return res.json();
+    return handle<TipoEnsaio[]>(res);
   },
 
   createTipoEnsaio: async (data: Partial<TipoEnsaio>): Promise<TipoEnsaio> => {
     const res = await authFetch('/api/tipos-ensaio', { method: 'POST', body: JSON.stringify(data) });
-    return res.json();
+    return handle<TipoEnsaio>(res);
   },
 
   updateTipoEnsaio: async (id: string, data: Partial<TipoEnsaio>): Promise<TipoEnsaio> => {
     const res = await authFetch(`/api/tipos-ensaio/${id}`, { method: 'PUT', body: JSON.stringify(data) });
-    return res.json();
+    return handle<TipoEnsaio>(res);
   },
 
   deleteTipoEnsaio: async (id: string): Promise<void> => {
-    await authFetch(`/api/tipos-ensaio/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/tipos-ensaio/${id}`, { method: 'DELETE' });
+    await handle<void>(res);
   },
 
   // ── CNPJ lookup ──────────────────────────────────────────────────
@@ -130,7 +143,7 @@ export const catalogoApi = {
   // ── Combos ───────────────────────────────────────────────────────
   getCombos: async (): Promise<Combo[]> => {
     const res = await authFetch('/api/combos');
-    return res.json();
+    return handle<Combo[]>(res);
   },
 
   createCombo: async (data: Partial<Combo>): Promise<Combo> => {
@@ -138,7 +151,7 @@ export const catalogoApi = {
       method: 'POST',
       body: JSON.stringify(data),
     });
-    return res.json();
+    return handle<Combo>(res);
   },
 
   updateCombo: async (id: string, data: Partial<Combo>): Promise<Combo> => {
@@ -146,10 +159,11 @@ export const catalogoApi = {
       method: 'PUT',
       body: JSON.stringify(data),
     });
-    return res.json();
+    return handle<Combo>(res);
   },
 
   deleteCombo: async (id: string): Promise<void> => {
-    await authFetch(`/api/combos/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/combos/${id}`, { method: 'DELETE' });
+    await handle<void>(res);
   },
 };
