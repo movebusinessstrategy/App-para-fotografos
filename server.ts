@@ -2755,6 +2755,7 @@ async function startServer() {
 
   const loadDeals = async (supabase: SupabaseClient, userId: string) => {
     const stages = await ensurePipelineStages(supabase, userId);
+    const adminClient = supabaseAdmin || supabase;
 
     const [dealsRes, clientsRes] = await Promise.all([
       supabase.from('deals').select('*').eq('user_id', userId),
@@ -2766,6 +2767,21 @@ async function startServer() {
     clients.forEach((c) => clientMap.set(c.id, c.name));
 
     const dealsRaw = dealsRes.data || [];
+
+    // Carrega itens de todos os deals (deal_items não tem user_id → usa admin)
+    let itemsMap = new Map<number, any[]>();
+    if (dealsRaw.length) {
+      const { data: allItems } = await adminClient
+        .from('deal_items')
+        .select('*')
+        .in('deal_id', dealsRaw.map((d: any) => d.id));
+      (allItems || []).forEach((item: any) => {
+        const list = itemsMap.get(item.deal_id) || [];
+        list.push(item);
+        itemsMap.set(item.deal_id, list);
+      });
+    }
+
     const activityMap = await fetchActivityMetrics(
       supabase,
       userId,
@@ -2775,6 +2791,7 @@ async function startServer() {
     const deals = dealsRaw.map((deal: any) => {
       const activity = activityMap.get(deal.id);
       const { temperature, score } = calculateTemperature(deal, activity);
+      const items = itemsMap.get(deal.id) || [];
       return {
         ...deal,
         stage_entered_at: deal.current_stage_entered_at || deal.stage_entered_at || deal.updated_at || deal.created_at,
@@ -2783,6 +2800,7 @@ async function startServer() {
         temperature,
         temperature_score: score,
         client_name: deal.client_id ? clientMap.get(deal.client_id) || null : null,
+        items,
       };
     });
 
@@ -3799,6 +3817,63 @@ async function startServer() {
       deal.current_stage_entered_at || deal.stage_entered_at
     );
     res.json({ success: true });
+  });
+
+  // ── Deal Items (múltiplos produtos/serviços/combos por deal) ──────────────────
+  app.post('/api/deals/:id/items', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+    const dealId = Number(req.params.id);
+
+    // Verifica que o deal pertence ao usuário
+    const { data: deal } = await supabase.from('deals').select('id, value').eq('id', dealId).eq('user_id', userId).single();
+    if (!deal) return res.status(404).json({ error: 'Deal not found' });
+
+    const { catalog_type, catalog_id, catalog_name, catalog_value, quantidade = 1 } = req.body;
+    if (!catalog_type || !catalog_id || !catalog_name) {
+      return res.status(400).json({ error: 'catalog_type, catalog_id, catalog_name são obrigatórios' });
+    }
+
+    const { data: newItem, error } = await adminClient
+      .from('deal_items')
+      .insert({ deal_id: dealId, catalog_type, catalog_id, catalog_name, catalog_value: catalog_value || 0, quantidade })
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Recalcula valor total dos itens e atualiza o deal
+    const { data: allItems } = await adminClient.from('deal_items').select('catalog_value, quantidade').eq('deal_id', dealId);
+    const total = (allItems || []).reduce((sum: number, i: any) => sum + (i.catalog_value * i.quantidade), 0);
+    await supabase.from('deals').update({ value: total }).eq('id', dealId).eq('user_id', userId);
+
+    res.json({ item: newItem, total });
+  });
+
+  app.delete('/api/deal-items/:itemId', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+    const itemId = req.params.itemId;
+
+    // Busca o item para pegar o deal_id
+    const { data: item } = await adminClient.from('deal_items').select('id, deal_id').eq('id', itemId).single();
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+
+    // Verifica que o deal pertence ao usuário
+    const { data: deal } = await supabase.from('deals').select('id').eq('id', item.deal_id).eq('user_id', userId).single();
+    if (!deal) return res.status(403).json({ error: 'Forbidden' });
+
+    const { error } = await adminClient.from('deal_items').delete().eq('id', itemId);
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Recalcula valor total dos itens restantes e atualiza o deal
+    const { data: remaining } = await adminClient.from('deal_items').select('catalog_value, quantidade').eq('deal_id', item.deal_id);
+    const total = (remaining || []).reduce((sum: number, i: any) => sum + (i.catalog_value * i.quantidade), 0);
+    await supabase.from('deals').update({ value: total }).eq('id', item.deal_id).eq('user_id', userId);
+
+    res.json({ success: true, total });
   });
 
   app.get('/api/pipeline/analytics', requireAuth, async (req, res) => {

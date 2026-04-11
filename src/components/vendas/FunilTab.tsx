@@ -37,6 +37,11 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
 
   React.useEffect(() => {
     setLocalDeals(deals);
+    // Atualiza o deal selecionado quando a lista refresha (ex: após vincular catálogo)
+    setSelectedDeal(prev => {
+      if (!prev) return prev;
+      return deals.find(d => d.id === prev.id) ?? prev;
+    });
   }, [deals]);
 
   const clientMap = useMemo(() => {

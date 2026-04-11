@@ -355,16 +355,10 @@ function FornecedorModal({ item, onSave, onClose }: {
           <input required value={form.nome ?? ""} onChange={(e) => set("nome", e.target.value)} className={INPUT} />
         </div>
 
-        {/* Contato + Prazo */}
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <FieldLabel>Contato / Responsável</FieldLabel>
-            <input value={form.contato ?? ""} onChange={(e) => set("contato", e.target.value)} className={INPUT} />
-          </div>
-          <div>
-            <FieldLabel>Prazo entrega (dias)</FieldLabel>
-            <NumInput value={form.prazo_entrega ?? 0} onChange={(n) => set("prazo_entrega", n || undefined)} />
-          </div>
+        {/* Contato */}
+        <div>
+          <FieldLabel>Contato / Responsável</FieldLabel>
+          <input value={form.contato ?? ""} onChange={(e) => set("contato", e.target.value)} className={INPUT} />
         </div>
 
         {/* WhatsApp + Email */}
@@ -472,9 +466,9 @@ function ProdutoModal({ item, fornecedores, categorias, onSave, onClose }: {
             </div>
           </div>
 
-          {/* Fornecedor + Estoque */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
+          {/* Fornecedor + Estoque + Prazo */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-1">
               <FieldLabel>Fornecedor</FieldLabel>
               <SearchableSelect
                 value={form.fornecedor_id ?? ""}
@@ -486,6 +480,10 @@ function ProdutoModal({ item, fornecedores, categorias, onSave, onClose }: {
             <div>
               <FieldLabel>Estoque</FieldLabel>
               <NumInput value={form.estoque ?? 0} onChange={(n) => set("estoque", n)} />
+            </div>
+            <div>
+              <FieldLabel>Prazo entrega (dias)</FieldLabel>
+              <NumInput value={form.prazo_entrega ?? 0} onChange={(n) => set("prazo_entrega", n || undefined)} />
             </div>
           </div>
 
@@ -1114,6 +1112,7 @@ export default function CatalogoPage() {
                         <th className={`${tableHeaderCls} text-right`}>Custo</th>
                         <th className={`${tableHeaderCls} text-right`}>Venda</th>
                         <th className={`${tableHeaderCls} text-right hidden sm:table-cell`}>Markup</th>
+                        <th className={`${tableHeaderCls} text-center hidden lg:table-cell`}>Prazo</th>
                         <th className={`${tableHeaderCls} text-center`}>Status</th>
                         <th className="px-5 py-3" />
                       </tr></thead>
@@ -1140,6 +1139,9 @@ export default function CatalogoPage() {
                                   {p.margem_lucro.toFixed(1)}%
                                 </span>
                               ) : "—"}
+                            </td>
+                            <td className="px-5 py-3 text-center text-gray-500 dark:text-gray-400 hidden lg:table-cell">
+                              {p.prazo_entrega ? `${p.prazo_entrega}d` : "—"}
                             </td>
                             <td className="px-5 py-3 text-center">
                               <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${p.ativo ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400" : "bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400"}`}>{p.ativo ? "Ativo" : "Inativo"}</span>
@@ -1209,7 +1211,6 @@ export default function CatalogoPage() {
                         <th className={tableHeaderCls}>Nome</th>
                         <th className={`${tableHeaderCls} hidden sm:table-cell`}>Tipo</th>
                         <th className={`${tableHeaderCls} hidden md:table-cell`}>Contato</th>
-                        <th className={`${tableHeaderCls} text-center hidden lg:table-cell`}>Prazo</th>
                         <th className="px-5 py-3" />
                       </tr></thead>
                       <tbody>
@@ -1225,7 +1226,6 @@ export default function CatalogoPage() {
                               </span>
                             </td>
                             <td className="px-5 py-3 text-gray-500 dark:text-gray-400 hidden md:table-cell">{f.contato || f.whatsapp || "—"}</td>
-                            <td className="px-5 py-3 text-center text-gray-500 dark:text-gray-400 hidden lg:table-cell">{f.prazo_entrega ? `${f.prazo_entrega}d` : "—"}</td>
                             <td className="px-5 py-3">
                               <div className="flex items-center justify-end gap-1">
                                 <button onClick={() => setEditFornecedor(f)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gold-600"><Pencil size={14} /></button>

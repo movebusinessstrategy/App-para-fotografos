@@ -2,7 +2,7 @@ import React from "react";
 import { useNavigate } from "react-router-dom";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { MessageCircle } from "lucide-react";
+import { MessageCircle, Package, Layers, Briefcase } from "lucide-react";
 import { Deal, Client } from "../../types";
 
 interface DealCardProps {
@@ -95,6 +95,28 @@ export function DealCard({ deal, client, onClick }: DealCardProps) {
         </span>
         <TierBadge tier={tier} />
       </div>
+      {deal.items && deal.items.length > 0 ? (
+        <div className="mt-1.5 space-y-0.5">
+          {deal.items.slice(0, 2).map(item => (
+            <div key={item.id} className="flex items-center gap-1">
+              {item.catalog_type === 'combo' && <Layers size={10} className="text-amber-500 flex-shrink-0" />}
+              {item.catalog_type === 'produto' && <Package size={10} className="text-blue-500 flex-shrink-0" />}
+              {item.catalog_type === 'servico' && <Briefcase size={10} className="text-purple-500 flex-shrink-0" />}
+              <span className="text-[10px] text-gray-400 dark:text-gray-500 truncate">{item.catalog_name}</span>
+            </div>
+          ))}
+          {deal.items.length > 2 && (
+            <span className="text-[10px] text-gray-400 dark:text-gray-500">+{deal.items.length - 2} mais</span>
+          )}
+        </div>
+      ) : deal.catalog_name ? (
+        <div className="flex items-center gap-1 mt-1.5">
+          {deal.catalog_type === 'combo' && <Layers size={11} className="text-amber-500 flex-shrink-0" />}
+          {deal.catalog_type === 'produto' && <Package size={11} className="text-blue-500 flex-shrink-0" />}
+          {deal.catalog_type === 'servico' && <Briefcase size={11} className="text-purple-500 flex-shrink-0" />}
+          <span className="text-[11px] text-gray-400 dark:text-gray-500 truncate">{deal.catalog_name}</span>
+        </div>
+      ) : null}
       <div className="flex items-center justify-between mt-2">
         <span className="text-sm font-semibold text-gray-900 dark:text-white">
           R$ {(deal.value || 0).toLocaleString("pt-BR")}
