@@ -1,7 +1,7 @@
 // src/components/vendas/DealConversionModal.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { motion } from "motion/react";
-import { Plus, User, Briefcase, ChevronDown, ChevronUp, Link2 } from "lucide-react";
+import { Plus, User, Briefcase, ChevronDown, ChevronUp, Link2, DollarSign } from "lucide-react";
 
 import { Deal, Client } from "../../types";
 import { authFetch } from "../../utils/authFetch";
@@ -24,6 +24,7 @@ export function DealConversionModal({
   const [createClient, setCreateClient] = useState(true);
   const [createJob, setCreateJob] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [sinalAmount, setSinalAmount] = useState(0);
   const [expandedSections, setExpandedSections] = useState({
     client: true,
     job: true,
@@ -62,13 +63,11 @@ export function DealConversionModal({
 
   useEffect(() => {
     if (deal) {
-      // Se já tem client_id, pré-seleciona modo "existente"
       if (deal.client_id) {
         setConversionMode("existing");
         setSelectedClientId(deal.client_id);
         setCreateClient(false);
       }
-      
       setClientData((prev) => ({
         ...prev,
         name: deal.contact_name || deal.title || "",
@@ -83,8 +82,22 @@ export function DealConversionModal({
         amount: deal.value || 0,
         notes: deal.notes || "",
       }));
+      setSinalAmount(0);
     }
   }, [deal]);
+
+  // Deriva o payment_status automaticamente do sinal
+  const autoPaymentStatus = useMemo(() => {
+    const total = jobData.amount || 0;
+    if (sinalAmount <= 0) return "pending";
+    if (sinalAmount >= total) return "paid";
+    return "partial";
+  }, [sinalAmount, jobData.amount]);
+
+  // Sincroniza payment_status com o sinal
+  useEffect(() => {
+    setJobData(prev => ({ ...prev, payment_status: autoPaymentStatus }));
+  }, [autoPaymentStatus]);
 
   if (!deal) return null;
 
@@ -98,16 +111,24 @@ export function DealConversionModal({
   const submit = async () => {
     setIsSubmitting(true);
     try {
+      const jobPayload = createJob ? {
+        ...jobData,
+        payment_status: autoPaymentStatus,
+        notes: [
+          jobData.notes,
+          sinalAmount > 0 ? `Sinal pago: R$ ${sinalAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '',
+        ].filter(Boolean).join('\n').trim(),
+      } : undefined;
+
       await authFetch(`/api/deals/${deal.id}/convert`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          // Se modo "existing", vincula ao cliente existente
           existingClientId: conversionMode === "existing" ? selectedClientId : undefined,
           createClient: conversionMode === "new" && createClient,
           createJob,
           client: conversionMode === "new" && createClient ? clientData : undefined,
-          job: createJob ? jobData : undefined,
+          job: jobPayload,
         }),
       });
       onConverted();
@@ -231,6 +252,83 @@ export function DealConversionModal({
               </button>
             </div>
           </div>
+
+          {/* ====== RESUMO FINANCEIRO ====== */}
+          {(() => {
+            const total = jobData.amount || 0;
+            const restante = Math.max(0, total - sinalAmount);
+            const pct = total > 0 ? Math.min(100, (sinalAmount / total) * 100) : 0;
+            const pctFormatted = pct.toFixed(0);
+            const barColor = pct >= 100 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-400' : 'bg-blue-400';
+            return (
+              <div className="border border-emerald-200 dark:border-emerald-800 rounded-xl overflow-hidden">
+                <div className="bg-emerald-50 dark:bg-emerald-950/30 px-4 py-3 flex items-center gap-2 border-b border-emerald-100 dark:border-emerald-800">
+                  <DollarSign size={14} className="text-emerald-600 dark:text-emerald-400" />
+                  <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wide">Resumo Financeiro</span>
+                  {deal?.items && deal.items.length > 0 && (
+                    <span className="ml-auto text-[10px] text-emerald-600 dark:text-emerald-500 font-medium">
+                      {deal.items.length} {deal.items.length === 1 ? 'item' : 'itens'} vinculados
+                    </span>
+                  )}
+                </div>
+                <div className="p-4 space-y-4 bg-white dark:bg-gray-900">
+                  {/* Linha: Total / Sinal / Restante */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3">
+                      <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase mb-1">Valor Total</p>
+                      <p className="text-base font-bold text-gray-900 dark:text-white">
+                        R$ {total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </p>
+                    </div>
+                    <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl p-3 border border-blue-100 dark:border-blue-800">
+                      <p className="text-[10px] font-semibold text-blue-500 dark:text-blue-400 uppercase mb-1">Sinal Pago</p>
+                      <input
+                        type="number"
+                        min={0}
+                        max={total}
+                        step={0.01}
+                        value={sinalAmount || ""}
+                        onChange={e => setSinalAmount(parseFloat(e.target.value) || 0)}
+                        placeholder="0,00"
+                        className="w-full bg-transparent text-base font-bold text-blue-700 dark:text-blue-300 outline-none placeholder-blue-300 dark:placeholder-blue-700 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      />
+                    </div>
+                    <div className={`rounded-xl p-3 ${restante === 0 && total > 0 ? 'bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-800' : 'bg-orange-50 dark:bg-orange-900/20 border border-orange-100 dark:border-orange-800'}`}>
+                      <p className={`text-[10px] font-semibold uppercase mb-1 ${restante === 0 && total > 0 ? 'text-emerald-500' : 'text-orange-500'}`}>Restante</p>
+                      <p className={`text-base font-bold ${restante === 0 && total > 0 ? 'text-emerald-700 dark:text-emerald-300' : 'text-orange-700 dark:text-orange-300'}`}>
+                        R$ {restante.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Barra de progresso */}
+                  {total > 0 && (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-gray-400 dark:text-gray-500">Progresso do pagamento</span>
+                        <span className={`font-bold ${pct >= 100 ? 'text-emerald-600 dark:text-emerald-400' : pct >= 50 ? 'text-amber-600 dark:text-amber-400' : 'text-blue-600 dark:text-blue-400'}`}>
+                          {pctFormatted}% pago
+                        </span>
+                      </div>
+                      <div className="h-2.5 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-300 ${barColor}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <p className="text-[11px] text-gray-400 dark:text-gray-500 text-center">
+                        {pct >= 100
+                          ? '✓ Pagamento completo'
+                          : sinalAmount > 0
+                          ? `Falta R$ ${restante.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} para quitação`
+                          : 'Nenhum sinal registrado'}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ====== SELECIONAR CLIENTE EXISTENTE ====== */}
           {conversionMode === "existing" && (
@@ -529,7 +627,7 @@ export function DealConversionModal({
                   {/* Linha 3: Valor, Forma de pagamento, Status pagamento */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div>
-                      <label className={labelClasses}>Valor *</label>
+                      <label className={labelClasses}>Valor Total *</label>
                       <input
                         type="number"
                         value={jobData.amount}
@@ -555,15 +653,16 @@ export function DealConversionModal({
                     </div>
                     <div>
                       <label className={labelClasses}>Status do Pagamento</label>
-                      <select
-                        value={jobData.payment_status}
-                        onChange={(e) => setJobData((p) => ({ ...p, payment_status: e.target.value }))}
-                        className={selectClasses}
-                      >
-                        <option value="pending" className="bg-white dark:bg-gray-800">Pendente</option>
-                        <option value="partial" className="bg-white dark:bg-gray-800">Parcial</option>
-                        <option value="paid" className="bg-white dark:bg-gray-800">Pago</option>
-                      </select>
+                      <div className={`px-3 py-2 rounded-lg text-sm font-semibold border ${
+                        autoPaymentStatus === 'paid'
+                          ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                          : autoPaymentStatus === 'partial'
+                          ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800'
+                          : 'bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border-gray-200 dark:border-gray-700'
+                      }`}>
+                        {autoPaymentStatus === 'paid' ? '✓ Pago' : autoPaymentStatus === 'partial' ? '◑ Parcial' : '○ Pendente'}
+                        <p className="text-[10px] font-normal opacity-70 mt-0.5">Calculado pelo sinal</p>
+                      </div>
                     </div>
                   </div>
 
