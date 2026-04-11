@@ -2232,6 +2232,176 @@ async function startServer() {
     res.json(processed);
   });
 
+  // ============ JOB FINANCEIRO ============
+
+  // GET /api/jobs/:id/financeiro — itens do deal vinculado + job_items + pagamentos
+  app.get('/api/jobs/:id/financeiro', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+    const jobId = Number(req.params.id);
+
+    // Verifica ownership do job
+    const { data: job } = await supabase.from('jobs').select('id, amount, notes, payment_method').eq('id', jobId).eq('user_id', userId).single();
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+
+    // Busca deal vinculado (converted_job_id = jobId)
+    const { data: deal } = await supabase
+      .from('deals')
+      .select('id, value')
+      .eq('converted_job_id', jobId)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    // Busca deal_items do deal vinculado
+    let dealItems: any[] = [];
+    if (deal?.id) {
+      const { data } = await adminClient.from('deal_items').select('*').eq('deal_id', deal.id).order('created_at');
+      dealItems = data || [];
+    }
+
+    // Busca job_items (adicionados diretamente ao job na aba financeiro)
+    let jobItems: any[] = [];
+    try {
+      const { data } = await adminClient.from('job_items').select('*').eq('job_id', jobId).order('created_at');
+      jobItems = data || [];
+    } catch { jobItems = []; }
+
+    // Busca pagamentos do job
+    let payments: any[] = [];
+    try {
+      const { data } = await adminClient.from('job_payments').select('*').eq('job_id', jobId).order('payment_date').order('created_at');
+      payments = data || [];
+    } catch { payments = []; }
+
+    // Fallback: se não há pagamentos mas há sinal nas notas, cria o registro automaticamente
+    if (payments.length === 0 && job.notes) {
+      const match = job.notes.match(/Sinal pago:\s*R\$\s*([\d.,]+)/i);
+      if (match) {
+        const sinalStr = match[1].replace(/\./g, '').replace(',', '.');
+        const sinalValue = parseFloat(sinalStr);
+        if (sinalValue > 0) {
+          try {
+            const { data: created } = await adminClient.from('job_payments').insert({
+              job_id: jobId,
+              amount: sinalValue,
+              description: 'Sinal',
+              payment_date: new Date().toISOString().slice(0, 10),
+              payment_method: job.payment_method || 'Pix',
+            }).select();
+            if (created && created.length > 0) payments = created;
+          } catch { /* ignora se job_payments ainda não existe */ }
+        }
+      }
+    }
+
+    const totalPago = payments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
+
+    res.json({ dealItems, jobItems, payments, totalPago, jobAmount: job.amount });
+  });
+
+  // POST /api/jobs/:id/payments — registrar um pagamento
+  app.post('/api/jobs/:id/payments', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+    const jobId = Number(req.params.id);
+
+    const { data: job } = await supabase.from('jobs').select('id, amount').eq('id', jobId).eq('user_id', userId).single();
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+
+    const { amount, description, payment_date, payment_method } = req.body;
+    if (!amount || amount <= 0) return res.status(400).json({ error: 'amount obrigatório e > 0' });
+
+    const { data: payment, error } = await adminClient.from('job_payments').insert({
+      job_id: jobId,
+      amount: Number(amount),
+      description: description || null,
+      payment_date: payment_date || new Date().toISOString().slice(0, 10),
+      payment_method: payment_method || 'Pix',
+    }).select().single();
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Recalcula total pago e atualiza payment_status no job
+    const { data: allPayments } = await adminClient.from('job_payments').select('amount').eq('job_id', jobId);
+    const totalPago = (allPayments || []).reduce((s: number, p: any) => s + (p.amount || 0), 0);
+    const newStatus = totalPago <= 0 ? 'pending' : totalPago >= job.amount ? 'paid' : 'partial';
+    await supabase.from('jobs').update({ payment_status: newStatus }).eq('id', jobId).eq('user_id', userId);
+
+    res.json({ payment, totalPago, newStatus });
+  });
+
+  // DELETE /api/job-payments/:id
+  app.delete('/api/job-payments/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+
+    const { data: payment } = await adminClient.from('job_payments').select('id, job_id, amount').eq('id', req.params.id).single();
+    if (!payment) return res.status(404).json({ error: 'Not found' });
+
+    // Garante ownership via job
+    const { data: job } = await supabase.from('jobs').select('id, amount').eq('id', payment.job_id).eq('user_id', userId).single();
+    if (!job) return res.status(403).json({ error: 'Forbidden' });
+
+    await adminClient.from('job_payments').delete().eq('id', req.params.id);
+
+    const { data: remaining } = await adminClient.from('job_payments').select('amount').eq('job_id', payment.job_id);
+    const totalPago = (remaining || []).reduce((s: number, p: any) => s + (p.amount || 0), 0);
+    const newStatus = totalPago <= 0 ? 'pending' : totalPago >= job.amount ? 'paid' : 'partial';
+    await supabase.from('jobs').update({ payment_status: newStatus }).eq('id', payment.job_id).eq('user_id', userId);
+
+    res.json({ success: true, totalPago, newStatus });
+  });
+
+  // POST /api/jobs/:id/items — adicionar item ao job
+  app.post('/api/jobs/:id/items', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+    const jobId = Number(req.params.id);
+
+    const { data: job } = await supabase.from('jobs').select('id, amount').eq('id', jobId).eq('user_id', userId).single();
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+
+    const { catalog_type, catalog_id, catalog_name, catalog_value, quantidade = 1 } = req.body;
+    if (!catalog_type || !catalog_id || !catalog_name) return res.status(400).json({ error: 'Campos obrigatórios ausentes' });
+
+    const { data: item, error } = await adminClient.from('job_items').insert({
+      job_id: jobId, catalog_type, catalog_id, catalog_name,
+      catalog_value: catalog_value || 0, quantidade,
+    }).select().single();
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Recalcula amount do job (deal_items + job_items)
+    const { data: jItems } = await adminClient.from('job_items').select('catalog_value, quantidade').eq('job_id', jobId);
+    const newAmount = (jItems || []).reduce((s: number, i: any) => s + i.catalog_value * i.quantidade, 0) + job.amount;
+    // Só atualiza se job_items existiam antes (para não sobrescrever o valor original)
+    if ((jItems || []).length > 0) {
+      await supabase.from('jobs').update({ amount: newAmount }).eq('id', jobId).eq('user_id', userId);
+    }
+
+    res.json({ item });
+  });
+
+  // DELETE /api/job-items/:id
+  app.delete('/api/job-items/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+
+    const { data: item } = await adminClient.from('job_items').select('id, job_id').eq('id', req.params.id).single();
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const { data: job } = await supabase.from('jobs').select('id').eq('id', item.job_id).eq('user_id', userId).single();
+    if (!job) return res.status(403).json({ error: 'Forbidden' });
+
+    await adminClient.from('job_items').delete().eq('id', req.params.id);
+    res.json({ success: true });
+  });
+
   // ============ FUNNEL & LEADS ROUTES ============
   app.get('/api/funnel', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
@@ -3689,7 +3859,7 @@ async function startServer() {
     const supabase = (req as any).supabase as SupabaseClient;
     const stages = await ensurePipelineStages(supabase, userId);
     const wonStage = stages.find((s) => s.is_won) || DEFAULT_STAGES.find((s) => s.is_won);
-    const { createClient, createJob, client, job } = req.body;
+    const { createClient, createJob, client, job, sinalAmount, existingClientId } = req.body;
     const nowIso = new Date().toISOString();
 
     const { data: deal } = await supabase
@@ -3700,7 +3870,7 @@ async function startServer() {
       .single();
     if (!deal) return res.status(404).json({ error: 'Deal not found' });
 
-    let clientId = deal.client_id as number | null;
+    let clientId = (existingClientId as number | null) || (deal.client_id as number | null);
 
     if (createClient) {
       const clientPayload = {
@@ -3736,6 +3906,18 @@ async function startServer() {
       const { data: newJob, error } = await supabase.from('jobs').insert(jobPayload).select().single();
       if (error) return res.status(500).json({ error: error.message });
       jobId = newJob?.id || null;
+
+      // Registra o sinal como pagamento na tabela job_payments
+      if (jobId && sinalAmount && Number(sinalAmount) > 0) {
+        const adminClient = supabaseAdmin || supabase;
+        await adminClient.from('job_payments').insert({
+          job_id: jobId,
+          amount: Number(sinalAmount),
+          description: 'Sinal',
+          payment_date: new Date().toISOString().slice(0, 10),
+          payment_method: job.payment_method || 'Pix',
+        }).select();
+      }
     }
 
     const stageId = wonStage?.id || 'won';
