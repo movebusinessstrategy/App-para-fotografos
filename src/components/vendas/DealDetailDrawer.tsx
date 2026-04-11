@@ -694,20 +694,32 @@ export function DealDetailDrawer({
                         </div>
                         <div className="flex items-center justify-between mt-2">
                           {/* Controle de quantidade */}
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1">
                             <button
                               onMouseDown={e => e.preventDefault()}
                               onClick={() => changeItemQty(item.id, -1)}
                               disabled={item.quantidade <= 1}
-                              className="w-6 h-6 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 flex items-center justify-center text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:opacity-40 transition-colors text-sm font-bold"
+                              className="w-6 h-6 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 flex items-center justify-center text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:opacity-40 transition-colors text-sm font-bold leading-none"
                             >−</button>
-                            <span className="text-sm font-semibold text-gray-800 dark:text-gray-200 min-w-[20px] text-center">
-                              {item.quantidade}
-                            </span>
+                            <input
+                              type="number"
+                              min={1}
+                              value={item.quantidade}
+                              onChange={e => {
+                                const val = parseInt(e.target.value) || 1;
+                                setLocalItems(prev => prev.map(i => i.id === item.id ? { ...i, quantidade: Math.max(1, val) } : i));
+                              }}
+                              onBlur={e => {
+                                const val = Math.max(1, parseInt(e.target.value) || 1);
+                                if (val !== item.quantidade) changeItemQty(item.id, val - item.quantidade);
+                              }}
+                              onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                              className="w-10 text-center text-sm font-semibold text-gray-800 dark:text-gray-200 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg py-0.5 outline-none focus:border-gold-400 dark:focus:border-gold-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            />
                             <button
                               onMouseDown={e => e.preventDefault()}
                               onClick={() => changeItemQty(item.id, +1)}
-                              className="w-6 h-6 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 flex items-center justify-center text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors text-sm font-bold"
+                              className="w-6 h-6 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 flex items-center justify-center text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors text-sm font-bold leading-none"
                             >+</button>
                           </div>
                           {/* Preço */}
