@@ -56,10 +56,20 @@ export function ChatView({ phone, contactName }: Props) {
   const fetchMessages = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const res = await authFetch(`/api/inbox/messages/${phone}?limit=80`);
+      const cleanPhone = phone.replace(/\D/g, '');
+      const res = await authFetch(`/api/inbox/messages/${cleanPhone}?limit=80`);
       if (res.ok) {
         const data = await res.json();
-        setMessages(Array.isArray(data) ? data : []);
+        if (Array.isArray(data) && data.length > 0) {
+          // Merge: mantém mensagens otimistas (tmp-*) que ainda não estão no banco
+          setMessages((prev) => {
+            const dbIds = new Set(data.map((m: Message) => m.message_id));
+            const optimistic = prev.filter((m) => m.message_id.startsWith('tmp-') && !dbIds.has(m.message_id));
+            return [...data, ...optimistic].sort(
+              (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+            );
+          });
+        }
       }
     } finally {
       if (!silent) setLoading(false);
@@ -94,13 +104,13 @@ export function ChatView({ phone, contactName }: Props) {
     setSending(true);
     setText("");
 
-    // Otimistic update
     const tmpId = `tmp-${Date.now()}`;
+    const now = new Date().toISOString();
     const tmpMsg: Message = {
       message_id: tmpId,
       body: msg,
       from_me: true,
-      timestamp: new Date().toISOString(),
+      timestamp: now,
       status: "sending",
     };
     setMessages((prev) => [...prev, tmpMsg]);
@@ -108,7 +118,7 @@ export function ChatView({ phone, contactName }: Props) {
     try {
       const res = await authFetch("/api/inbox/send", {
         method: "POST",
-        body: JSON.stringify({ phone, text: msg }),
+        body: JSON.stringify({ phone: phone.replace(/\D/g, ''), text: msg }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -117,7 +127,10 @@ export function ChatView({ phone, contactName }: Props) {
         alert(`Erro ao enviar: ${err.error || res.statusText}`);
         return;
       }
-      await fetchMessages(true);
+      // Confirma a mensagem otimista sem re-fetch (evita limpar o chat se fetch falhar)
+      setMessages((prev) =>
+        prev.map((m) => m.message_id === tmpId ? { ...m, status: "sent" } : m)
+      );
     } catch {
       setMessages((prev) => prev.filter((m) => m.message_id !== tmpId));
       setText(msg);
