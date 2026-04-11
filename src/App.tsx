@@ -20,7 +20,6 @@ const PipelineSettings = lazy(() => import("./pages/PipelineSettings"));
 const OportunidadesPage = lazy(() => import("./pages/OportunidadesPage"));
 const ContractsPage = lazy(() => import("./pages/ContractsPage"));
 const AdminPage = lazy(() => import("./pages/AdminPage"));
-const InboxPage = lazy(() => import("./pages/InboxPage"));
 const PrivacyPolicyPage = lazy(() => import("./pages/PrivacyPolicyPage"));
 const TermsOfServicePage = lazy(() => import("./pages/TermsOfServicePage"));
 
@@ -68,7 +67,6 @@ export default function App() {
                 />
                 <Route path="oportunidades" element={<OportunidadesPage />} />
                 <Route path="contratos" element={<ContractsPage />} />
-                <Route path="inbox" element={<InboxPage />} />
                 <Route path="admin" element={<AdminPage />} />
               </Route>
             </Routes>

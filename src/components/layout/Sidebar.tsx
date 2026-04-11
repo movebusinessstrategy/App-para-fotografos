@@ -6,7 +6,6 @@ import {
   DollarSign,
   FileText,
   LayoutDashboard,
-  MessageCircle,
   Settings,
   Shield,
   Trello,
@@ -27,7 +26,6 @@ const ALL_NAV_ITEMS = [
   { to: "/finance",       label: "Financeiro",       icon: DollarSign,      module: "finance" },
   { to: "/oportunidades", label: "Oportunidades",    icon: TrendingUp,      module: "oportunidades" },
   { to: "/contratos",     label: "Contratos",        icon: FileText,        module: "contratos" },
-  { to: "/inbox",         label: "Inbox WhatsApp",   icon: MessageCircle,   module: "inbox" },
 ];
 
 // Admin e configurações — apenas para donos

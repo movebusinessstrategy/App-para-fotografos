@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { BarChart3, LayoutGrid, Plus, MessageSquare, Settings } from "lucide-react";
 import { FunilTab } from "./FunilTab";
 import { AnalisesTab } from "./AnalisesTab";
@@ -11,7 +12,11 @@ import { Deal, PipelineStage, Client } from "../../types";
 type Tab = "inbox" | "kanban" | "analises";
 
 export function VendasDashboard() {
-  const [tab, setTab] = useState<Tab>("inbox");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTab = (searchParams.get("tab") as Tab) || "inbox";
+  const initialPhone = searchParams.get("phone") || "";
+
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [stages, setStages] = useState<PipelineStage[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -112,6 +117,7 @@ export function VendasDashboard() {
           <InboxView
             deals={deals}
             stages={stages}
+            initialPhone={initialPhone}
             onDealUpdated={() => fetchData({ silent: true })}
           />
         ) : tab === "kanban" ? (
