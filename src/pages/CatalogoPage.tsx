@@ -534,18 +534,10 @@ function ServicoModal({ item, tiposEnsaio, onSave, onClose }: {
           <NumInput value={form.preco_base ?? 0} onChange={(n) => set("preco_base", n)} step="0.01" />
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <FieldLabel>Qtd. fotos entregues</FieldLabel>
-            <NumInput value={form.qtd_fotos_entrega ?? 0} onChange={(n) => set("qtd_fotos_entrega", n || undefined)} placeholder="Ex: 30" />
-          </div>
-          <div className="flex items-end pb-0.5">
-            <label className="flex items-center gap-2 cursor-pointer py-2">
-              <input type="checkbox" checked={form.inclui_edicao ?? true} onChange={(e) => set("inclui_edicao", e.target.checked)} className="w-4 h-4 accent-gold-500" />
-              <span className="text-sm text-gray-700 dark:text-gray-300">Inclui edição</span>
-            </label>
-          </div>
-        </div>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={form.inclui_edicao ?? true} onChange={(e) => set("inclui_edicao", e.target.checked)} className="w-4 h-4 accent-gold-500" />
+          <span className="text-sm text-gray-700 dark:text-gray-300">Inclui edição</span>
+        </label>
 
         {/* Dados fiscais */}
         <div className="border-t border-gray-100 dark:border-gray-800 pt-4">
@@ -583,13 +575,13 @@ function ServicoModal({ item, tiposEnsaio, onSave, onClose }: {
 // ═══════════════════════════════════════════════════════════
 // MODAL: COMBO
 // ═══════════════════════════════════════════════════════════
-function ComboModal({ item, produtos, servicos, onSave, onClose }: {
+const ComboModal: React.FC<{
   item: Partial<Combo> | null;
   produtos: Produto[];
   servicos: Servico[];
   onSave: (d: Partial<Combo>) => Promise<void>;
   onClose: () => void;
-}) {
+}> = ({ item, produtos, servicos, onSave, onClose }) => {
   const [form, setForm] = useState<Partial<Combo>>(item ?? { nome: "", desconto: 0, itens: [], ativo: true });
   const [saving, setSaving] = useState(false);
   const [niTipo, setNiTipo] = useState<"produto" | "servico">("servico");
@@ -713,7 +705,7 @@ function ComboModal({ item, produtos, servicos, onSave, onClose }: {
       </div>
     </div>
   );
-}
+};
 
 // ═══════════════════════════════════════════════════════════
 // COMBO CARD
@@ -789,6 +781,44 @@ function SubTabBar({ tabs, active, onChange }: {
 }
 
 // ═══════════════════════════════════════════════════════════
+// CONFIRM DIALOG
+// ═══════════════════════════════════════════════════════════
+function ConfirmDialog({ title, message, onConfirm, onCancel, loading }: {
+  title: string;
+  message: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  loading?: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-sm shadow-2xl p-6 flex flex-col gap-5">
+        <div className="flex items-start gap-4">
+          <div className="p-2.5 rounded-xl bg-red-50 dark:bg-red-900/20 flex-shrink-0">
+            <Trash2 size={20} className="text-red-500" />
+          </div>
+          <div>
+            <h3 className="font-bold text-gray-900 dark:text-white mb-1">{title}</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">{message}</p>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2">
+          <button onClick={onCancel} disabled={loading}
+            className="px-4 py-2 text-sm rounded-xl border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50">
+            Cancelar
+          </button>
+          <button onClick={onConfirm} disabled={loading}
+            className="px-4 py-2 text-sm rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-medium flex items-center gap-2">
+            {loading ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+            Excluir
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
 // PÁGINA PRINCIPAL
 // ═══════════════════════════════════════════════════════════
 export default function CatalogoPage() {
@@ -819,8 +849,23 @@ export default function CatalogoPage() {
   const [editCategoria, setEditCategoria] = useState<Partial<CategoriaCatalogo> | null | false>(false);
   const [editTipo, setEditTipo] = useState<Partial<TipoEnsaio> | null | false>(false);
 
-  const load = async () => {
-    setLoading(true);
+  // ConfirmDialog state
+  const [confirmCfg, setConfirmCfg] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
+  const [confirmLoading, setConfirmLoading] = useState(false);
+
+  const askConfirm = (title: string, message: string, onConfirm: () => Promise<void>) => {
+    setConfirmCfg({
+      title,
+      message,
+      onConfirm: async () => {
+        setConfirmLoading(true);
+        try { await onConfirm(); } finally { setConfirmLoading(false); setConfirmCfg(null); }
+      },
+    });
+  };
+
+  const load = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [p, f, s, c, cat, tipos] = await Promise.all([
         catalogoApi.getProdutos(),
@@ -833,7 +878,7 @@ export default function CatalogoPage() {
       setProdutos(p); setFornecedores(f); setServicos(s); setCombos(c);
       setCategorias(cat); setTiposEnsaio(tipos);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -863,27 +908,27 @@ export default function CatalogoPage() {
   // ── Saves ──
   const saveProduto = async (d: Partial<Produto>) => {
     if (d.id) await catalogoApi.updateProduto(d.id, d); else await catalogoApi.createProduto(d);
-    await load(); setEditProduto(false);
+    setEditProduto(false); await load(true);
   };
   const saveFornecedor = async (d: Partial<Fornecedor>) => {
     if (d.id) await catalogoApi.updateFornecedor(d.id, d); else await catalogoApi.createFornecedor(d);
-    await load(); setEditFornecedor(false);
+    setEditFornecedor(false); await load(true);
   };
   const saveServico = async (d: Partial<Servico>) => {
     if (d.id) await catalogoApi.updateServico(d.id, d); else await catalogoApi.createServico(d);
-    await load(); setEditServico(false);
+    setEditServico(false); await load(true);
   };
   const saveCombo = async (d: Partial<Combo>) => {
     if (d.id) await catalogoApi.updateCombo(d.id, d); else await catalogoApi.createCombo(d);
-    await load(); setEditCombo(false);
+    setEditCombo(false); await load(true);
   };
   const saveCategoria = async (d: Partial<CategoriaCatalogo>) => {
     if (d.id) await catalogoApi.updateCategoria(d.id, d); else await catalogoApi.createCategoria(d);
-    await load(); setEditCategoria(false);
+    setEditCategoria(false); await load(true);
   };
   const saveTipo = async (d: Partial<TipoEnsaio>) => {
     if (d.id) await catalogoApi.updateTipoEnsaio(d.id, d); else await catalogoApi.createTipoEnsaio(d);
-    await load(); setEditTipo(false);
+    setEditTipo(false); await load(true);
   };
 
   // ── Dados filtrados ──
@@ -998,7 +1043,7 @@ export default function CatalogoPage() {
                             <td className="px-5 py-3">
                               <div className="flex items-center justify-end gap-1">
                                 <button onClick={() => setEditProduto(p)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gold-600"><Pencil size={14} /></button>
-                                <button onClick={async () => { if (!confirm("Excluir produto?")) return; await catalogoApi.deleteProduto(p.id); setProdutos((x) => x.filter((i) => i.id !== p.id)); }}
+                                <button onClick={() => askConfirm("Excluir produto", `Tem certeza que deseja excluir "${p.nome}"? Esta ação não pode ser desfeita.`, async () => { await catalogoApi.deleteProduto(p.id); setProdutos((x) => x.filter((i) => i.id !== p.id)); })}
                                   className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
                               </div>
                             </td>
@@ -1041,7 +1086,7 @@ export default function CatalogoPage() {
                             <td className="px-5 py-3">
                               <div className="flex items-center justify-end gap-1">
                                 <button onClick={() => setEditCategoria(cat)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gold-600"><Pencil size={14} /></button>
-                                <button onClick={async () => { if (!confirm("Excluir categoria?")) return; await catalogoApi.deleteCategoria(cat.id); setCategorias((x) => x.filter((i) => i.id !== cat.id)); }}
+                                <button onClick={() => askConfirm("Excluir categoria", `Tem certeza que deseja excluir "${cat.nome}"? Produtos vinculados perderão essa categoria.`, async () => { await catalogoApi.deleteCategoria(cat.id); setCategorias((x) => x.filter((i) => i.id !== cat.id)); })}
                                   className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
                               </div>
                             </td>
@@ -1084,7 +1129,7 @@ export default function CatalogoPage() {
                             <td className="px-5 py-3">
                               <div className="flex items-center justify-end gap-1">
                                 <button onClick={() => setEditFornecedor(f)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gold-600"><Pencil size={14} /></button>
-                                <button onClick={async () => { if (!confirm("Excluir fornecedor?")) return; await catalogoApi.deleteFornecedor(f.id); setFornecedores((x) => x.filter((i) => i.id !== f.id)); }}
+                                <button onClick={() => askConfirm("Excluir fornecedor", `Tem certeza que deseja excluir "${f.nome}"? Esta ação não pode ser desfeita.`, async () => { await catalogoApi.deleteFornecedor(f.id); setFornecedores((x) => x.filter((i) => i.id !== f.id)); })}
                                   className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
                               </div>
                             </td>
@@ -1118,7 +1163,6 @@ export default function CatalogoPage() {
                         <th className={`${tableHeaderCls} hidden md:table-cell`}>Tipo</th>
                         <th className={`${tableHeaderCls} text-right`}>Preço base</th>
                         <th className={`${tableHeaderCls} text-center hidden sm:table-cell`}>Edição</th>
-                        <th className={`${tableHeaderCls} text-center hidden lg:table-cell`}>Fotos</th>
                         <th className={`${tableHeaderCls} text-center`}>Status</th>
                         <th className="px-5 py-3" />
                       </tr></thead>
@@ -1134,14 +1178,13 @@ export default function CatalogoPage() {
                             <td className="px-5 py-3 text-center hidden sm:table-cell">
                               {s.inclui_edicao ? <CheckCircle size={16} className="mx-auto text-green-500" /> : <XCircle size={16} className="mx-auto text-gray-300 dark:text-gray-600" />}
                             </td>
-                            <td className="px-5 py-3 text-center text-gray-500 dark:text-gray-400 hidden lg:table-cell">{s.qtd_fotos_entrega ?? "—"}</td>
                             <td className="px-5 py-3 text-center">
                               <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${s.ativo ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400" : "bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400"}`}>{s.ativo ? "Ativo" : "Inativo"}</span>
                             </td>
                             <td className="px-5 py-3">
                               <div className="flex items-center justify-end gap-1">
                                 <button onClick={() => setEditServico(s)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gold-600"><Pencil size={14} /></button>
-                                <button onClick={async () => { if (!confirm("Excluir serviço?")) return; await catalogoApi.deleteServico(s.id); setServicos((x) => x.filter((i) => i.id !== s.id)); }}
+                                <button onClick={() => askConfirm("Excluir serviço", `Tem certeza que deseja excluir "${s.nome}"? Esta ação não pode ser desfeita.`, async () => { await catalogoApi.deleteServico(s.id); setServicos((x) => x.filter((i) => i.id !== s.id)); })}
                                   className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
                               </div>
                             </td>
@@ -1172,7 +1215,7 @@ export default function CatalogoPage() {
                             <td className="px-5 py-3">
                               <div className="flex items-center justify-end gap-1">
                                 <button onClick={() => setEditTipo(t)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gold-600"><Pencil size={14} /></button>
-                                <button onClick={async () => { if (!confirm("Excluir tipo de ensaio?")) return; await catalogoApi.deleteTipoEnsaio(t.id); setTiposEnsaio((x) => x.filter((i) => i.id !== t.id)); }}
+                                <button onClick={() => askConfirm("Excluir tipo de ensaio", `Tem certeza que deseja excluir "${t.nome}"? Serviços vinculados perderão esse tipo.`, async () => { await catalogoApi.deleteTipoEnsaio(t.id); setTiposEnsaio((x) => x.filter((i) => i.id !== t.id)); })}
                                   className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
                               </div>
                             </td>
@@ -1194,7 +1237,7 @@ export default function CatalogoPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {filtCombos.map((c) => (
                   <ComboCard key={c.id} combo={c} onEdit={() => setEditCombo(c)}
-                    onDelete={async () => { if (!confirm("Excluir combo?")) return; await catalogoApi.deleteCombo(c.id); setCombos((x) => x.filter((i) => i.id !== c.id)); }} />
+                    onDelete={() => askConfirm("Excluir combo", `Tem certeza que deseja excluir "${c.nome}"? Esta ação não pode ser desfeita.`, async () => { await catalogoApi.deleteCombo(c.id); setCombos((x) => x.filter((i) => i.id !== c.id)); })} />
                 ))}
               </div>
             )
@@ -1206,9 +1249,19 @@ export default function CatalogoPage() {
       {editProduto !== false && <ProdutoModal item={editProduto} fornecedores={fornecedores} categorias={categorias} onSave={saveProduto} onClose={() => setEditProduto(false)} />}
       {editFornecedor !== false && <FornecedorModal item={editFornecedor} onSave={saveFornecedor} onClose={() => setEditFornecedor(false)} />}
       {editServico !== false && <ServicoModal item={editServico} tiposEnsaio={tiposEnsaio} onSave={saveServico} onClose={() => setEditServico(false)} />}
-      {editCombo !== false && <ComboModal item={editCombo} produtos={produtos} servicos={servicos} onSave={saveCombo} onClose={() => setEditCombo(false)} />}
+      {editCombo !== false && <ComboModal key={editCombo?.id ?? 'new'} item={editCombo} produtos={produtos} servicos={servicos} onSave={saveCombo} onClose={() => setEditCombo(false)} />}
       {editCategoria !== false && <CategoriaModal item={editCategoria} onSave={saveCategoria} onClose={() => setEditCategoria(false)} />}
       {editTipo !== false && <TipoEnsaioModal item={editTipo} onSave={saveTipo} onClose={() => setEditTipo(false)} />}
+
+      {confirmCfg && (
+        <ConfirmDialog
+          title={confirmCfg.title}
+          message={confirmCfg.message}
+          onConfirm={confirmCfg.onConfirm}
+          onCancel={() => setConfirmCfg(null)}
+          loading={confirmLoading}
+        />
+      )}
     </div>
   );
 }
