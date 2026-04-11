@@ -272,8 +272,25 @@ export function DealDetailDrawer({
       await authFetch(`/api/deal-items/${itemId}`, { method: 'DELETE' });
       onUpdate({ silent: true });
     } catch {
-      // Recarrega se der erro
       onUpdate({ silent: true });
+    }
+  };
+
+  const changeItemQty = async (itemId: string, delta: number) => {
+    setLocalItems(prev => prev.map(i =>
+      i.id === itemId ? { ...i, quantidade: Math.max(1, i.quantidade + delta) } : i
+    ));
+    const item = localItems.find(i => i.id === itemId);
+    if (!item) return;
+    const newQty = Math.max(1, item.quantidade + delta);
+    try {
+      await authFetch(`/api/deal-items/${itemId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ quantidade: newQty }),
+      });
+      onUpdate({ silent: true });
+    } catch {
+      setLocalItems(prev => prev.map(i => i.id === itemId ? { ...i, quantidade: item.quantidade } : i));
     }
   };
 
@@ -663,24 +680,46 @@ export function DealDetailDrawer({
                   {localItems.map(item => {
                     const cfg = CATALOG_CONFIG[item.catalog_type as keyof typeof CATALOG_CONFIG] || CATALOG_CONFIG.produto;
                     return (
-                      <div key={item.id} className={`flex items-center gap-2 p-2.5 rounded-xl border ${cfg.bg} ${cfg.border}`}>
-                        <span className={`flex-shrink-0 ${cfg.color}`}>{cfg.icon}</span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{item.catalog_name}</p>
-                          <p className="text-[11px] text-gray-500 dark:text-gray-400">
-                            {item.quantidade}x · R$ {item.catalog_value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                          </p>
+                      <div key={item.id} className={`p-2.5 rounded-xl border ${cfg.bg} ${cfg.border}`}>
+                        <div className="flex items-center gap-2">
+                          <span className={`flex-shrink-0 ${cfg.color}`}>{cfg.icon}</span>
+                          <p className="text-sm font-medium text-gray-900 dark:text-white truncate flex-1">{item.catalog_name}</p>
+                          <button
+                            onMouseDown={e => e.preventDefault()}
+                            onClick={() => removeDealItem(item.id)}
+                            className="p-1 text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors flex-shrink-0"
+                          >
+                            <X size={12} />
+                          </button>
                         </div>
-                        <span className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex-shrink-0">
-                          R$ {(item.catalog_value * item.quantidade).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                        </span>
-                        <button
-                          onMouseDown={e => e.preventDefault()}
-                          onClick={() => removeDealItem(item.id)}
-                          className="p-1 text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors flex-shrink-0"
-                        >
-                          <X size={13} />
-                        </button>
+                        <div className="flex items-center justify-between mt-2">
+                          {/* Controle de quantidade */}
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onMouseDown={e => e.preventDefault()}
+                              onClick={() => changeItemQty(item.id, -1)}
+                              disabled={item.quantidade <= 1}
+                              className="w-6 h-6 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 flex items-center justify-center text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:opacity-40 transition-colors text-sm font-bold"
+                            >−</button>
+                            <span className="text-sm font-semibold text-gray-800 dark:text-gray-200 min-w-[20px] text-center">
+                              {item.quantidade}
+                            </span>
+                            <button
+                              onMouseDown={e => e.preventDefault()}
+                              onClick={() => changeItemQty(item.id, +1)}
+                              className="w-6 h-6 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 flex items-center justify-center text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors text-sm font-bold"
+                            >+</button>
+                          </div>
+                          {/* Preço */}
+                          <div className="text-right">
+                            <p className="text-xs text-gray-400 dark:text-gray-500">
+                              R$ {item.catalog_value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} un.
+                            </p>
+                            <p className="text-sm font-bold text-gray-900 dark:text-white">
+                              R$ {(item.catalog_value * item.quantidade).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                            </p>
+                          </div>
+                        </div>
                       </div>
                     );
                   })}
