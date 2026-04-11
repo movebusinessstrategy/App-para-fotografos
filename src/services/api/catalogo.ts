@@ -1,5 +1,5 @@
 import { authFetch } from '../../utils/authFetch';
-import { Fornecedor, Produto, Servico, Combo } from '../../types';
+import { Fornecedor, Produto, Servico, Combo, CategoriaCatalogo, TipoEnsaio } from '../../types';
 
 export const catalogoApi = {
   // ── Fornecedores ────────────────────────────────────────────────
@@ -78,6 +78,53 @@ export const catalogoApi = {
 
   deleteServico: async (id: string): Promise<void> => {
     await authFetch(`/api/servicos/${id}`, { method: 'DELETE' });
+  },
+
+  // ── Categorias Produto ───────────────────────────────────────────
+  getCategorias: async (): Promise<CategoriaCatalogo[]> => {
+    const res = await authFetch('/api/categorias-produto');
+    return res.json();
+  },
+
+  createCategoria: async (data: Partial<CategoriaCatalogo>): Promise<CategoriaCatalogo> => {
+    const res = await authFetch('/api/categorias-produto', { method: 'POST', body: JSON.stringify(data) });
+    return res.json();
+  },
+
+  updateCategoria: async (id: string, data: Partial<CategoriaCatalogo>): Promise<CategoriaCatalogo> => {
+    const res = await authFetch(`/api/categorias-produto/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+    return res.json();
+  },
+
+  deleteCategoria: async (id: string): Promise<void> => {
+    await authFetch(`/api/categorias-produto/${id}`, { method: 'DELETE' });
+  },
+
+  // ── Tipos de Ensaio ──────────────────────────────────────────────
+  getTiposEnsaio: async (): Promise<TipoEnsaio[]> => {
+    const res = await authFetch('/api/tipos-ensaio');
+    return res.json();
+  },
+
+  createTipoEnsaio: async (data: Partial<TipoEnsaio>): Promise<TipoEnsaio> => {
+    const res = await authFetch('/api/tipos-ensaio', { method: 'POST', body: JSON.stringify(data) });
+    return res.json();
+  },
+
+  updateTipoEnsaio: async (id: string, data: Partial<TipoEnsaio>): Promise<TipoEnsaio> => {
+    const res = await authFetch(`/api/tipos-ensaio/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+    return res.json();
+  },
+
+  deleteTipoEnsaio: async (id: string): Promise<void> => {
+    await authFetch(`/api/tipos-ensaio/${id}`, { method: 'DELETE' });
+  },
+
+  // ── CNPJ lookup ──────────────────────────────────────────────────
+  lookupCnpj: async (cnpj: string): Promise<Record<string, unknown>> => {
+    const res = await authFetch(`/api/cnpj/${cnpj.replace(/\D/g, '')}`);
+    if (!res.ok) throw new Error((await res.json()).error || 'CNPJ não encontrado');
+    return res.json();
   },
 
   // ── Combos ───────────────────────────────────────────────────────

@@ -1,68 +1,240 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
-  Package,
-  Briefcase,
-  Layers,
-  Building2,
-  Plus,
-  Search,
-  Pencil,
-  Trash2,
-  X,
-  Loader2,
-  CheckCircle,
-  XCircle,
-  ChevronDown,
-  ChevronUp,
+  Package, Briefcase, Layers, Building2, Plus, Search,
+  Pencil, Trash2, X, Loader2, CheckCircle, XCircle,
+  ChevronDown, ChevronUp, Tag, RefreshCw, AlertCircle,
 } from "lucide-react";
 import { catalogoApi } from "../services/api/catalogo";
 import {
-  Produto,
-  Fornecedor,
-  Servico,
-  Combo,
-  ComboItem,
-  CategoriaProduto,
-  CATEGORIA_LABELS,
-  TIPO_ENSAIO_LABELS,
-  UnidadeProduto,
+  Produto, Fornecedor, Servico, Combo, ComboItem,
+  CategoriaCatalogo, TipoEnsaio, UnidadeProduto,
 } from "../types";
+import { SearchableSelect } from "../components/ui/SearchableSelect";
 
 // ═══════════════════════════════════════════════════════════
-// CONSTANTS
+// HELPERS
 // ═══════════════════════════════════════════════════════════
+const INPUT = "w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400 transition-colors";
+const LABEL = "block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1";
 const UNIDADES: UnidadeProduto[] = ["un", "cx", "pct", "par", "kit"];
-const CATEGORIAS = Object.entries(CATEGORIA_LABELS) as [CategoriaProduto, string][];
-const TIPOS_ENSAIO = Object.entries(TIPO_ENSAIO_LABELS);
 
 type Aba = "produtos" | "servicos" | "combos";
-type SubAbaProdutos = "produtos" | "fornecedores";
+type SubProdutos = "produtos" | "categorias" | "fornecedores";
+type SubServicos = "servicos" | "tipos";
+
+/** Controlled number input: shows empty while editing, resets to 0 on blur if empty */
+function NumInput({
+  value, onChange, placeholder = "0", className = "", ...rest
+}: { value: number; onChange: (n: number) => void; placeholder?: string; className?: string } &
+  Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "type" | "placeholder">) {
+  const [raw, setRaw] = useState(value > 0 ? String(value) : "");
+  const focused = useRef(false);
+
+  // Sync from parent only when not focused (e.g. opening modal for existing item)
+  useEffect(() => {
+    if (!focused.current) setRaw(value > 0 ? String(value) : "");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <input
+      {...rest}
+      type="number"
+      placeholder={placeholder}
+      className={`${INPUT} ${className}`}
+      value={raw}
+      onFocus={() => { focused.current = true; }}
+      onChange={(e) => {
+        setRaw(e.target.value);
+        const n = parseFloat(e.target.value);
+        onChange(isNaN(n) ? 0 : n);
+      }}
+      onBlur={() => {
+        focused.current = false;
+        const n = parseFloat(raw);
+        if (raw === "" || isNaN(n)) { setRaw(""); onChange(0); }
+      }}
+    />
+  );
+}
+
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  return <label className={LABEL}>{children}</label>;
+}
+
+function ModalShell({ title, onClose, children, footer }: {
+  title: string; onClose: () => void;
+  children: React.ReactNode; footer: React.ReactNode;
+}) {
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-lg shadow-xl flex flex-col max-h-[92vh]">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
+          <h2 className="font-bold text-gray-900 dark:text-white">{title}</h2>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"><X size={18} /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-6 py-4">{children}</div>
+        <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100 dark:border-gray-800 flex-shrink-0">{footer}</div>
+      </div>
+    </div>
+  );
+}
+
+function SaveBtn({ saving }: { saving: boolean }) {
+  return (
+    <button type="submit" disabled={saving}
+      className="px-5 py-2 text-sm rounded-xl bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white font-medium flex items-center gap-2">
+      {saving && <Loader2 size={14} className="animate-spin" />}Salvar
+    </button>
+  );
+}
+
+function CancelBtn({ onClick }: { onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick}
+      className="px-4 py-2 text-sm rounded-xl border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800">
+      Cancelar
+    </button>
+  );
+}
 
 // ═══════════════════════════════════════════════════════════
-// MODAL PRODUTO
+// MODAL: CATEGORIA
 // ═══════════════════════════════════════════════════════════
-function ProdutoModal({
-  item,
-  fornecedores,
-  onSave,
-  onClose,
-}: {
-  item: Partial<Produto> | null;
-  fornecedores: Fornecedor[];
-  onSave: (d: Partial<Produto>) => Promise<void>;
+const CORES = ["#6B7280","#EF4444","#F97316","#EAB308","#22C55E","#06B6D4","#3B82F6","#8B5CF6","#EC4899","#D4A94A"];
+
+function CategoriaModal({ item, onSave, onClose }: {
+  item: Partial<CategoriaCatalogo> | null;
+  onSave: (d: Partial<CategoriaCatalogo>) => Promise<void>;
   onClose: () => void;
 }) {
-  const [form, setForm] = useState<Partial<Produto>>(
-    item ?? { nome: "", categoria: "outros", preco_custo: 0, preco_venda: 0, unidade: "un", estoque: 0, ativo: true }
+  const [nome, setNome] = useState(item?.nome ?? "");
+  const [cor, setCor] = useState(item?.cor ?? "#6B7280");
+  const [saving, setSaving] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try { await onSave({ ...(item?.id ? { id: item.id } : {}), nome, cor }); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-sm shadow-xl">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800">
+          <h2 className="font-bold text-gray-900 dark:text-white">{item?.id ? "Editar Categoria" : "Nova Categoria"}</h2>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"><X size={18} /></button>
+        </div>
+        <form onSubmit={submit} className="px-6 py-4 space-y-4">
+          <div>
+            <FieldLabel>Nome *</FieldLabel>
+            <input required value={nome} onChange={(e) => setNome(e.target.value)} className={INPUT} placeholder="Ex: Álbum / Fotolivro" />
+          </div>
+          <div>
+            <FieldLabel>Cor</FieldLabel>
+            <div className="flex flex-wrap gap-2">
+              {CORES.map((c) => (
+                <button key={c} type="button" onClick={() => setCor(c)}
+                  style={{ background: c }}
+                  className={`w-7 h-7 rounded-full transition-transform ${cor === c ? "scale-125 ring-2 ring-offset-2 ring-gray-400" : "hover:scale-110"}`} />
+              ))}
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <CancelBtn onClick={onClose} />
+            <SaveBtn saving={saving} />
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// MODAL: TIPO DE ENSAIO
+// ═══════════════════════════════════════════════════════════
+function TipoEnsaioModal({ item, onSave, onClose }: {
+  item: Partial<TipoEnsaio> | null;
+  onSave: (d: Partial<TipoEnsaio>) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [nome, setNome] = useState(item?.nome ?? "");
+  const [saving, setSaving] = useState(false);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try { await onSave({ ...(item?.id ? { id: item.id } : {}), nome }); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-sm shadow-xl">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800">
+          <h2 className="font-bold text-gray-900 dark:text-white">{item?.id ? "Editar Tipo" : "Novo Tipo de Ensaio"}</h2>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"><X size={18} /></button>
+        </div>
+        <form onSubmit={submit} className="px-6 py-4 space-y-4">
+          <div>
+            <FieldLabel>Nome *</FieldLabel>
+            <input required value={nome} onChange={(e) => setNome(e.target.value)} className={INPUT} placeholder="Ex: Newborn Premium" />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <CancelBtn onClick={onClose} />
+            <SaveBtn saving={saving} />
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// MODAL: FORNECEDOR
+// ═══════════════════════════════════════════════════════════
+function FornecedorModal({ item, onSave, onClose }: {
+  item: Partial<Fornecedor> | null;
+  onSave: (d: Partial<Fornecedor>) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [form, setForm] = useState<Partial<Fornecedor>>(
+    item ?? { tipo_pessoa: "PJ", nome: "" }
   );
   const [saving, setSaving] = useState(false);
-  const set = (k: keyof Produto, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
+  const [cnpjLoading, setCnpjLoading] = useState(false);
+  const [cnpjError, setCnpjError] = useState("");
 
-  const margem =
-    form.preco_venda && form.preco_custo && form.preco_custo > 0
-      ? (((form.preco_venda - form.preco_custo) / form.preco_custo) * 100).toFixed(1)
-      : "—";
+  const set = (k: keyof Fornecedor, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
+  const isPJ = (form.tipo_pessoa ?? "PJ") === "PJ";
+
+  const lookupCnpj = async () => {
+    const raw = (form.cnpj ?? "").replace(/\D/g, "");
+    if (raw.length !== 14) { setCnpjError("CNPJ inválido"); return; }
+    setCnpjLoading(true); setCnpjError("");
+    try {
+      const data = await catalogoApi.lookupCnpj(raw) as any;
+      setForm((f) => ({
+        ...f,
+        nome: data.razao_social || data.nome_fantasia || f.nome,
+        email: data.email || f.email,
+        contato: data.nome_fantasia || f.contato,
+        whatsapp: data.ddd_telefone_1 ? data.ddd_telefone_1.replace(/\D/g, "") : f.whatsapp,
+      }));
+    } catch (e: any) {
+      setCnpjError(e.message || "Erro ao consultar");
+    } finally {
+      setCnpjLoading(false);
+    }
+  };
+
+  // Auto-lookup when CNPJ reaches 14 digits
+  useEffect(() => {
+    const raw = (form.cnpj ?? "").replace(/\D/g, "");
+    if (isPJ && raw.length === 14) lookupCnpj();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.cnpj]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,84 +243,239 @@ function ProdutoModal({
   };
 
   return (
+    <ModalShell
+      title={item?.id ? "Editar Fornecedor" : "Novo Fornecedor"}
+      onClose={onClose}
+      footer={<><CancelBtn onClick={onClose} /><SaveBtn saving={saving} /></>}
+    >
+      <form id="fornecedor-form" onSubmit={submit} className="space-y-4">
+        {/* PF / PJ toggle */}
+        <div>
+          <FieldLabel>Tipo de pessoa</FieldLabel>
+          <div className="flex bg-gray-100 dark:bg-gray-800 p-1 rounded-xl gap-1 w-fit">
+            {(["PJ", "PF"] as const).map((t) => (
+              <button key={t} type="button" onClick={() => set("tipo_pessoa", t)}
+                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${form.tipo_pessoa === t || (!form.tipo_pessoa && t === "PJ")
+                  ? "bg-white dark:bg-gray-700 text-gold-700 dark:text-gold-300 shadow-sm"
+                  : "text-gray-500 dark:text-gray-400 hover:text-gray-700"}`}>
+                {t === "PJ" ? "Pessoa Jurídica" : "Pessoa Física"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* CNPJ / CPF */}
+        {isPJ ? (
+          <div>
+            <FieldLabel>CNPJ</FieldLabel>
+            <div className="flex gap-2">
+              <input value={form.cnpj ?? ""} onChange={(e) => { set("cnpj", e.target.value); setCnpjError(""); }}
+                placeholder="00.000.000/0001-00" maxLength={18} className={`${INPUT} flex-1`} />
+              <button type="button" onClick={lookupCnpj} disabled={cnpjLoading}
+                title="Consultar Receita Federal"
+                className="px-3 rounded-xl border border-gray-200 dark:border-gray-700 text-gray-500 hover:text-gold-600 hover:border-gold-400 disabled:opacity-50 transition-colors flex-shrink-0">
+                {cnpjLoading ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+              </button>
+            </div>
+            {cnpjError && (
+              <p className="flex items-center gap-1 text-xs text-red-500 mt-1">
+                <AlertCircle size={12} />{cnpjError}
+              </p>
+            )}
+          </div>
+        ) : (
+          <div>
+            <FieldLabel>CPF</FieldLabel>
+            <input value={form.cpf ?? ""} onChange={(e) => set("cpf", e.target.value)} placeholder="000.000.000-00" maxLength={14} className={INPUT} />
+          </div>
+        )}
+
+        {/* Nome */}
+        <div>
+          <FieldLabel>Nome / Razão Social *</FieldLabel>
+          <input required value={form.nome ?? ""} onChange={(e) => set("nome", e.target.value)} className={INPUT} />
+        </div>
+
+        {/* Contato + Prazo */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <FieldLabel>Contato / Responsável</FieldLabel>
+            <input value={form.contato ?? ""} onChange={(e) => set("contato", e.target.value)} className={INPUT} />
+          </div>
+          <div>
+            <FieldLabel>Prazo entrega (dias)</FieldLabel>
+            <NumInput value={form.prazo_entrega ?? 0} onChange={(n) => set("prazo_entrega", n || undefined)} />
+          </div>
+        </div>
+
+        {/* WhatsApp + Email */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <FieldLabel>WhatsApp</FieldLabel>
+            <input value={form.whatsapp ?? ""} onChange={(e) => set("whatsapp", e.target.value)} className={INPUT} />
+          </div>
+          <div>
+            <FieldLabel>E-mail</FieldLabel>
+            <input type="email" value={form.email ?? ""} onChange={(e) => set("email", e.target.value)} className={INPUT} />
+          </div>
+        </div>
+
+        {/* Observações */}
+        <div>
+          <FieldLabel>Observações</FieldLabel>
+          <textarea rows={2} value={form.observacoes ?? ""} onChange={(e) => set("observacoes", e.target.value)} className={`${INPUT} resize-none`} />
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// MODAL: PRODUTO
+// ═══════════════════════════════════════════════════════════
+function ProdutoModal({ item, fornecedores, categorias, onSave, onClose }: {
+  item: Partial<Produto> | null;
+  fornecedores: Fornecedor[];
+  categorias: CategoriaCatalogo[];
+  onSave: (d: Partial<Produto>) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [form, setForm] = useState<Partial<Produto>>(
+    item ?? { nome: "", categoria: "", preco_custo: 0, preco_venda: 0, unidade: "un", estoque: 0, ativo: true }
+  );
+  const [saving, setSaving] = useState(false);
+  const set = (k: keyof Produto, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
+
+  // Markup = (venda - custo) / venda
+  const markup = form.preco_venda && form.preco_venda > 0
+    ? (((form.preco_venda - (form.preco_custo ?? 0)) / form.preco_venda) * 100).toFixed(1)
+    : "—";
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try { await onSave(form); } finally { setSaving(false); }
+  };
+
+  const categoriaOpts = categorias.map((c) => ({ value: c.nome, label: c.nome }));
+  const fornecedorOpts = [{ value: "", label: "Nenhum" }, ...fornecedores.map((f) => ({ value: f.id, label: f.nome }))];
+  const unidadeOpts = UNIDADES.map((u) => ({ value: u, label: u }));
+
+  return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-lg shadow-xl flex flex-col max-h-[90vh]">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-xl shadow-xl flex flex-col max-h-[92vh]">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
           <h2 className="font-bold text-gray-900 dark:text-white">{item?.id ? "Editar Produto" : "Novo Produto"}</h2>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"><X size={18} /></button>
         </div>
         <form onSubmit={submit} className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          {/* Nome */}
           <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Nome *</label>
-            <input required value={form.nome ?? ""} onChange={(e) => set("nome", e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400" />
+            <FieldLabel>Nome *</FieldLabel>
+            <input required value={form.nome ?? ""} onChange={(e) => set("nome", e.target.value)} className={INPUT} />
           </div>
+
+          {/* Categoria + Unidade */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Categoria</label>
-              <select value={form.categoria} onChange={(e) => set("categoria", e.target.value as CategoriaProduto)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400">
-                {CATEGORIAS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-              </select>
+              <FieldLabel>Categoria</FieldLabel>
+              <SearchableSelect
+                value={form.categoria ?? ""}
+                onChange={(v) => set("categoria", v)}
+                options={categoriaOpts}
+                placeholder="Selecionar..."
+              />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Unidade</label>
-              <select value={form.unidade} onChange={(e) => set("unidade", e.target.value as UnidadeProduto)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400">
-                {UNIDADES.map((u) => <option key={u} value={u}>{u}</option>)}
-              </select>
+              <FieldLabel>Unidade</FieldLabel>
+              <SearchableSelect
+                value={form.unidade ?? "un"}
+                onChange={(v) => set("unidade", v as UnidadeProduto)}
+                options={unidadeOpts}
+                placeholder="Unidade"
+              />
             </div>
           </div>
+
+          {/* Preços */}
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Custo (R$)</label>
-              <input type="number" min={0} step="0.01" value={form.preco_custo ?? 0}
-                onChange={(e) => set("preco_custo", parseFloat(e.target.value) || 0)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400" />
+              <FieldLabel>Custo (R$)</FieldLabel>
+              <NumInput value={form.preco_custo ?? 0} onChange={(n) => set("preco_custo", n)} step="0.01" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Venda (R$)</label>
-              <input type="number" min={0} step="0.01" value={form.preco_venda ?? 0}
-                onChange={(e) => set("preco_venda", parseFloat(e.target.value) || 0)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400" />
+              <FieldLabel>Venda (R$)</FieldLabel>
+              <NumInput value={form.preco_venda ?? 0} onChange={(n) => set("preco_venda", n)} step="0.01" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Margem</label>
-              <div className="px-3 py-2 text-sm rounded-xl bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700">
-                {margem !== "—" ? `${margem}%` : "—"}
+              <FieldLabel>Markup</FieldLabel>
+              <div className={`${INPUT} text-gray-400`}>{markup !== "—" ? `${markup}%` : "—"}</div>
+            </div>
+          </div>
+
+          {/* Fornecedor + Estoque */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <FieldLabel>Fornecedor</FieldLabel>
+              <SearchableSelect
+                value={form.fornecedor_id ?? ""}
+                onChange={(v) => set("fornecedor_id", v || undefined)}
+                options={fornecedorOpts}
+                placeholder="Nenhum"
+              />
+            </div>
+            <div>
+              <FieldLabel>Estoque</FieldLabel>
+              <NumInput value={form.estoque ?? 0} onChange={(n) => set("estoque", n)} />
+            </div>
+          </div>
+
+          {/* Descrição */}
+          <div>
+            <FieldLabel>Descrição</FieldLabel>
+            <textarea rows={2} value={form.descricao ?? ""} onChange={(e) => set("descricao", e.target.value)} className={`${INPUT} resize-none`} />
+          </div>
+
+          {/* Dados fiscais */}
+          <div className="border-t border-gray-100 dark:border-gray-800 pt-4">
+            <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-3">Dados fiscais (opcional — NFe)</p>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <FieldLabel>NCM</FieldLabel>
+                <input value={form.ncm ?? ""} onChange={(e) => set("ncm", e.target.value)} placeholder="0000.00.00" className={INPUT} />
+              </div>
+              <div>
+                <FieldLabel>CFOP</FieldLabel>
+                <input value={form.cfop ?? ""} onChange={(e) => set("cfop", e.target.value)} placeholder="5102" className={INPUT} />
+              </div>
+              <div>
+                <FieldLabel>Origem</FieldLabel>
+                <SearchableSelect
+                  value={form.origem ?? ""}
+                  onChange={(v) => set("origem", v || undefined)}
+                  options={[
+                    { value: "", label: "Não informado" },
+                    { value: "0", label: "0 – Nacional" },
+                    { value: "1", label: "1 – Estrangeira (importação direta)" },
+                    { value: "2", label: "2 – Estrangeira (adquirida no mercado interno)" },
+                  ]}
+                  placeholder="Origem"
+                />
               </div>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Fornecedor</label>
-              <select value={form.fornecedor_id ?? ""} onChange={(e) => set("fornecedor_id", e.target.value || undefined)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400">
-                <option value="">Nenhum</option>
-                {fornecedores.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Estoque</label>
-              <input type="number" min={0} value={form.estoque ?? 0} onChange={(e) => set("estoque", parseInt(e.target.value) || 0)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400" />
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Descrição</label>
-            <textarea rows={2} value={form.descricao ?? ""} onChange={(e) => set("descricao", e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400 resize-none" />
-          </div>
+
+          {/* Ativo */}
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="checkbox" checked={form.ativo ?? true} onChange={(e) => set("ativo", e.target.checked)} className="w-4 h-4 accent-gold-500" />
             <span className="text-sm text-gray-700 dark:text-gray-300">Produto ativo</span>
           </label>
         </form>
-        <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100 dark:border-gray-800">
-          <button onClick={onClose} className="px-4 py-2 text-sm rounded-xl border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800">Cancelar</button>
-          <button onClick={submit as unknown as React.MouseEventHandler} disabled={saving}
+        <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100 dark:border-gray-800 flex-shrink-0">
+          <CancelBtn onClick={onClose} />
+          <button type="submit" form="produto-form" onClick={submit as unknown as React.MouseEventHandler} disabled={saving}
             className="px-5 py-2 text-sm rounded-xl bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white font-medium flex items-center gap-2">
-            {saving && <Loader2 size={14} className="animate-spin" />} Salvar
+            {saving && <Loader2 size={14} className="animate-spin" />}Salvar
           </button>
         </div>
       </div>
@@ -157,167 +484,104 @@ function ProdutoModal({
 }
 
 // ═══════════════════════════════════════════════════════════
-// MODAL FORNECEDOR
+// MODAL: SERVIÇO
 // ═══════════════════════════════════════════════════════════
-function FornecedorModal({ item, onSave, onClose }: { item: Partial<Fornecedor> | null; onSave: (d: Partial<Fornecedor>) => Promise<void>; onClose: () => void }) {
-  const [form, setForm] = useState<Partial<Fornecedor>>(item ?? { nome: "" });
-  const [saving, setSaving] = useState(false);
-  const set = (k: keyof Fornecedor, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
-  const submit = async (e: React.FormEvent) => { e.preventDefault(); setSaving(true); try { await onSave(form); } finally { setSaving(false); } };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-md shadow-xl flex flex-col max-h-[90vh]">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800">
-          <h2 className="font-bold text-gray-900 dark:text-white">{item?.id ? "Editar Fornecedor" : "Novo Fornecedor"}</h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"><X size={18} /></button>
-        </div>
-        <form onSubmit={submit} className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-          <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Nome *</label>
-            <input required value={form.nome ?? ""} onChange={(e) => set("nome", e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400" />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">CNPJ</label>
-              <input value={form.cnpj ?? ""} onChange={(e) => set("cnpj", e.target.value)} placeholder="00.000.000/0001-00"
-                className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400" />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Prazo entrega (dias)</label>
-              <input type="number" min={0} value={form.prazo_entrega ?? ""} onChange={(e) => set("prazo_entrega", e.target.value ? parseInt(e.target.value) : undefined)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400" />
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Contato</label>
-            <input value={form.contato ?? ""} onChange={(e) => set("contato", e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400" />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">WhatsApp</label>
-              <input value={form.whatsapp ?? ""} onChange={(e) => set("whatsapp", e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400" />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">E-mail</label>
-              <input type="email" value={form.email ?? ""} onChange={(e) => set("email", e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400" />
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Observações</label>
-            <textarea rows={2} value={form.observacoes ?? ""} onChange={(e) => set("observacoes", e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400 resize-none" />
-          </div>
-        </form>
-        <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100 dark:border-gray-800">
-          <button onClick={onClose} className="px-4 py-2 text-sm rounded-xl border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800">Cancelar</button>
-          <button onClick={submit as unknown as React.MouseEventHandler} disabled={saving}
-            className="px-5 py-2 text-sm rounded-xl bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white font-medium flex items-center gap-2">
-            {saving && <Loader2 size={14} className="animate-spin" />} Salvar
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════
-// MODAL SERVIÇO
-// ═══════════════════════════════════════════════════════════
-function ServicoModal({ item, onSave, onClose }: { item: Partial<Servico> | null; onSave: (d: Partial<Servico>) => Promise<void>; onClose: () => void }) {
+function ServicoModal({ item, tiposEnsaio, onSave, onClose }: {
+  item: Partial<Servico> | null;
+  tiposEnsaio: TipoEnsaio[];
+  onSave: (d: Partial<Servico>) => Promise<void>;
+  onClose: () => void;
+}) {
   const [form, setForm] = useState<Partial<Servico>>(
-    item ?? { nome: "", tipo_ensaio: "newborn", preco_base: 0, inclui_edicao: true, ativo: true }
+    item ?? { nome: "", tipo_ensaio: "", preco_base: 0, inclui_edicao: true, ativo: true }
   );
   const [saving, setSaving] = useState(false);
   const set = (k: keyof Servico, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
-  const submit = async (e: React.FormEvent) => { e.preventDefault(); setSaving(true); try { await onSave(form); } finally { setSaving(false); } };
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try { await onSave(form); } finally { setSaving(false); }
+  };
+
+  const tipoOpts = tiposEnsaio.map((t) => ({ value: t.nome, label: t.nome }));
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-lg shadow-xl flex flex-col max-h-[90vh]">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800">
-          <h2 className="font-bold text-gray-900 dark:text-white">{item?.id ? "Editar Serviço" : "Novo Serviço"}</h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"><X size={18} /></button>
+    <ModalShell
+      title={item?.id ? "Editar Serviço" : "Novo Serviço"}
+      onClose={onClose}
+      footer={<><CancelBtn onClick={onClose} /><SaveBtn saving={saving} /></>}
+    >
+      <form onSubmit={submit} className="space-y-4">
+        <div>
+          <FieldLabel>Nome do serviço *</FieldLabel>
+          <input required value={form.nome ?? ""} onChange={(e) => set("nome", e.target.value)}
+            placeholder="Ex: Newborn Completo Premium" className={INPUT} />
         </div>
-        <form onSubmit={submit} className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+
+        <div>
+          <FieldLabel>Tipo de ensaio</FieldLabel>
+          <SearchableSelect
+            value={form.tipo_ensaio ?? ""}
+            onChange={(v) => set("tipo_ensaio", v)}
+            options={tipoOpts}
+            placeholder={tipoOpts.length === 0 ? "Cadastre tipos na aba Tipos de Ensaio" : "Selecionar..."}
+          />
+        </div>
+
+        <div>
+          <FieldLabel>Preço base (R$)</FieldLabel>
+          <NumInput value={form.preco_base ?? 0} onChange={(n) => set("preco_base", n)} step="0.01" />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Nome do serviço *</label>
-            <input required value={form.nome ?? ""} onChange={(e) => set("nome", e.target.value)} placeholder="Ex: Newborn Completo Premium"
-              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400" />
+            <FieldLabel>Qtd. fotos entregues</FieldLabel>
+            <NumInput value={form.qtd_fotos_entrega ?? 0} onChange={(n) => set("qtd_fotos_entrega", n || undefined)} placeholder="Ex: 30" />
           </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Tipo de ensaio</label>
-            <select value={form.tipo_ensaio ?? "newborn"} onChange={(e) => set("tipo_ensaio", e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400">
-              {TIPOS_ENSAIO.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
+          <div className="flex items-end pb-0.5">
+            <label className="flex items-center gap-2 cursor-pointer py-2">
+              <input type="checkbox" checked={form.inclui_edicao ?? true} onChange={(e) => set("inclui_edicao", e.target.checked)} className="w-4 h-4 accent-gold-500" />
+              <span className="text-sm text-gray-700 dark:text-gray-300">Inclui edição</span>
+            </label>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Preço base (R$)</label>
-            <input type="number" min={0} step="0.01" value={form.preco_base ?? 0} onChange={(e) => set("preco_base", parseFloat(e.target.value) || 0)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400" />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
+        </div>
+
+        {/* Dados fiscais */}
+        <div className="border-t border-gray-100 dark:border-gray-800 pt-4">
+          <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-3">Dados fiscais (opcional — NFS-e)</p>
+          <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Qtd. fotos entregues</label>
-              <input type="number" min={0} value={form.qtd_fotos_entrega ?? ""} onChange={(e) => set("qtd_fotos_entrega", e.target.value ? parseInt(e.target.value) : undefined)}
-                placeholder="Ex: 30" className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400" />
+              <FieldLabel>CNAE</FieldLabel>
+              <input value={form.cnae ?? ""} onChange={(e) => set("cnae", e.target.value)} placeholder="74.20-0-01" className={INPUT} />
             </div>
-            <div className="flex items-end">
-              <label className="flex items-center gap-2 cursor-pointer pb-2">
-                <input type="checkbox" checked={form.inclui_edicao ?? true} onChange={(e) => set("inclui_edicao", e.target.checked)} className="w-4 h-4 accent-gold-500" />
-                <span className="text-sm text-gray-700 dark:text-gray-300">Inclui edição</span>
-              </label>
+            <div>
+              <FieldLabel>Cód. serviço</FieldLabel>
+              <input value={form.codigo_servico ?? ""} onChange={(e) => set("codigo_servico", e.target.value)} placeholder="LC 116" className={INPUT} />
             </div>
-          </div>
-          <div className="border-t border-gray-100 dark:border-gray-800 pt-3">
-            <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-3">Dados fiscais (opcional)</p>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">CNAE</label>
-                <input value={form.cnae ?? ""} onChange={(e) => set("cnae", e.target.value)} placeholder="74.20-0-01"
-                  className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Cód. serviço</label>
-                <input value={form.codigo_servico ?? ""} onChange={(e) => set("codigo_servico", e.target.value)} placeholder="LC 116"
-                  className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Alíquota ISS (%)</label>
-                <input type="number" min={0} max={100} step="0.01" value={form.iss_aliquota ?? ""} onChange={(e) => set("iss_aliquota", e.target.value ? parseFloat(e.target.value) : undefined)}
-                  placeholder="5.00" className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400" />
-              </div>
+            <div>
+              <FieldLabel>ISS (%)</FieldLabel>
+              <NumInput value={form.iss_aliquota ?? 0} onChange={(n) => set("iss_aliquota", n || undefined)} step="0.01" placeholder="5.00" />
             </div>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Descrição</label>
-            <textarea rows={2} value={form.descricao ?? ""} onChange={(e) => set("descricao", e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400 resize-none" />
-          </div>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={form.ativo ?? true} onChange={(e) => set("ativo", e.target.checked)} className="w-4 h-4 accent-gold-500" />
-            <span className="text-sm text-gray-700 dark:text-gray-300">Serviço ativo</span>
-          </label>
-        </form>
-        <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100 dark:border-gray-800">
-          <button onClick={onClose} className="px-4 py-2 text-sm rounded-xl border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800">Cancelar</button>
-          <button onClick={submit as unknown as React.MouseEventHandler} disabled={saving}
-            className="px-5 py-2 text-sm rounded-xl bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white font-medium flex items-center gap-2">
-            {saving && <Loader2 size={14} className="animate-spin" />} Salvar
-          </button>
         </div>
-      </div>
-    </div>
+
+        <div>
+          <FieldLabel>Descrição</FieldLabel>
+          <textarea rows={2} value={form.descricao ?? ""} onChange={(e) => set("descricao", e.target.value)} className={`${INPUT} resize-none`} />
+        </div>
+
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={form.ativo ?? true} onChange={(e) => set("ativo", e.target.checked)} className="w-4 h-4 accent-gold-500" />
+          <span className="text-sm text-gray-700 dark:text-gray-300">Serviço ativo</span>
+        </label>
+      </form>
+    </ModalShell>
   );
 }
 
 // ═══════════════════════════════════════════════════════════
-// MODAL COMBO
+// MODAL: COMBO
 // ═══════════════════════════════════════════════════════════
 function ComboModal({ item, produtos, servicos, onSave, onClose }: {
   item: Partial<Combo> | null;
@@ -328,82 +592,79 @@ function ComboModal({ item, produtos, servicos, onSave, onClose }: {
 }) {
   const [form, setForm] = useState<Partial<Combo>>(item ?? { nome: "", desconto: 0, itens: [], ativo: true });
   const [saving, setSaving] = useState(false);
-  const [newItemTipo, setNewItemTipo] = useState<"produto" | "servico">("servico");
-  const [newItemId, setNewItemId] = useState("");
-  const [newItemQtd, setNewItemQtd] = useState(1);
+  const [niTipo, setNiTipo] = useState<"produto" | "servico">("servico");
+  const [niId, setNiId] = useState("");
+  const [niQtd, setNiQtd] = useState(1);
 
   const set = (k: keyof Combo, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
   const itens = form.itens ?? [];
 
   const addItem = () => {
-    if (!newItemId) return;
-    const found = newItemTipo === "produto" ? produtos.find((p) => p.id === newItemId) : servicos.find((s) => s.id === newItemId);
+    if (!niId) return;
+    const found = niTipo === "produto" ? produtos.find((p) => p.id === niId) : servicos.find((s) => s.id === niId);
     if (!found) return;
-    const preco = newItemTipo === "produto" ? (found as Produto).preco_venda : (found as Servico).preco_base;
-    const novoItem: ComboItem = { id: `new-${Date.now()}`, combo_id: form.id ?? "", tipo: newItemTipo, item_id: newItemId, nome: found.nome, quantidade: newItemQtd, preco_unitario: preco };
+    const preco = niTipo === "produto" ? (found as Produto).preco_venda : (found as Servico).preco_base;
+    const novoItem: ComboItem = { id: `new-${Date.now()}`, combo_id: form.id ?? "", tipo: niTipo, item_id: niId, nome: found.nome, quantidade: niQtd, preco_unitario: preco };
     set("itens", [...itens, novoItem]);
-    setNewItemId("");
-    setNewItemQtd(1);
+    setNiId(""); setNiQtd(1);
   };
 
-  const totalProdutos = itens.filter((i) => i.tipo === "produto").reduce((acc, i) => acc + i.preco_unitario * i.quantidade, 0);
-  const totalServicos = itens.filter((i) => i.tipo === "servico").reduce((acc, i) => acc + i.preco_unitario * i.quantidade, 0);
-  const subtotal = totalProdutos + totalServicos;
+  const totalP = itens.filter((i) => i.tipo === "produto").reduce((a, i) => a + i.preco_unitario * i.quantidade, 0);
+  const totalS = itens.filter((i) => i.tipo === "servico").reduce((a, i) => a + i.preco_unitario * i.quantidade, 0);
+  const subtotal = totalP + totalS;
   const desconto = form.desconto ?? 0;
-  const precoFinal = Math.max(0, subtotal - desconto);
+  const final = Math.max(0, subtotal - desconto);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
-    try { await onSave({ ...form, total_produtos: totalProdutos, total_servicos: totalServicos, subtotal, preco_final: precoFinal }); }
+    try { await onSave({ ...form, total_produtos: totalP, total_servicos: totalS, subtotal, preco_final: final }); }
     finally { setSaving(false); }
   };
 
-  const available = newItemTipo === "produto" ? produtos.filter((p) => p.ativo) : servicos.filter((s) => s.ativo);
+  const available = niTipo === "produto" ? produtos.filter((p) => p.ativo) : servicos.filter((s) => s.ativo);
+  const itemOpts = available.map((i) => ({ value: i.id, label: i.nome }));
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
       <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-2xl shadow-xl flex flex-col max-h-[92vh]">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
           <h2 className="font-bold text-gray-900 dark:text-white">{item?.id ? "Editar Combo" : "Novo Combo"}</h2>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"><X size={18} /></button>
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-5">
           <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2">
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Nome do combo *</label>
-              <input required value={form.nome ?? ""} onChange={(e) => set("nome", e.target.value)} placeholder="Ex: Newborn + Álbum + Pendrive"
-                className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400" />
+              <FieldLabel>Nome *</FieldLabel>
+              <input required value={form.nome ?? ""} onChange={(e) => set("nome", e.target.value)} placeholder="Ex: Newborn + Álbum + Pendrive" className={INPUT} />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Desconto (R$)</label>
-              <input type="number" min={0} step="0.01" value={form.desconto ?? 0} onChange={(e) => set("desconto", parseFloat(e.target.value) || 0)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400" />
+              <FieldLabel>Desconto (R$)</FieldLabel>
+              <NumInput value={form.desconto ?? 0} onChange={(n) => set("desconto", n)} step="0.01" />
             </div>
-            <div className="flex items-end">
-              <label className="flex items-center gap-2 cursor-pointer pb-2">
+            <div className="flex items-end pb-1">
+              <label className="flex items-center gap-2 cursor-pointer py-2">
                 <input type="checkbox" checked={form.ativo ?? true} onChange={(e) => set("ativo", e.target.checked)} className="w-4 h-4 accent-gold-500" />
                 <span className="text-sm text-gray-700 dark:text-gray-300">Combo ativo</span>
               </label>
             </div>
           </div>
+
+          {/* Adicionar item */}
           <div>
             <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">Itens do combo</p>
-            <div className="flex gap-2 mb-3">
-              <select value={newItemTipo} onChange={(e) => { setNewItemTipo(e.target.value as "produto" | "servico"); setNewItemId(""); }}
+            <div className="flex gap-2 mb-3 flex-wrap">
+              <select value={niTipo} onChange={(e) => { setNiTipo(e.target.value as "produto" | "servico"); setNiId(""); }}
                 className="px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400 flex-shrink-0">
                 <option value="servico">Serviço</option>
                 <option value="produto">Produto</option>
               </select>
-              <select value={newItemId} onChange={(e) => setNewItemId(e.target.value)}
-                className="flex-1 px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400">
-                <option value="">Selecionar...</option>
-                {available.map((i) => <option key={i.id} value={i.id}>{i.nome}</option>)}
-              </select>
-              <input type="number" min={1} value={newItemQtd} onChange={(e) => setNewItemQtd(parseInt(e.target.value) || 1)}
-                className="w-16 px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400 text-center" />
-              <button type="button" onClick={addItem} disabled={!newItemId}
-                className="px-3 py-2 rounded-xl bg-gold-600 hover:bg-gold-700 disabled:opacity-40 text-white text-sm font-medium">
+              <div className="flex-1 min-w-[160px]">
+                <SearchableSelect value={niId} onChange={setNiId} options={itemOpts} placeholder="Selecionar..." />
+              </div>
+              <NumInput value={niQtd} onChange={setNiQtd} className="w-16 text-center" placeholder="Qtd" />
+              <button type="button" onClick={addItem} disabled={!niId}
+                className="px-3 py-2 rounded-xl bg-gold-600 hover:bg-gold-700 disabled:opacity-40 text-white text-sm font-medium flex-shrink-0">
                 <Plus size={16} />
               </button>
             </div>
@@ -426,26 +687,27 @@ function ComboModal({ item, produtos, servicos, onSave, onClose }: {
               </div>
             )}
           </div>
+
+          {/* Resumo */}
           <div className="rounded-xl bg-gray-50 dark:bg-gray-800/60 p-4 space-y-2 text-sm">
-            <div className="flex justify-between text-gray-500 dark:text-gray-400"><span>Serviços</span><span>R$ {totalServicos.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span></div>
-            <div className="flex justify-between text-gray-500 dark:text-gray-400"><span>Produtos</span><span>R$ {totalProdutos.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span></div>
+            <div className="flex justify-between text-gray-500 dark:text-gray-400"><span>Serviços</span><span>R$ {totalS.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span></div>
+            <div className="flex justify-between text-gray-500 dark:text-gray-400"><span>Produtos</span><span>R$ {totalP.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span></div>
             {desconto > 0 && <div className="flex justify-between text-red-500 dark:text-red-400"><span>Desconto</span><span>- R$ {desconto.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span></div>}
             <div className="flex justify-between font-bold text-gray-900 dark:text-white border-t border-gray-200 dark:border-gray-700 pt-2 mt-1">
-              <span>Total do combo</span>
-              <span className="text-gold-600">R$ {precoFinal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
+              <span>Total</span><span className="text-gold-600">R$ {final.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
             </div>
           </div>
+
           <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Descrição</label>
-            <textarea rows={2} value={form.descricao ?? ""} onChange={(e) => set("descricao", e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400 resize-none" />
+            <FieldLabel>Descrição</FieldLabel>
+            <textarea rows={2} value={form.descricao ?? ""} onChange={(e) => set("descricao", e.target.value)} className={`${INPUT} resize-none`} />
           </div>
         </div>
-        <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100 dark:border-gray-800">
-          <button onClick={onClose} className="px-4 py-2 text-sm rounded-xl border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800">Cancelar</button>
+        <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100 dark:border-gray-800 flex-shrink-0">
+          <CancelBtn onClick={onClose} />
           <button onClick={submit as unknown as React.MouseEventHandler} disabled={saving}
             className="px-5 py-2 text-sm rounded-xl bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white font-medium flex items-center gap-2">
-            {saving && <Loader2 size={14} className="animate-spin" />} Salvar
+            {saving && <Loader2 size={14} className="animate-spin" />}Salvar
           </button>
         </div>
       </div>
@@ -475,16 +737,12 @@ const ComboCard: React.FC<{ combo: Combo; onEdit: () => void; onDelete: () => vo
           <button onClick={onDelete} className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
         </div>
       </div>
-      <div className="flex items-end gap-3 mt-3">
-        <div>
-          <p className="text-[10px] text-gray-400 uppercase tracking-wide">Valor do combo</p>
-          <p className="text-2xl font-bold text-gold-600">R$ {combo.preco_final.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
-        </div>
-        {combo.desconto > 0 && (
-          <p className="text-xs text-gray-400 mb-1">(subtotal R$ {combo.subtotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} − R$ {combo.desconto.toLocaleString("pt-BR", { minimumFractionDigits: 2 })})</p>
-        )}
+      <div className="mt-3">
+        <p className="text-[10px] text-gray-400 uppercase tracking-wide">Valor do combo</p>
+        <p className="text-2xl font-bold text-gold-600">R$ {combo.preco_final.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+        {combo.desconto > 0 && <p className="text-xs text-gray-400 mt-0.5">subtotal R$ {combo.subtotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} − R$ {combo.desconto.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>}
       </div>
-      {combo.itens && combo.itens.length > 0 && (
+      {combo.itens?.length > 0 && (
         <div className="mt-3 border-t border-gray-100 dark:border-gray-800 pt-3">
           <button onClick={() => setExpanded((v) => !v)} className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
             {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
@@ -509,60 +767,94 @@ const ComboCard: React.FC<{ combo: Combo; onEdit: () => void; onDelete: () => vo
 };
 
 // ═══════════════════════════════════════════════════════════
-// PÁGINA PRINCIPAL — CATÁLOGO
+// SUB-TAB BAR
+// ═══════════════════════════════════════════════════════════
+function SubTabBar({ tabs, active, onChange }: {
+  tabs: { id: string; label: string }[];
+  active: string;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <div className="flex gap-1 mb-4 border-b border-gray-100 dark:border-gray-800">
+      {tabs.map((t) => (
+        <button key={t.id} onClick={() => onChange(t.id)}
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${active === t.id
+            ? "border-gold-500 text-gold-600 dark:text-gold-400"
+            : "border-transparent text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"}`}>
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// PÁGINA PRINCIPAL
 // ═══════════════════════════════════════════════════════════
 export default function CatalogoPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const aba = (searchParams.get("aba") as Aba) ?? "produtos";
-  const subAbaProdutos = (searchParams.get("sub") as SubAbaProdutos) ?? "produtos";
+  const subP = (searchParams.get("sub") as SubProdutos) ?? "produtos";
+  const subS = (searchParams.get("subS") as SubServicos) ?? "servicos";
 
   const setAba = (a: Aba) => setSearchParams({ aba: a });
-  const setSubAba = (s: SubAbaProdutos) => setSearchParams({ aba: "produtos", sub: s });
+  const setSubP = (s: SubProdutos) => setSearchParams({ aba: "produtos", sub: s });
+  const setSubS = (s: SubServicos) => setSearchParams({ aba: "servicos", subS: s });
 
+  // Data
   const [produtos, setProdutos] = useState<Produto[]>([]);
   const [fornecedores, setFornecedores] = useState<Fornecedor[]>([]);
   const [servicos, setServicos] = useState<Servico[]>([]);
   const [combos, setCombos] = useState<Combo[]>([]);
+  const [categorias, setCategorias] = useState<CategoriaCatalogo[]>([]);
+  const [tiposEnsaio, setTiposEnsaio] = useState<TipoEnsaio[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
 
+  // Modais
   const [editProduto, setEditProduto] = useState<Partial<Produto> | null | false>(false);
   const [editFornecedor, setEditFornecedor] = useState<Partial<Fornecedor> | null | false>(false);
   const [editServico, setEditServico] = useState<Partial<Servico> | null | false>(false);
   const [editCombo, setEditCombo] = useState<Partial<Combo> | null | false>(false);
+  const [editCategoria, setEditCategoria] = useState<Partial<CategoriaCatalogo> | null | false>(false);
+  const [editTipo, setEditTipo] = useState<Partial<TipoEnsaio> | null | false>(false);
 
   const load = async () => {
     setLoading(true);
     try {
-      const [p, f, s, c] = await Promise.all([
+      const [p, f, s, c, cat, tipos] = await Promise.all([
         catalogoApi.getProdutos(),
         catalogoApi.getFornecedores(),
         catalogoApi.getServicos(),
         catalogoApi.getCombos(),
+        catalogoApi.getCategorias(),
+        catalogoApi.getTiposEnsaio(),
       ]);
-      setProdutos(p);
-      setFornecedores(f);
-      setServicos(s);
-      setCombos(c);
+      setProdutos(p); setFornecedores(f); setServicos(s); setCombos(c);
+      setCategorias(cat); setTiposEnsaio(tipos);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => { load(); }, []);
-  useEffect(() => { setSearch(""); }, [aba, subAbaProdutos]);
+  useEffect(() => { setSearch(""); }, [aba, subP, subS]);
 
-  // ── Labels e botão "Novo" por aba ──
+  // ── Botão "Novo" por contexto ──
   const novoLabel = aba === "produtos"
-    ? subAbaProdutos === "fornecedores" ? "Novo Fornecedor" : "Novo Produto"
-    : aba === "servicos" ? "Novo Serviço" : "Novo Combo";
+    ? subP === "categorias" ? "Nova Categoria" : subP === "fornecedores" ? "Novo Fornecedor" : "Novo Produto"
+    : aba === "servicos"
+    ? subS === "tipos" ? "Novo Tipo" : "Novo Serviço"
+    : "Novo Combo";
 
   const handleNovo = () => {
     if (aba === "produtos") {
-      if (subAbaProdutos === "fornecedores") setEditFornecedor({});
+      if (subP === "categorias") setEditCategoria({});
+      else if (subP === "fornecedores") setEditFornecedor({});
       else setEditProduto({});
     } else if (aba === "servicos") {
-      setEditServico({});
+      if (subS === "tipos") setEditTipo({});
+      else setEditServico({});
     } else {
       setEditCombo({});
     }
@@ -585,19 +877,33 @@ export default function CatalogoPage() {
     if (d.id) await catalogoApi.updateCombo(d.id, d); else await catalogoApi.createCombo(d);
     await load(); setEditCombo(false);
   };
+  const saveCategoria = async (d: Partial<CategoriaCatalogo>) => {
+    if (d.id) await catalogoApi.updateCategoria(d.id, d); else await catalogoApi.createCategoria(d);
+    await load(); setEditCategoria(false);
+  };
+  const saveTipo = async (d: Partial<TipoEnsaio>) => {
+    if (d.id) await catalogoApi.updateTipoEnsaio(d.id, d); else await catalogoApi.createTipoEnsaio(d);
+    await load(); setEditTipo(false);
+  };
 
   // ── Dados filtrados ──
   const q = search.toLowerCase();
-  const filtProdutos = produtos.filter((p) => !q || p.nome.toLowerCase().includes(q) || (p.fornecedor_nome ?? "").toLowerCase().includes(q));
+  const filtProdutos = produtos.filter((p) => !q || p.nome.toLowerCase().includes(q) || (p.categoria ?? "").toLowerCase().includes(q) || (p.fornecedor_nome ?? "").toLowerCase().includes(q));
   const filtFornecedores = fornecedores.filter((f) => !q || f.nome.toLowerCase().includes(q) || (f.email ?? "").toLowerCase().includes(q));
-  const filtServicos = servicos.filter((s) => !q || s.nome.toLowerCase().includes(q) || (TIPO_ENSAIO_LABELS[s.tipo_ensaio] ?? "").toLowerCase().includes(q));
+  const filtServicos = servicos.filter((s) => !q || s.nome.toLowerCase().includes(q) || (s.tipo_ensaio ?? "").toLowerCase().includes(q));
   const filtCombos = combos.filter((c) => !q || c.nome.toLowerCase().includes(q));
+  const filtCategorias = categorias.filter((c) => !q || c.nome.toLowerCase().includes(q));
+  const filtTipos = tiposEnsaio.filter((t) => !q || t.nome.toLowerCase().includes(q));
 
+  // ── Abas ──
   const ABAS: { id: Aba; label: string; icon: React.ReactNode }[] = [
     { id: "produtos", label: "Produtos", icon: <Package size={15} /> },
     { id: "servicos", label: "Serviços", icon: <Briefcase size={15} /> },
     { id: "combos", label: "Combos", icon: <Layers size={15} /> },
   ];
+
+  const tableHeaderCls = "text-left px-5 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide";
+  const tableRowCls = "border-b border-gray-50 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-gray-800/30";
 
   return (
     <div className="space-y-5">
@@ -613,20 +919,18 @@ export default function CatalogoPage() {
         </button>
       </div>
 
-      {/* Abas principais */}
+      {/* Abas + Busca */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex bg-gray-100 dark:bg-gray-800 p-1 rounded-xl gap-1 w-fit">
           {ABAS.map((a) => (
             <button key={a.id} onClick={() => setAba(a.id)}
               className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${aba === a.id
                 ? "bg-white dark:bg-gray-700 text-gold-700 dark:text-gold-300 shadow-sm"
-                : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-              }`}>
+                : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"}`}>
               {a.icon}{a.label}
             </button>
           ))}
         </div>
-
         <div className="relative max-w-xs w-full">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           <input placeholder="Buscar..." value={search} onChange={(e) => setSearch(e.target.value)}
@@ -639,47 +943,46 @@ export default function CatalogoPage() {
         <div className="flex items-center justify-center h-48"><Loader2 size={24} className="animate-spin text-gold-500" /></div>
       ) : (
         <>
-          {/* ─── ABA PRODUTOS ─── */}
+          {/* ─── PRODUTOS ─── */}
           {aba === "produtos" && (
             <div>
-              {/* Sub-abas Produtos / Fornecedores */}
-              <div className="flex gap-1 mb-4 border-b border-gray-100 dark:border-gray-800">
-                {(["produtos", "fornecedores"] as SubAbaProdutos[]).map((s) => (
-                  <button key={s} onClick={() => setSubAba(s)}
-                    className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${subAbaProdutos === s
-                      ? "border-gold-500 text-gold-600 dark:text-gold-400"
-                      : "border-transparent text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
-                    }`}>
-                    {s === "produtos" ? "Produtos" : "Fornecedores"}
-                  </button>
-                ))}
-              </div>
+              <SubTabBar
+                tabs={[{ id: "produtos", label: "Produtos" }, { id: "categorias", label: "Categorias" }, { id: "fornecedores", label: "Fornecedores" }]}
+                active={subP}
+                onChange={(s) => setSubP(s as SubProdutos)}
+              />
 
-              {subAbaProdutos === "produtos" ? (
+              {/* Sub: Produtos */}
+              {subP === "produtos" && (
                 <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 overflow-hidden">
                   {filtProdutos.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-16 gap-3 text-gray-400"><Package size={32} strokeWidth={1.5} /><p className="text-sm">Nenhum produto encontrado</p></div>
                   ) : (
                     <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-gray-100 dark:border-gray-800">
-                          <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Nome</th>
-                          <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden md:table-cell">Categoria</th>
-                          <th className="text-right px-5 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Custo</th>
-                          <th className="text-right px-5 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Venda</th>
-                          <th className="text-right px-5 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden sm:table-cell">Margem</th>
-                          <th className="text-center px-5 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Status</th>
-                          <th className="px-5 py-3" />
-                        </tr>
-                      </thead>
+                      <thead><tr className="border-b border-gray-100 dark:border-gray-800">
+                        <th className={tableHeaderCls}>Nome</th>
+                        <th className={`${tableHeaderCls} hidden md:table-cell`}>Categoria</th>
+                        <th className={`${tableHeaderCls} text-right`}>Custo</th>
+                        <th className={`${tableHeaderCls} text-right`}>Venda</th>
+                        <th className={`${tableHeaderCls} text-right hidden sm:table-cell`}>Markup</th>
+                        <th className={`${tableHeaderCls} text-center`}>Status</th>
+                        <th className="px-5 py-3" />
+                      </tr></thead>
                       <tbody>
                         {filtProdutos.map((p) => (
-                          <tr key={p.id} className="border-b border-gray-50 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-gray-800/30">
+                          <tr key={p.id} className={tableRowCls}>
                             <td className="px-5 py-3">
                               <div className="font-medium text-gray-900 dark:text-white">{p.nome}</div>
                               {p.fornecedor_nome && <div className="text-xs text-gray-400 mt-0.5">{p.fornecedor_nome}</div>}
                             </td>
-                            <td className="px-5 py-3 text-gray-500 dark:text-gray-400 hidden md:table-cell">{CATEGORIA_LABELS[p.categoria] ?? p.categoria}</td>
+                            <td className="px-5 py-3 text-gray-500 dark:text-gray-400 hidden md:table-cell">
+                              {p.categoria ? (
+                                <span className="inline-flex items-center gap-1">
+                                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: categorias.find((c) => c.nome === p.categoria)?.cor ?? "#6B7280" }} />
+                                  {p.categoria}
+                                </span>
+                              ) : "—"}
+                            </td>
                             <td className="px-5 py-3 text-right text-gray-700 dark:text-gray-300">R$ {p.preco_custo.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</td>
                             <td className="px-5 py-3 text-right font-semibold text-gray-900 dark:text-white">R$ {p.preco_venda.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</td>
                             <td className="px-5 py-3 text-right hidden sm:table-cell">
@@ -690,14 +993,12 @@ export default function CatalogoPage() {
                               ) : "—"}
                             </td>
                             <td className="px-5 py-3 text-center">
-                              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${p.ativo ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400" : "bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400"}`}>
-                                {p.ativo ? "Ativo" : "Inativo"}
-                              </span>
+                              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${p.ativo ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400" : "bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400"}`}>{p.ativo ? "Ativo" : "Inativo"}</span>
                             </td>
                             <td className="px-5 py-3">
                               <div className="flex items-center justify-end gap-1">
                                 <button onClick={() => setEditProduto(p)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gold-600"><Pencil size={14} /></button>
-                                <button onClick={async () => { if (!confirm("Excluir produto?")) return; await catalogoApi.deleteProduto(p.id); setProdutos((prev) => prev.filter((x) => x.id !== p.id)); }}
+                                <button onClick={async () => { if (!confirm("Excluir produto?")) return; await catalogoApi.deleteProduto(p.id); setProdutos((x) => x.filter((i) => i.id !== p.id)); }}
                                   className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
                               </div>
                             </td>
@@ -707,35 +1008,83 @@ export default function CatalogoPage() {
                     </table>
                   )}
                 </div>
-              ) : (
+              )}
+
+              {/* Sub: Categorias */}
+              {subP === "categorias" && (
+                <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 overflow-hidden">
+                  {filtCategorias.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 gap-3 text-gray-400"><Tag size={32} strokeWidth={1.5} /><p className="text-sm">Nenhuma categoria cadastrada</p></div>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead><tr className="border-b border-gray-100 dark:border-gray-800">
+                        <th className={tableHeaderCls}>Nome</th>
+                        <th className={`${tableHeaderCls} text-center`}>Cor</th>
+                        <th className={`${tableHeaderCls} text-center`}>Produtos</th>
+                        <th className="px-5 py-3" />
+                      </tr></thead>
+                      <tbody>
+                        {filtCategorias.map((cat) => (
+                          <tr key={cat.id} className={tableRowCls}>
+                            <td className="px-5 py-3">
+                              <div className="flex items-center gap-2">
+                                <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: cat.cor ?? "#6B7280" }} />
+                                <span className="font-medium text-gray-900 dark:text-white">{cat.nome}</span>
+                              </div>
+                            </td>
+                            <td className="px-5 py-3 text-center">
+                              <span className="text-xs text-gray-400 font-mono">{cat.cor ?? "#6B7280"}</span>
+                            </td>
+                            <td className="px-5 py-3 text-center text-gray-500 dark:text-gray-400">
+                              {produtos.filter((p) => p.categoria === cat.nome).length}
+                            </td>
+                            <td className="px-5 py-3">
+                              <div className="flex items-center justify-end gap-1">
+                                <button onClick={() => setEditCategoria(cat)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gold-600"><Pencil size={14} /></button>
+                                <button onClick={async () => { if (!confirm("Excluir categoria?")) return; await catalogoApi.deleteCategoria(cat.id); setCategorias((x) => x.filter((i) => i.id !== cat.id)); }}
+                                  className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
+
+              {/* Sub: Fornecedores */}
+              {subP === "fornecedores" && (
                 <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 overflow-hidden">
                   {filtFornecedores.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-16 gap-3 text-gray-400"><Building2 size={32} strokeWidth={1.5} /><p className="text-sm">Nenhum fornecedor cadastrado</p></div>
                   ) : (
                     <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-gray-100 dark:border-gray-800">
-                          <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Nome</th>
-                          <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden md:table-cell">Contato</th>
-                          <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden lg:table-cell">CNPJ</th>
-                          <th className="text-center px-5 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden sm:table-cell">Prazo</th>
-                          <th className="px-5 py-3" />
-                        </tr>
-                      </thead>
+                      <thead><tr className="border-b border-gray-100 dark:border-gray-800">
+                        <th className={tableHeaderCls}>Nome</th>
+                        <th className={`${tableHeaderCls} hidden sm:table-cell`}>Tipo</th>
+                        <th className={`${tableHeaderCls} hidden md:table-cell`}>Contato</th>
+                        <th className={`${tableHeaderCls} text-center hidden lg:table-cell`}>Prazo</th>
+                        <th className="px-5 py-3" />
+                      </tr></thead>
                       <tbody>
                         {filtFornecedores.map((f) => (
-                          <tr key={f.id} className="border-b border-gray-50 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-gray-800/30">
+                          <tr key={f.id} className={tableRowCls}>
                             <td className="px-5 py-3">
                               <div className="font-medium text-gray-900 dark:text-white">{f.nome}</div>
                               {f.email && <div className="text-xs text-gray-400 mt-0.5">{f.email}</div>}
                             </td>
+                            <td className="px-5 py-3 hidden sm:table-cell">
+                              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${f.tipo_pessoa === "PF" ? "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400" : "bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400"}`}>
+                                {f.tipo_pessoa === "PF" ? "Pessoa Física" : "Pessoa Jurídica"}
+                              </span>
+                            </td>
                             <td className="px-5 py-3 text-gray-500 dark:text-gray-400 hidden md:table-cell">{f.contato || f.whatsapp || "—"}</td>
-                            <td className="px-5 py-3 text-gray-500 dark:text-gray-400 hidden lg:table-cell">{f.cnpj || "—"}</td>
-                            <td className="px-5 py-3 text-center text-gray-500 dark:text-gray-400 hidden sm:table-cell">{f.prazo_entrega ? `${f.prazo_entrega}d` : "—"}</td>
+                            <td className="px-5 py-3 text-center text-gray-500 dark:text-gray-400 hidden lg:table-cell">{f.prazo_entrega ? `${f.prazo_entrega}d` : "—"}</td>
                             <td className="px-5 py-3">
                               <div className="flex items-center justify-end gap-1">
                                 <button onClick={() => setEditFornecedor(f)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gold-600"><Pencil size={14} /></button>
-                                <button onClick={async () => { if (!confirm("Excluir fornecedor?")) return; await catalogoApi.deleteFornecedor(f.id); setFornecedores((prev) => prev.filter((x) => x.id !== f.id)); }}
+                                <button onClick={async () => { if (!confirm("Excluir fornecedor?")) return; await catalogoApi.deleteFornecedor(f.id); setFornecedores((x) => x.filter((i) => i.id !== f.id)); }}
                                   className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
                               </div>
                             </td>
@@ -749,58 +1098,95 @@ export default function CatalogoPage() {
             </div>
           )}
 
-          {/* ─── ABA SERVIÇOS ─── */}
+          {/* ─── SERVIÇOS ─── */}
           {aba === "servicos" && (
-            <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 overflow-hidden">
-              {filtServicos.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-16 gap-3 text-gray-400"><Briefcase size={32} strokeWidth={1.5} /><p className="text-sm">Nenhum serviço encontrado</p></div>
-              ) : (
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-gray-100 dark:border-gray-800">
-                      <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Nome</th>
-                      <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden md:table-cell">Tipo</th>
-                      <th className="text-right px-5 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Preço base</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden sm:table-cell">Edição</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden lg:table-cell">Fotos</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Status</th>
-                      <th className="px-5 py-3" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filtServicos.map((s) => (
-                      <tr key={s.id} className="border-b border-gray-50 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-gray-800/30">
-                        <td className="px-5 py-3">
-                          <div className="font-medium text-gray-900 dark:text-white">{s.nome}</div>
-                          {s.descricao && <div className="text-xs text-gray-400 mt-0.5 truncate max-w-[200px]">{s.descricao}</div>}
-                        </td>
-                        <td className="px-5 py-3 text-gray-500 dark:text-gray-400 hidden md:table-cell">{TIPO_ENSAIO_LABELS[s.tipo_ensaio] ?? s.tipo_ensaio}</td>
-                        <td className="px-5 py-3 text-right font-semibold text-gray-900 dark:text-white">R$ {s.preco_base.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</td>
-                        <td className="px-5 py-3 text-center hidden sm:table-cell">
-                          {s.inclui_edicao ? <CheckCircle size={16} className="mx-auto text-green-500" /> : <XCircle size={16} className="mx-auto text-gray-300 dark:text-gray-600" />}
-                        </td>
-                        <td className="px-5 py-3 text-center text-gray-500 dark:text-gray-400 hidden lg:table-cell">{s.qtd_fotos_entrega ?? "—"}</td>
-                        <td className="px-5 py-3 text-center">
-                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${s.ativo ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400" : "bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400"}`}>
-                            {s.ativo ? "Ativo" : "Inativo"}
-                          </span>
-                        </td>
-                        <td className="px-5 py-3">
-                          <div className="flex items-center justify-end gap-1">
-                            <button onClick={() => setEditServico(s)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gold-600"><Pencil size={14} /></button>
-                            <button onClick={async () => { if (!confirm("Excluir serviço?")) return; await catalogoApi.deleteServico(s.id); setServicos((prev) => prev.filter((x) => x.id !== s.id)); }}
-                              className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <div>
+              <SubTabBar
+                tabs={[{ id: "servicos", label: "Serviços" }, { id: "tipos", label: "Tipos de Ensaio" }]}
+                active={subS}
+                onChange={(s) => setSubS(s as SubServicos)}
+              />
+
+              {subS === "servicos" && (
+                <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 overflow-hidden">
+                  {filtServicos.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 gap-3 text-gray-400"><Briefcase size={32} strokeWidth={1.5} /><p className="text-sm">Nenhum serviço encontrado</p></div>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead><tr className="border-b border-gray-100 dark:border-gray-800">
+                        <th className={tableHeaderCls}>Nome</th>
+                        <th className={`${tableHeaderCls} hidden md:table-cell`}>Tipo</th>
+                        <th className={`${tableHeaderCls} text-right`}>Preço base</th>
+                        <th className={`${tableHeaderCls} text-center hidden sm:table-cell`}>Edição</th>
+                        <th className={`${tableHeaderCls} text-center hidden lg:table-cell`}>Fotos</th>
+                        <th className={`${tableHeaderCls} text-center`}>Status</th>
+                        <th className="px-5 py-3" />
+                      </tr></thead>
+                      <tbody>
+                        {filtServicos.map((s) => (
+                          <tr key={s.id} className={tableRowCls}>
+                            <td className="px-5 py-3">
+                              <div className="font-medium text-gray-900 dark:text-white">{s.nome}</div>
+                              {s.descricao && <div className="text-xs text-gray-400 mt-0.5 truncate max-w-[180px]">{s.descricao}</div>}
+                            </td>
+                            <td className="px-5 py-3 text-gray-500 dark:text-gray-400 hidden md:table-cell">{s.tipo_ensaio || "—"}</td>
+                            <td className="px-5 py-3 text-right font-semibold text-gray-900 dark:text-white">R$ {s.preco_base.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</td>
+                            <td className="px-5 py-3 text-center hidden sm:table-cell">
+                              {s.inclui_edicao ? <CheckCircle size={16} className="mx-auto text-green-500" /> : <XCircle size={16} className="mx-auto text-gray-300 dark:text-gray-600" />}
+                            </td>
+                            <td className="px-5 py-3 text-center text-gray-500 dark:text-gray-400 hidden lg:table-cell">{s.qtd_fotos_entrega ?? "—"}</td>
+                            <td className="px-5 py-3 text-center">
+                              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${s.ativo ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400" : "bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400"}`}>{s.ativo ? "Ativo" : "Inativo"}</span>
+                            </td>
+                            <td className="px-5 py-3">
+                              <div className="flex items-center justify-end gap-1">
+                                <button onClick={() => setEditServico(s)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gold-600"><Pencil size={14} /></button>
+                                <button onClick={async () => { if (!confirm("Excluir serviço?")) return; await catalogoApi.deleteServico(s.id); setServicos((x) => x.filter((i) => i.id !== s.id)); }}
+                                  className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
+
+              {subS === "tipos" && (
+                <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 overflow-hidden">
+                  {filtTipos.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 gap-3 text-gray-400"><Tag size={32} strokeWidth={1.5} /><p className="text-sm">Nenhum tipo de ensaio cadastrado</p></div>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead><tr className="border-b border-gray-100 dark:border-gray-800">
+                        <th className={tableHeaderCls}>Nome</th>
+                        <th className={`${tableHeaderCls} text-center`}>Serviços</th>
+                        <th className="px-5 py-3" />
+                      </tr></thead>
+                      <tbody>
+                        {filtTipos.map((t) => (
+                          <tr key={t.id} className={tableRowCls}>
+                            <td className="px-5 py-3 font-medium text-gray-900 dark:text-white">{t.nome}</td>
+                            <td className="px-5 py-3 text-center text-gray-500 dark:text-gray-400">{servicos.filter((s) => s.tipo_ensaio === t.nome).length}</td>
+                            <td className="px-5 py-3">
+                              <div className="flex items-center justify-end gap-1">
+                                <button onClick={() => setEditTipo(t)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gold-600"><Pencil size={14} /></button>
+                                <button onClick={async () => { if (!confirm("Excluir tipo de ensaio?")) return; await catalogoApi.deleteTipoEnsaio(t.id); setTiposEnsaio((x) => x.filter((i) => i.id !== t.id)); }}
+                                  className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
               )}
             </div>
           )}
 
-          {/* ─── ABA COMBOS ─── */}
+          {/* ─── COMBOS ─── */}
           {aba === "combos" && (
             filtCombos.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 gap-3 text-gray-400"><Layers size={32} strokeWidth={1.5} /><p className="text-sm">Nenhum combo encontrado</p></div>
@@ -808,7 +1194,7 @@ export default function CatalogoPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {filtCombos.map((c) => (
                   <ComboCard key={c.id} combo={c} onEdit={() => setEditCombo(c)}
-                    onDelete={async () => { if (!confirm("Excluir combo?")) return; await catalogoApi.deleteCombo(c.id); setCombos((prev) => prev.filter((x) => x.id !== c.id)); }} />
+                    onDelete={async () => { if (!confirm("Excluir combo?")) return; await catalogoApi.deleteCombo(c.id); setCombos((x) => x.filter((i) => i.id !== c.id)); }} />
                 ))}
               </div>
             )
@@ -817,10 +1203,12 @@ export default function CatalogoPage() {
       )}
 
       {/* Modais */}
-      {editProduto !== false && <ProdutoModal item={editProduto} fornecedores={fornecedores} onSave={saveProduto} onClose={() => setEditProduto(false)} />}
+      {editProduto !== false && <ProdutoModal item={editProduto} fornecedores={fornecedores} categorias={categorias} onSave={saveProduto} onClose={() => setEditProduto(false)} />}
       {editFornecedor !== false && <FornecedorModal item={editFornecedor} onSave={saveFornecedor} onClose={() => setEditFornecedor(false)} />}
-      {editServico !== false && <ServicoModal item={editServico} onSave={saveServico} onClose={() => setEditServico(false)} />}
+      {editServico !== false && <ServicoModal item={editServico} tiposEnsaio={tiposEnsaio} onSave={saveServico} onClose={() => setEditServico(false)} />}
       {editCombo !== false && <ComboModal item={editCombo} produtos={produtos} servicos={servicos} onSave={saveCombo} onClose={() => setEditCombo(false)} />}
+      {editCategoria !== false && <CategoriaModal item={editCategoria} onSave={saveCategoria} onClose={() => setEditCategoria(false)} />}
+      {editTipo !== false && <TipoEnsaioModal item={editTipo} onSave={saveTipo} onClose={() => setEditTipo(false)} />}
     </div>
   );
 }
