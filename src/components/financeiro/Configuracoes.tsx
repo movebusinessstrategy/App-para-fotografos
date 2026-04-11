@@ -87,6 +87,30 @@ export default function Configuracoes() {
   };
 
   // ── Meios ───────────────────────────────────────────────────
+  const [editandoMeio, setEditandoMeio] = useState<Meio | null>(null);
+
+  const saveMeio = async () => {
+    if (!editandoMeio) return;
+    setSaving(true);
+    try {
+      const res = await authFetch(`/api/fin/meios/${editandoMeio.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nome: editandoMeio.nome,
+          tipo: editandoMeio.tipo,
+          taxa_percentual: Number(editandoMeio.taxa_percentual),
+          taxa_fixa: Number(editandoMeio.taxa_fixa),
+          prazo_recebimento: Number(editandoMeio.prazo_recebimento),
+        }),
+      });
+      if (res.ok) {
+        setMeios(prev => prev.map(m => m.id === editandoMeio.id ? editandoMeio : m));
+        setEditandoMeio(null);
+      }
+    } finally { setSaving(false); }
+  };
+
   const addMeio = async () => {
     if (!novaMeio.nome) return;
     setSaving(true);
@@ -131,6 +155,29 @@ export default function Configuracoes() {
   };
 
   // ── Contas ──────────────────────────────────────────────────
+  const [editandoConta, setEditandoConta] = useState<Conta | null>(null);
+
+  const saveConta = async () => {
+    if (!editandoConta) return;
+    setSaving(true);
+    try {
+      const res = await authFetch(`/api/fin/contas/${editandoConta.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nome: editandoConta.nome,
+          tipo: editandoConta.tipo,
+          banco: editandoConta.banco || null,
+          saldo_inicial: Number(editandoConta.saldo_inicial),
+        }),
+      });
+      if (res.ok) {
+        setContas(prev => prev.map(c => c.id === editandoConta.id ? editandoConta : c));
+        setEditandoConta(null);
+      }
+    } finally { setSaving(false); }
+  };
+
   const addConta = async () => {
     if (!novaConta.nome) return;
     setSaving(true);
@@ -339,86 +386,115 @@ export default function Configuracoes() {
               {meios.length === 0 && (
                 <div className="text-center py-6">
                   <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">Nenhum meio de pagamento cadastrado.</p>
-                  <button
-                    onClick={seedMeios}
-                    disabled={saving}
-                    className="text-sm px-4 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
-                  >
+                  <button onClick={seedMeios} disabled={saving} className="text-sm px-4 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50">
                     Criar meios padrão
                   </button>
                 </div>
               )}
-              {meios.length > 0 && (
-                <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-gray-100 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400">
-                        <th className="text-left px-4 py-3 font-medium">Nome</th>
-                        <th className="text-left px-4 py-3 font-medium">Tipo</th>
-                        <th className="text-right px-4 py-3 font-medium">Taxa %</th>
-                        <th className="text-right px-4 py-3 font-medium">Taxa Fixa</th>
-                        <th className="text-right px-4 py-3 font-medium">Prazo (dias)</th>
-                        <th className="px-4 py-3" />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {meios.map(m => (
-                        <tr key={m.id} className="border-b border-gray-50 dark:border-gray-700/50 last:border-0">
-                          <td className="px-4 py-2.5 font-medium text-gray-800 dark:text-gray-200">{m.nome}</td>
-                          <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400">{m.tipo}</td>
-                          <td className="px-4 py-2.5 text-right text-gray-700 dark:text-gray-300">{m.taxa_percentual}%</td>
-                          <td className="px-4 py-2.5 text-right text-gray-700 dark:text-gray-300">R$ {m.taxa_fixa.toFixed(2)}</td>
-                          <td className="px-4 py-2.5 text-right text-gray-700 dark:text-gray-300">{m.prazo_recebimento}</td>
-                          <td className="px-4 py-2.5">
-                            <button onClick={() => delMeio(m.id)} className="text-gray-400 hover:text-red-500">
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              <div className="space-y-2">
+                {meios.map(m => (
+                  <div key={m.id} className="rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 overflow-hidden">
+                    {editandoMeio?.id === m.id ? (
+                      <div className="p-4 space-y-3">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="col-span-2">
+                            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Nome</label>
+                            <input value={editandoMeio.nome} onChange={e => setEditandoMeio(p => p ? { ...p, nome: e.target.value } : null)}
+                              className="w-full text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Tipo</label>
+                            <select value={editandoMeio.tipo} onChange={e => setEditandoMeio(p => p ? { ...p, tipo: e.target.value } : null)}
+                              className="w-full text-sm px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500">
+                              {['pix', 'dinheiro', 'transferencia', 'debito', 'credito', 'boleto', 'link_pagamento'].map(t => <option key={t} value={t}>{t}</option>)}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Taxa % <span className="text-gray-400">(ex: 2.99 para cartão)</span></label>
+                            <input type="number" step="0.01" value={editandoMeio.taxa_percentual} onChange={e => setEditandoMeio(p => p ? { ...p, taxa_percentual: Number(e.target.value) } : null)}
+                              className="w-full text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Taxa Fixa R$ <span className="text-gray-400">(ex: 1.50)</span></label>
+                            <input type="number" step="0.01" value={editandoMeio.taxa_fixa} onChange={e => setEditandoMeio(p => p ? { ...p, taxa_fixa: Number(e.target.value) } : null)}
+                              className="w-full text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Prazo de recebimento <span className="text-gray-400">(dias para cair na conta)</span></label>
+                            <input type="number" value={editandoMeio.prazo_recebimento} onChange={e => setEditandoMeio(p => p ? { ...p, prazo_recebimento: Number(e.target.value) } : null)}
+                              className="w-full text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                          </div>
+                        </div>
+                        <div className="flex gap-2 justify-end">
+                          <button onClick={() => setEditandoMeio(null)} className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700">
+                            <X className="w-3.5 h-3.5" /> Cancelar
+                          </button>
+                          <button onClick={saveMeio} disabled={saving} className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50">
+                            <Save className="w-3.5 h-3.5" /> Salvar
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between px-4 py-3">
+                        <div>
+                          <p className="text-sm font-medium text-gray-800 dark:text-gray-200">{m.nome}</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            {m.tipo}
+                            {m.taxa_percentual > 0 ? ` · ${m.taxa_percentual}%` : ''}
+                            {m.taxa_fixa > 0 ? ` + R$ ${m.taxa_fixa.toFixed(2)}` : ''}
+                            {m.prazo_recebimento > 0 ? ` · ${m.prazo_recebimento}d para receber` : ''}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => setEditandoMeio(m)} className="p-1.5 rounded-lg text-gray-400 hover:text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/20">
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => delMeio(m.id)} className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
               {/* Formulário novo meio */}
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-                <input
-                  value={novaMeio.nome}
-                  onChange={e => setNovaMeio(f => ({ ...f, nome: e.target.value }))}
-                  placeholder="Nome"
-                  className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-                />
-                <select
-                  value={novaMeio.tipo}
-                  onChange={e => setNovaMeio(f => ({ ...f, tipo: e.target.value }))}
-                  className="px-2 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-                >
-                  {['pix', 'dinheiro', 'transferencia', 'debito', 'credito', 'boleto', 'link_pagamento'].map(t => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-                <input
-                  value={novaMeio.taxa_percentual}
-                  onChange={e => setNovaMeio(f => ({ ...f, taxa_percentual: e.target.value }))}
-                  placeholder="Taxa %"
-                  type="number"
-                  step="0.01"
-                  className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-                />
-                <input
-                  value={novaMeio.prazo_recebimento}
-                  onChange={e => setNovaMeio(f => ({ ...f, prazo_recebimento: e.target.value }))}
-                  placeholder="Prazo dias"
-                  type="number"
-                  className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-                />
-                <button
-                  onClick={addMeio}
-                  disabled={saving || !novaMeio.nome}
-                  className="flex items-center justify-center gap-1 px-3 py-1.5 text-sm rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
-                >
-                  <Plus className="w-4 h-4" /> Adicionar
-                </button>
+              <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-600 p-4 space-y-3">
+                <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Adicionar meio de pagamento</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="col-span-2">
+                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Nome</label>
+                    <input value={novaMeio.nome} onChange={e => setNovaMeio(f => ({ ...f, nome: e.target.value }))} placeholder="Ex: Pix, Cartão de Crédito..."
+                      className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Tipo</label>
+                    <select value={novaMeio.tipo} onChange={e => setNovaMeio(f => ({ ...f, tipo: e.target.value }))}
+                      className="w-full px-2.5 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500">
+                      {['pix', 'dinheiro', 'transferencia', 'debito', 'credito', 'boleto', 'link_pagamento'].map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Taxa % <span className="text-gray-400">(cobrada pela operadora)</span></label>
+                    <input type="number" step="0.01" value={novaMeio.taxa_percentual} onChange={e => setNovaMeio(f => ({ ...f, taxa_percentual: e.target.value }))} placeholder="0"
+                      className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Taxa Fixa R$ <span className="text-gray-400">(por transação)</span></label>
+                    <input type="number" step="0.01" value={novaMeio.taxa_fixa} onChange={e => setNovaMeio(f => ({ ...f, taxa_fixa: e.target.value }))} placeholder="0"
+                      className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Prazo <span className="text-gray-400">(dias para cair na conta)</span></label>
+                    <input type="number" value={novaMeio.prazo_recebimento} onChange={e => setNovaMeio(f => ({ ...f, prazo_recebimento: e.target.value }))} placeholder="0"
+                      className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <button onClick={addMeio} disabled={saving || !novaMeio.nome} className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50">
+                    <Plus className="w-4 h-4" /> Adicionar
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -431,55 +507,169 @@ export default function Configuracoes() {
                   Nenhuma conta cadastrada. Adicione suas contas bancárias abaixo.
                 </p>
               )}
+
+              {/* Lista de contas */}
               {contas.length > 0 && (
                 <div className="space-y-2">
                   {contas.map(c => (
-                    <div key={c.id} className="flex items-center justify-between px-4 py-3 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
-                      <div>
-                        <p className="text-sm font-medium text-gray-800 dark:text-gray-200">{c.nome}</p>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">
-                          {c.tipo}{c.banco ? ` · ${c.banco}` : ''} · Saldo inicial: R$ {c.saldo_inicial.toFixed(2)}
-                        </p>
-                      </div>
-                      <button onClick={() => delConta(c.id)} className="text-gray-400 hover:text-red-500">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                    <div key={c.id} className="rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 overflow-hidden">
+                      {editandoConta?.id === c.id ? (
+                        /* Modo edição */
+                        <div className="p-4 space-y-3">
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="col-span-2">
+                              <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                                Nome <span className="text-gray-400 font-normal">— como você identifica essa conta (ex: "Nubank", "Caixa Empresa")</span>
+                              </label>
+                              <input
+                                value={editandoConta.nome}
+                                onChange={e => setEditandoConta(prev => prev ? { ...prev, nome: e.target.value } : null)}
+                                className="w-full text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                                Tipo <span className="text-gray-400 font-normal">— natureza da conta</span>
+                              </label>
+                              <select
+                                value={editandoConta.tipo}
+                                onChange={e => setEditandoConta(prev => prev ? { ...prev, tipo: e.target.value } : null)}
+                                className="w-full text-sm px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                              >
+                                <option value="corrente">Corrente</option>
+                                <option value="poupanca">Poupança</option>
+                                <option value="investimento">Investimento</option>
+                                <option value="carteira">Carteira / Caixa</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                                Banco <span className="text-gray-400 font-normal">— opcional (ex: "Bradesco", "Inter")</span>
+                              </label>
+                              <input
+                                value={editandoConta.banco || ''}
+                                onChange={e => setEditandoConta(prev => prev ? { ...prev, banco: e.target.value } : null)}
+                                placeholder="Opcional"
+                                className="w-full text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                              />
+                            </div>
+                            <div className="col-span-2">
+                              <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                                Saldo Inicial <span className="text-gray-400 font-normal">— quanto havia nessa conta quando você a cadastrou aqui</span>
+                              </label>
+                              <input
+                                value={editandoConta.saldo_inicial}
+                                onChange={e => setEditandoConta(prev => prev ? { ...prev, saldo_inicial: Number(e.target.value) } : null)}
+                                type="number"
+                                step="0.01"
+                                className="w-full text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                              />
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => saveConta(editandoConta)}
+                              disabled={saving}
+                              className="flex-1 text-sm py-1.5 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+                            >
+                              Salvar
+                            </button>
+                            <button
+                              onClick={() => setEditandoConta(null)}
+                              className="flex-1 text-sm py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+                            >
+                              Cancelar
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        /* Modo leitura */
+                        <div className="flex items-center justify-between px-4 py-3">
+                          <div>
+                            <p className="text-sm font-medium text-gray-800 dark:text-gray-200">{c.nome}</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                              {c.tipo}{c.banco ? ` · ${c.banco}` : ''} · Saldo inicial: R$ {c.saldo_inicial.toFixed(2)}
+                            </p>
+                          </div>
+                          <div className="flex gap-2">
+                            <button onClick={() => setEditandoConta(c)} className="text-gray-400 hover:text-violet-500">
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                            <button onClick={() => delConta(c.id)} className="text-gray-400 hover:text-red-500">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
               )}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                <input
-                  value={novaConta.nome}
-                  onChange={e => setNovaConta(f => ({ ...f, nome: e.target.value }))}
-                  placeholder="Nome da conta"
-                  className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-                />
-                <select
-                  value={novaConta.tipo}
-                  onChange={e => setNovaConta(f => ({ ...f, tipo: e.target.value }))}
-                  className="px-2 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-                >
-                  <option value="corrente">Corrente</option>
-                  <option value="poupanca">Poupança</option>
-                  <option value="investimento">Investimento</option>
-                  <option value="carteira">Carteira</option>
-                </select>
-                <input
-                  value={novaConta.saldo_inicial}
-                  onChange={e => setNovaConta(f => ({ ...f, saldo_inicial: e.target.value }))}
-                  placeholder="Saldo inicial"
-                  type="number"
-                  step="0.01"
-                  className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-                />
-                <button
-                  onClick={addConta}
-                  disabled={saving || !novaConta.nome}
-                  className="flex items-center justify-center gap-1 px-3 py-1.5 text-sm rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
-                >
-                  <Plus className="w-4 h-4" /> Adicionar
-                </button>
+
+              {/* Formulário de adição */}
+              <div className="rounded-xl border border-dashed border-gray-200 dark:border-gray-700 p-4 space-y-3">
+                <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Nova conta</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="md:col-span-2">
+                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                      Nome <span className="text-gray-400 font-normal">— como você identifica essa conta (ex: "Nubank", "Caixa Empresa")</span>
+                    </label>
+                    <input
+                      value={novaConta.nome}
+                      onChange={e => setNovaConta(f => ({ ...f, nome: e.target.value }))}
+                      placeholder="Ex: Conta Principal"
+                      className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                      Tipo <span className="text-gray-400 font-normal">— natureza da conta</span>
+                    </label>
+                    <select
+                      value={novaConta.tipo}
+                      onChange={e => setNovaConta(f => ({ ...f, tipo: e.target.value }))}
+                      className="w-full px-2 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    >
+                      <option value="corrente">Corrente</option>
+                      <option value="poupanca">Poupança</option>
+                      <option value="investimento">Investimento</option>
+                      <option value="carteira">Carteira / Caixa</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                      Banco <span className="text-gray-400 font-normal">— opcional (ex: "Bradesco", "Inter")</span>
+                    </label>
+                    <input
+                      value={novaConta.banco || ''}
+                      onChange={e => setNovaConta(f => ({ ...f, banco: e.target.value }))}
+                      placeholder="Opcional"
+                      className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                      Saldo Inicial <span className="text-gray-400 font-normal">— quanto havia na conta ao cadastrá-la aqui</span>
+                    </label>
+                    <input
+                      value={novaConta.saldo_inicial}
+                      onChange={e => setNovaConta(f => ({ ...f, saldo_inicial: e.target.value }))}
+                      placeholder="0,00"
+                      type="number"
+                      step="0.01"
+                      className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <button
+                      onClick={addConta}
+                      disabled={saving || !novaConta.nome}
+                      className="w-full flex items-center justify-center gap-1 px-3 py-2 text-sm rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+                    >
+                      <Plus className="w-4 h-4" /> Adicionar Conta
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           )}
