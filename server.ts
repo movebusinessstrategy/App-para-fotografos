@@ -4404,40 +4404,109 @@ async function startServer() {
     const supabase = finClient(req); const userId = finUser(req);
     const adminClient = supabaseAdmin || supabase;
 
-    // Busca todos os jobs do usuário
-    const { data: jobs } = await supabase.from('jobs').select('id,client_id,job_name,job_date,amount,payment_status,payment_method').eq('user_id', userId);
-    if (!jobs?.length) return res.json({ criadas: 0 });
+    const { data: jobs } = await supabase
+      .from('jobs')
+      .select('id,client_id,job_name,job_date,amount,payment_status,payment_method')
+      .eq('user_id', userId);
+    if (!jobs?.length) return res.json({ criadas: 0, atualizadas: 0 });
 
-    // IDs de jobs já com receita
-    const { data: jaExistentes } = await supabase.from('fin_receitas').select('job_id').eq('user_id', userId).not('job_id', 'is', null);
-    const jobIdsExistentes = new Set((jaExistentes || []).map((r: any) => r.job_id));
+    // Carrega TODAS as receitas de jobs de uma vez (evita N+1)
+    const { data: todasReceitas } = await supabase
+      .from('fin_receitas')
+      .select('id,job_id,status,valor_bruto')
+      .eq('user_id', userId)
+      .not('job_id', 'is', null);
+
+    const receitasPorJob = new Map<number, any[]>();
+    for (const r of (todasReceitas || [])) {
+      const list = receitasPorJob.get(r.job_id) || [];
+      list.push(r);
+      receitasPorJob.set(r.job_id, list);
+    }
 
     let criadas = 0;
     let atualizadas = 0;
     const hoje = new Date().toISOString().slice(0, 10);
 
     for (const job of jobs) {
-      if (jobIdsExistentes.has(job.id)) {
-        // Job já sincronizado — atualiza status das receitas se o job mudou de estado
+      const receitasExistentes = receitasPorJob.get(job.id) || [];
+      const temReceita = receitasExistentes.length > 0;
+      const dataVencimento = job.job_date || hoje;
+      const clienteNome = job.job_name || `Job #${job.id}`;
+
+      // Busca pagamentos reais registrados para este job
+      const { data: payments } = await adminClient
+        .from('job_payments').select('*').eq('job_id', job.id).order('created_at');
+      const paymentsArr = payments || [];
+
+      if (!temReceita) {
+        // ── Job nunca sincronizado: criar receitas do zero ────────────────────
+        if (paymentsArr.length > 0) {
+          for (const pay of paymentsArr) {
+            await supabase.from('fin_receitas').insert({
+              user_id: userId, job_id: job.id,
+              cliente_id: job.client_id, cliente_nome: clienteNome,
+              descricao: `${clienteNome} — ${pay.description || 'Pagamento'}`,
+              valor_bruto: pay.amount, taxa_meio: 0, valor_liquido: pay.amount,
+              data_vencimento: pay.payment_date || dataVencimento,
+              data_pagamento: pay.payment_date,
+              status: 'recebido', parcela: 1, total_parcelas: 1,
+              origem_automatica: true, updated_at: new Date().toISOString(),
+            });
+            criadas++;
+          }
+          const totalPago = paymentsArr.reduce((s: number, p: any) => s + (p.amount || 0), 0);
+          const restante = (job.amount || 0) - totalPago;
+          if (restante > 1 && job.payment_status !== 'paid') {
+            const st = dataVencimento < hoje ? 'atrasado' : 'pendente';
+            await supabase.from('fin_receitas').insert({
+              user_id: userId, job_id: job.id, cliente_id: job.client_id, cliente_nome: clienteNome,
+              descricao: `${clienteNome} — Saldo restante`,
+              valor_bruto: restante, taxa_meio: 0, valor_liquido: restante,
+              data_vencimento: dataVencimento, status: st,
+              parcela: 1, total_parcelas: 1, origem_automatica: true, updated_at: new Date().toISOString(),
+            });
+            criadas++;
+          }
+        } else if ((job.amount || 0) > 0) {
+          const st = job.payment_status === 'paid' ? 'recebido' : (dataVencimento < hoje ? 'atrasado' : 'pendente');
+          await supabase.from('fin_receitas').insert({
+            user_id: userId, job_id: job.id, cliente_id: job.client_id, cliente_nome: clienteNome,
+            descricao: clienteNome,
+            valor_bruto: job.amount, taxa_meio: 0, valor_liquido: job.amount,
+            data_vencimento: dataVencimento,
+            data_pagamento: st === 'recebido' ? hoje : null,
+            status: st, parcela: 1, total_parcelas: 1,
+            origem_automatica: true, updated_at: new Date().toISOString(),
+          });
+          criadas++;
+        }
+      } else {
+        // ── Job já existente: reconciliar com estado atual ────────────────────
         if (job.payment_status === 'paid') {
-          const { data: updated } = await supabase.from('fin_receitas')
-            .update({ status: 'recebido', data_pagamento: hoje, updated_at: new Date().toISOString() })
-            .eq('user_id', userId).eq('job_id', job.id).in('status', ['pendente', 'atrasado'])
-            .select('id');
-          atualizadas += (updated?.length || 0);
-        } else if (job.payment_status === 'partial') {
-          // Busca pagamentos registrados para criar receitas de parcelas pagas ainda não existentes
-          const { data: payments } = await adminClient.from('job_payments').select('*').eq('job_id', job.id);
-          const { data: receitasDoJob } = await supabase.from('fin_receitas').select('descricao,valor_bruto').eq('user_id', userId).eq('job_id', job.id);
-          const valoresCriados = new Set((receitasDoJob || []).map((r: any) => r.valor_bruto));
-          for (const pay of (payments || [])) {
-            if (!valoresCriados.has(pay.amount)) {
+          // Marca toda receita ainda pendente/atrasada como recebido
+          const pendentes = receitasExistentes.filter((r: any) =>
+            r.status === 'pendente' || r.status === 'atrasado'
+          );
+          for (const r of pendentes) {
+            await supabase.from('fin_receitas')
+              .update({ status: 'recebido', data_pagamento: hoje, updated_at: new Date().toISOString() })
+              .eq('id', r.id).eq('user_id', userId);
+            atualizadas++;
+          }
+        } else if (job.payment_status === 'partial' && paymentsArr.length > 0) {
+          // Para cada pagamento real, insere receita se ainda não existe valor similar como recebido
+          for (const pay of paymentsArr) {
+            const jaExiste = receitasExistentes.some(
+              (r: any) => r.status === 'recebido' && Math.abs(r.valor_bruto - pay.amount) < 0.01
+            );
+            if (!jaExiste) {
               await supabase.from('fin_receitas').insert({
                 user_id: userId, job_id: job.id,
-                cliente_id: job.client_id, cliente_nome: job.job_name || `Job #${job.id}`,
-                descricao: `${job.job_name} — ${pay.description || 'Pagamento parcial'}`,
+                cliente_id: job.client_id, cliente_nome: clienteNome,
+                descricao: `${clienteNome} — ${pay.description || 'Pagamento parcial'}`,
                 valor_bruto: pay.amount, taxa_meio: 0, valor_liquido: pay.amount,
-                data_vencimento: pay.payment_date || job.job_date || hoje,
+                data_vencimento: pay.payment_date || dataVencimento,
                 data_pagamento: pay.payment_date,
                 status: 'recebido', parcela: 1, total_parcelas: 1,
                 origem_automatica: true, updated_at: new Date().toISOString(),
@@ -4446,64 +4515,72 @@ async function startServer() {
             }
           }
         }
-        continue;
-      }
-
-      // Busca pagamentos do job
-      const { data: payments } = await adminClient.from('job_payments').select('*').eq('job_id', job.id).order('created_at');
-
-      const dataVencimento = job.job_date || hoje;
-      const clienteNome = job.job_name || `Job #${job.id}`;
-
-      if (payments && payments.length > 0) {
-        // Cria receita para cada pagamento registrado
-        for (const pay of payments) {
-          await supabase.from('fin_receitas').insert({
-            user_id: userId, job_id: job.id,
-            cliente_id: job.client_id, cliente_nome: clienteNome,
-            descricao: `${job.job_name} — ${pay.description || 'Pagamento'}`,
-            valor_bruto: pay.amount, taxa_meio: 0, valor_liquido: pay.amount,
-            data_vencimento: pay.payment_date || dataVencimento,
-            data_pagamento: pay.payment_date,
-            status: 'recebido', parcela: 1, total_parcelas: 1,
-            origem_automatica: true, updated_at: new Date().toISOString(),
-          });
-          criadas++;
-        }
-        // Se há saldo restante (payment_status = partial), gera receita pendente
-        const totalPago = payments.reduce((s: number, p: any) => s + p.amount, 0);
-        const restante = (job.amount || 0) - totalPago;
-        if (restante > 1) {
-          const status = dataVencimento < hoje ? 'atrasado' : 'pendente';
-          await supabase.from('fin_receitas').insert({
-            user_id: userId, job_id: job.id,
-            cliente_id: job.client_id, cliente_nome: clienteNome,
-            descricao: `${job.job_name} — Saldo restante`,
-            valor_bruto: restante, taxa_meio: 0, valor_liquido: restante,
-            data_vencimento: dataVencimento, status,
-            parcela: 1, total_parcelas: 1, origem_automatica: true, updated_at: new Date().toISOString(),
-          });
-          criadas++;
-        }
-      } else {
-        // Nenhum pagamento — cria receita pendente com valor total
-        if ((job.amount || 0) > 0) {
-          const status = job.payment_status === 'paid' ? 'recebido' : (dataVencimento < hoje ? 'atrasado' : 'pendente');
-          await supabase.from('fin_receitas').insert({
-            user_id: userId, job_id: job.id,
-            cliente_id: job.client_id, cliente_nome: clienteNome,
-            descricao: job.job_name || `Job #${job.id}`,
-            valor_bruto: job.amount, taxa_meio: 0, valor_liquido: job.amount,
-            data_vencimento: dataVencimento,
-            data_pagamento: status === 'recebido' ? hoje : null,
-            status, parcela: 1, total_parcelas: 1,
-            origem_automatica: true, updated_at: new Date().toISOString(),
-          });
-          criadas++;
-        }
       }
     }
+
     res.json({ criadas, atualizadas });
+  });
+
+  // ─── Diagnóstico do sync ────────────────────────────────────────────────────
+  app.get('/api/fin/sync-jobs/debug', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const adminClient = supabaseAdmin || supabase;
+
+    const { data: jobs } = await supabase
+      .from('jobs')
+      .select('id,job_name,amount,payment_status,job_date')
+      .eq('user_id', userId)
+      .order('id');
+
+    const { data: receitas } = await supabase
+      .from('fin_receitas')
+      .select('job_id,status,valor_bruto,descricao')
+      .eq('user_id', userId)
+      .not('job_id', 'is', null);
+
+    const receitasPorJob = new Map<number, any[]>();
+    for (const r of (receitas || [])) {
+      const list = receitasPorJob.get(r.job_id) || [];
+      list.push(r);
+      receitasPorJob.set(r.job_id, list);
+    }
+
+    const hoje = new Date().toISOString().slice(0, 10);
+    const diagnostico = await Promise.all((jobs || []).map(async (job: any) => {
+      const receitasDoJob = receitasPorJob.get(job.id) || [];
+      const { data: payments } = await adminClient
+        .from('job_payments').select('id,amount,payment_date').eq('job_id', job.id);
+
+      return {
+        job_id: job.id,
+        job_name: job.job_name,
+        job_amount: job.amount,
+        payment_status: job.payment_status,
+        job_date: job.job_date,
+        tem_receita: receitasDoJob.length > 0,
+        receitas: receitasDoJob.map((r: any) => ({ status: r.status, valor: r.valor_bruto, descricao: r.descricao })),
+        job_payments: (payments || []).map((p: any) => ({ id: p.id, amount: p.amount, date: p.payment_date })),
+        problema: (() => {
+          if (receitasDoJob.length === 0) return 'SEM_RECEITA';
+          if (job.payment_status === 'paid' && receitasDoJob.every((r: any) => r.status === 'recebido')) return 'OK_PAGO';
+          if (job.payment_status === 'paid' && receitasDoJob.some((r: any) => r.status !== 'recebido')) return 'PAGO_MAS_RECEITA_PENDENTE';
+          if (job.payment_status === 'partial') return 'PARCIAL';
+          if (job.payment_status === 'pending' || !job.payment_status) return 'PENDENTE';
+          return 'OK';
+        })(),
+      };
+    }));
+
+    const resumo = {
+      total_jobs: diagnostico.length,
+      sem_receita: diagnostico.filter(d => d.problema === 'SEM_RECEITA').length,
+      ok_pago: diagnostico.filter(d => d.problema === 'OK_PAGO').length,
+      pago_mas_pendente: diagnostico.filter(d => d.problema === 'PAGO_MAS_RECEITA_PENDENTE').length,
+      parcial: diagnostico.filter(d => d.problema === 'PARCIAL').length,
+      pendente: diagnostico.filter(d => d.problema === 'PENDENTE').length,
+    };
+
+    res.json({ resumo, jobs: diagnostico });
   });
 
   // ─── Dashboard financeiro ───────────────────────────────────────────────────
