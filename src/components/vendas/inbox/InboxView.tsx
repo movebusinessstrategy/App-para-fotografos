@@ -10,12 +10,13 @@ import { MessageCircle, RefreshCw, Wifi, WifiOff, Loader2 } from "lucide-react";
 interface Props {
   deals: Deal[];
   stages: PipelineStage[];
+  initialPhone?: string;
   onDealUpdated: () => void;
 }
 
 type WaStatus = "connected" | "disconnected" | "connecting" | "checking";
 
-export function InboxView({ deals, stages, onDealUpdated }: Props) {
+export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [loading, setLoading] = useState(true);
@@ -32,19 +33,28 @@ export function InboxView({ deals, stages, onDealUpdated }: Props) {
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
-          // Ordenar por data mais recente
-          setConversations(
-            data.sort((a, b) =>
-              new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime()
-            )
+          const sorted = data.sort((a, b) =>
+            new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime()
           );
+          setConversations(sorted);
+
+          // Auto-select se veio de um DealCard com phone na URL
+          if (initialPhone && !selected) {
+            const match = sorted.find((c) => c.phone === initialPhone);
+            if (match) {
+              setSelected(match);
+            } else {
+              // Ainda não tem conversa — cria placeholder para abrir o chat
+              setSelected({ phone: initialPhone, contact_name: null, last_message: '', last_message_at: new Date().toISOString(), unread_count: 0 });
+            }
+          }
         }
       }
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [initialPhone]);
 
   const checkWaStatus = useCallback(async () => {
     try {

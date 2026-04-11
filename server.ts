@@ -941,7 +941,27 @@ async function startServer() {
 
   app.get('/api/whatsapp/status', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
     const instanceName = getInstanceName(userId);
+
+    // Verifica Meta WhatsApp Business primeiro
+    try {
+      const { data: metaAccount } = await supabase
+        .from('whatsapp_business_accounts')
+        .select('phone_number, display_name')
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (metaAccount) {
+        return res.json({
+          connected: true,
+          provider: 'meta',
+          phone: metaAccount.phone_number,
+          display_name: metaAccount.display_name,
+          whatsapp: { connected: true },
+        });
+      }
+    } catch {}
 
     if (isZApiEnabled()) {
       if (getMissingZApiConfig().length > 0) {
@@ -1428,6 +1448,72 @@ async function startServer() {
         .eq('phone', phone);
     } catch {}
     return res.json({ ok: true });
+  });
+
+  // Envia mensagem via Meta WhatsApp Business API
+  app.post('/api/inbox/send', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { phone, text } = req.body;
+
+    if (!phone || !text) return res.status(400).json({ error: 'phone e text são obrigatórios' });
+
+    const { data: waAccount } = await supabase
+      .from('whatsapp_business_accounts')
+      .select('phone_number_id, phone_number, access_token')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (!waAccount) return res.status(400).json({ error: 'WhatsApp Business não conectado. Vá em Configurações para conectar.' });
+
+    const cleanPhone = phone.replace(/\D/g, '');
+
+    try {
+      const metaRes = await fetch(
+        `https://graph.facebook.com/v21.0/${waAccount.phone_number_id}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${waAccount.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            messaging_product: 'whatsapp',
+            to: cleanPhone,
+            type: 'text',
+            text: { body: text },
+          }),
+        }
+      );
+      const metaData = await metaRes.json();
+      if (metaData.error) return res.status(400).json({ error: metaData.error.message });
+
+      const msgId = metaData.messages?.[0]?.id || `meta-${Date.now()}`;
+      const now = new Date().toISOString();
+
+      await supabase.from('wa_messages').insert({
+        user_id: userId,
+        phone: cleanPhone,
+        message_id: msgId,
+        body: text,
+        from_me: true,
+        timestamp: now,
+        type: 'text',
+        status: 'sent',
+      });
+
+      await supabase.from('wa_conversations').upsert({
+        user_id: userId,
+        phone: cleanPhone,
+        last_message: text,
+        last_message_at: now,
+      }, { onConflict: 'user_id,phone' });
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[inbox/send] error:', err);
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Sincroniza histórico de conversas recentes da Evolution API para o cache em memória
@@ -4339,27 +4425,28 @@ async function startServer() {
         .eq('phone_number_id', phoneNumberId)
         .maybeSingle();
 
-      if (!waAccount) return;
+      if (!waAccount || !supabaseAdmin) return;
 
-      // Try to match client by last 8 digits of phone
-      const last8 = fromNumber.replace(/\D/g, '').slice(-8);
-      const { data: clients } = await supabaseAdmin
-        .from('clients')
-        .select('id, phone')
-        .ilike('phone', `%${last8}`);
+      const cleanFrom = fromNumber.replace(/\D/g, '');
+      const now = new Date().toISOString();
 
-      const clientId = clients?.[0]?.id || null;
-
-      await supabaseAdmin.from('whatsapp_messages').insert({
+      await supabaseAdmin.from('wa_messages').insert({
         user_id: waAccount.user_id,
-        client_id: clientId,
-        direction: 'inbound',
-        from_number: fromNumber,
-        to_number: phoneNumberId,
-        wa_message_id: msgId,
+        phone: cleanFrom,
+        message_id: msgId || `meta-in-${Date.now()}`,
         body: msgBody,
+        from_me: false,
+        timestamp: now,
+        type: 'text',
         status: 'received',
       });
+
+      await supabaseAdmin.from('wa_conversations').upsert({
+        user_id: waAccount.user_id,
+        phone: cleanFrom,
+        last_message: msgBody,
+        last_message_at: now,
+      }, { onConflict: 'user_id,phone' });
     } catch (err) {
       console.error('[WhatsApp Webhook] Error:', err);
     }
