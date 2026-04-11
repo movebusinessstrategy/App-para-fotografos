@@ -1391,7 +1391,7 @@ async function startServer() {
   app.get('/api/inbox/messages/:phone', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const phone = req.params.phone;
+    const phone = req.params.phone.replace(/\D/g, ''); // normaliza: remove +, espaços, etc
     const limit = Number(req.query.limit) || 60;
     try {
       const { data, error } = await supabase
@@ -1437,7 +1437,7 @@ async function startServer() {
   // Marcar conversa como lida (zera unread no Supabase)
   app.post('/api/inbox/mark-read/:phone', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const phone = req.params.phone;
+    const phone = req.params.phone.replace(/\D/g, '');
     readUpToTimestampByPhone.set(phone, Date.now());
     try {
       const supabase = createSupabaseClient();
