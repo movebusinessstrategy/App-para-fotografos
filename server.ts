@@ -1343,8 +1343,8 @@ async function startServer() {
   // Lista conversas do Supabase (persistido) + merge com cache em memória
   app.get('/api/inbox/conversations', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
     try {
-      const supabase = createSupabaseClient();
       const { data, error } = await supabase
         .from('wa_conversations')
         .select('*')
@@ -1390,10 +1390,10 @@ async function startServer() {
   // Mensagens de uma conversa
   app.get('/api/inbox/messages/:phone', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
     const phone = req.params.phone;
     const limit = Number(req.query.limit) || 60;
     try {
-      const supabase = createSupabaseClient();
       const { data, error } = await supabase
         .from('wa_messages')
         .select('*')
@@ -4283,6 +4283,58 @@ async function startServer() {
   // ============ META WHATSAPP BUSINESS ============
   const META_APP_ID = process.env.META_APP_ID || '';
   const META_APP_SECRET = process.env.META_APP_SECRET || '';
+
+  // Rota de diagnóstico — retorna o que o token tem acesso
+  app.get('/api/meta/whatsapp/debug', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    const { data: acc } = await supabase
+      .from('whatsapp_business_accounts')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (!acc) return res.status(404).json({ error: 'Nenhuma conta conectada' });
+
+    const result: any = { account_in_db: acc };
+
+    try {
+      // 1. debug_token
+      const debugRes = await fetch(
+        `https://graph.facebook.com/v21.0/debug_token?input_token=${acc.access_token}&access_token=${META_APP_ID}|${META_APP_SECRET}`
+      );
+      result.debug_token = await debugRes.json();
+    } catch (e: any) { result.debug_token_error = e.message; }
+
+    try {
+      // 2. phone number details
+      const phoneRes = await fetch(
+        `https://graph.facebook.com/v21.0/${acc.phone_number_id}?fields=id,display_phone_number,verified_name,quality_rating,platform_type&access_token=${acc.access_token}`
+      );
+      result.phone_number_details = await phoneRes.json();
+    } catch (e: any) { result.phone_number_error = e.message; }
+
+    try {
+      // 3. Tenta enviar mensagem de teste
+      const sendRes = await fetch(
+        `https://graph.facebook.com/v21.0/${acc.phone_number_id}/messages`,
+        {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${acc.access_token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messaging_product: 'whatsapp',
+            to: '5543988416682',
+            type: 'text',
+            text: { body: 'Teste diagnóstico FotoMOVE' },
+          }),
+        }
+      );
+      result.test_send = await sendRes.json();
+    } catch (e: any) { result.test_send_error = e.message; }
+
+    res.json(result);
+  });
 
   app.post('/api/meta/whatsapp/exchange-token', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
