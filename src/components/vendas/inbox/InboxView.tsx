@@ -87,6 +87,17 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
     }
   }, [conversations]);
 
+  // Reage quando initialPhone muda (clique em outro DealCard)
+  useEffect(() => {
+    if (!initialPhone) return;
+    const match = conversations.find((c) => c.phone === initialPhone);
+    if (match) {
+      setSelected(match);
+    } else {
+      setSelected({ phone: initialPhone, contact_name: null, last_message: '', last_message_at: new Date().toISOString(), unread_count: 0 });
+    }
+  }, [initialPhone]);
+
   const handleSelect = (conv: Conversation) => {
     setSelected(conv);
   };

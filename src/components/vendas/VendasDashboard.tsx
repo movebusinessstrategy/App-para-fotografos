@@ -44,6 +44,14 @@ export function VendasDashboard() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  // Reage à mudança nos params da URL (ex: clique no botão WA de um DealCard)
+  useEffect(() => {
+    const tabParam = searchParams.get("tab") as Tab | null;
+    if (tabParam && tabParam !== tab) {
+      setTab(tabParam);
+    }
+  }, [searchParams]);
+
   const activeDeals = deals.filter((d) => {
     const stage = stages.find((s) => s.id === d.stage);
     return !stage?.is_final;
