@@ -1053,24 +1053,27 @@ async function startServer() {
     const supabase = (req as any).supabase as SupabaseClient;
     const instanceName = getInstanceName(userId);
 
-    // Verifica Meta WhatsApp Business primeiro
-    try {
-      const { data: metaAccount } = await supabase
-        .from('whatsapp_business_accounts')
-        .select('phone_number, display_name')
-        .eq('user_id', userId)
-        .maybeSingle();
+    // Verifica Meta WhatsApp Business SOMENTE se o provider configurado for 'meta'
+    // (quando WHATSAPP_PROVIDER=evolution, a Meta não deve ser reportada como ativa)
+    if (WHATSAPP_PROVIDER === 'meta' || (!WHATSAPP_PROVIDER && !isZApiEnabled())) {
+      try {
+        const { data: metaAccount } = await supabase
+          .from('whatsapp_business_accounts')
+          .select('phone_number, display_name')
+          .eq('user_id', userId)
+          .maybeSingle();
 
-      if (metaAccount) {
-        return res.json({
-          connected: true,
-          provider: 'meta',
-          phone: metaAccount.phone_number,
-          display_name: metaAccount.display_name,
-          whatsapp: { connected: true },
-        });
-      }
-    } catch {}
+        if (metaAccount) {
+          return res.json({
+            connected: true,
+            provider: 'meta',
+            phone: metaAccount.phone_number,
+            display_name: metaAccount.display_name,
+            whatsapp: { connected: true },
+          });
+        }
+      } catch {}
+    }
 
     if (isZApiEnabled()) {
       if (getMissingZApiConfig().length > 0) {
