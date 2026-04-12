@@ -163,17 +163,17 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
       </DndContext>
 
     <DealDetailDrawer
-  deal={selectedDeal}
-  client={
-    selectedDeal?.client_id
-      ? clientMap.get(selectedDeal.client_id)
-      : undefined
-  }
-  clients={clients}  // ← ADICIONAR
-  stages={stages}
-  onClose={() => setSelectedDeal(null)}
-  onUpdate={onUpdate}
-/>
+      deal={selectedDeal}
+      client={
+        selectedDeal?.client_id
+          ? clientMap.get(selectedDeal.client_id)
+          : undefined
+      }
+      clients={clients}
+      stages={stages}
+      onClose={() => setSelectedDeal(null)}
+      onUpdate={onUpdate}
+    />
     </>
   );
 }

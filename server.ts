@@ -162,6 +162,9 @@ interface LiveWhatsAppMessage {
   fromMe: boolean;
   timestamp: number;
   source: 'webhook';
+  mediaType?: 'image' | 'audio' | 'video' | 'document';
+  mediaBase64?: string;
+  mediaMimetype?: string;
 }
 
 const LIVE_MESSAGE_CACHE_LIMIT = 400;
@@ -192,6 +195,24 @@ const parseWebhookTimestamp = (payload: any) => {
     return parsed > 1_000_000_000_000 ? parsed : parsed * 1000;
   }
   return Date.now();
+};
+
+const extractWebhookMedia = (payload: any): { type: 'image'|'audio'|'video'|'document'; base64: string; mimetype: string } | null => {
+  // Evolution API com base64: true envia assim:
+  // payload.imageMessage.base64 | payload.image.base64 | payload.data.message.imageMessage.base64
+  const img = payload?.imageMessage ?? payload?.image ?? payload?.data?.message?.imageMessage ?? payload?.message?.imageMessage;
+  if (img?.base64) return { type: 'image', base64: img.base64, mimetype: img.mimetype || 'image/jpeg' };
+
+  const audio = payload?.audioMessage ?? payload?.audio ?? payload?.data?.message?.audioMessage;
+  if (audio?.base64) return { type: 'audio', base64: audio.base64, mimetype: audio.mimetype || 'audio/ogg' };
+
+  const video = payload?.videoMessage ?? payload?.video ?? payload?.data?.message?.videoMessage;
+  if (video?.base64) return { type: 'video', base64: video.base64, mimetype: video.mimetype || 'video/mp4' };
+
+  const doc = payload?.documentMessage ?? payload?.document ?? payload?.data?.message?.documentMessage;
+  if (doc?.base64) return { type: 'document', base64: doc.base64, mimetype: doc.mimetype || 'application/octet-stream' };
+
+  return null;
 };
 
 const extractWebhookText = (payload: any): string | null => {
@@ -241,15 +262,23 @@ async function persistMessageToSupabase(userId: string, message: LiveWhatsAppMes
     const ts = new Date(message.timestamp).toISOString();
 
     // Upsert mensagem
+    const msgType = message.mediaType || 'text';
+    const mediaDataUrl = message.mediaBase64
+      ? (message.mediaBase64.startsWith('data:')
+          ? message.mediaBase64
+          : `data:${message.mediaMimetype || 'image/jpeg'};base64,${message.mediaBase64}`)
+      : null;
+
     await supabase.from('wa_messages').upsert({
       user_id: userId,
       phone: message.phone,
       message_id: message.id,
       body: message.text,
       from_me: message.fromMe,
-      type: 'text',
+      type: msgType,
       timestamp: ts,
       status: 'received',
+      ...(mediaDataUrl ? { media_url: mediaDataUrl } : {}),
     }, { onConflict: 'user_id,message_id', ignoreDuplicates: true });
 
     // Upsert conversa (atualiza último msg)
@@ -720,13 +749,54 @@ async function startServer() {
 
     // Evolution API
     try {
-      const response = await fetch(`${EVOLUTION_API_URL}/instance/create`, {
+      const serverUrl = (process.env.SERVER_URL || '').replace(/\/$/, '');
+      const webhookConfig = serverUrl ? {
+        enabled: true,
+        url: `${serverUrl}/api/whatsapp/webhook`,
+        byEvents: false,
+        base64: true,
+        events: ['QRCODE_UPDATED', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE'],
+      } : undefined;
+
+      // Check if instance already exists
+      const stateCheckRes = await fetch(`${EVOLUTION_API_URL}/instance/connectionState/${instanceName}`, {
+        method: 'GET',
+        headers: { 'apikey': EVOLUTION_API_KEY },
+      });
+
+      if (stateCheckRes.ok) {
+        // Instance exists — configure webhook and trigger QR
+        console.log(`[WA] Instância ${instanceName} já existe. Configurando webhook e gerando QR...`);
+        if (webhookConfig) {
+          await fetch(`${EVOLUTION_API_URL}/webhook/set/${instanceName}`, {
+            method: 'POST',
+            headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ webhook: webhookConfig }),
+          }).catch((e) => console.warn('[WA] Webhook config failed:', e.message));
+        }
+        qrCodeByInstance.delete(instanceName);
+        await fetch(`${EVOLUTION_API_URL}/instance/connect/${instanceName}`, {
+          method: 'GET',
+          headers: { 'apikey': EVOLUTION_API_KEY },
+        }).catch(() => {});
+        return res.json({ success: true, provider: 'evolution', exists: true, triggered: true });
+      }
+
+      // Instance does not exist — create it with webhook embedded
+      const createBody: Record<string, unknown> = {
+        instanceName,
+        qrcode: true,
+        integration: 'WHATSAPP-BAILEYS',
+        ...(webhookConfig ? { webhook: webhookConfig } : {}),
+      };
+      const createRes = await fetch(`${EVOLUTION_API_URL}/instance/create`, {
         method: 'POST',
         headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instanceName, qrcode: true, integration: 'WHATSAPP-BAILEYS' }),
+        body: JSON.stringify(createBody),
       });
-      const parsed = await parseHttpResponse(response);
-      return res.status(response.status).json({ success: response.ok, provider: 'evolution', ...parsed.data });
+      const parsed = await parseHttpResponse(createRes);
+      qrCodeByInstance.delete(instanceName);
+      return res.status(createRes.status).json({ success: createRes.ok, provider: 'evolution', ...parsed.data });
     } catch (error) {
       console.error('Erro ao inicializar sessão Evolution API:', error);
       return res.status(500).json({ error: 'Falha ao inicializar sessão WhatsApp' });
@@ -848,16 +918,46 @@ async function startServer() {
       }
     }
 
-    // Evolution API
+    // Evolution API — long-poll até 20s esperando QR chegar via webhook
     try {
-      const response = await fetch(`${EVOLUTION_API_URL}/instance/connect/${instanceName}`, {
+      // Trigger QR generation (resposta imediata é {"count":0} em v2)
+      await fetch(`${EVOLUTION_API_URL}/instance/connect/${instanceName}`, {
         method: 'GET',
         headers: { 'apikey': EVOLUTION_API_KEY },
+      }).catch(() => {});
+
+      // Aguarda até 20s pelo QR vindo via webhook (qrcode.updated)
+      const deadline = Date.now() + 20000;
+      while (Date.now() < deadline) {
+        const cached = qrCodeByInstance.get(instanceName);
+        if (cached) {
+          const base64 = cached.startsWith('data:') ? cached : `data:image/png;base64,${cached}`;
+          console.log(`[WA] QR Code pronto para ${instanceName}`);
+          return res.json({ base64, qrcode: { base64 }, provider: 'evolution' });
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 500));
+      }
+
+      // Timeout — verifica se por acaso já conectou durante a espera
+      try {
+        const statusRes = await fetch(`${EVOLUTION_API_URL}/instance/connectionState/${instanceName}`, {
+          headers: { 'apikey': EVOLUTION_API_KEY },
+        });
+        if (statusRes.ok) {
+          const statusData = await statusRes.json();
+          const state = normalizeWhatsappState(statusData);
+          if (state === 'open') {
+            return res.json({ state: 'open', connectionStatus: 'open', instance: { state: 'open' }, provider: 'evolution' });
+          }
+        }
+      } catch { /* ignora */ }
+
+      console.warn(`[WA] Timeout aguardando QR para ${instanceName} — webhook pode não estar configurado`);
+      return res.status(408).json({
+        error: 'Timeout aguardando QR Code. Certifique-se de que o webhook está configurado (clique em Conectar para reconfigurar).',
+        provider: 'evolution',
+        count: 0,
       });
-      const parsed = await parseHttpResponse(response);
-      const base64 = parsed.data?.base64 ?? qrCodeByInstance.get(instanceName) ?? '';
-      if (!base64) return res.json({ count: 0 });
-      return res.status(response.status).json({ base64, qrcode: { base64 }, provider: 'evolution' });
     } catch (error) {
       console.error('Erro ao buscar QR Code (Evolution API):', error);
       return res.status(500).json({ error: 'Falha ao buscar QR Code' });
@@ -1250,11 +1350,40 @@ async function startServer() {
 
   // Webhook para mensagens recebidas (Evolution API / Z-API / Meta Cloud API)
   // Captura sub-rotas da Evolution API quando byEvents: true (ex: /webhook/connection-update)
+  // Evolution v2 com webhookByEvents:true envia para /webhook/{EVENT_NAME}
+  // Precisamos processar QR code e mensagens aqui também
   app.post('/api/whatsapp/webhook/:event', async (req, res) => {
-    res.sendStatus(200); // sempre responde 200 para o provider não ficar retonando
-    const event = req.params.event;
-    if (event === 'connection-update') return; // só log silencioso
-    console.log(`[WA Webhook] Evento via sub-rota: ${event}`, JSON.stringify(req.body).slice(0, 200));
+    res.sendStatus(200);
+    const eventParam = req.params.event.toLowerCase();
+    const body = req.body ?? {};
+    const instanceName: string = body?.instance ?? body?.instanceName ?? '';
+
+    if (eventParam === 'qrcode_updated' || eventParam === 'qrcode.updated') {
+      const qrBase64: string = body?.data?.qrcode?.base64 ?? body?.qrcode?.base64 ?? body?.data?.base64 ?? '';
+      if (qrBase64 && instanceName) {
+        qrCodeByInstance.set(instanceName, qrBase64);
+        console.log(`[WA] QR recebido via /webhook/${eventParam} para: ${instanceName}`);
+      }
+      return;
+    }
+
+    if (eventParam === 'connection_update' || eventParam === 'connection.update') {
+      const state: string = body?.data?.state ?? body?.state ?? body?.connectionStatus ?? '';
+      console.log(`[WA] Connection update (byEvents) instância=${instanceName} state=${state}`);
+      return;
+    }
+
+    if (eventParam === 'messages_upsert' || eventParam === 'messages.upsert') {
+      // Reprocessa como se fosse o webhook principal inserindo evento no body
+      const merged = { ...body, event: 'messages.upsert' };
+      req.body = merged;
+      // Chama a lógica de processamento diretamente passando req.body modificado
+      // (simplificado: loga e deixa o polling de mensagens buscar do banco)
+      console.log(`[WA] Messages upsert (byEvents) instância=${instanceName}`, JSON.stringify(body).slice(0, 200));
+      return;
+    }
+
+    console.log(`[WA Webhook] Evento sub-rota não processado: ${eventParam}`, JSON.stringify(body).slice(0, 200));
   });
 
   app.post('/api/whatsapp/webhook', async (req, res) => {
@@ -1355,7 +1484,8 @@ async function startServer() {
 
         const phone = normalizePhone(rawPhone);
         const text = extractWebhookText(event);
-        if (!phone || !text) continue;
+        const media = extractWebhookMedia(event);
+        if (!phone || (!text && !media)) continue;
 
         const name = String(
           event?.senderName ?? event?.pushName ?? event?.chatName ??
@@ -1373,10 +1503,11 @@ async function startServer() {
           id: messageId,
           phone,
           name,
-          text,
+          text: text || (media ? `[${media.type}]` : ''),
           fromMe: Boolean(event?.fromMe),
           timestamp,
           source: 'webhook',
+          ...(media ? { mediaType: media.type, mediaBase64: media.base64, mediaMimetype: media.mimetype } : {}),
         });
         processed += 1;
       }
@@ -1483,8 +1614,11 @@ async function startServer() {
           body: m.text,
           from_me: m.fromMe,
           timestamp: new Date(m.timestamp).toISOString(),
-          type: 'text',
+          type: m.mediaType || 'text',
           status: 'received',
+          media_url: m.mediaBase64
+            ? (m.mediaBase64.startsWith('data:') ? m.mediaBase64 : `data:${m.mediaMimetype||'image/jpeg'};base64,${m.mediaBase64}`)
+            : null,
         }));
 
       const all = [...(data || []), ...memMessages].sort(
@@ -1497,8 +1631,11 @@ async function startServer() {
         body: m.text,
         from_me: m.fromMe,
         timestamp: new Date(m.timestamp).toISOString(),
-        type: 'text',
+        type: m.mediaType || 'text',
         status: 'received',
+        media_url: m.mediaBase64
+          ? (m.mediaBase64.startsWith('data:') ? m.mediaBase64 : `data:${m.mediaMimetype||'image/jpeg'};base64,${m.mediaBase64}`)
+          : null,
       }));
       return res.json(msgs);
     }
@@ -1528,60 +1665,80 @@ async function startServer() {
 
     if (!phone || !text) return res.status(400).json({ error: 'phone e text são obrigatórios' });
 
+    const cleanPhone = normalizeBrazilianPhone(phone.replace(/\D/g, ''));
+    const instanceName = `user_${userId.replace(/-/g, '_')}`;
+
+    const saveToDb = async (msgId: string) => {
+      const now = new Date().toISOString();
+      await supabase.from('wa_messages').insert({
+        user_id: userId, phone: cleanPhone, message_id: msgId,
+        body: text, from_me: true, timestamp: now, type: 'text', status: 'sent',
+      });
+      await supabase.from('wa_conversations').upsert({
+        user_id: userId, phone: cleanPhone, last_message: text, last_message_at: now,
+      }, { onConflict: 'user_id,phone' });
+    };
+
+    // ── Z-API ────────────────────────────────────────────────────────────────
+    if (isZApiEnabled()) {
+      try {
+        const response = await fetch(zapiUrl('/send-text'), {
+          method: 'POST',
+          headers: zapiHeaders(true),
+          body: JSON.stringify({ phone: cleanPhone, message: String(text) }),
+        });
+        const parsed = await parseHttpResponse(response);
+        if (!response.ok) return res.status(response.status).json({ error: parsed.data?.error || 'Erro Z-API' });
+        const msgId = parsed.data?.messageId || `zapi-${Date.now()}`;
+        await saveToDb(msgId);
+        return res.json({ success: true, message_id: msgId });
+      } catch (err: any) {
+        return res.status(500).json({ error: err.message });
+      }
+    }
+
+    // ── Evolution API ─────────────────────────────────────────────────────────
+    if (WHATSAPP_PROVIDER === 'evolution') {
+      try {
+        const response = await fetch(`${EVOLUTION_API_URL}/message/sendText/${instanceName}`, {
+          method: 'POST',
+          headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ number: cleanPhone, textMessage: { text: String(text) } }),
+        });
+        const parsed = await parseHttpResponse(response);
+        if (!response.ok) return res.status(response.status).json({ error: parsed.data?.error || 'Erro Evolution API' });
+        const msgId = parsed.data?.key?.id || `evo-${Date.now()}`;
+        await saveToDb(msgId);
+        return res.json({ success: true, message_id: msgId });
+      } catch (err: any) {
+        return res.status(500).json({ error: err.message });
+      }
+    }
+
+    // ── Meta WhatsApp Business API (fallback) ────────────────────────────────
     const { data: waAccount } = await supabase
       .from('whatsapp_business_accounts')
       .select('phone_number_id, phone_number, access_token')
       .eq('user_id', userId)
       .maybeSingle();
 
-    if (!waAccount) return res.status(400).json({ error: 'WhatsApp Business não conectado. Vá em Configurações para conectar.' });
-
-    const cleanPhone = normalizeBrazilianPhone(phone.replace(/\D/g, ''));
+    if (!waAccount) return res.status(400).json({ error: 'WhatsApp não conectado. Configure nas Configurações.' });
 
     try {
       const metaRes = await fetch(
         `https://graph.facebook.com/v21.0/${waAccount.phone_number_id}/messages`,
         {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${waAccount.access_token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            messaging_product: 'whatsapp',
-            to: cleanPhone,
-            type: 'text',
-            text: { body: text },
-          }),
+          headers: { 'Authorization': `Bearer ${waAccount.access_token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messaging_product: 'whatsapp', to: cleanPhone, type: 'text', text: { body: text } }),
         }
       );
       const metaData = await metaRes.json();
       if (metaData.error) return res.status(400).json({ error: metaData.error.message });
-
       const msgId = metaData.messages?.[0]?.id || `meta-${Date.now()}`;
-      const now = new Date().toISOString();
-
-      await supabase.from('wa_messages').insert({
-        user_id: userId,
-        phone: cleanPhone,
-        message_id: msgId,
-        body: text,
-        from_me: true,
-        timestamp: now,
-        type: 'text',
-        status: 'sent',
-      });
-
-      await supabase.from('wa_conversations').upsert({
-        user_id: userId,
-        phone: cleanPhone,
-        last_message: text,
-        last_message_at: now,
-      }, { onConflict: 'user_id,phone' });
-
+      await saveToDb(msgId);
       res.json({ success: true, message_id: msgId });
     } catch (err: any) {
-      console.error('[inbox/send] error:', err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -4365,22 +4522,68 @@ async function startServer() {
 
   app.post('/api/fin/despesas', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    // Mapeia campos do form para colunas do DB (remove colunas inexistentes)
-    const { recorrencia_tipo, recorrencia_qtd, observacoes, ...rest } = req.body;
-    const insertBody: any = {
-      ...rest,
-      frequencia_recorrencia: recorrencia_tipo || null,
-      user_id: userId,
-      updated_at: new Date().toISOString(),
-    };
-    const { data, error } = await supabase.from('fin_despesas').insert(insertBody).select().single();
-    if (error) return res.status(500).json({ error: error.message });
-    res.json(data);
+    try {
+      const { recorrencia_tipo, recorrencia_qtd, tipo_pessoa, ...rest } = req.body;
+      // Colunas base garantidas
+      const insertBody: any = {
+        descricao: rest.descricao,
+        valor: rest.valor,
+        status: 'pendente',
+        data_vencimento: rest.data_vencimento || null,
+        data_pagamento: rest.data_pagamento || null,
+        recorrente: rest.recorrente ?? false,
+        user_id: userId,
+        updated_at: new Date().toISOString(),
+      };
+      // Colunas opcionais — adicionadas somente se tiverem valor
+      // (evita erro de schema caso ainda não existam no banco)
+      const optionals: Record<string, any> = {
+        categoria_id: rest.categoria_id || null,
+        meio_id: rest.meio_id || null,
+        fornecedor: rest.fornecedor || null,
+        observacoes: rest.observacoes || null,
+        frequencia_recorrencia: recorrencia_tipo || null,
+        conta_id: rest.conta_id || null,
+      };
+      // Tenta inserir com todos os campos; se falhar por coluna inexistente,
+      // remove o campo problemático e tenta novamente
+      let { data, error } = await supabase.from('fin_despesas').insert({ ...insertBody, ...optionals }).select().single();
+      if (error?.message?.includes('Could not find')) {
+        // Detecta qual coluna está faltando e remove do objeto
+        const colMatch = error.message.match(/Could not find the '(\w+)' column/);
+        if (colMatch) {
+          delete optionals[colMatch[1]];
+          ({ data, error } = await supabase.from('fin_despesas').insert({ ...insertBody, ...optionals }).select().single());
+        }
+        // Se ainda falhar, fallback com campos base apenas
+        if (error?.message?.includes('Could not find')) {
+          ({ data, error } = await supabase.from('fin_despesas').insert(insertBody).select().single());
+        }
+      }
+      if (error) return res.status(500).json({ error: error.message });
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message ?? 'Erro ao criar despesa' });
+    }
   });
 
   app.put('/api/fin/despesas/:id', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const { error } = await supabase.from('fin_despesas').update({ ...req.body, updated_at: new Date().toISOString() }).eq('id', req.params.id).eq('user_id', userId);
+    const { descricao, valor, status, data_vencimento, data_pagamento, categoria_id, meio_id, fornecedor, observacoes, recorrente, frequencia_recorrencia, conta_id } = req.body;
+    const updateBody: any = { updated_at: new Date().toISOString() };
+    if (descricao !== undefined) updateBody.descricao = descricao;
+    if (valor !== undefined) updateBody.valor = valor;
+    if (status !== undefined) updateBody.status = status;
+    if (data_vencimento !== undefined) updateBody.data_vencimento = data_vencimento || null;
+    if (data_pagamento !== undefined) updateBody.data_pagamento = data_pagamento || null;
+    if (categoria_id !== undefined) updateBody.categoria_id = categoria_id || null;
+    if (meio_id !== undefined) updateBody.meio_id = meio_id || null;
+    if (fornecedor !== undefined) updateBody.fornecedor = fornecedor || null;
+    if (observacoes !== undefined) updateBody.observacoes = observacoes || null;
+    if (recorrente !== undefined) updateBody.recorrente = recorrente;
+    if (frequencia_recorrencia !== undefined) updateBody.frequencia_recorrencia = frequencia_recorrencia || null;
+    if (conta_id !== undefined) updateBody.conta_id = conta_id || null;
+    const { error } = await supabase.from('fin_despesas').update(updateBody).eq('id', req.params.id).eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
   });
@@ -4404,24 +4607,43 @@ async function startServer() {
     const supabase = finClient(req); const userId = finUser(req);
     const adminClient = supabaseAdmin || supabase;
 
+    // Join direto com clients para garantir o nome correto
     const { data: jobs } = await supabase
       .from('jobs')
-      .select('id,client_id,job_name,job_date,amount,payment_status,payment_method')
+      .select('id,client_id,job_name,job_date,amount,payment_status,payment_method,clients(id,name)')
       .eq('user_id', userId);
     if (!jobs?.length) return res.json({ criadas: 0, atualizadas: 0 });
 
-    // Carrega TODAS as receitas de jobs de uma vez (evita N+1)
-    const { data: todasReceitas } = await supabase
-      .from('fin_receitas')
-      .select('id,job_id,status,valor_bruto')
-      .eq('user_id', userId)
-      .not('job_id', 'is', null);
+    const jobIds = jobs.map((j: any) => j.id);
 
+    // Carrega receitas e pagamentos em paralelo
+    const [{ data: todasReceitas }, { data: todosPayments }] = await Promise.all([
+      supabase
+        .from('fin_receitas')
+        .select('id,job_id,status,valor_bruto')
+        .eq('user_id', userId)
+        .not('job_id', 'is', null),
+      adminClient
+        .from('job_payments')
+        .select('*')
+        .in('job_id', jobIds)
+        .order('created_at'),
+    ]);
+
+    // Agrupa por job_id — normaliza para Number para evitar mismatch string/int
     const receitasPorJob = new Map<number, any[]>();
     for (const r of (todasReceitas || [])) {
-      const list = receitasPorJob.get(r.job_id) || [];
+      const jid = Number(r.job_id);
+      const list = receitasPorJob.get(jid) || [];
       list.push(r);
-      receitasPorJob.set(r.job_id, list);
+      receitasPorJob.set(jid, list);
+    }
+    const paymentsPorJob = new Map<number, any[]>();
+    for (const p of (todosPayments || [])) {
+      const jid = Number(p.job_id);
+      const list = paymentsPorJob.get(jid) || [];
+      list.push(p);
+      paymentsPorJob.set(jid, list);
     }
 
     let criadas = 0;
@@ -4429,15 +4651,13 @@ async function startServer() {
     const hoje = new Date().toISOString().slice(0, 10);
 
     for (const job of jobs) {
-      const receitasExistentes = receitasPorJob.get(job.id) || [];
+      const jid = Number(job.id);
+      const receitasExistentes = receitasPorJob.get(jid) || [];
+      const paymentsArr = paymentsPorJob.get(jid) || [];
       const temReceita = receitasExistentes.length > 0;
       const dataVencimento = job.job_date || hoje;
-      const clienteNome = job.job_name || `Job #${job.id}`;
-
-      // Busca pagamentos reais registrados para este job
-      const { data: payments } = await adminClient
-        .from('job_payments').select('*').eq('job_id', job.id).order('created_at');
-      const paymentsArr = payments || [];
+      const clienteNome = (job.clients as any)?.name || job.job_name || `Job #${job.id}`;
+      const descricaoBase = job.job_name || clienteNome;
 
       if (!temReceita) {
         // ── Job nunca sincronizado: criar receitas do zero ────────────────────
@@ -4446,7 +4666,7 @@ async function startServer() {
             await supabase.from('fin_receitas').insert({
               user_id: userId, job_id: job.id,
               cliente_id: job.client_id, cliente_nome: clienteNome,
-              descricao: `${clienteNome} — ${pay.description || 'Pagamento'}`,
+              descricao: `${descricaoBase} — ${pay.description || 'Pagamento'}`,
               valor_bruto: pay.amount, taxa_meio: 0, valor_liquido: pay.amount,
               data_vencimento: pay.payment_date || dataVencimento,
               data_pagamento: pay.payment_date,
@@ -4461,7 +4681,7 @@ async function startServer() {
             const st = dataVencimento < hoje ? 'atrasado' : 'pendente';
             await supabase.from('fin_receitas').insert({
               user_id: userId, job_id: job.id, cliente_id: job.client_id, cliente_nome: clienteNome,
-              descricao: `${clienteNome} — Saldo restante`,
+              descricao: `${descricaoBase} — Saldo restante`,
               valor_bruto: restante, taxa_meio: 0, valor_liquido: restante,
               data_vencimento: dataVencimento, status: st,
               parcela: 1, total_parcelas: 1, origem_automatica: true, updated_at: new Date().toISOString(),
@@ -4472,7 +4692,7 @@ async function startServer() {
           const st = job.payment_status === 'paid' ? 'recebido' : (dataVencimento < hoje ? 'atrasado' : 'pendente');
           await supabase.from('fin_receitas').insert({
             user_id: userId, job_id: job.id, cliente_id: job.client_id, cliente_nome: clienteNome,
-            descricao: clienteNome,
+            descricao: descricaoBase,
             valor_bruto: job.amount, taxa_meio: 0, valor_liquido: job.amount,
             data_vencimento: dataVencimento,
             data_pagamento: st === 'recebido' ? hoje : null,
@@ -4484,18 +4704,26 @@ async function startServer() {
       } else {
         // ── Job já existente: reconciliar com estado atual ────────────────────
         if (job.payment_status === 'paid') {
-          // Marca toda receita ainda pendente/atrasada como recebido
+          // Marca TODA receita pendente/atrasada como recebido
+          // Também atualiza cliente_nome se estava errado
           const pendentes = receitasExistentes.filter((r: any) =>
             r.status === 'pendente' || r.status === 'atrasado'
           );
           for (const r of pendentes) {
             await supabase.from('fin_receitas')
-              .update({ status: 'recebido', data_pagamento: hoje, updated_at: new Date().toISOString() })
+              .update({ status: 'recebido', data_pagamento: hoje, cliente_nome: clienteNome, updated_at: new Date().toISOString() })
               .eq('id', r.id).eq('user_id', userId);
             atualizadas++;
           }
+          // Corrige cliente_nome nas recebidas também
+          const recebidas = receitasExistentes.filter((r: any) => r.status === 'recebido');
+          for (const r of recebidas) {
+            await supabase.from('fin_receitas')
+              .update({ cliente_nome: clienteNome, updated_at: new Date().toISOString() })
+              .eq('id', r.id).eq('user_id', userId);
+          }
         } else if (job.payment_status === 'partial' && paymentsArr.length > 0) {
-          // Para cada pagamento real, insere receita se ainda não existe valor similar como recebido
+          // Para cada pagamento real, insere receita se ainda não existe como recebido
           for (const pay of paymentsArr) {
             const jaExiste = receitasExistentes.some(
               (r: any) => r.status === 'recebido' && Math.abs(r.valor_bruto - pay.amount) < 0.01
@@ -4504,7 +4732,7 @@ async function startServer() {
               await supabase.from('fin_receitas').insert({
                 user_id: userId, job_id: job.id,
                 cliente_id: job.client_id, cliente_nome: clienteNome,
-                descricao: `${clienteNome} — ${pay.description || 'Pagamento parcial'}`,
+                descricao: `${descricaoBase} — ${pay.description || 'Pagamento parcial'}`,
                 valor_bruto: pay.amount, taxa_meio: 0, valor_liquido: pay.amount,
                 data_vencimento: pay.payment_date || dataVencimento,
                 data_pagamento: pay.payment_date,
@@ -4512,7 +4740,29 @@ async function startServer() {
                 origem_automatica: true, updated_at: new Date().toISOString(),
               });
               criadas++;
+            } else {
+              // Corrige cliente_nome se estava errado
+              const r = receitasExistentes.find((r: any) => r.status === 'recebido' && Math.abs(r.valor_bruto - pay.amount) < 0.01);
+              if (r) {
+                await supabase.from('fin_receitas')
+                  .update({ cliente_nome: clienteNome, updated_at: new Date().toISOString() })
+                  .eq('id', r.id).eq('user_id', userId);
+              }
             }
+          }
+          // Corrige cliente_nome nas receitas pendentes
+          const pendentes = receitasExistentes.filter((r: any) => r.status === 'pendente' || r.status === 'atrasado');
+          for (const r of pendentes) {
+            await supabase.from('fin_receitas')
+              .update({ cliente_nome: clienteNome, updated_at: new Date().toISOString() })
+              .eq('id', r.id).eq('user_id', userId);
+          }
+        } else {
+          // pending — só corrige o cliente_nome
+          for (const r of receitasExistentes) {
+            await supabase.from('fin_receitas')
+              .update({ cliente_nome: clienteNome, updated_at: new Date().toISOString() })
+              .eq('id', r.id).eq('user_id', userId);
           }
         }
       }
@@ -4532,24 +4782,43 @@ async function startServer() {
       .eq('user_id', userId)
       .order('id');
 
-    const { data: receitas } = await supabase
-      .from('fin_receitas')
-      .select('job_id,status,valor_bruto,descricao')
-      .eq('user_id', userId)
-      .not('job_id', 'is', null);
+    if (!jobs?.length) return res.json({ resumo: { total_jobs: 0, sem_receita: 0, ok_pago: 0, pago_mas_pendente: 0, parcial: 0, pendente: 0 }, jobs: [] });
 
+    const jobIds = jobs.map((j: any) => j.id);
+
+    // Carrega receitas e pagamentos em paralelo (sem N+1)
+    const [{ data: receitas }, { data: todosPayments }] = await Promise.all([
+      supabase
+        .from('fin_receitas')
+        .select('job_id,status,valor_bruto,descricao')
+        .eq('user_id', userId)
+        .not('job_id', 'is', null),
+      adminClient
+        .from('job_payments')
+        .select('id,job_id,amount,payment_date')
+        .in('job_id', jobIds),
+    ]);
+
+    // Normaliza job_id para Number para evitar mismatch string/int
     const receitasPorJob = new Map<number, any[]>();
     for (const r of (receitas || [])) {
-      const list = receitasPorJob.get(r.job_id) || [];
+      const jid = Number(r.job_id);
+      const list = receitasPorJob.get(jid) || [];
       list.push(r);
-      receitasPorJob.set(r.job_id, list);
+      receitasPorJob.set(jid, list);
+    }
+    const paymentsPorJob = new Map<number, any[]>();
+    for (const p of (todosPayments || [])) {
+      const jid = Number(p.job_id);
+      const list = paymentsPorJob.get(jid) || [];
+      list.push(p);
+      paymentsPorJob.set(jid, list);
     }
 
-    const hoje = new Date().toISOString().slice(0, 10);
-    const diagnostico = await Promise.all((jobs || []).map(async (job: any) => {
-      const receitasDoJob = receitasPorJob.get(job.id) || [];
-      const { data: payments } = await adminClient
-        .from('job_payments').select('id,amount,payment_date').eq('job_id', job.id);
+    const diagnostico = (jobs || []).map((job: any) => {
+      const jid = Number(job.id);
+      const receitasDoJob = receitasPorJob.get(jid) || [];
+      const payments = paymentsPorJob.get(jid) || [];
 
       return {
         job_id: job.id,
@@ -4559,7 +4828,7 @@ async function startServer() {
         job_date: job.job_date,
         tem_receita: receitasDoJob.length > 0,
         receitas: receitasDoJob.map((r: any) => ({ status: r.status, valor: r.valor_bruto, descricao: r.descricao })),
-        job_payments: (payments || []).map((p: any) => ({ id: p.id, amount: p.amount, date: p.payment_date })),
+        job_payments: payments.map((p: any) => ({ id: p.id, amount: p.amount, date: p.payment_date })),
         problema: (() => {
           if (receitasDoJob.length === 0) return 'SEM_RECEITA';
           if (job.payment_status === 'paid' && receitasDoJob.every((r: any) => r.status === 'recebido')) return 'OK_PAGO';
@@ -4569,15 +4838,15 @@ async function startServer() {
           return 'OK';
         })(),
       };
-    }));
+    });
 
     const resumo = {
       total_jobs: diagnostico.length,
-      sem_receita: diagnostico.filter(d => d.problema === 'SEM_RECEITA').length,
-      ok_pago: diagnostico.filter(d => d.problema === 'OK_PAGO').length,
-      pago_mas_pendente: diagnostico.filter(d => d.problema === 'PAGO_MAS_RECEITA_PENDENTE').length,
-      parcial: diagnostico.filter(d => d.problema === 'PARCIAL').length,
-      pendente: diagnostico.filter(d => d.problema === 'PENDENTE').length,
+      sem_receita: diagnostico.filter((d: any) => d.problema === 'SEM_RECEITA').length,
+      ok_pago: diagnostico.filter((d: any) => d.problema === 'OK_PAGO').length,
+      pago_mas_pendente: diagnostico.filter((d: any) => d.problema === 'PAGO_MAS_RECEITA_PENDENTE').length,
+      parcial: diagnostico.filter((d: any) => d.problema === 'PARCIAL').length,
+      pendente: diagnostico.filter((d: any) => d.problema === 'PENDENTE').length,
     };
 
     res.json({ resumo, jobs: diagnostico });

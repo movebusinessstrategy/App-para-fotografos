@@ -1,16 +1,17 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Plus, CheckCircle2, Search, Filter, Trash2, ChevronDown, X } from 'lucide-react';
-import { MoneyInput, NumInput, FinSelect, Toggle } from './FinInputs';
+import { Plus, CheckCircle2, Search, Trash2, X, AlertTriangle, Edit2, Save, XCircle } from 'lucide-react';
+import { MoneyInput, FinSelect, Toggle, DatePicker } from './FinInputs';
 import { authFetch } from '../../utils/authFetch';
 import {
   fmtBRL, fmtDate, STATUS_RECEITA_LABEL, STATUS_RECEITA_COLOR,
-  CATEGORIAS_RECEITA_PADRAO, MEIOS_PADRAO, exportCSV,
+  exportCSV,
 } from './finUtils';
 
 interface Receita {
   id: string;
   descricao: string;
-  valor: number;
+  valor_bruto: number;
+  valor_liquido: number;
   data_vencimento: string | null;
   data_recebimento: string | null;
   status: string;
@@ -19,7 +20,6 @@ interface Receita {
   meio_id: string | null;
   meio_nome?: string;
   cliente_nome?: string;
-  observacoes?: string;
   recorrente: boolean;
 }
 
@@ -27,6 +27,18 @@ interface Categoria { id: string; nome: string; cor: string; }
 interface Meio { id: string; nome: string; }
 
 const STATUSES = ['todos', 'pendente', 'recebido', 'atrasado', 'cancelado'];
+
+const emptyForm = {
+  descricao: '',
+  valor_bruto: '',
+  data_vencimento: '',
+  categoria_id: '',
+  meio_id: '',
+  cliente_nome: '',
+  recorrente: false,
+  recorrencia_tipo: 'mensal',
+  recorrencia_qtd: '1',
+};
 
 export default function ContasReceber() {
   const [receitas, setReceitas] = useState<Receita[]>([]);
@@ -36,19 +48,10 @@ export default function ContasReceber() {
   const [busca, setBusca] = useState('');
   const [statusFiltro, setStatusFiltro] = useState('todos');
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({
-    descricao: '',
-    valor: '',
-    data_vencimento: '',
-    categoria_id: '',
-    meio_id: '',
-    cliente_nome: '',
-    observacoes: '',
-    recorrente: false,
-    recorrencia_tipo: 'mensal',
-    recorrencia_qtd: '1',
-  });
+  const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [editando, setEditando] = useState<Receita | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -71,9 +74,9 @@ export default function ContasReceber() {
   const marcarRecebido = async (id: string) => {
     const hoje = new Date().toISOString().split('T')[0];
     const res = await authFetch(`/api/fin/receitas/${id}/receber`, {
-      method: 'PATCH',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data_recebimento: hoje }),
+      body: JSON.stringify({ data_pagamento: hoje }),
     });
     if (res.ok) {
       setReceitas(prev => prev.map(r =>
@@ -82,24 +85,27 @@ export default function ContasReceber() {
     }
   };
 
-  const deletar = async (id: string) => {
-    if (!confirm('Excluir este recebimento?')) return;
-    const res = await authFetch(`/api/fin/receitas/${id}`, { method: 'DELETE' });
-    if (res.ok) setReceitas(prev => prev.filter(r => r.id !== id));
+  const deletar = async () => {
+    if (!confirmDelete) return;
+    const res = await authFetch(`/api/fin/receitas/${confirmDelete}`, { method: 'DELETE' });
+    if (res.ok) setReceitas(prev => prev.filter(r => r.id !== confirmDelete));
+    setConfirmDelete(null);
   };
 
   const salvar = async () => {
-    if (!form.descricao || !form.valor) return;
+    if (!form.descricao || !form.valor_bruto) return;
     setSaving(true);
     try {
+      const valor = parseFloat(form.valor_bruto.replace(',', '.'));
       const body = {
         descricao: form.descricao,
-        valor: parseFloat(form.valor.replace(',', '.')),
+        valor_bruto: valor,
+        valor_liquido: valor,
+        status: 'pendente',
         data_vencimento: form.data_vencimento || null,
         categoria_id: form.categoria_id || null,
         meio_id: form.meio_id || null,
         cliente_nome: form.cliente_nome || null,
-        observacoes: form.observacoes || null,
         recorrente: form.recorrente,
         recorrencia_tipo: form.recorrente ? form.recorrencia_tipo : null,
         recorrencia_qtd: form.recorrente ? parseInt(form.recorrencia_qtd) : null,
@@ -112,10 +118,32 @@ export default function ContasReceber() {
       if (res.ok) {
         await load();
         setShowForm(false);
-        setForm({ descricao: '', valor: '', data_vencimento: '', categoria_id: '', meio_id: '', cliente_nome: '', observacoes: '', recorrente: false, recorrencia_tipo: 'mensal', recorrencia_qtd: '1' });
+        setForm(emptyForm);
       }
     } finally {
       setSaving(false);
+    }
+  };
+
+  const saveEdit = async () => {
+    if (!editando) return;
+    const res = await authFetch(`/api/fin/receitas/${editando.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        descricao: editando.descricao,
+        valor_bruto: editando.valor_bruto,
+        valor_liquido: editando.valor_liquido ?? editando.valor_bruto,
+        data_vencimento: editando.data_vencimento,
+        categoria_id: editando.categoria_id,
+        meio_id: editando.meio_id,
+        cliente_nome: editando.cliente_nome,
+        status: editando.status,
+      }),
+    });
+    if (res.ok) {
+      setReceitas(prev => prev.map(r => r.id === editando.id ? editando : r));
+      setEditando(null);
     }
   };
 
@@ -125,7 +153,7 @@ export default function ContasReceber() {
     return matchBusca && matchStatus;
   });
 
-  const totalFiltrado = filtradas.reduce((acc, r) => acc + (r.valor || 0), 0);
+  const totalFiltrado = filtradas.reduce((acc, r) => acc + (r.valor_bruto || 0), 0);
 
   return (
     <div className="space-y-4">
@@ -140,7 +168,7 @@ export default function ContasReceber() {
         <div className="flex gap-2">
           <button
             onClick={() => exportCSV(filtradas.map(r => ({
-              Descrição: r.descricao, Valor: r.valor, Vencimento: r.data_vencimento ?? '',
+              Descrição: r.descricao, Valor: r.valor_bruto, Vencimento: r.data_vencimento ?? '',
               Status: STATUS_RECEITA_LABEL[r.status] ?? r.status, Cliente: r.cliente_nome ?? '',
             })), 'contas_receber.csv')}
             className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
@@ -198,8 +226,8 @@ export default function ContasReceber() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400">
-                <th className="text-left px-4 py-3 font-medium">Descrição</th>
                 <th className="text-left px-4 py-3 font-medium">Cliente</th>
+                <th className="text-left px-4 py-3 font-medium">Descrição</th>
                 <th className="text-left px-4 py-3 font-medium">Vencimento</th>
                 <th className="text-right px-4 py-3 font-medium">Valor</th>
                 <th className="text-center px-4 py-3 font-medium">Status</th>
@@ -208,43 +236,138 @@ export default function ContasReceber() {
             </thead>
             <tbody>
               {filtradas.map(r => (
-                <tr key={r.id} className="border-b border-gray-50 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-700/30 last:border-0">
-                  <td className="px-4 py-3">
-                    <p className="font-medium text-gray-800 dark:text-gray-200">{r.descricao}</p>
-                    {r.categoria_nome && <p className="text-xs text-gray-400">{r.categoria_nome}</p>}
-                  </td>
-                  <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{r.cliente_nome ?? '—'}</td>
-                  <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{fmtDate(r.data_vencimento)}</td>
-                  <td className="px-4 py-3 text-right font-semibold text-gray-900 dark:text-white">{fmtBRL(r.valor)}</td>
-                  <td className="px-4 py-3 text-center">
-                    <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_RECEITA_COLOR[r.status] ?? ''}`}>
-                      {STATUS_RECEITA_LABEL[r.status] ?? r.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-1 justify-end">
-                      {r.status === 'pendente' || r.status === 'atrasado' ? (
-                        <button
-                          onClick={() => marcarRecebido(r.id)}
-                          title="Marcar como recebido"
-                          className="p-1 rounded-md text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
-                        >
-                          <CheckCircle2 className="w-4 h-4" />
+                editando?.id === r.id ? (
+                  // ── Linha de edição inline ────────────────────────────────
+                  <tr key={r.id} className="border-b border-violet-100 dark:border-violet-900/30 bg-violet-50/30 dark:bg-violet-900/10">
+                    <td className="px-3 py-2">
+                      <input
+                        value={editando.cliente_nome ?? ''}
+                        onChange={e => setEditando(ed => ed ? { ...ed, cliente_nome: e.target.value } : ed)}
+                        className="w-full px-2 py-1 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                        placeholder="Cliente"
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <input
+                        value={editando.descricao}
+                        onChange={e => setEditando(ed => ed ? { ...ed, descricao: e.target.value } : ed)}
+                        className="w-full px-2 py-1 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <DatePicker
+                        value={editando.data_vencimento ?? ''}
+                        onChange={v => setEditando(ed => ed ? { ...ed, data_vencimento: v } : ed)}
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <MoneyInput
+                        value={String(editando.valor_bruto)}
+                        onChange={v => setEditando(ed => ed ? { ...ed, valor_bruto: parseFloat(v.replace(',', '.')) || 0 } : ed)}
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <FinSelect
+                        value={editando.status}
+                        onChange={v => setEditando(ed => ed ? { ...ed, status: v } : ed)}
+                        nullable={false}
+                        options={[
+                          { value: 'pendente', label: 'Pendente' },
+                          { value: 'recebido', label: 'Recebido' },
+                          { value: 'atrasado', label: 'Atrasado' },
+                          { value: 'cancelado', label: 'Cancelado' },
+                        ]}
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-1 justify-end">
+                        <button onClick={saveEdit} className="p-1 rounded-md text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/30">
+                          <Save className="w-4 h-4" />
                         </button>
-                      ) : null}
-                      <button
-                        onClick={() => deletar(r.id)}
-                        title="Excluir"
-                        className="p-1 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
+                        <button onClick={() => setEditando(null)} className="p-1 rounded-md text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">
+                          <XCircle className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  // ── Linha normal ──────────────────────────────────────────
+                  <tr key={r.id} className="border-b border-gray-50 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-700/30 last:border-0">
+                    <td className="px-4 py-3">
+                      <p className="font-medium text-gray-800 dark:text-gray-200">{r.cliente_nome || '—'}</p>
+                    </td>
+                    <td className="px-4 py-3">
+                      <p className="text-gray-700 dark:text-gray-300">{r.descricao}</p>
+                      {r.categoria_nome && <p className="text-xs text-gray-400">{r.categoria_nome}</p>}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{fmtDate(r.data_vencimento)}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-gray-900 dark:text-white">{fmtBRL(r.valor_bruto)}</td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_RECEITA_COLOR[r.status] ?? ''}`}>
+                        {STATUS_RECEITA_LABEL[r.status] ?? r.status}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1 justify-end">
+                        {(r.status === 'pendente' || r.status === 'atrasado') && (
+                          <button
+                            onClick={() => marcarRecebido(r.id)}
+                            title="Marcar como recebido"
+                            className="p-1 rounded-md text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setEditando(r)}
+                          title="Editar"
+                          className="p-1 rounded-md text-gray-400 hover:text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/20"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => setConfirmDelete(r.id)}
+                          title="Excluir"
+                          className="p-1 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Modal confirmação de exclusão */}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-sm p-6 flex flex-col items-center gap-4">
+            <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+              <AlertTriangle className="w-6 h-6 text-red-500" />
+            </div>
+            <div className="text-center">
+              <p className="font-semibold text-gray-900 dark:text-white">Excluir lançamento?</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Essa ação não pode ser desfeita.</p>
+            </div>
+            <div className="flex gap-3 w-full">
+              <button
+                onClick={() => setConfirmDelete(null)}
+                className="flex-1 px-4 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={deletar}
+                className="flex-1 px-4 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-700"
+              >
+                Excluir
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -272,15 +395,13 @@ export default function ContasReceber() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Valor *</label>
-                  <MoneyInput value={form.valor} onChange={v => setForm(f => ({ ...f, valor: v }))} />
+                  <MoneyInput value={form.valor_bruto} onChange={v => setForm(f => ({ ...f, valor_bruto: v }))} />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Vencimento</label>
-                  <input
+                  <DatePicker
                     value={form.data_vencimento}
-                    onChange={e => setForm(f => ({ ...f, data_vencimento: e.target.value }))}
-                    type="date"
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    onChange={v => setForm(f => ({ ...f, data_vencimento: v }))}
                   />
                 </div>
               </div>
@@ -339,7 +460,14 @@ export default function ContasReceber() {
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Repetições</label>
-                    <NumInput value={form.recorrencia_qtd} onChange={v => setForm(f => ({ ...f, recorrencia_qtd: v }))} placeholder="1" allowDecimal={false} />
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={form.recorrencia_qtd === '1' ? '' : form.recorrencia_qtd}
+                      onChange={e => setForm(f => ({ ...f, recorrencia_qtd: e.target.value.replace(/[^0-9]/g, '') || '1' }))}
+                      placeholder="1"
+                      className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
                   </div>
                 </div>
               )}
@@ -353,7 +481,7 @@ export default function ContasReceber() {
               </button>
               <button
                 onClick={salvar}
-                disabled={saving || !form.descricao || !form.valor}
+                disabled={saving || !form.descricao || !form.valor_bruto}
                 className="px-4 py-2 text-sm rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
               >
                 {saving ? 'Salvando...' : 'Salvar'}

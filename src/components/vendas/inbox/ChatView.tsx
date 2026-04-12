@@ -9,11 +9,13 @@ interface Message {
   timestamp: string;
   type?: string;
   status?: string;
+  media_url?: string | null;
 }
 
 interface Props {
   phone: string;
   contactName?: string | null;
+  showHeader?: boolean;
 }
 
 function formatTime(iso: string) {
@@ -44,7 +46,7 @@ function groupByDate(messages: Message[]) {
   return groups;
 }
 
-export function ChatView({ phone, contactName }: Props) {
+export function ChatView({ phone, contactName, showHeader = true }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [text, setText] = useState("");
@@ -149,28 +151,30 @@ export function ChatView({ phone, contactName }: Props) {
   return (
     <div className="flex flex-col h-full min-h-0 bg-gray-50 dark:bg-gray-900">
       {/* Header do chat */}
-      <div className="flex items-center gap-3 px-5 py-3 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-        <div className="w-9 h-9 rounded-full bg-gold-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
-          {(contactName || phone).slice(0, 2).toUpperCase()}
+      {showHeader && (
+        <div className="flex items-center gap-3 px-5 py-3 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+          <div className="w-9 h-9 rounded-full bg-gold-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
+            {(contactName || phone).slice(0, 2).toUpperCase()}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-gray-900 dark:text-white truncate">
+              {contactName || phone}
+            </p>
+            {contactName && (
+              <p className="text-xs text-gray-400">{phone}</p>
+            )}
+          </div>
+          <a
+            href={`https://wa.me/${phone}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="p-2 rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gold-600 transition-colors"
+            title="Abrir no WhatsApp"
+          >
+            <Phone size={16} />
+          </a>
         </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-bold text-gray-900 dark:text-white truncate">
-            {contactName || phone}
-          </p>
-          {contactName && (
-            <p className="text-xs text-gray-400">{phone}</p>
-          )}
-        </div>
-        <a
-          href={`https://wa.me/${phone}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="p-2 rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gold-600 transition-colors"
-          title="Abrir no WhatsApp"
-        >
-          <Phone size={16} />
-        </a>
-      </div>
+      )}
 
       {/* Mensagens */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-1">
@@ -201,17 +205,40 @@ export function ChatView({ phone, contactName }: Props) {
                   className={`flex mb-1 ${msg.from_me ? "justify-end" : "justify-start"}`}
                 >
                   <div
-                    className={`max-w-[72%] px-3.5 py-2 rounded-2xl text-sm leading-relaxed shadow-sm ${
+                    className={`max-w-[72%] rounded-2xl text-sm leading-relaxed shadow-sm overflow-hidden ${
                       msg.from_me
                         ? "bg-gold-600 text-white rounded-tr-sm"
                         : "bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 rounded-tl-sm border border-gray-100 dark:border-gray-700"
                     }`}
                   >
-                    <p style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{msg.body}</p>
-                    <p className={`text-[10px] mt-1 text-right ${msg.from_me ? "text-gold-200" : "text-gray-400"}`}>
-                      {formatTime(msg.timestamp)}
-                      {msg.status === "sending" && " ·"}
-                    </p>
+                    {/* Imagem */}
+                    {msg.media_url && msg.type === 'image' && (
+                      <a href={msg.media_url} target="_blank" rel="noopener noreferrer">
+                        <img
+                          src={msg.media_url}
+                          alt="imagem"
+                          className="max-w-full max-h-64 object-cover block"
+                          style={{ borderRadius: '12px 12px 0 0' }}
+                        />
+                      </a>
+                    )}
+                    {/* Áudio */}
+                    {msg.media_url && msg.type === 'audio' && (
+                      <audio controls src={msg.media_url} className="w-full px-2 py-1" />
+                    )}
+                    {/* Texto / legenda */}
+                    <div className="px-3.5 py-2">
+                      {msg.body && msg.body !== `[${msg.type}]` && (
+                        <p style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{msg.body}</p>
+                      )}
+                      {!msg.body && !msg.media_url && (
+                        <p className="italic opacity-60 text-xs">[{msg.type || 'mensagem'}]</p>
+                      )}
+                      <p className={`text-[10px] mt-1 text-right ${msg.from_me ? "text-gold-200" : "text-gray-400"}`}>
+                        {formatTime(msg.timestamp)}
+                        {msg.status === "sending" && " ·"}
+                      </p>
+                    </div>
                   </div>
                 </div>
               ))}

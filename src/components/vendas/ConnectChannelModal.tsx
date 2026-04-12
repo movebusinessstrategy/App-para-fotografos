@@ -325,7 +325,7 @@ function WhatsAppPanel({ status, qrCode, loading, error, onConnect, onDisconnect
         className="flex w-full items-center justify-center gap-2 rounded-xl bg-green-500 px-6 py-3 text-sm font-bold text-white shadow-md transition hover:bg-green-600 disabled:opacity-60"
       >
         {loading ? <Loader2 size={15} className="animate-spin" /> : <Smartphone size={15} />}
-        {loading ? "Aguarde, conectando… (pode levar até 10s)" : "Conectar via QR Code"}
+        {loading ? "Aguardando QR Code… (pode levar até 25s)" : "Conectar via QR Code"}
       </button>
     </div>
   );

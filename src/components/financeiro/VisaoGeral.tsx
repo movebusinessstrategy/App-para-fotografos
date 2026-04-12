@@ -80,9 +80,6 @@ export default function VisaoGeral() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState('');
-  const [debugData, setDebugData] = useState<any>(null);
-  const [loadingDebug, setLoadingDebug] = useState(false);
-
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -107,16 +104,6 @@ export default function VisaoGeral() {
       await load();
     } finally {
       setSyncing(false);
-    }
-  };
-
-  const runDebug = async () => {
-    setLoadingDebug(true);
-    try {
-      const res = await authFetch('/api/fin/sync-jobs/debug');
-      if (res.ok) setDebugData(await res.json());
-    } finally {
-      setLoadingDebug(false);
     }
   };
 
@@ -154,74 +141,8 @@ export default function VisaoGeral() {
             <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
             Sincronizar Jobs
           </button>
-          <button
-            onClick={runDebug}
-            disabled={loadingDebug}
-            className="flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 disabled:opacity-50"
-          >
-            <RefreshCw className={`w-4 h-4 ${loadingDebug ? 'animate-spin' : ''}`} />
-            Diagnóstico
-          </button>
         </div>
       </div>
-
-      {/* Painel de diagnóstico */}
-      {debugData && (
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-amber-200 dark:border-amber-800 overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800">
-            <div>
-              <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">Diagnóstico de Sincronização</p>
-              <p className="text-xs text-amber-600 dark:text-amber-400">
-                {debugData.resumo.total_jobs} jobs · {debugData.resumo.sem_receita} sem receita · {debugData.resumo.pago_mas_pendente} pagos mas pendentes · {debugData.resumo.ok_pago} ok
-              </p>
-            </div>
-            <button onClick={() => setDebugData(null)} className="text-amber-500 hover:text-amber-700 text-lg">✕</button>
-          </div>
-          <div className="overflow-x-auto max-h-72 overflow-y-auto">
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 bg-gray-50 dark:bg-gray-900">
-                <tr className="text-left text-gray-500 dark:text-gray-400">
-                  <th className="px-3 py-2 font-medium">Job</th>
-                  <th className="px-3 py-2 font-medium">Valor</th>
-                  <th className="px-3 py-2 font-medium">Status</th>
-                  <th className="px-3 py-2 font-medium">Pagamentos</th>
-                  <th className="px-3 py-2 font-medium">Receitas</th>
-                  <th className="px-3 py-2 font-medium">Problema</th>
-                </tr>
-              </thead>
-              <tbody>
-                {debugData.jobs.map((j: any) => (
-                  <tr key={j.job_id} className={`border-t border-gray-100 dark:border-gray-700 ${
-                    j.problema === 'SEM_RECEITA' ? 'bg-red-50 dark:bg-red-900/10' :
-                    j.problema === 'PAGO_MAS_RECEITA_PENDENTE' ? 'bg-orange-50 dark:bg-orange-900/10' :
-                    j.problema === 'OK_PAGO' ? 'bg-emerald-50 dark:bg-emerald-900/10' : ''
-                  }`}>
-                    <td className="px-3 py-2 font-medium text-gray-800 dark:text-gray-200 max-w-32 truncate">{j.job_name}</td>
-                    <td className="px-3 py-2 text-gray-600 dark:text-gray-300">R$ {(j.job_amount || 0).toFixed(2)}</td>
-                    <td className="px-3 py-2">
-                      <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
-                        j.payment_status === 'paid' ? 'bg-emerald-100 text-emerald-700' :
-                        j.payment_status === 'partial' ? 'bg-amber-100 text-amber-700' :
-                        'bg-gray-100 text-gray-600'
-                      }`}>{j.payment_status || 'pending'}</span>
-                    </td>
-                    <td className="px-3 py-2 text-gray-500">{j.job_payments.length > 0 ? j.job_payments.map((p: any) => `R$${p.amount}`).join(', ') : '—'}</td>
-                    <td className="px-3 py-2 text-gray-500">{j.receitas.length > 0 ? j.receitas.map((r: any) => `${r.status}:R$${r.valor}`).join(', ') : '—'}</td>
-                    <td className="px-3 py-2">
-                      <span className={`font-mono text-xs ${
-                        j.problema === 'SEM_RECEITA' ? 'text-red-600' :
-                        j.problema === 'PAGO_MAS_RECEITA_PENDENTE' ? 'text-orange-600' :
-                        j.problema === 'OK_PAGO' ? 'text-emerald-600' :
-                        'text-gray-400'
-                      }`}>{j.problema}</span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
 
       {/* KPI Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
