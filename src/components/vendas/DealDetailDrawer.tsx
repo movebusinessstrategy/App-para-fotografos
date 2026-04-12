@@ -210,10 +210,12 @@ export function DealDetailDrawer({
   const [availableLabels, setAvailableLabels] = useState<PipelineLabel[]>([]);
   const [dealLabels, setDealLabels] = useState<string[]>([]);
   const [showLabelPicker, setShowLabelPicker] = useState(false);
+  const [showHeaderLabelDropdown, setShowHeaderLabelDropdown] = useState(false);
   const [newLabelName, setNewLabelName] = useState("");
   const [newLabelColor, setNewLabelColor] = useState("#6B7280");
   const [creatingLabel, setCreatingLabel] = useState(false);
   const labelPickerRef = useRef<HTMLDivElement>(null);
+  const headerLabelRef = useRef<HTMLDivElement>(null);
 
   // WhatsApp profile photo
   const [contactPhotoUrl, setContactPhotoUrl] = useState<string | null>(null);
@@ -374,6 +376,7 @@ export function DealDetailDrawer({
       setEditingTitle(false);
       setDealLabels(Array.isArray(deal.labels) ? deal.labels : []);
       setShowLabelPicker(false);
+      setShowHeaderLabelDropdown(false);
       loadActivities();
       loadHistory();
     }
@@ -467,11 +470,14 @@ export function DealDetailDrawer({
     setEditingPriority(false);
   };
 
-  // Label picker click-outside
+  // Label picker click-outside (info tab + header dropdown)
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (labelPickerRef.current && !labelPickerRef.current.contains(e.target as Node)) {
         setShowLabelPicker(false);
+      }
+      if (headerLabelRef.current && !headerLabelRef.current.contains(e.target as Node)) {
+        setShowHeaderLabelDropdown(false);
       }
     };
     document.addEventListener('mousedown', handler);
@@ -670,31 +676,112 @@ export function DealDetailDrawer({
               </button>
             </div>
 
-            {/* Etiquetas do lead — visíveis em ambas as abas */}
-            {(dealLabels.length > 0 || true) && (
-              <div className="flex items-center gap-1.5 mb-2 flex-wrap">
-                {dealLabels.map(lId => {
-                  const label = availableLabels.find(l => l.id === lId);
-                  if (!label) return null;
-                  return (
-                    <span
-                      key={lId}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold text-white"
-                      style={{ backgroundColor: label.color }}
-                    >
-                      {label.name}
-                    </span>
-                  );
-                })}
-                <button
-                  onClick={() => setActiveTab('info')}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                  title="Gerenciar etiquetas na aba Informações"
-                >
-                  <Tag size={10} /> {dealLabels.length === 0 ? "Adicionar etiqueta" : "Editar"}
-                </button>
-              </div>
-            )}
+            {/* Etiquetas do lead — dropdown inline no header */}
+            <div ref={headerLabelRef} className="relative flex items-center gap-1.5 mb-2 flex-wrap">
+              {/* Labels aplicadas — clique para remover */}
+              {dealLabels.map(lId => {
+                const label = availableLabels.find(l => l.id === lId);
+                if (!label) return null;
+                return (
+                  <button
+                    key={lId}
+                    onClick={() => toggleLabel(lId)}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold text-white hover:opacity-75 transition-opacity"
+                    style={{ backgroundColor: label.color }}
+                    title="Clique para remover"
+                  >
+                    {label.name}
+                    <X size={9} className="opacity-80" />
+                  </button>
+                );
+              })}
+
+              {/* Botão que abre o dropdown */}
+              <button
+                onClick={() => setShowHeaderLabelDropdown(v => !v)}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium transition-colors ${
+                  showHeaderLabelDropdown
+                    ? 'bg-gold-100 dark:bg-gold-900/30 text-gold-600 dark:text-gold-400'
+                    : 'bg-gray-100 dark:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
+                }`}
+              >
+                <Tag size={10} />
+                {dealLabels.length === 0 ? "Etiqueta" : "+"}
+              </button>
+
+              {/* Dropdown */}
+              {showHeaderLabelDropdown && (
+                <div className="absolute top-full left-0 mt-1.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-2xl dark:shadow-black/50 p-3 z-50 min-w-[260px] space-y-3">
+                  {/* Etiquetas existentes */}
+                  {availableLabels.length === 0 ? (
+                    <p className="text-xs text-gray-400 dark:text-gray-500 text-center py-1">Nenhuma etiqueta ainda. Crie uma abaixo.</p>
+                  ) : (
+                    <div>
+                      <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase mb-2">Selecionar</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {availableLabels.map(label => {
+                          const active = dealLabels.includes(label.id);
+                          return (
+                            <button
+                              key={label.id}
+                              onClick={() => toggleLabel(label.id)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold text-white transition-all"
+                              style={{
+                                backgroundColor: label.color,
+                                opacity: active ? 1 : 0.4,
+                                outline: active ? `2px solid ${label.color}` : 'none',
+                                outlineOffset: '2px',
+                              }}
+                            >
+                              {active && <Check size={10} />}
+                              {label.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Criar nova etiqueta */}
+                  <div className="border-t border-gray-100 dark:border-gray-700 pt-3">
+                    <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase mb-2">Nova etiqueta</p>
+                    {/* Color swatches */}
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {LABEL_COLORS.map(color => (
+                        <button
+                          key={color}
+                          onClick={() => setNewLabelColor(color)}
+                          className="w-5 h-5 rounded-full hover:scale-110 transition-transform flex items-center justify-center flex-shrink-0"
+                          style={{ backgroundColor: color }}
+                        >
+                          {newLabelColor === color && <Check size={9} className="text-white drop-shadow" />}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="w-5 h-5 rounded-full flex-shrink-0 border border-white/20"
+                        style={{ backgroundColor: newLabelColor }}
+                      />
+                      <input
+                        value={newLabelName}
+                        onChange={e => setNewLabelName(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') createLabel(); if (e.key === 'Escape') setShowHeaderLabelDropdown(false); }}
+                        placeholder="Nome da etiqueta..."
+                        className="flex-1 text-sm border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 rounded-lg px-2.5 py-1.5 outline-none focus:border-gold-400 dark:focus:border-gold-500 text-gray-800 dark:text-gray-200 placeholder-gray-400"
+                      />
+                      <button
+                        onClick={createLabel}
+                        disabled={!newLabelName.trim() || creatingLabel}
+                        className="px-2.5 py-1.5 bg-gold-600 hover:bg-gold-700 disabled:opacity-40 text-white text-xs rounded-lg font-semibold transition-colors"
+                      >
+                        {creatingLabel ? '...' : 'Criar'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
 
             {/* Abas */}
             <div className="flex gap-1">
