@@ -178,12 +178,21 @@ const normalizePhone = (value: unknown) => {
   return String(value).replace(/\D/g, '');
 };
 
-// Brasil: número com 10 dígitos locais (sem o 9) → normaliza para 11 dígitos
-// Ex: 554388416682 (12 total) → 5543988416682 (13 total)
+// Normaliza número brasileiro para formato internacional (55 + DDD + 9 + 8 dígitos = 13 total)
+// Casos tratados:
+//   13 dígitos (5543988416682)  → já correto
+//   12 dígitos (554388416682)   → insert 9 after DDD  → 5543988416682
+//   11 dígitos (43988416682)    → add 55              → 5543988416682
+//   10 dígitos (4388416682)     → add 55 + insert 9   → 5543988416682
 const normalizeBrazilianPhone = (digits: string): string => {
-  if (digits.startsWith('55') && digits.length === 12) {
-    return digits.slice(0, 4) + '9' + digits.slice(4);
+  if (digits.startsWith('55')) {
+    if (digits.length === 12) {
+      return digits.slice(0, 4) + '9' + digits.slice(4);
+    }
+    return digits; // 13 = correto; outros formatos raros: retorna sem alterar
   }
+  if (digits.length === 11) return '55' + digits;
+  if (digits.length === 10) return '55' + digits.slice(0, 2) + '9' + digits.slice(2);
   return digits;
 };
 
@@ -290,6 +299,54 @@ async function persistMessageToSupabase(userId: string, message: LiveWhatsAppMes
       last_message_at: ts,
       updated_at: new Date().toISOString(),
     }, { onConflict: 'user_id,phone' });
+
+    // Auto-criar lead no pipeline quando mensagem chega de fora
+    if (!message.fromMe && supabaseAdmin) {
+      const phoneNorm = normalizeBrazilianPhone(message.phone);
+      const phoneShort = phoneNorm.startsWith('55') ? phoneNorm.slice(2) : phoneNorm;
+
+      const { data: existingDeals } = await supabaseAdmin
+        .from('deals')
+        .select('id')
+        .eq('user_id', userId)
+        .or(`contact_phone.eq.${phoneNorm},contact_phone.eq.${phoneShort}`)
+        .limit(1);
+
+      if (!existingDeals || existingDeals.length === 0) {
+        const { data: stages } = await supabaseAdmin
+          .from('deal_stages')
+          .select('id, name, position')
+          .eq('user_id', userId)
+          .not('id', 'like', 'prod-%')
+          .eq('is_final', false)
+          .order('position', { ascending: true })
+          .limit(1);
+
+        if (stages && stages.length > 0) {
+          const firstStage = stages[0];
+          const nowIso = new Date().toISOString();
+          const contactName = message.name || null;
+          await supabaseAdmin.from('deals').insert({
+            user_id: userId,
+            title: contactName || phoneNorm,
+            contact_name: contactName,
+            contact_phone: phoneNorm,
+            stage: firstStage.id,
+            value: 0,
+            created_at: nowIso,
+            updated_at: nowIso,
+            current_stage_entered_at: nowIso,
+            stage_history: JSON.stringify([{
+              stage_id: firstStage.id,
+              stage_name: firstStage.name,
+              entered_at: nowIso,
+              left_at: null,
+            }]),
+          });
+          console.log(`[Pipeline] Lead auto-criado: "${contactName || phoneNorm}" na etapa "${firstStage.name}"`);
+        }
+      }
+    }
   } catch (err) {
     // Falha silenciosa — cache em memória ainda funciona
   }
