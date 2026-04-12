@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
-import { Send, Loader2, Phone, MessageCircle } from "lucide-react";
+import { Send, Loader2, Phone, MessageCircle, Check, CheckCheck, Clock } from "lucide-react";
 import { authFetch } from "../../../utils/authFetch";
 
 interface Message {
@@ -25,10 +25,14 @@ function formatTime(iso: string) {
 function formatDate(iso: string) {
   const d = new Date(iso);
   const now = new Date();
-  const diffDays = Math.floor((now.getTime() - d.getTime()) / 86400000);
-  if (diffDays === 0) return "Hoje";
-  if (diffDays === 1) return "Ontem";
-  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "long" });
+  // Compara só a data (sem hora) para evitar bug de fuso
+  const todayStr = now.toDateString();
+  const dStr = d.toDateString();
+  const yesterdayStr = new Date(now.getTime() - 86400000).toDateString();
+
+  if (dStr === todayStr) return "Hoje";
+  if (dStr === yesterdayStr) return "Ontem";
+  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" });
 }
 
 function groupByDate(messages: Message[]) {
@@ -46,11 +50,51 @@ function groupByDate(messages: Message[]) {
   return groups;
 }
 
+function MessageTick({ status }: { status?: string }) {
+  if (!status) return null;
+  const s = status.toLowerCase();
+
+  if (s === "sending" || s === "pending") {
+    return <Clock size={11} className="inline-block ml-1 opacity-60" />;
+  }
+  if (s === "sent" || s === "server_ack") {
+    return <Check size={11} className="inline-block ml-1 opacity-70" />;
+  }
+  if (s === "delivered" || s === "delivery_ack") {
+    return <CheckCheck size={11} className="inline-block ml-1 opacity-70" />;
+  }
+  if (s === "read" || s === "played") {
+    return <CheckCheck size={11} className="inline-block ml-1 text-blue-300" />;
+  }
+  // mensagem recebida: sem tick (tick é só para enviadas)
+  return null;
+}
+
+function Avatar({ name, phone, photoUrl }: { name?: string | null; phone: string; photoUrl?: string | null }) {
+  const initials = (name || phone).slice(0, 2).toUpperCase();
+  if (photoUrl) {
+    return (
+      <img
+        src={photoUrl}
+        alt={name || phone}
+        className="w-9 h-9 rounded-full object-cover flex-shrink-0"
+        onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+      />
+    );
+  }
+  return (
+    <div className="w-9 h-9 rounded-full bg-gold-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
+      {initials}
+    </div>
+  );
+}
+
 export function ChatView({ phone, contactName, showHeader = true }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -63,8 +107,6 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
-          // DB retornou mensagens: substitui completamente, preservando apenas
-          // otimistas (tmp-*) que ainda não chegaram no banco.
           setMessages((prev) => {
             const dbIds = new Set(data.map((m: Message) => m.message_id));
             const pendingOptimistic = prev.filter(
@@ -75,11 +117,20 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
             );
           });
         }
-        // Se data vazio: não altera estado (evita limpar mensagens ao reiniciar)
       }
     } finally {
       if (!silent) setLoading(false);
     }
+  }, [phone]);
+
+  // Busca foto de perfil uma vez por contato
+  useEffect(() => {
+    setPhotoUrl(null);
+    const cleanPhone = phone.replace(/\D/g, '');
+    authFetch(`/api/inbox/profile-picture/${cleanPhone}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d?.url) setPhotoUrl(d.url); })
+      .catch(() => {});
   }, [phone]);
 
   useEffect(() => {
@@ -87,7 +138,6 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
     fetchMessages();
     authFetch(`/api/inbox/mark-read/${phone}`, { method: "POST" }).catch(() => {});
 
-    // Polling a cada 4s
     pollRef.current = setInterval(() => fetchMessages(true), 4000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [phone, fetchMessages]);
@@ -133,8 +183,6 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
         alert(`Erro ao enviar: ${err.error || res.statusText}`);
         return;
       }
-      // Remove a mensagem otimista e busca imediatamente do banco.
-      // Isso garante que só existe uma cópia (a real) — sem duplicatas.
       setMessages((prev) => prev.filter((m) => m.message_id !== tmpId));
       fetchMessages(true);
     } catch {
@@ -150,12 +198,10 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-gray-50 dark:bg-gray-900">
-      {/* Header do chat */}
+      {/* Header */}
       {showHeader && (
         <div className="flex items-center gap-3 px-5 py-3 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-          <div className="w-9 h-9 rounded-full bg-gold-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
-            {(contactName || phone).slice(0, 2).toUpperCase()}
-          </div>
+          <Avatar name={contactName} phone={phone} photoUrl={photoUrl} />
           <div className="flex-1 min-w-0">
             <p className="text-sm font-bold text-gray-900 dark:text-white truncate">
               {contactName || phone}
@@ -193,7 +239,7 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
               {/* Separador de data */}
               <div className="flex items-center gap-3 my-4">
                 <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
-                <span className="text-xs text-gray-400 px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded-full">
+                <span className="text-xs text-gray-400 px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded-full whitespace-nowrap">
                   {group.label}
                 </span>
                 <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
@@ -204,8 +250,15 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
                   key={msg.message_id}
                   className={`flex mb-1 ${msg.from_me ? "justify-end" : "justify-start"}`}
                 >
+                  {/* Avatar do contato nas mensagens recebidas */}
+                  {!msg.from_me && (
+                    <div className="mr-1.5 mt-auto mb-0.5 flex-shrink-0">
+                      <Avatar name={contactName} phone={phone} photoUrl={photoUrl} />
+                    </div>
+                  )}
+
                   <div
-                    className={`max-w-[72%] rounded-2xl text-sm leading-relaxed shadow-sm overflow-hidden ${
+                    className={`max-w-[68%] rounded-2xl text-sm leading-relaxed shadow-sm overflow-hidden ${
                       msg.from_me
                         ? "bg-gold-600 text-white rounded-tr-sm"
                         : "bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 rounded-tl-sm border border-gray-100 dark:border-gray-700"
@@ -234,9 +287,12 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
                       {!msg.body && !msg.media_url && (
                         <p className="italic opacity-60 text-xs">[{msg.type || 'mensagem'}]</p>
                       )}
-                      <p className={`text-[10px] mt-1 text-right ${msg.from_me ? "text-gold-200" : "text-gray-400"}`}>
+                      {/* Hora + tick */}
+                      <p className={`text-[10px] mt-1 flex items-center justify-end gap-0.5 ${
+                        msg.from_me ? "text-gold-200" : "text-gray-400"
+                      }`}>
                         {formatTime(msg.timestamp)}
-                        {msg.status === "sending" && " ·"}
+                        {msg.from_me && <MessageTick status={msg.status} />}
                       </p>
                     </div>
                   </div>
