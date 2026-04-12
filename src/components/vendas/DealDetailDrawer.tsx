@@ -155,6 +155,21 @@ const PRIORITY_OPTIONS = [
 ];
 const PRIORITY_LABELS: Record<string, string> = { low: "Baixa", medium: "Média", high: "Alta" };
 
+const LABEL_COLORS = [
+  "#EF4444", // red
+  "#F97316", // orange
+  "#EAB308", // yellow
+  "#22C55E", // green
+  "#14B8A6", // teal
+  "#3B82F6", // blue
+  "#6366F1", // indigo
+  "#A855F7", // purple
+  "#EC4899", // pink
+  "#6B7280", // gray
+  "#0F172A", // slate dark
+  "#7C3AED", // violet
+];
+
 export function DealDetailDrawer({
   deal, client, clients = [], stages, onClose, onUpdate, onOpenChat,
 }: DealDetailDrawerProps) {
@@ -655,6 +670,32 @@ export function DealDetailDrawer({
               </button>
             </div>
 
+            {/* Etiquetas do lead — visíveis em ambas as abas */}
+            {(dealLabels.length > 0 || true) && (
+              <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+                {dealLabels.map(lId => {
+                  const label = availableLabels.find(l => l.id === lId);
+                  if (!label) return null;
+                  return (
+                    <span
+                      key={lId}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold text-white"
+                      style={{ backgroundColor: label.color }}
+                    >
+                      {label.name}
+                    </span>
+                  );
+                })}
+                <button
+                  onClick={() => setActiveTab('info')}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                  title="Gerenciar etiquetas na aba Informações"
+                >
+                  <Tag size={10} /> {dealLabels.length === 0 ? "Adicionar etiqueta" : "Editar"}
+                </button>
+              </div>
+            )}
+
             {/* Abas */}
             <div className="flex gap-1">
               <button
@@ -1139,14 +1180,30 @@ export function DealDetailDrawer({
                   {/* Create new label */}
                   <div className="border-t border-gray-100 dark:border-gray-700 pt-3">
                     <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase mb-2">Nova etiqueta</p>
+                    {/* Color swatches */}
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {LABEL_COLORS.map(color => (
+                        <button
+                          key={color}
+                          onClick={() => setNewLabelColor(color)}
+                          className="w-6 h-6 rounded-full transition-transform hover:scale-110 flex items-center justify-center"
+                          style={{ backgroundColor: color }}
+                          title={color}
+                        >
+                          {newLabelColor === color && (
+                            <Check size={11} className="text-white drop-shadow" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                    {/* Preview */}
                     <div className="flex items-center gap-2">
-                      <input
-                        type="color"
-                        value={newLabelColor}
-                        onChange={e => setNewLabelColor(e.target.value)}
-                        className="w-8 h-8 rounded cursor-pointer border-0 p-0.5 bg-transparent"
-                        title="Cor da etiqueta"
-                      />
+                      <span
+                        className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium text-white shrink-0"
+                        style={{ backgroundColor: newLabelColor }}
+                      >
+                        {newLabelName || "Prévia"}
+                      </span>
                       <input
                         value={newLabelName}
                         onChange={e => setNewLabelName(e.target.value)}

@@ -517,8 +517,15 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
 
         <div className="px-4 py-3">
           {recording ? (
-            /* Recording UI */
+            /* Recording UI with waveform */
             <div className="flex items-center gap-2">
+              <style>{`
+                @keyframes wave1 { 0%,100%{height:6px} 50%{height:20px} }
+                @keyframes wave2 { 0%,100%{height:10px} 50%{height:28px} }
+                @keyframes wave3 { 0%,100%{height:4px} 50%{height:16px} }
+                @keyframes wave4 { 0%,100%{height:14px} 50%{height:24px} }
+                @keyframes wave5 { 0%,100%{height:8px} 50%{height:22px} }
+              `}</style>
               <button
                 onClick={cancelRecording}
                 className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-100 dark:bg-gray-700 text-gray-500 hover:text-red-500 transition-colors flex-shrink-0"
@@ -526,12 +533,33 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
               >
                 <X size={16} />
               </button>
-              <div className="flex-1 flex items-center gap-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-xl px-4 py-2.5">
-                <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse flex-shrink-0" />
-                <span className="text-sm font-medium text-red-600 dark:text-red-400">
+              <div className="flex-1 flex items-center gap-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-xl px-4 py-2">
+                {/* Waveform bars */}
+                <div className="flex items-center gap-[3px] h-8">
+                  {[
+                    { anim: 'wave1', delay: '0ms' },
+                    { anim: 'wave2', delay: '120ms' },
+                    { anim: 'wave3', delay: '60ms' },
+                    { anim: 'wave4', delay: '180ms' },
+                    { anim: 'wave5', delay: '90ms' },
+                    { anim: 'wave1', delay: '150ms' },
+                    { anim: 'wave3', delay: '30ms' },
+                    { anim: 'wave2', delay: '210ms' },
+                  ].map((bar, i) => (
+                    <div
+                      key={i}
+                      className="w-1 rounded-full bg-red-500"
+                      style={{
+                        animation: `${bar.anim} 0.8s ease-in-out infinite`,
+                        animationDelay: bar.delay,
+                        height: 8,
+                      }}
+                    />
+                  ))}
+                </div>
+                <span className="text-sm font-semibold text-red-600 dark:text-red-400 tabular-nums">
                   {formatRecTime(recordingTime)}
                 </span>
-                <span className="text-xs text-red-400 dark:text-red-500">Gravando áudio...</span>
               </div>
               <button
                 onClick={stopRecording}
