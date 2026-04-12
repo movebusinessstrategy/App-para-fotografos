@@ -3519,6 +3519,14 @@ async function startServer() {
     if (targets.length === 0) return res.json({ sent: 0, failed: 0, total: 0, errors: [] });
 
     const instanceName = `user_${userId.replace(/-/g, '_')}`;
+
+    // Carrega conta Meta como fallback (uma consulta antes do loop)
+    const { data: waAccount } = await supabase
+      .from('whatsapp_business_accounts')
+      .select('phone_number_id, access_token')
+      .eq('user_id', userId)
+      .maybeSingle();
+
     let sent = 0, failed = 0;
     const errors: string[] = [];
 
@@ -3527,18 +3535,44 @@ async function startServer() {
       const phone = normalizeBrazilianPhone(rawPhone);
       const name = deal.contact_name || deal.title || '';
       const personalizedMsg = message.replace(/\{nome\}/gi, name);
+      let ok = false;
+      let failReason = '';
 
       try {
-        let ok = false;
-
-        // Tenta Evolution API
-        if (EVOLUTION_API_URL && EVOLUTION_API_KEY) {
+        // 1ª tentativa: Evolution API (só se for o provider configurado)
+        if (WHATSAPP_PROVIDER === 'evolution' && EVOLUTION_API_URL && EVOLUTION_API_KEY) {
           const evoRes = await fetch(`${EVOLUTION_API_URL}/message/sendText/${instanceName}`, {
             method: 'POST',
             headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' },
             body: JSON.stringify({ number: phone, textMessage: { text: personalizedMsg } }),
           });
-          ok = evoRes.ok;
+          if (evoRes.ok) {
+            ok = true;
+          } else {
+            const evoData = await evoRes.json().catch(() => ({}));
+            failReason = `Evolution ${evoRes.status}: ${evoData?.message || evoData?.error || ''}`;
+            console.warn(`[Blast] Evolution falhou para ${phone}:`, failReason);
+          }
+        }
+
+        // Meta API (provider principal se não for Evolution, ou fallback)
+        if (!ok && waAccount?.phone_number_id && waAccount?.access_token) {
+          const metaRes = await fetch(
+            `https://graph.facebook.com/v21.0/${waAccount.phone_number_id}/messages`,
+            {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${waAccount.access_token}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ messaging_product: 'whatsapp', to: phone, type: 'text', text: { body: personalizedMsg } }),
+            }
+          );
+          const metaData = await metaRes.json();
+          if (metaRes.ok && !metaData.error) {
+            ok = true;
+          } else {
+            const metaMsg = metaData?.error?.message || JSON.stringify(metaData?.error || {});
+            failReason = failReason ? `${failReason} | Meta: ${metaMsg}` : `Meta: ${metaMsg}`;
+            console.warn(`[Blast] Meta falhou para ${phone}:`, metaMsg);
+          }
         }
 
         if (ok) {
@@ -3555,14 +3589,14 @@ async function startServer() {
           }, { onConflict: 'user_id,phone' });
         } else {
           failed++;
-          errors.push(`${name} (${phone})`);
+          errors.push(`${name} (${phone})${failReason ? ': ' + failReason : ''}`);
         }
-      } catch {
+      } catch (err: any) {
         failed++;
-        errors.push(`${name} (${phone})`);
+        errors.push(`${name} (${phone}): ${err.message || 'Erro de conexão'}`);
       }
 
-      // Aguarda 1s entre envios para evitar bloqueio do WhatsApp
+      // 1s entre envios para não bloquear o WhatsApp
       await new Promise<void>((r) => setTimeout(r, 1000));
     }
 
