@@ -1738,7 +1738,20 @@ async function startServer() {
         }
       );
       const metaData = await metaRes.json();
-      if (metaData.error) return res.status(400).json({ error: metaData.error.message });
+      if (metaData.error) {
+        const code = metaData.error.code;
+        const msg: string = metaData.error.message || JSON.stringify(metaData.error);
+        console.error(`[Send Meta] Erro código ${code}:`, msg);
+        // Token expirado ou inválido
+        if (code === 190 || code === 401 || msg.toLowerCase().includes('token')) {
+          return res.status(400).json({ error: 'Token do WhatsApp Business expirado. Vá em Configurações → reconecte a API Oficial.' });
+        }
+        // Sandbox: destinatário não aprovado
+        if (code === 131030 || msg.includes('not in allowed list') || msg.includes('recipient')) {
+          return res.status(400).json({ error: 'Número não está na lista de testes do Meta. Adicione-o no Meta Business ou use o QR Code para enviar livremente.' });
+        }
+        return res.status(400).json({ error: msg });
+      }
       const msgId = metaData.messages?.[0]?.id || `meta-${Date.now()}`;
       await saveToDb(msgId);
       res.json({ success: true, message_id: msgId });
@@ -6116,7 +6129,25 @@ async function startServer() {
         }
       }
 
-      // 4. Salva ou atualiza no banco
+      // 4. Troca token curto por long-lived token (60 dias em vez de ~2h)
+      let finalToken = token;
+      try {
+        const ltRes = await fetch(
+          `https://graph.facebook.com/oauth/access_token?grant_type=fb_exchange_token` +
+          `&client_id=${META_APP_ID}&client_secret=${META_APP_SECRET}&fb_exchange_token=${encodeURIComponent(token)}`
+        );
+        const ltData = await ltRes.json();
+        if (ltData.access_token) {
+          finalToken = ltData.access_token;
+          console.log('[Meta] Token trocado por long-lived com sucesso');
+        } else {
+          console.warn('[Meta] Falha ao trocar token:', ltData.error?.message || JSON.stringify(ltData));
+        }
+      } catch (ltErr: any) {
+        console.warn('[Meta] Falha ao trocar token (continua com token original):', ltErr.message);
+      }
+
+      // 5. Salva ou atualiza no banco
       const { error } = await supabase
         .from('whatsapp_business_accounts')
         .upsert(
@@ -6126,7 +6157,7 @@ async function startServer() {
             phone_number_id: phoneNumberId,
             phone_number: phoneNumber,
             display_name: displayName,
-            access_token: token,
+            access_token: finalToken,
             connected_at: new Date().toISOString(),
           },
           { onConflict: 'user_id' }
@@ -6134,12 +6165,12 @@ async function startServer() {
 
       if (error) return res.status(500).json({ error: error.message });
 
-      // 5. Assina webhook no nível da WABA (necessário para receber eventos)
-      if (wabaId && token) {
+      // 6. Assina webhook no nível da WABA (necessário para receber eventos)
+      if (wabaId && finalToken) {
         try {
           const subRes = await fetch(
             `https://graph.facebook.com/v21.0/${wabaId}/subscribed_apps`,
-            { method: 'POST', headers: { Authorization: `Bearer ${token}` } }
+            { method: 'POST', headers: { Authorization: `Bearer ${finalToken}` } }
           );
           const subData = await subRes.json();
           console.log('[Meta] WABA subscribed_apps:', JSON.stringify(subData));
