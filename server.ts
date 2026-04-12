@@ -1066,75 +1066,60 @@ async function startServer() {
     const supabase = (req as any).supabase as SupabaseClient;
     const instanceName = getInstanceName(userId);
 
-    // Verifica Meta WhatsApp Business SOMENTE se o provider configurado for 'meta'
-    // (quando WHATSAPP_PROVIDER=evolution, a Meta não deve ser reportada como ativa)
-    if (WHATSAPP_PROVIDER === 'meta' || (!WHATSAPP_PROVIDER && !isZApiEnabled())) {
-      try {
-        const { data: metaAccount } = await supabase
-          .from('whatsapp_business_accounts')
-          .select('phone_number, display_name')
-          .eq('user_id', userId)
-          .maybeSingle();
-
-        if (metaAccount) {
-          return res.json({
-            connected: true,
-            provider: 'meta',
-            phone: metaAccount.phone_number,
-            display_name: metaAccount.display_name,
-            whatsapp: { connected: true },
-          });
-        }
-      } catch {}
-    }
-
     if (isZApiEnabled()) {
       if (getMissingZApiConfig().length > 0) {
         return res.status(500).json(zapiConfigError());
       }
-
       try {
-        const response = await fetch(zapiUrl('/status'), {
-          method: 'GET',
-          headers: zapiHeaders(),
-        });
+        const response = await fetch(zapiUrl('/status'), { method: 'GET', headers: zapiHeaders() });
         const parsed = await parseHttpResponse(response);
-        if (!response.ok) {
-          return res.status(response.status).json({
-            error: 'Falha ao consultar status na Z-API',
-            provider: 'zapi',
-            details: parsed.data,
-          });
-        }
+        if (!response.ok) return res.status(response.status).json({ error: 'Falha ao consultar status na Z-API', provider: 'zapi', details: parsed.data });
         const state = normalizeWhatsappState(parsed.data);
         const payload = (typeof parsed.data === 'object' && parsed.data !== null) ? parsed.data : { raw: parsed.raw };
-
-        return res.status(response.status).json({
-          ...payload,
-          provider: 'zapi',
-          state,
-          connectionStatus: state,
-          instance: { state },
-        });
+        return res.status(response.status).json({ ...payload, provider: 'zapi', state, connectionStatus: state, instance: { state } });
       } catch (error) {
         console.error('Erro ao verificar status (Z-API):', error);
         return res.status(500).json({ error: 'Falha ao verificar status (Z-API)' });
       }
     }
 
-    // Evolution API
-    try {
-      const response = await fetch(`${EVOLUTION_API_URL}/instance/connectionState/${instanceName}`, {
-        method: 'GET',
-        headers: { 'apikey': EVOLUTION_API_KEY },
-      });
-      const parsed = await parseHttpResponse(response);
-      const state = normalizeWhatsappState(parsed.data);
-      return res.status(response.status).json({ instance: { state }, state, connectionStatus: state, provider: 'evolution' });
-    } catch (error) {
-      console.error('Erro ao verificar status (Evolution API):', error);
-      return res.status(500).json({ error: 'Falha ao verificar status' });
+    // Evolution API — verifica estado da instância
+    if (WHATSAPP_PROVIDER === 'evolution') {
+      try {
+        const response = await fetch(`${EVOLUTION_API_URL}/instance/connectionState/${instanceName}`, {
+          method: 'GET',
+          headers: { 'apikey': EVOLUTION_API_KEY },
+        });
+        const parsed = await parseHttpResponse(response);
+        const state = normalizeWhatsappState(parsed.data);
+        if (state === 'open') {
+          return res.json({ connected: true, instance: { state }, state, connectionStatus: state, provider: 'evolution', whatsapp: { connected: true } });
+        }
+        // Evolution desconectada — verifica Meta como fallback ativo
+      } catch { /* ignora — verifica Meta abaixo */ }
     }
+
+    // Meta WhatsApp Business — usado quando Evolution não está conectada ou provider=meta
+    try {
+      const { data: metaAccount } = await supabase
+        .from('whatsapp_business_accounts')
+        .select('phone_number, display_name')
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (metaAccount) {
+        return res.json({
+          connected: true,
+          provider: 'meta',
+          phone: metaAccount.phone_number,
+          display_name: metaAccount.display_name,
+          whatsapp: { connected: true },
+        });
+      }
+    } catch {}
+
+    // Nenhum provider conectado
+    return res.json({ connected: false, provider: WHATSAPP_PROVIDER, whatsapp: { connected: false } });
   });
 
   app.post('/api/whatsapp/webhook/configure', requireAuth, async (req, res) => {
@@ -1722,12 +1707,15 @@ async function startServer() {
           body: JSON.stringify({ number: cleanPhone, textMessage: { text: String(text) } }),
         });
         const parsed = await parseHttpResponse(response);
-        if (!response.ok) return res.status(response.status).json({ error: parsed.data?.error || 'Erro Evolution API' });
-        const msgId = parsed.data?.key?.id || `evo-${Date.now()}`;
-        await saveToDb(msgId);
-        return res.json({ success: true, message_id: msgId });
+        if (response.ok) {
+          const msgId = parsed.data?.key?.id || `evo-${Date.now()}`;
+          await saveToDb(msgId);
+          return res.json({ success: true, message_id: msgId });
+        }
+        // Evolution falhou (instância desconectada?) — tenta Meta como fallback
+        console.warn(`[Send] Evolution retornou ${response.status}, tentando Meta como fallback...`);
       } catch (err: any) {
-        return res.status(500).json({ error: err.message });
+        console.warn('[Send] Evolution erro de rede, tentando Meta como fallback...', err.message);
       }
     }
 
