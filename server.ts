@@ -1917,6 +1917,124 @@ async function startServer() {
     }
   });
 
+  // Envia mídia (imagem, áudio, documento) via WhatsApp
+  app.post('/api/inbox/send-media', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { phone, mediaBase64, mimetype, filename, caption } = req.body;
+
+    if (!phone || !mediaBase64 || !mimetype) {
+      return res.status(400).json({ error: 'phone, mediaBase64 e mimetype são obrigatórios' });
+    }
+
+    const cleanPhone = normalizeBrazilianPhone(phone.replace(/\D/g, ''));
+    const instanceName = `user_${userId.replace(/-/g, '_')}`;
+
+    const getMediaType = (mime: string): string => {
+      if (mime.startsWith('image/')) return 'image';
+      if (mime.startsWith('video/')) return 'video';
+      if (mime.startsWith('audio/')) return 'audio';
+      return 'document';
+    };
+    const mediaType = getMediaType(mimetype);
+
+    const saveToDb = async (msgId: string) => {
+      const now = new Date().toISOString();
+      await supabase.from('wa_messages').insert({
+        user_id: userId, phone: cleanPhone, message_id: msgId,
+        body: caption || '', from_me: true, timestamp: now,
+        type: mediaType, status: 'sent',
+      });
+      await supabase.from('wa_conversations').upsert({
+        user_id: userId, phone: cleanPhone,
+        last_message: caption || `[${mediaType}]`, last_message_at: now,
+      }, { onConflict: 'user_id,phone' });
+    };
+
+    // ── Evolution API ────────────────────────────────────────────────────────
+    if (WHATSAPP_PROVIDER === 'evolution') {
+      try {
+        const endpoint = mediaType === 'audio'
+          ? `/message/sendAudio/${instanceName}`
+          : `/message/sendMedia/${instanceName}`;
+        const body = mediaType === 'audio'
+          ? { number: cleanPhone, audio: mediaBase64, encoding: true }
+          : { number: cleanPhone, mediatype: mediaType, media: mediaBase64, caption: caption || '', fileName: filename || `file.${mimetype.split('/')[1]}` };
+
+        const response = await fetch(`${EVOLUTION_API_URL}${endpoint}`, {
+          method: 'POST',
+          headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const parsed = await parseHttpResponse(response);
+        if (response.ok) {
+          const msgId = parsed.data?.key?.id || `evo-${Date.now()}`;
+          await saveToDb(msgId);
+          return res.json({ success: true, message_id: msgId });
+        }
+        console.warn(`[SendMedia] Evolution retornou ${response.status}, tentando Meta...`);
+      } catch (err: any) {
+        console.warn('[SendMedia] Evolution erro:', err.message);
+      }
+    }
+
+    // ── Meta WhatsApp Business API ───────────────────────────────────────────
+    const { data: waAccount } = await supabase
+      .from('whatsapp_business_accounts')
+      .select('phone_number_id, access_token')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (!waAccount) return res.status(400).json({ error: 'WhatsApp não conectado. Configure nas Configurações.' });
+
+    try {
+      // 1. Upload da mídia
+      const buffer = Buffer.from(mediaBase64, 'base64');
+      const formData = new FormData();
+      formData.append('messaging_product', 'whatsapp');
+      formData.append('file', new Blob([buffer], { type: mimetype }), filename || `media.${mimetype.split('/')[1]}`);
+
+      const uploadRes = await fetch(
+        `https://graph.facebook.com/v21.0/${waAccount.phone_number_id}/media`,
+        { method: 'POST', headers: { 'Authorization': `Bearer ${waAccount.access_token}` }, body: formData }
+      );
+      const uploadData = await uploadRes.json();
+      if (!uploadRes.ok || !uploadData.id) {
+        const errMsg = uploadData?.error?.message || 'Erro ao fazer upload da mídia';
+        return res.status(400).json({ error: errMsg });
+      }
+      const mediaId = uploadData.id;
+
+      // 2. Envio da mensagem
+      const msgBody: Record<string, unknown> = {
+        messaging_product: 'whatsapp',
+        to: cleanPhone,
+        type: mediaType,
+        [mediaType]: mediaType === 'audio'
+          ? { id: mediaId }
+          : { id: mediaId, caption: caption || '' },
+      };
+
+      const sendRes = await fetch(
+        `https://graph.facebook.com/v21.0/${waAccount.phone_number_id}/messages`,
+        {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${waAccount.access_token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(msgBody),
+        }
+      );
+      const sendData = await sendRes.json();
+      if (sendData.error) {
+        return res.status(400).json({ error: sendData.error.message || 'Erro ao enviar mídia' });
+      }
+      const msgId = sendData.messages?.[0]?.id || `meta-${Date.now()}`;
+      await saveToDb(msgId);
+      return res.json({ success: true, message_id: msgId });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   // Sincroniza histórico de conversas recentes da Evolution API para o cache em memória
   app.post('/api/whatsapp/sync-history', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
@@ -3643,6 +3761,53 @@ async function startServer() {
     }
 
     res.json({ sent, failed, total: targets.length, errors });
+  });
+
+  // ============ PIPELINE LABELS ============
+  app.get('/api/pipeline/labels', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase
+      .from('pipeline_labels')
+      .select('*')
+      .eq('user_id', userId)
+      .order('name', { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  });
+
+  app.post('/api/pipeline/labels', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { name, color } = req.body;
+    if (!name?.trim()) return res.status(400).json({ error: 'name é obrigatório' });
+    const { data, error } = await supabase
+      .from('pipeline_labels')
+      .insert({ user_id: userId, name: name.trim(), color: color || '#6B7280' })
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.delete('/api/pipeline/labels/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    await supabase.from('pipeline_labels').delete().eq('id', req.params.id).eq('user_id', userId);
+    res.json({ success: true });
+  });
+
+  app.patch('/api/deals/:id/labels', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { labels } = req.body;
+    const { error } = await supabase
+      .from('deals')
+      .update({ labels: Array.isArray(labels) ? labels : [] })
+      .eq('id', req.params.id)
+      .eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
   });
 
   // ============ PRODUCTION STAGES ROUTES ============

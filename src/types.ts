@@ -144,6 +144,14 @@ export interface PipelineStage {
   follow_up_delay_hours?: number;
 }
 
+export interface PipelineLabel {
+  id: string;
+  user_id?: string;
+  name: string;
+  color: string;
+  created_at: string;
+}
+
 export interface Deal {
   id: string;
   user_id: string;
@@ -151,6 +159,7 @@ export interface Deal {
   title: string;
   value: number;
   stage: DealStage;
+  labels?: string[];
   stage_entered_at?: string | null;
   current_stage_entered_at?: string | null;
   stage_history?: StageHistoryEntry[];

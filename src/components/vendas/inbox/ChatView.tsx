@@ -1,6 +1,44 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
-import { Send, Loader2, Phone, MessageCircle, Check, CheckCheck, Clock } from "lucide-react";
+import { Send, Loader2, Phone, MessageCircle, Check, CheckCheck, Clock, Paperclip, Mic, X, FileText, Smile } from "lucide-react";
 import { authFetch } from "../../../utils/authFetch";
+
+const EMOJI_LIST = [
+  "😀","😂","🤣","😍","😘","🥰","😊","😉","😎","🤩","😢","😭","🥺","😱","🤔","🙄","😏","🤗","😤",
+  "🙏","👍","👎","❤️","🔥","✨","💯","🎉","🎊","🙌","👏","💪","💕","💖","💗","💓","⭐","🌟","✅",
+  "😅","😆","🤭","😋","😜","🤪","😝","🤑","🤠","🥳","🤡","💀","👻","💩","🌹","🌺","🌸","🍀","🌈",
+  "🌙","☀️","🌊","🐶","🐱","🦋","🌻","🍕","🍔","🍦","☕","🎵","🎶","📷","📸","💎","🏆","🎁","📱",
+];
+
+function EmojiPicker({ onSelect, onClose }: { onSelect: (emoji: string) => void; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [onClose]);
+
+  return (
+    <div
+      ref={ref}
+      className="absolute bottom-full left-0 mb-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-xl p-3 z-30"
+      style={{ width: 280 }}
+    >
+      <div className="grid grid-cols-10 gap-0.5">
+        {EMOJI_LIST.map((emoji) => (
+          <button
+            key={emoji}
+            onClick={() => onSelect(emoji)}
+            className="w-7 h-7 flex items-center justify-center text-lg hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+          >
+            {emoji}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 interface Message {
   message_id: string;
@@ -25,7 +63,6 @@ function formatTime(iso: string) {
 function formatDate(iso: string) {
   const d = new Date(iso);
   const now = new Date();
-  // Compara só a data (sem hora) para evitar bug de fuso
   const todayStr = now.toDateString();
   const dStr = d.toDateString();
   const yesterdayStr = new Date(now.getTime() - 86400000).toDateString();
@@ -66,7 +103,6 @@ function MessageTick({ status }: { status?: string }) {
   if (s === "read" || s === "played") {
     return <CheckCheck size={11} className="inline-block ml-1 text-blue-300" />;
   }
-  // mensagem recebida: sem tick (tick é só para enviadas)
   return null;
 }
 
@@ -89,20 +125,47 @@ function Avatar({ name, phone, photoUrl }: { name?: string | null; phone: string
   );
 }
 
+const fileToBase64 = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string).split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+const formatRecTime = (s: number) =>
+  `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`;
+
+function getMediaType(file: File): "image" | "video" | "audio" | "document" {
+  if (file.type.startsWith("image/")) return "image";
+  if (file.type.startsWith("video/")) return "video";
+  if (file.type.startsWith("audio/")) return "audio";
+  return "document";
+}
+
 export function ChatView({ phone, contactName, showHeader = true }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [mediaPreview, setMediaPreview] = useState<{ file: File; url: string; type: string } | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [showEmoji, setShowEmoji] = useState(false);
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchMessages = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const cleanPhone = phone.replace(/\D/g, '');
+      const cleanPhone = phone.replace(/\D/g, "");
       const res = await authFetch(`/api/inbox/messages/${cleanPhone}?limit=80`);
       if (res.ok) {
         const data = await res.json();
@@ -110,7 +173,7 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
           setMessages((prev) => {
             const dbIds = new Set(data.map((m: Message) => m.message_id));
             const pendingOptimistic = prev.filter(
-              (m) => m.message_id.startsWith('tmp-') && !dbIds.has(m.message_id)
+              (m) => m.message_id.startsWith("tmp-") && !dbIds.has(m.message_id)
             );
             return [...data, ...pendingOptimistic].sort(
               (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
@@ -126,9 +189,9 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
   // Busca foto de perfil uma vez por contato
   useEffect(() => {
     setPhotoUrl(null);
-    const cleanPhone = phone.replace(/\D/g, '');
+    const cleanPhone = phone.replace(/\D/g, "");
     authFetch(`/api/inbox/profile-picture/${cleanPhone}`)
-      .then((r) => r.ok ? r.json() : null)
+      .then((r) => (r.ok ? r.json() : null))
       .then((d) => { if (d?.url) setPhotoUrl(d.url); })
       .catch(() => {});
   }, [phone]);
@@ -154,6 +217,15 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
     el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
   }, [text]);
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (mediaPreview) URL.revokeObjectURL(mediaPreview.url);
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+      mediaRecorderRef.current?.stream?.getTracks().forEach(t => t.stop());
+    };
+  }, []);
+
   const handleSend = async () => {
     const msg = text.trim();
     if (!msg || sending) return;
@@ -162,19 +234,13 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
 
     const tmpId = `tmp-${Date.now()}`;
     const now = new Date().toISOString();
-    const tmpMsg: Message = {
-      message_id: tmpId,
-      body: msg,
-      from_me: true,
-      timestamp: now,
-      status: "sending",
-    };
+    const tmpMsg: Message = { message_id: tmpId, body: msg, from_me: true, timestamp: now, status: "sending" };
     setMessages((prev) => [...prev, tmpMsg]);
 
     try {
       const res = await authFetch("/api/inbox/send", {
         method: "POST",
-        body: JSON.stringify({ phone: phone.replace(/\D/g, ''), text: msg }),
+        body: JSON.stringify({ phone: phone.replace(/\D/g, ""), text: msg }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -192,6 +258,103 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
     } finally {
       setSending(false);
     }
+  };
+
+  const sendMedia = async (file: File, caption?: string) => {
+    setSending(true);
+    const previewUrl = URL.createObjectURL(file);
+    const mediaType = getMediaType(file);
+    const tmpId = `tmp-${Date.now()}`;
+    const now = new Date().toISOString();
+    const tmpMsg: Message = {
+      message_id: tmpId, body: caption || "", from_me: true,
+      timestamp: now, status: "sending", type: mediaType, media_url: previewUrl,
+    };
+    setMessages((prev) => [...prev, tmpMsg]);
+    setMediaPreview(null);
+    setText("");
+
+    try {
+      const mediaBase64 = await fileToBase64(file);
+      const res = await authFetch("/api/inbox/send-media", {
+        method: "POST",
+        body: JSON.stringify({
+          phone: phone.replace(/\D/g, ""),
+          mediaBase64,
+          mimetype: file.type,
+          filename: file.name,
+          caption: caption || "",
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setMessages((prev) => prev.filter((m) => m.message_id !== tmpId));
+        alert(`Erro ao enviar mídia: ${err.error || res.statusText}`);
+        return;
+      }
+      setMessages((prev) => prev.filter((m) => m.message_id !== tmpId));
+      fetchMessages(true);
+    } catch {
+      setMessages((prev) => prev.filter((m) => m.message_id !== tmpId));
+      alert("Erro de conexão ao enviar mídia.");
+    } finally {
+      setSending(false);
+      URL.revokeObjectURL(previewUrl);
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setMediaPreview({ file, url, type: getMediaType(file) });
+    e.target.value = "";
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")
+        ? "audio/ogg;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : "";
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        const ext = recorder.mimeType?.includes("ogg") ? "ogg" : "webm";
+        const file = new File([blob], `audio-${Date.now()}.${ext}`, { type: blob.type });
+        await sendMedia(file);
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setRecording(true);
+      setRecordingTime(0);
+      recordingTimerRef.current = setInterval(() => setRecordingTime((t) => t + 1), 1000);
+    } catch {
+      alert("Não foi possível acessar o microfone.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    mediaRecorderRef.current?.stop();
+    setRecording(false);
+  };
+
+  const cancelRecording = () => {
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    mediaRecorderRef.current?.stream?.getTracks().forEach((t) => t.stop());
+    if (mediaRecorderRef.current?.state !== "inactive") {
+      mediaRecorderRef.current!.ondataavailable = null;
+      mediaRecorderRef.current!.onstop = null;
+      mediaRecorderRef.current?.stop();
+    }
+    mediaRecorderRef.current = null;
+    setRecording(false);
   };
 
   const groups = groupByDate(messages);
@@ -250,7 +413,6 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
                   key={msg.message_id}
                   className={`flex mb-1 ${msg.from_me ? "justify-end" : "justify-start"}`}
                 >
-                  {/* Avatar do contato nas mensagens recebidas */}
                   {!msg.from_me && (
                     <div className="mr-1.5 mt-auto mb-0.5 flex-shrink-0">
                       <Avatar name={contactName} phone={phone} photoUrl={photoUrl} />
@@ -265,27 +427,41 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
                     }`}
                   >
                     {/* Imagem */}
-                    {msg.media_url && msg.type === 'image' && (
+                    {msg.media_url && msg.type === "image" && (
                       <a href={msg.media_url} target="_blank" rel="noopener noreferrer">
                         <img
                           src={msg.media_url}
                           alt="imagem"
                           className="max-w-full max-h-64 object-cover block"
-                          style={{ borderRadius: '12px 12px 0 0' }}
+                          style={{ borderRadius: "12px 12px 0 0" }}
                         />
                       </a>
                     )}
                     {/* Áudio */}
-                    {msg.media_url && msg.type === 'audio' && (
+                    {msg.media_url && msg.type === "audio" && (
                       <audio controls src={msg.media_url} className="w-full px-2 py-1" />
+                    )}
+                    {/* Documento */}
+                    {msg.media_url && msg.type === "document" && (
+                      <a
+                        href={msg.media_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-2 px-3 py-2 hover:opacity-80 transition-opacity"
+                      >
+                        <FileText size={18} className={msg.from_me ? "text-gold-200" : "text-gray-400"} />
+                        <span className="text-xs underline truncate max-w-[160px]">
+                          {msg.body || "Documento"}
+                        </span>
+                      </a>
                     )}
                     {/* Texto / legenda */}
                     <div className="px-3.5 py-2">
-                      {msg.body && msg.body !== `[${msg.type}]` && (
+                      {msg.body && msg.body !== `[${msg.type}]` && msg.type !== "document" && (
                         <p style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{msg.body}</p>
                       )}
                       {!msg.body && !msg.media_url && (
-                        <p className="italic opacity-60 text-xs">[{msg.type || 'mensagem'}]</p>
+                        <p className="italic opacity-60 text-xs">[{msg.type || "mensagem"}]</p>
                       )}
                       {/* Hora + tick */}
                       <p className={`text-[10px] mt-1 flex items-center justify-end gap-0.5 ${
@@ -304,33 +480,165 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
         <div ref={bottomRef} />
       </div>
 
-      {/* Input */}
-      <div className="px-4 py-3 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 flex-shrink-0">
-        <div className="flex items-end gap-2">
-          <textarea
-            ref={textareaRef}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder="Digite uma mensagem..."
-            rows={1}
-            className="flex-1 resize-none bg-gray-100 dark:bg-gray-700 text-sm text-gray-800 dark:text-gray-200 rounded-xl px-4 py-2.5 outline-none placeholder-gray-400 overflow-hidden"
-            style={{ minHeight: "42px", maxHeight: "128px" }}
-          />
-          <button
-            onClick={handleSend}
-            disabled={!text.trim() || sending}
-            className="w-10 h-10 flex items-center justify-center rounded-xl bg-gold-600 hover:bg-gold-700 disabled:opacity-40 text-white transition-colors flex-shrink-0"
-          >
-            {sending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-          </button>
+      {/* Input area */}
+      <div className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 flex-shrink-0">
+        {/* Media preview */}
+        {mediaPreview && (
+          <div className="px-4 pt-3 pb-1">
+            <div className="relative inline-block">
+              {mediaPreview.type === "image" ? (
+                <img
+                  src={mediaPreview.url}
+                  alt="preview"
+                  className="max-h-32 rounded-xl object-cover shadow"
+                />
+              ) : mediaPreview.type === "audio" ? (
+                <audio controls src={mediaPreview.url} className="max-w-full" />
+              ) : (
+                <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-700 rounded-xl px-3 py-2.5">
+                  <FileText size={20} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
+                  <span className="text-sm text-gray-700 dark:text-gray-300 max-w-[200px] truncate">
+                    {mediaPreview.file.name}
+                  </span>
+                </div>
+              )}
+              <button
+                onClick={() => { URL.revokeObjectURL(mediaPreview.url); setMediaPreview(null); }}
+                className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-gray-700 text-white flex items-center justify-center hover:bg-red-600 transition-colors"
+              >
+                <X size={10} />
+              </button>
+            </div>
+            {mediaPreview.type === "image" && (
+              <p className="text-[10px] text-gray-400 mt-1">Legenda no campo abaixo (opcional)</p>
+            )}
+          </div>
+        )}
+
+        <div className="px-4 py-3">
+          {recording ? (
+            /* Recording UI */
+            <div className="flex items-center gap-2">
+              <button
+                onClick={cancelRecording}
+                className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-100 dark:bg-gray-700 text-gray-500 hover:text-red-500 transition-colors flex-shrink-0"
+                title="Cancelar gravação"
+              >
+                <X size={16} />
+              </button>
+              <div className="flex-1 flex items-center gap-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-xl px-4 py-2.5">
+                <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse flex-shrink-0" />
+                <span className="text-sm font-medium text-red-600 dark:text-red-400">
+                  {formatRecTime(recordingTime)}
+                </span>
+                <span className="text-xs text-red-400 dark:text-red-500">Gravando áudio...</span>
+              </div>
+              <button
+                onClick={stopRecording}
+                className="w-10 h-10 flex items-center justify-center rounded-xl bg-red-600 hover:bg-red-700 text-white transition-colors flex-shrink-0"
+                title="Parar e enviar"
+              >
+                <Send size={16} />
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-end gap-2">
+              {/* Hidden file input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+                className="hidden"
+                onChange={handleFileSelect}
+              />
+
+              {/* Paperclip button */}
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={sending || recording}
+                className="w-10 h-10 flex items-center justify-center rounded-xl bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-40 transition-colors flex-shrink-0"
+                title="Enviar arquivo ou imagem"
+              >
+                <Paperclip size={18} />
+              </button>
+
+              {/* Text input + emoji */}
+              <div className="flex-1 relative flex items-end">
+                {showEmoji && (
+                  <EmojiPicker
+                    onSelect={(emoji) => {
+                      setText((t) => t + emoji);
+                      textareaRef.current?.focus();
+                    }}
+                    onClose={() => setShowEmoji(false)}
+                  />
+                )}
+                <button
+                  onClick={() => setShowEmoji(v => !v)}
+                  className={`absolute right-3 bottom-2.5 p-0.5 rounded-lg transition-colors ${
+                    showEmoji
+                      ? "text-gold-500"
+                      : "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                  }`}
+                  title="Emojis"
+                >
+                  <Smile size={17} />
+                </button>
+                <textarea
+                  ref={textareaRef}
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      if (mediaPreview) {
+                        sendMedia(mediaPreview.file, text.trim() || undefined);
+                      } else {
+                        handleSend();
+                      }
+                    }
+                    if (e.key === "Escape") setShowEmoji(false);
+                  }}
+                  placeholder={mediaPreview ? "Adicionar legenda..." : "Digite uma mensagem..."}
+                  rows={1}
+                  className="w-full resize-none bg-gray-100 dark:bg-gray-700 text-sm text-gray-800 dark:text-gray-200 rounded-xl px-4 py-2.5 pr-10 outline-none placeholder-gray-400 overflow-hidden"
+                  style={{ minHeight: "42px", maxHeight: "128px" }}
+                />
+              </div>
+
+              {/* Send / Mic button */}
+              {mediaPreview || text.trim() ? (
+                <button
+                  onClick={() => {
+                    if (mediaPreview) {
+                      sendMedia(mediaPreview.file, text.trim() || undefined);
+                    } else {
+                      handleSend();
+                    }
+                  }}
+                  disabled={sending}
+                  className="w-10 h-10 flex items-center justify-center rounded-xl bg-gold-600 hover:bg-gold-700 disabled:opacity-40 text-white transition-colors flex-shrink-0"
+                >
+                  {sending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                </button>
+              ) : (
+                <button
+                  onClick={startRecording}
+                  disabled={sending}
+                  className="w-10 h-10 flex items-center justify-center rounded-xl bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-40 transition-colors flex-shrink-0"
+                  title="Gravar áudio"
+                >
+                  <Mic size={18} />
+                </button>
+              )}
+            </div>
+          )}
+          {!recording && (
+            <p className="text-[10px] text-gray-400 mt-1 ml-1">
+              Enter para enviar · Shift+Enter para nova linha
+            </p>
+          )}
         </div>
-        <p className="text-[10px] text-gray-400 mt-1 ml-1">Enter para enviar · Shift+Enter para nova linha</p>
       </div>
     </div>
   );
