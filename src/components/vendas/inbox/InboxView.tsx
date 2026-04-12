@@ -107,33 +107,43 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
     <>
     <div className="flex flex-col h-full overflow-hidden">
       {/* Banner de status WhatsApp */}
-      {waStatus !== "connected" && (
-        <div className={`flex items-center justify-between gap-3 px-5 py-2.5 text-sm flex-shrink-0 ${
-          waStatus === "checking"
-            ? "bg-gray-100 dark:bg-gray-700 text-gray-500"
-            : "bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800"
-        }`}>
-          <div className="flex items-center gap-2">
-            {waStatus === "checking" ? (
-              <Loader2 size={14} className="animate-spin text-gray-400" />
-            ) : (
-              <WifiOff size={14} className="text-amber-500" />
-            )}
-            <span className={waStatus === "checking" ? "text-gray-500" : "text-amber-700 dark:text-amber-400 font-medium"}>
-              {waStatus === "checking" ? "Verificando conexão..." : "WhatsApp desconectado — conecte para receber e enviar mensagens"}
-            </span>
-          </div>
-          {waStatus === "disconnected" && (
-            <button
-              onClick={() => setConnectChoiceOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-lg transition-colors flex-shrink-0"
-            >
-              <Wifi size={12} />
-              Conectar
-            </button>
+      <div className={`flex items-center justify-between gap-3 px-5 py-2.5 text-sm flex-shrink-0 border-b ${
+        waStatus === "checking"
+          ? "bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-400"
+          : waStatus === "connected"
+          ? "bg-green-50 dark:bg-green-900/10 border-green-100 dark:border-green-900/30"
+          : "bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800"
+      }`}>
+        <div className="flex items-center gap-2">
+          {waStatus === "checking" ? (
+            <Loader2 size={14} className="animate-spin text-gray-400" />
+          ) : waStatus === "connected" ? (
+            <Wifi size={14} className="text-green-500" />
+          ) : (
+            <WifiOff size={14} className="text-amber-500" />
           )}
+          <span className={
+            waStatus === "checking" ? "text-gray-400" :
+            waStatus === "connected" ? "text-green-700 dark:text-green-400 font-medium" :
+            "text-amber-700 dark:text-amber-400 font-medium"
+          }>
+            {waStatus === "checking" ? "Verificando conexão..." :
+             waStatus === "connected" ? "WhatsApp conectado" :
+             "WhatsApp desconectado — conecte para enviar e receber mensagens"}
+          </span>
         </div>
-      )}
+        <button
+          onClick={() => setConnectChoiceOpen(true)}
+          className={`flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-lg transition-colors flex-shrink-0 ${
+            waStatus === "connected"
+              ? "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+              : "bg-amber-500 hover:bg-amber-600 text-white"
+          }`}
+        >
+          <Wifi size={12} />
+          {waStatus === "connected" ? "Gerenciar" : "Conectar"}
+        </button>
+      </div>
 
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Lista de conversas — 280px fixo com scroll interno */}
