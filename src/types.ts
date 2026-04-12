@@ -139,6 +139,7 @@ export interface PipelineStage {
   is_final: boolean;
   is_won: boolean;
   stage_type?: string;
+  follow_up_message?: string | null;
 }
 
 export interface Deal {

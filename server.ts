@@ -3475,6 +3475,100 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // Salva template de mensagem de follow-up para uma etapa
+  app.patch('/api/pipeline/stages/:id/follow-up', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { id } = req.params;
+    const { message } = req.body;
+    if (typeof message !== 'string') return res.status(400).json({ error: 'message é obrigatório' });
+
+    const { error } = await supabase
+      .from('deal_stages')
+      .update({ follow_up_message: message })
+      .eq('id', id)
+      .eq('user_id', userId);
+
+    if (error) {
+      if (error.message?.includes('follow_up_message') || error.code === '42703') {
+        return res.status(422).json({ error: 'MIGRATION_NEEDED' });
+      }
+      return res.status(500).json({ error: error.message });
+    }
+    res.json({ success: true });
+  });
+
+  // Dispara mensagem de follow-up para todos os deals de uma etapa que têm telefone
+  app.post('/api/pipeline/stages/:id/blast', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { id } = req.params;
+    const { message } = req.body;
+    if (!message?.trim()) return res.status(400).json({ error: 'message é obrigatório' });
+
+    const { data: dealsInStage, error: dealsErr } = await supabase
+      .from('deals')
+      .select('id, title, contact_name, contact_phone')
+      .eq('user_id', userId)
+      .eq('stage', id)
+      .not('contact_phone', 'is', null);
+
+    if (dealsErr) return res.status(500).json({ error: dealsErr.message });
+
+    const targets = (dealsInStage || []).filter((d: any) => d.contact_phone?.trim());
+    if (targets.length === 0) return res.json({ sent: 0, failed: 0, total: 0, errors: [] });
+
+    const instanceName = `user_${userId.replace(/-/g, '_')}`;
+    let sent = 0, failed = 0;
+    const errors: string[] = [];
+
+    for (const deal of targets) {
+      const rawPhone = String(deal.contact_phone).replace(/\D/g, '');
+      const phone = normalizeBrazilianPhone(rawPhone);
+      const name = deal.contact_name || deal.title || '';
+      const personalizedMsg = message.replace(/\{nome\}/gi, name);
+
+      try {
+        let ok = false;
+
+        // Tenta Evolution API
+        if (EVOLUTION_API_URL && EVOLUTION_API_KEY) {
+          const evoRes = await fetch(`${EVOLUTION_API_URL}/message/sendText/${instanceName}`, {
+            method: 'POST',
+            headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ number: phone, textMessage: { text: personalizedMsg } }),
+          });
+          ok = evoRes.ok;
+        }
+
+        if (ok) {
+          sent++;
+          const now = new Date().toISOString();
+          const msgId = `blast-${Date.now()}-${phone}`;
+          await supabase.from('wa_messages').insert({
+            user_id: userId, phone, body: personalizedMsg, from_me: true,
+            timestamp: now, type: 'text', status: 'sent', message_id: msgId,
+          });
+          await supabase.from('wa_conversations').upsert({
+            user_id: userId, phone, last_message: personalizedMsg, last_message_at: now,
+            updated_at: now,
+          }, { onConflict: 'user_id,phone' });
+        } else {
+          failed++;
+          errors.push(`${name} (${phone})`);
+        }
+      } catch {
+        failed++;
+        errors.push(`${name} (${phone})`);
+      }
+
+      // Aguarda 1s entre envios para evitar bloqueio do WhatsApp
+      await new Promise<void>((r) => setTimeout(r, 1000));
+    }
+
+    res.json({ sent, failed, total: targets.length, errors });
+  });
+
   // ============ PRODUCTION STAGES ROUTES ============
   app.get('/api/production/stages', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
