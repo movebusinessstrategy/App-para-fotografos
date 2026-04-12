@@ -3526,6 +3526,20 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // Lista follow-ups agendados pendentes do usuário
+  app.get('/api/pipeline/followups/pending', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase
+      .from('scheduled_followups')
+      .select('id, phone, message, stage_id, scheduled_at, status, created_at')
+      .eq('user_id', userId)
+      .in('status', ['pending', 'processing'])
+      .order('scheduled_at', { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  });
+
   // Dispara mensagem de follow-up para todos os deals de uma etapa que têm telefone
   app.post('/api/pipeline/stages/:id/blast', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
