@@ -1480,23 +1480,65 @@ async function startServer() {
         if (!value?.messages?.length) return;
 
         const message = value.messages[0];
-        if (message.type !== 'text') return;
+        const msgType: string = message.type || 'text';
+
+        // Ignora tipos que não sabemos tratar (reaction, system, etc.)
+        if (!['text', 'image', 'audio', 'video', 'document', 'sticker', 'voice'].includes(msgType)) return;
 
         const phoneNumberId = value.metadata?.phone_number_id;
         const fromNumber = message.from;
-        const msgBody = message.text?.body || '';
         const msgId = message.id;
 
-        console.log(`[Webhook Meta] Mensagem de ${fromNumber} para phone_number_id ${phoneNumberId}: "${msgBody}"`);
-
+        // Precisa do access_token para baixar mídia — busca antes do processamento
         const { data: waAccount, error: waErr } = await supabaseAdmin
           .from('whatsapp_business_accounts')
-          .select('user_id')
+          .select('user_id, access_token')
           .eq('phone_number_id', phoneNumberId)
           .maybeSingle();
 
         if (waErr) { console.error('[Webhook Meta] Erro ao buscar conta:', waErr.message); return; }
         if (!waAccount) { console.error('[Webhook Meta] Nenhuma conta para phone_number_id:', phoneNumberId); return; }
+
+        let msgBody = '';
+        let mediaDataUrl: string | null = null;
+        const normalizedType = msgType === 'voice' ? 'audio' : msgType;
+
+        if (msgType === 'text') {
+          msgBody = message.text?.body || '';
+        } else {
+          // image | audio | video | document | sticker | voice
+          const mediaObj = (message as any)[msgType] as any;
+          msgBody = mediaObj?.caption || '';
+          const metaMediaId: string = mediaObj?.id || '';
+
+          if (metaMediaId && waAccount.access_token) {
+            try {
+              // 1. Obtém a URL temporária do arquivo no Meta
+              const infoRes = await fetch(`https://graph.facebook.com/v21.0/${metaMediaId}`, {
+                headers: { Authorization: `Bearer ${waAccount.access_token}` },
+              });
+              if (infoRes.ok) {
+                const info = await infoRes.json();
+                if (info.url) {
+                  // 2. Baixa o arquivo
+                  const fileRes = await fetch(info.url, {
+                    headers: { Authorization: `Bearer ${waAccount.access_token}` },
+                  });
+                  if (fileRes.ok) {
+                    const contentType = fileRes.headers.get('content-type') || `${normalizedType}/octet-stream`;
+                    const buffer = Buffer.from(await fileRes.arrayBuffer());
+                    mediaDataUrl = `data:${contentType};base64,${buffer.toString('base64')}`;
+                    console.log(`[Webhook Meta] ✅ Mídia baixada: ${normalizedType} (${Math.round(buffer.length / 1024)}KB)`);
+                  }
+                }
+              }
+            } catch (err) {
+              console.error('[Webhook Meta] Erro ao baixar mídia:', err);
+            }
+          }
+        }
+
+        console.log(`[Webhook Meta] ${normalizedType} de ${fromNumber}: "${msgBody}"${mediaDataUrl ? ' [mídia]' : ''}`);
 
         const cleanFrom = normalizeBrazilianPhone(fromNumber.replace(/\D/g, ''));
         const now = new Date().toISOString();
@@ -1508,21 +1550,23 @@ async function startServer() {
           body: msgBody,
           from_me: false,
           timestamp: now,
-          type: 'text',
+          type: normalizedType,
           status: 'received',
+          ...(mediaDataUrl ? { media_url: mediaDataUrl } : {}),
         });
         if (msgErr) console.error('[Webhook Meta] Erro ao salvar mensagem:', msgErr.message);
 
+        const lastMsg = msgBody || `[${normalizedType}]`;
         const { error: convErr } = await supabaseAdmin.from('wa_conversations').upsert({
           user_id: waAccount.user_id,
           phone: cleanFrom,
-          last_message: msgBody,
+          last_message: lastMsg,
           last_message_at: now,
           unread_count: 1,
         }, { onConflict: 'user_id,phone' });
 
         if (convErr) console.error('[Webhook Meta] Erro ao atualizar conversa:', convErr.message);
-        else console.log(`[Webhook Meta] ✅ Mensagem salva — user ${waAccount.user_id}, phone ${cleanFrom}`);
+        else console.log(`[Webhook Meta] ✅ ${normalizedType} salvo — user ${waAccount.user_id}, phone ${cleanFrom}`);
 
         // Auto-criar lead no pipeline (Meta)
         const metaUserId = waAccount.user_id;
