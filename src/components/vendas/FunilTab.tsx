@@ -51,40 +51,44 @@ const DELAY_OPTIONS = [
 
 function FollowUpModal({ stage, dealsInStage, onClose }: FollowUpModalProps) {
   const withPhone = dealsInStage.filter((d) => d.contact_phone?.trim());
-  const [message, setMessage] = useState(stage.follow_up_message || "");
+  const [tab, setTab] = useState<"auto" | "agora">("auto");
+
+  // Aba Automático
+  const [autoMessage, setAutoMessage] = useState(stage.follow_up_message || "");
   const [autoEnabled, setAutoEnabled] = useState(stage.auto_follow_up_enabled ?? false);
   const [delayHours, setDelayHours] = useState(stage.follow_up_delay_hours ?? 2);
   const [saving, setSaving] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [result, setResult] = useState<BlastResult | null>(null);
-  const [error, setError] = useState("");
-  const [confirmed, setConfirmed] = useState(false);
   const [saveOk, setSaveOk] = useState(false);
 
-  // Salva template + configuração de automação
-  const handleSaveTemplate = async () => {
-    if (!message.trim()) return;
+  // Aba Agora
+  const [nowMessage, setNowMessage] = useState(stage.follow_up_message || "");
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState<BlastResult | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
+
+  const [error, setError] = useState("");
+
+  const handleSaveAuto = async () => {
+    if (!autoMessage.trim()) return;
     setSaving(true);
     setError("");
     setSaveOk(false);
     try {
-      // Salva mensagem
-      const r1 = await authFetch(`/api/pipeline/stages/${stage.id}/follow-up`, {
-        method: "PATCH",
-        body: JSON.stringify({ message }),
-      });
-      // Salva automação
-      const r2 = await authFetch(`/api/pipeline/stages/${stage.id}`, {
-        method: "PUT",
-        body: JSON.stringify({ auto_follow_up_enabled: autoEnabled, follow_up_delay_hours: delayHours }),
-      });
+      const [r1, r2] = await Promise.all([
+        authFetch(`/api/pipeline/stages/${stage.id}/follow-up`, {
+          method: "PATCH",
+          body: JSON.stringify({ message: autoMessage }),
+        }),
+        authFetch(`/api/pipeline/stages/${stage.id}`, {
+          method: "PUT",
+          body: JSON.stringify({ auto_follow_up_enabled: autoEnabled, follow_up_delay_hours: delayHours }),
+        }),
+      ]);
       const d1 = await r1.json();
       if (!r1.ok) {
-        setError(d1.error === "MIGRATION_NEEDED"
-          ? "Rode no Supabase:\nALTER TABLE deal_stages ADD COLUMN IF NOT EXISTS follow_up_message TEXT;\nALTER TABLE deal_stages ADD COLUMN IF NOT EXISTS auto_follow_up_enabled BOOLEAN DEFAULT false;\nALTER TABLE deal_stages ADD COLUMN IF NOT EXISTS follow_up_delay_hours INTEGER DEFAULT 2;"
-          : d1.error || "Erro ao salvar");
+        setError(d1.error || "Erro ao salvar mensagem");
       } else if (!r2.ok) {
-        setError("Erro ao salvar configuração de automação");
+        setError("Erro ao salvar configuração");
       } else {
         setSaveOk(true);
         setTimeout(() => setSaveOk(false), 3000);
@@ -96,23 +100,19 @@ function FollowUpModal({ stage, dealsInStage, onClose }: FollowUpModalProps) {
     }
   };
 
-  // Dispara para todos
   const handleBlast = async () => {
-    if (!message.trim() || withPhone.length === 0) return;
+    if (!nowMessage.trim() || withPhone.length === 0) return;
     setSending(true);
     setError("");
     setResult(null);
     try {
       const res = await authFetch(`/api/pipeline/stages/${stage.id}/blast`, {
         method: "POST",
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message: nowMessage }),
       });
       const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "Erro ao disparar");
-      } else {
-        setResult(data);
-      }
+      if (!res.ok) setError(data.error || "Erro ao disparar");
+      else setResult(data);
     } catch {
       setError("Erro de conexão");
     } finally {
@@ -124,12 +124,13 @@ function FollowUpModal({ stage, dealsInStage, onClose }: FollowUpModalProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh]">
+
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
           <div className="flex items-center gap-2">
             <Rocket size={18} className="text-gold-500" />
             <div>
-              <h2 className="font-bold text-gray-900 dark:text-white text-sm">Follow-up em massa</h2>
+              <h2 className="font-bold text-gray-900 dark:text-white text-sm">Follow-up</h2>
               <p className="text-xs text-gray-500 dark:text-gray-400">{stage.name}</p>
             </div>
           </div>
@@ -138,192 +139,245 @@ function FollowUpModal({ stage, dealsInStage, onClose }: FollowUpModalProps) {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-          {/* Contadores */}
-          <div className="flex gap-3">
-            <div className="flex-1 rounded-xl bg-gray-50 dark:bg-gray-800 p-3 text-center">
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">{dealsInStage.length}</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">cards na etapa</p>
-            </div>
-            <div className="flex-1 rounded-xl bg-gold-50 dark:bg-gold-900/20 p-3 text-center">
-              <p className="text-2xl font-bold text-gold-600 dark:text-gold-400">{withPhone.length}</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">com telefone</p>
-            </div>
-          </div>
-
-          {/* Automação */}
-          <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-gray-800">
-              <div>
-                <p className="text-sm font-semibold text-gray-800 dark:text-white">Follow-up automático</p>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                  Envia quando um lead entrar nesta etapa
-                </p>
-              </div>
-              <button
-                onClick={() => setAutoEnabled((v) => !v)}
-                className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
-                  autoEnabled ? "bg-gold-500" : "bg-gray-300 dark:bg-gray-600"
-                }`}
-              >
-                <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${
-                  autoEnabled ? "translate-x-5" : "translate-x-0"
-                }`} />
-              </button>
-            </div>
-
-            {autoEnabled && (
-              <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-700 space-y-2">
-                <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
-                  Enviar após
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  {DELAY_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() => setDelayHours(opt.value)}
-                      className={`px-3 py-1.5 text-xs rounded-lg border font-medium transition-colors ${
-                        delayHours === opt.value
-                          ? "bg-gold-500 border-gold-500 text-white"
-                          : "border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gold-400 hover:text-gold-500"
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-                <p className="text-[11px] text-gray-400">
-                  Se o horário calculado for entre 22h–07h, o envio é adiado para 07h.
-                </p>
-              </div>
-            )}
-          </div>
-
-          {withPhone.length === 0 && (
-            <div className="rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-3 text-sm text-amber-700 dark:text-amber-400">
-              Nenhum contato nesta etapa tem telefone cadastrado.
-            </div>
-          )}
-
-          {/* Textarea */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
-              Mensagem
-            </label>
-            <textarea
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              rows={5}
-              placeholder={"Olá {nome}, tudo bem?\n\nVi que ainda não finalizamos..."}
-              className="w-full rounded-xl bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-sm text-gray-800 dark:text-gray-200 px-4 py-3 outline-none focus:ring-2 focus:ring-gold-400 resize-none placeholder-gray-400"
-            />
-            <p className="text-[11px] text-gray-400">
-              Use <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">{"{nome}"}</code> para personalizar com o nome de cada contato.
-            </p>
-          </div>
-
-          {/* Prévia da lista */}
-          {withPhone.length > 0 && (
-            <div className="space-y-1">
-              <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-                Quem vai receber
-              </p>
-              <div className="max-h-32 overflow-y-auto rounded-xl border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-800">
-                {withPhone.map((d) => (
-                  <div key={d.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
-                    <span className="text-gray-700 dark:text-gray-300 truncate">{d.contact_name || d.title}</span>
-                    <span className="text-gray-400 ml-2 flex-shrink-0">{d.contact_phone}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Resultado */}
-          {result && (
-            <div className={`rounded-xl p-4 text-sm space-y-1 ${
-              result.failed === 0
-                ? "bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800"
-                : "bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800"
-            }`}>
-              <div className="flex items-center gap-2 font-semibold">
-                {result.failed === 0
-                  ? <CheckCircle2 size={15} className="text-green-600" />
-                  : <AlertCircle size={15} className="text-amber-600" />}
-                <span>{result.sent} de {result.total} enviados com sucesso</span>
-              </div>
-              {result.failed > 0 && (
-                <p className="text-xs text-amber-700 dark:text-amber-400 ml-5">
-                  Falhas: {result.errors.join(", ")}
-                </p>
-              )}
-            </div>
-          )}
-
-          {error && (
-            <div className="rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3 text-xs text-red-700 dark:text-red-400 whitespace-pre-wrap">
-              {error}
-            </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="flex items-center gap-2 px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex-shrink-0">
+        {/* Abas */}
+        <div className="flex border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
           <button
-            onClick={handleSaveTemplate}
-            disabled={saving || !message.trim()}
-            className={`px-4 py-2 text-xs font-semibold rounded-lg border transition-colors disabled:opacity-40 ${
-              saveOk
-                ? "border-green-400 text-green-600 bg-green-50 dark:bg-green-900/20"
-                : "border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
+            onClick={() => { setTab("auto"); setError(""); }}
+            className={`flex-1 py-3 text-xs font-semibold transition-colors ${
+              tab === "auto"
+                ? "text-gold-600 border-b-2 border-gold-500"
+                : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
             }`}
           >
-            {saving
-              ? <><Loader2 size={13} className="animate-spin inline mr-1" />Salvando...</>
-              : saveOk
-              ? <><CheckCircle2 size={13} className="inline mr-1" />Salvo!</>
-              : "Salvar configuração"}
+            Automático
           </button>
+          <button
+            onClick={() => { setTab("agora"); setError(""); setResult(null); setConfirmed(false); }}
+            className={`flex-1 py-3 text-xs font-semibold transition-colors ${
+              tab === "agora"
+                ? "text-gold-600 border-b-2 border-gold-500"
+                : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+            }`}
+          >
+            Enviar agora
+          </button>
+        </div>
 
-          <div className="flex-1" />
+        {/* ── ABA AUTOMÁTICO ── */}
+        {tab === "auto" && (
+          <>
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+              {/* Toggle */}
+              <div className="flex items-center justify-between p-4 rounded-xl bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+                <div>
+                  <p className="text-sm font-semibold text-gray-800 dark:text-white">Ativar envio automático</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    Envia para o lead quando ele entrar nesta etapa
+                  </p>
+                </div>
+                <button
+                  onClick={() => setAutoEnabled((v) => !v)}
+                  className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
+                    autoEnabled ? "bg-gold-500" : "bg-gray-300 dark:bg-gray-600"
+                  }`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${
+                    autoEnabled ? "translate-x-5" : "translate-x-0"
+                  }`} />
+                </button>
+              </div>
 
-          {!confirmed && !result ? (
-            <button
-              onClick={() => setConfirmed(true)}
-              disabled={!message.trim() || withPhone.length === 0}
-              className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-gold-600 hover:bg-gold-700 text-white disabled:opacity-40 transition-colors"
-            >
-              <Rocket size={13} />
-              Disparar para {withPhone.length} contato{withPhone.length !== 1 ? "s" : ""}
-            </button>
-          ) : confirmed && !result ? (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500">Tem certeza?</span>
+              {/* Delay — só mostra se ativado */}
+              {autoEnabled && (
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
+                    Enviar após entrar na etapa
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {DELAY_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        onClick={() => setDelayHours(opt.value)}
+                        className={`px-3 py-1.5 text-xs rounded-lg border font-medium transition-colors ${
+                          delayHours === opt.value
+                            ? "bg-gold-500 border-gold-500 text-white"
+                            : "border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gold-400 hover:text-gold-500"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-gray-400">
+                    Horários entre 22h–07h são adiados para às 07h para não acordar ninguém.
+                  </p>
+                </div>
+              )}
+
+              {/* Mensagem */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
+                  Mensagem da etapa
+                </label>
+                <textarea
+                  value={autoMessage}
+                  onChange={(e) => setAutoMessage(e.target.value)}
+                  rows={5}
+                  placeholder={"Olá {nome}, tudo bem?\n\nVi que ainda não finalizamos sua sessão..."}
+                  className="w-full rounded-xl bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-sm text-gray-800 dark:text-gray-200 px-4 py-3 outline-none focus:ring-2 focus:ring-gold-400 resize-none placeholder-gray-400"
+                />
+                <p className="text-[11px] text-gray-400">
+                  Use <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">{"{nome}"}</code> para inserir o nome do contato automaticamente.
+                </p>
+              </div>
+
+              {error && (
+                <div className="rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3 text-xs text-red-700 dark:text-red-400 whitespace-pre-wrap">
+                  {error}
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex-shrink-0">
               <button
-                onClick={() => setConfirmed(false)}
-                className="px-3 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
+                onClick={handleSaveAuto}
+                disabled={saving || !autoMessage.trim()}
+                className={`w-full py-2.5 text-sm font-semibold rounded-xl transition-colors disabled:opacity-40 ${
+                  saveOk
+                    ? "bg-green-500 text-white"
+                    : "bg-gold-600 hover:bg-gold-700 text-white"
+                }`}
               >
-                Cancelar
-              </button>
-              <button
-                onClick={handleBlast}
-                disabled={sending}
-                className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-gold-600 hover:bg-gold-700 text-white disabled:opacity-40 transition-colors"
-              >
-                {sending
-                  ? <><Loader2 size={13} className="animate-spin" /> Enviando...</>
-                  : <><Send size={13} /> Confirmar envio</>}
+                {saving
+                  ? <><Loader2 size={14} className="animate-spin inline mr-1.5" />Salvando...</>
+                  : saveOk
+                  ? <><CheckCircle2 size={14} className="inline mr-1.5" />Configuração salva!</>
+                  : "Salvar configuração"}
               </button>
             </div>
-          ) : (
-            <button
-              onClick={onClose}
-              className="px-4 py-2 text-xs font-semibold rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-            >
-              Fechar
-            </button>
-          )}
-        </div>
+          </>
+        )}
+
+        {/* ── ABA ENVIAR AGORA ── */}
+        {tab === "agora" && (
+          <>
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+              {/* Contadores */}
+              <div className="flex gap-3">
+                <div className="flex-1 rounded-xl bg-gray-50 dark:bg-gray-800 p-3 text-center">
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{dealsInStage.length}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">cards na etapa</p>
+                </div>
+                <div className="flex-1 rounded-xl bg-gold-50 dark:bg-gold-900/20 p-3 text-center">
+                  <p className="text-2xl font-bold text-gold-600 dark:text-gold-400">{withPhone.length}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">com telefone</p>
+                </div>
+              </div>
+
+              {withPhone.length === 0 && (
+                <div className="rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-3 text-sm text-amber-700 dark:text-amber-400">
+                  Nenhum contato nesta etapa tem telefone cadastrado.
+                </div>
+              )}
+
+              {/* Mensagem */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
+                  Mensagem
+                </label>
+                <textarea
+                  value={nowMessage}
+                  onChange={(e) => setNowMessage(e.target.value)}
+                  rows={5}
+                  placeholder={"Olá {nome}, tudo bem?\n\nVi que ainda não finalizamos..."}
+                  className="w-full rounded-xl bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-sm text-gray-800 dark:text-gray-200 px-4 py-3 outline-none focus:ring-2 focus:ring-gold-400 resize-none placeholder-gray-400"
+                />
+                <p className="text-[11px] text-gray-400">
+                  Use <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">{"{nome}"}</code> para personalizar. Será enviado imediatamente para todos com telefone.
+                </p>
+              </div>
+
+              {/* Prévia */}
+              {withPhone.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                    Quem vai receber agora
+                  </p>
+                  <div className="max-h-28 overflow-y-auto rounded-xl border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-800">
+                    {withPhone.map((d) => (
+                      <div key={d.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
+                        <span className="text-gray-700 dark:text-gray-300 truncate">{d.contact_name || d.title}</span>
+                        <span className="text-gray-400 ml-2 flex-shrink-0">{d.contact_phone}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Resultado */}
+              {result && (
+                <div className={`rounded-xl p-4 text-sm space-y-1 ${
+                  result.failed === 0
+                    ? "bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800"
+                    : "bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800"
+                }`}>
+                  <div className="flex items-center gap-2 font-semibold">
+                    {result.failed === 0
+                      ? <CheckCircle2 size={15} className="text-green-600" />
+                      : <AlertCircle size={15} className="text-amber-600" />}
+                    <span>{result.sent} de {result.total} enviados com sucesso</span>
+                  </div>
+                  {result.failed > 0 && (
+                    <p className="text-xs text-amber-700 dark:text-amber-400 ml-5">
+                      Falhas: {result.errors.join(", ")}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {error && (
+                <div className="rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3 text-xs text-red-700 dark:text-red-400 whitespace-pre-wrap">
+                  {error}
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex-shrink-0">
+              {result ? (
+                <button onClick={onClose} className="w-full py-2.5 text-sm font-semibold rounded-xl bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
+                  Fechar
+                </button>
+              ) : !confirmed ? (
+                <button
+                  onClick={() => setConfirmed(true)}
+                  disabled={!nowMessage.trim() || withPhone.length === 0}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 text-sm font-semibold rounded-xl bg-gold-600 hover:bg-gold-700 text-white disabled:opacity-40 transition-colors"
+                >
+                  <Rocket size={15} />
+                  Disparar para {withPhone.length} contato{withPhone.length !== 1 ? "s" : ""} agora
+                </button>
+              ) : (
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setConfirmed(false)}
+                    className="flex-1 py-2.5 text-sm font-semibold rounded-xl border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={handleBlast}
+                    disabled={sending}
+                    className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-semibold rounded-xl bg-gold-600 hover:bg-gold-700 text-white disabled:opacity-40 transition-colors"
+                  >
+                    {sending
+                      ? <><Loader2 size={14} className="animate-spin" />Enviando...</>
+                      : <><Send size={14} />Confirmar</>}
+                  </button>
+                </div>
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
