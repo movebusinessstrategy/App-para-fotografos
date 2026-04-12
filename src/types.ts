@@ -140,6 +140,8 @@ export interface PipelineStage {
   is_won: boolean;
   stage_type?: string;
   follow_up_message?: string | null;
+  auto_follow_up_enabled?: boolean;
+  follow_up_delay_hours?: number;
 }
 
 export interface Deal {

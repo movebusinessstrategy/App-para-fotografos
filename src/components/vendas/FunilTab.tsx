@@ -39,32 +39,55 @@ interface FollowUpModalProps {
   onClose: () => void;
 }
 
+const DELAY_OPTIONS = [
+  { value: 0.5, label: "30 minutos" },
+  { value: 1, label: "1 hora" },
+  { value: 2, label: "2 horas" },
+  { value: 4, label: "4 horas" },
+  { value: 8, label: "8 horas" },
+  { value: 12, label: "12 horas" },
+  { value: 18, label: "18 horas" },
+];
+
 function FollowUpModal({ stage, dealsInStage, onClose }: FollowUpModalProps) {
   const withPhone = dealsInStage.filter((d) => d.contact_phone?.trim());
   const [message, setMessage] = useState(stage.follow_up_message || "");
+  const [autoEnabled, setAutoEnabled] = useState(stage.auto_follow_up_enabled ?? false);
+  const [delayHours, setDelayHours] = useState(stage.follow_up_delay_hours ?? 2);
   const [saving, setSaving] = useState(false);
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<BlastResult | null>(null);
   const [error, setError] = useState("");
   const [confirmed, setConfirmed] = useState(false);
+  const [saveOk, setSaveOk] = useState(false);
 
-  // Salva template sem disparar
+  // Salva template + configuração de automação
   const handleSaveTemplate = async () => {
     if (!message.trim()) return;
     setSaving(true);
     setError("");
+    setSaveOk(false);
     try {
-      const res = await authFetch(`/api/pipeline/stages/${stage.id}/follow-up`, {
+      // Salva mensagem
+      const r1 = await authFetch(`/api/pipeline/stages/${stage.id}/follow-up`, {
         method: "PATCH",
         body: JSON.stringify({ message }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        if (data.error === "MIGRATION_NEEDED") {
-          setError("Para salvar templates, adicione a coluna follow_up_message na tabela deal_stages no Supabase.\nSQL: ALTER TABLE deal_stages ADD COLUMN IF NOT EXISTS follow_up_message TEXT;");
-        } else {
-          setError(data.error || "Erro ao salvar");
-        }
+      // Salva automação
+      const r2 = await authFetch(`/api/pipeline/stages/${stage.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ auto_follow_up_enabled: autoEnabled, follow_up_delay_hours: delayHours }),
+      });
+      const d1 = await r1.json();
+      if (!r1.ok) {
+        setError(d1.error === "MIGRATION_NEEDED"
+          ? "Rode no Supabase:\nALTER TABLE deal_stages ADD COLUMN IF NOT EXISTS follow_up_message TEXT;\nALTER TABLE deal_stages ADD COLUMN IF NOT EXISTS auto_follow_up_enabled BOOLEAN DEFAULT false;\nALTER TABLE deal_stages ADD COLUMN IF NOT EXISTS follow_up_delay_hours INTEGER DEFAULT 2;"
+          : d1.error || "Erro ao salvar");
+      } else if (!r2.ok) {
+        setError("Erro ao salvar configuração de automação");
+      } else {
+        setSaveOk(true);
+        setTimeout(() => setSaveOk(false), 3000);
       }
     } catch {
       setError("Erro de conexão");
@@ -126,6 +149,54 @@ function FollowUpModal({ stage, dealsInStage, onClose }: FollowUpModalProps) {
               <p className="text-2xl font-bold text-gold-600 dark:text-gold-400">{withPhone.length}</p>
               <p className="text-xs text-gray-500 dark:text-gray-400">com telefone</p>
             </div>
+          </div>
+
+          {/* Automação */}
+          <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-gray-800">
+              <div>
+                <p className="text-sm font-semibold text-gray-800 dark:text-white">Follow-up automático</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                  Envia quando um lead entrar nesta etapa
+                </p>
+              </div>
+              <button
+                onClick={() => setAutoEnabled((v) => !v)}
+                className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
+                  autoEnabled ? "bg-gold-500" : "bg-gray-300 dark:bg-gray-600"
+                }`}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${
+                  autoEnabled ? "translate-x-5" : "translate-x-0"
+                }`} />
+              </button>
+            </div>
+
+            {autoEnabled && (
+              <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-700 space-y-2">
+                <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
+                  Enviar após
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {DELAY_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      onClick={() => setDelayHours(opt.value)}
+                      className={`px-3 py-1.5 text-xs rounded-lg border font-medium transition-colors ${
+                        delayHours === opt.value
+                          ? "bg-gold-500 border-gold-500 text-white"
+                          : "border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gold-400 hover:text-gold-500"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-gray-400">
+                  Se o horário calculado for entre 22h–07h, o envio é adiado para 07h.
+                </p>
+              </div>
+            )}
           </div>
 
           {withPhone.length === 0 && (
@@ -201,10 +272,17 @@ function FollowUpModal({ stage, dealsInStage, onClose }: FollowUpModalProps) {
           <button
             onClick={handleSaveTemplate}
             disabled={saving || !message.trim()}
-            className="px-4 py-2 text-xs font-semibold rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40 transition-colors"
+            className={`px-4 py-2 text-xs font-semibold rounded-lg border transition-colors disabled:opacity-40 ${
+              saveOk
+                ? "border-green-400 text-green-600 bg-green-50 dark:bg-green-900/20"
+                : "border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
+            }`}
           >
-            {saving ? <Loader2 size={13} className="animate-spin inline mr-1" /> : null}
-            Salvar template
+            {saving
+              ? <><Loader2 size={13} className="animate-spin inline mr-1" />Salvando...</>
+              : saveOk
+              ? <><CheckCircle2 size={13} className="inline mr-1" />Salvo!</>
+              : "Salvar configuração"}
           </button>
 
           <div className="flex-1" />

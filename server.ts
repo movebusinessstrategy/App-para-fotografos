@@ -196,6 +196,27 @@ const normalizeBrazilianPhone = (digits: string): string => {
   return digits;
 };
 
+// ─── Follow-up automático: agendamento respeitando horário de silêncio ───────
+// Brasil = UTC-3 (sem horário de verão desde 2019)
+const BRT_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+function computeScheduledAt(delayHours: number): Date {
+  const now = new Date();
+  const scheduled = new Date(now.getTime() + delayHours * 3600 * 1000);
+
+  // Converte para horário de Brasília para checar janela de silêncio (22h-07h)
+  const scheduledBRT = new Date(scheduled.getTime() - BRT_OFFSET_MS);
+  const hourBRT = scheduledBRT.getUTCHours();
+
+  if (hourBRT >= 22 || hourBRT < 7) {
+    const adjusted = new Date(scheduledBRT);
+    if (hourBRT >= 22) adjusted.setUTCDate(adjusted.getUTCDate() + 1);
+    adjusted.setUTCHours(7, 0, 0, 0); // 07:00 BRT
+    return new Date(adjusted.getTime() + BRT_OFFSET_MS); // volta para UTC
+  }
+  return scheduled;
+}
+
 const parseWebhookTimestamp = (payload: any) => {
   const candidates = [payload?.momment, payload?.moment, payload?.timestamp, payload?.ts];
   for (const candidate of candidates) {
@@ -3444,16 +3465,23 @@ async function startServer() {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const { id } = req.params;
-    const { name, color } = req.body;
+    const { name, color, auto_follow_up_enabled, follow_up_delay_hours } = req.body;
 
     const stages = await ensurePipelineStages(supabase, userId);
     const stage = stages.find((s) => s.id === id) || DEFAULT_STAGES.find((s) => s.id === id);
     if (!stage) return res.status(404).json({ error: 'Etapa não encontrada' });
     if (stage.is_final && name) return res.status(400).json({ error: 'Não é possível renomear etapa final' });
 
+    const updatePayload: Record<string, any> = {
+      name: name || stage.name,
+      color: color || stage.color,
+    };
+    if (auto_follow_up_enabled !== undefined) updatePayload.auto_follow_up_enabled = auto_follow_up_enabled;
+    if (follow_up_delay_hours !== undefined) updatePayload.follow_up_delay_hours = Number(follow_up_delay_hours);
+
     const { error } = await supabase
       .from('deal_stages')
-      .update({ name: name || stage.name, color: color || stage.color })
+      .update(updatePayload)
       .eq('id', id)
       .eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
@@ -4243,39 +4271,21 @@ async function startServer() {
     const supabase = (req as any).supabase as SupabaseClient;
     const dealId = Number(req.params.id);
 
-    console.log('=== DEBUG PUT /api/deals/:id ===');
-    console.log('dealId:', dealId, 'tipo:', typeof dealId);
-    console.log('userId:', userId);
-    console.log('body:', req.body);
+    if (isNaN(dealId)) return res.status(400).json({ error: 'ID inválido' });
 
-    if (isNaN(dealId)) {
-      return res.status(400).json({ error: 'ID inválido' });
-    }
-
-    // Testa buscar SEM o filtro de user_id primeiro
-    const { data: dealSemUser, error: errSemUser } = await supabase
+    const { data: existing } = await supabase
       .from('deals')
-      .select('id, user_id, stage')
-      .eq('id', dealId)
-      .single();
-    
-    console.log('Deal sem filtro user_id:', dealSemUser, 'erro:', errSemUser);
-
-    const { data: existing, error: errExisting } = await supabase
-      .from('deals')
-      .select('id, stage, stage_entered_at, stage_history, current_stage_entered_at, user_id')
+      .select('id, stage, stage_entered_at, stage_history, current_stage_entered_at, contact_phone, contact_name, title')
       .eq('id', dealId)
       .eq('user_id', userId)
       .single();
 
-    console.log('Deal com filtro user_id:', existing, 'erro:', errExisting);
-    console.log('=== FIM DEBUG ===');
-
     if (!existing) return res.status(404).json({ error: 'Deal not found' });
 
     const updates: any = { ...req.body, updated_at: new Date().toISOString() };
+    const stageChanged = updates.stage && updates.stage !== existing.stage;
 
-    if (updates.stage && updates.stage !== existing.stage) {
+    if (stageChanged) {
       const stages = await ensurePipelineStages(supabase, userId);
       const stageName = stages.find((s) => s.id === updates.stage)?.name || updates.stage;
       const nowIso = new Date().toISOString();
@@ -4283,17 +4293,48 @@ async function startServer() {
       updates.current_stage_entered_at = nowIso;
       updates.stage_history = appendStageHistory(existing.stage_history, updates.stage, stageName, nowIso);
       await recordStageEvent(
-        supabase,
-        userId,
-        dealId,
-        existing.stage,
-        updates.stage,
+        supabase, userId, dealId,
+        existing.stage, updates.stage,
         existing.current_stage_entered_at || existing.stage_entered_at
       );
     }
 
     const { error } = await supabase.from('deals').update(updates).eq('id', dealId).eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
+
+    // Agenda follow-up automático se a nova etapa tiver configurado
+    if (stageChanged && existing.contact_phone && supabaseAdmin) {
+      const { data: stageConfig } = await supabase
+        .from('deal_stages')
+        .select('auto_follow_up_enabled, follow_up_delay_hours, follow_up_message')
+        .eq('id', updates.stage)
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (stageConfig?.auto_follow_up_enabled && stageConfig?.follow_up_message) {
+        const phone = normalizeBrazilianPhone(String(existing.contact_phone).replace(/\D/g, ''));
+        const delayHours = stageConfig.follow_up_delay_hours || 2;
+        const scheduledAt = computeScheduledAt(delayHours);
+        const name = existing.contact_name || (existing as any).title || '';
+        const personalizedMsg = stageConfig.follow_up_message.replace(/\{nome\}/gi, name);
+
+        // Cancela follow-ups pendentes anteriores desse deal
+        await supabaseAdmin
+          .from('scheduled_followups')
+          .update({ status: 'cancelled' })
+          .eq('deal_id', dealId)
+          .eq('user_id', userId)
+          .eq('status', 'pending');
+
+        await supabaseAdmin.from('scheduled_followups').insert({
+          user_id: userId, deal_id: dealId, phone,
+          message: personalizedMsg, stage_id: updates.stage,
+          scheduled_at: scheduledAt.toISOString(),
+        });
+        console.log(`[FollowUp] Agendado para ${phone} às ${scheduledAt.toISOString()} (etapa: ${updates.stage})`);
+      }
+    }
+
     res.json({ success: true });
   });
 
@@ -6690,6 +6731,111 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
+
+  startFollowUpWorker();
+}
+
+// ─── Worker de follow-ups automáticos ────────────────────────────────────────
+function startFollowUpWorker() {
+  if (!supabaseAdmin) {
+    console.warn('[FollowUp Worker] supabaseAdmin não disponível — worker desativado');
+    return;
+  }
+  console.log('[FollowUp Worker] iniciado — verificando a cada 60s');
+
+  setInterval(async () => {
+    try {
+      const now = new Date().toISOString();
+
+      // Busca até 20 tarefas pendentes com scheduled_at passado
+      const { data: tasks } = await supabaseAdmin!
+        .from('scheduled_followups')
+        .select('*')
+        .eq('status', 'pending')
+        .lte('scheduled_at', now)
+        .limit(20);
+
+      if (!tasks || tasks.length === 0) return;
+
+      for (const task of tasks) {
+        // Marca como 'processing' para evitar duplo envio
+        const { data: claimed } = await supabaseAdmin!
+          .from('scheduled_followups')
+          .update({ status: 'processing' })
+          .eq('id', task.id)
+          .eq('status', 'pending')
+          .select('id');
+
+        if (!claimed || claimed.length === 0) continue; // outro worker pegou
+
+        let sent = false;
+        const instanceName = `user_${task.user_id.replace(/-/g, '_')}`;
+
+        try {
+          // 1ª: Evolution API
+          if (WHATSAPP_PROVIDER === 'evolution' && EVOLUTION_API_URL && EVOLUTION_API_KEY) {
+            const evoRes = await fetch(`${EVOLUTION_API_URL}/message/sendText/${instanceName}`, {
+              method: 'POST',
+              headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ number: task.phone, textMessage: { text: task.message } }),
+            });
+            sent = evoRes.ok;
+          }
+
+          // 2ª: Meta API
+          if (!sent) {
+            const { data: waAccount } = await supabaseAdmin!
+              .from('whatsapp_business_accounts')
+              .select('phone_number_id, access_token')
+              .eq('user_id', task.user_id)
+              .maybeSingle();
+
+            if (waAccount?.phone_number_id && waAccount?.access_token) {
+              const metaRes = await fetch(
+                `https://graph.facebook.com/v21.0/${waAccount.phone_number_id}/messages`,
+                {
+                  method: 'POST',
+                  headers: { 'Authorization': `Bearer ${waAccount.access_token}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    messaging_product: 'whatsapp', to: task.phone,
+                    type: 'text', text: { body: task.message },
+                  }),
+                }
+              );
+              const metaData = await metaRes.json();
+              sent = metaRes.ok && !metaData.error;
+            }
+          }
+
+          const sentAt = new Date().toISOString();
+          await supabaseAdmin!
+            .from('scheduled_followups')
+            .update({ status: sent ? 'sent' : 'failed', sent_at: sent ? sentAt : null })
+            .eq('id', task.id);
+
+          if (sent) {
+            const msgId = `auto-${Date.now()}-${task.phone}`;
+            await supabaseAdmin!.from('wa_messages').insert({
+              user_id: task.user_id, phone: task.phone, body: task.message,
+              from_me: true, timestamp: sentAt, type: 'text', status: 'sent', message_id: msgId,
+            });
+            await supabaseAdmin!.from('wa_conversations').upsert({
+              user_id: task.user_id, phone: task.phone,
+              last_message: task.message, last_message_at: sentAt, updated_at: sentAt,
+            }, { onConflict: 'user_id,phone' });
+            console.log(`[FollowUp Worker] ✅ ${task.phone} (deal ${task.deal_id}) — etapa ${task.stage_id}`);
+          } else {
+            console.warn(`[FollowUp Worker] ❌ Falha para ${task.phone} (deal ${task.deal_id})`);
+          }
+        } catch (err: any) {
+          console.error(`[FollowUp Worker] Erro:`, err.message);
+          await supabaseAdmin!.from('scheduled_followups').update({ status: 'failed' }).eq('id', task.id);
+        }
+      }
+    } catch (err: any) {
+      console.error('[FollowUp Worker] Erro geral:', err.message);
+    }
+  }, 60 * 1000);
 }
 
 startServer();
