@@ -1502,17 +1502,96 @@ async function startServer() {
 
         if (convErr) console.error('[Webhook Meta] Erro ao atualizar conversa:', convErr.message);
         else console.log(`[Webhook Meta] ✅ Mensagem salva — user ${waAccount.user_id}, phone ${cleanFrom}`);
+
+        // Auto-criar lead no pipeline (Meta)
+        const metaUserId = waAccount.user_id;
+        const phoneShortMeta = cleanFrom.startsWith('55') ? cleanFrom.slice(2) : cleanFrom;
+        const { data: existingDealsMeta } = await supabaseAdmin
+          .from('deals')
+          .select('id')
+          .eq('user_id', metaUserId)
+          .or(`contact_phone.eq.${cleanFrom},contact_phone.eq.${phoneShortMeta}`)
+          .limit(1);
+
+        if (!existingDealsMeta || existingDealsMeta.length === 0) {
+          const { data: stagesMeta } = await supabaseAdmin
+            .from('deal_stages')
+            .select('id, name, position')
+            .eq('user_id', metaUserId)
+            .not('id', 'like', 'prod-%')
+            .eq('is_final', false)
+            .order('position', { ascending: true })
+            .limit(1);
+
+          if (stagesMeta && stagesMeta.length > 0) {
+            const firstStageMeta = stagesMeta[0];
+            const nowMeta = new Date().toISOString();
+            await supabaseAdmin.from('deals').insert({
+              user_id: metaUserId,
+              title: cleanFrom,
+              contact_name: null,
+              contact_phone: cleanFrom,
+              stage: firstStageMeta.id,
+              value: 0,
+              created_at: nowMeta,
+              updated_at: nowMeta,
+              current_stage_entered_at: nowMeta,
+              stage_history: JSON.stringify([{
+                stage_id: firstStageMeta.id,
+                stage_name: firstStageMeta.name,
+                entered_at: nowMeta,
+                left_at: null,
+              }]),
+            });
+            console.log(`[Pipeline] Lead auto-criado via Meta: ${cleanFrom} na etapa "${firstStageMeta.name}"`);
+          }
+        }
         return;
       }
 
       // ── Evolution API / Z-API ────────────────────────────────────────────────
       const instanceName = payload?.instance ?? payload?.instanceName ?? '';
       const eventType = payload?.event ?? payload?.type ?? '';
+
+      // Deriva userId a partir do instanceName (padrão: user_<uuid-com-underscores>)
+      const userIdFromInstance = instanceName.startsWith('user_')
+        ? instanceName.slice(5).replace(/_/g, '-')
+        : '';
+
       if (eventType === 'qrcode.updated' || eventType === 'QRCODE_UPDATED') {
         const qrBase64 = payload?.data?.qrcode?.base64 ?? payload?.qrcode?.base64 ?? payload?.data?.base64 ?? '';
         if (qrBase64 && instanceName) {
           qrCodeByInstance.set(instanceName, qrBase64);
           console.log(`[WA] QR recebido via webhook para instância: ${instanceName}`);
+        }
+        return;
+      }
+
+      // Atualiza status de mensagens enviadas (entregue/lido)
+      if ((eventType === 'messages.update' || eventType === 'MESSAGES_UPDATE') && userIdFromInstance && supabaseAdmin) {
+        const updates: any[] = Array.isArray(payload?.data) ? payload.data : [];
+        for (const upd of updates) {
+          const msgId: string = upd?.key?.id ?? upd?.messageId ?? '';
+          const rawStatus: string | number = upd?.update?.status ?? upd?.status ?? '';
+          if (!msgId || rawStatus === '') continue;
+
+          // Mapeia status numérico ou string para nosso formato
+          const statusMap: Record<string, string> = {
+            '0': 'error', 'ERROR': 'error',
+            '1': 'pending', 'PENDING': 'pending',
+            '2': 'sent', 'SERVER_ACK': 'sent',
+            '3': 'delivered', 'DELIVERY_ACK': 'delivered',
+            '4': 'read', 'READ': 'read',
+            '5': 'read', 'PLAYED': 'read',
+          };
+          const normalized = statusMap[String(rawStatus).toUpperCase()] ?? statusMap[String(rawStatus)] ?? null;
+          if (!normalized) continue;
+
+          await supabaseAdmin
+            .from('wa_messages')
+            .update({ status: normalized })
+            .eq('user_id', userIdFromInstance)
+            .eq('message_id', msgId);
         }
         return;
       }
@@ -1566,12 +1645,12 @@ async function startServer() {
           timestamp,
           source: 'webhook',
           ...(media ? { mediaType: media.type, mediaBase64: media.base64, mediaMimetype: media.mimetype } : {}),
-        });
+        }, userIdFromInstance || undefined);
         processed += 1;
       }
 
       if (processed > 0) {
-        console.log(`[Webhook WA] Mensagens processadas: ${processed}`);
+        console.log(`[Webhook WA] Mensagens processadas: ${processed}, userId: ${userIdFromInstance || 'desconhecido'}`);
       }
     } catch (error) {
       console.error('Erro no webhook:', error);
@@ -1825,6 +1904,26 @@ async function startServer() {
 
     const total = liveWhatsAppMessagesByPhone.size;
     res.json({ synced: total, total, note: 'Mensagens recebidas via webhook da Evolution API / Z-API' });
+  });
+
+  // Foto de perfil do contato via Evolution API
+  app.get('/api/inbox/profile-picture/:phone', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const phone = normalizeBrazilianPhone(req.params.phone.replace(/\D/g, ''));
+    const instanceName = `user_${userId.replace(/-/g, '_')}`;
+    try {
+      const response = await fetch(`${EVOLUTION_API_URL}/chat/fetchProfilePictureUrl/${instanceName}`, {
+        method: 'POST',
+        headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ number: phone }),
+      });
+      if (!response.ok) return res.json({ url: null });
+      const data = await response.json().catch(() => ({}));
+      const url: string = data?.profilePictureUrl ?? data?.picture ?? data?.url ?? '';
+      return res.json({ url: url || null });
+    } catch {
+      return res.json({ url: null });
+    }
   });
 
   // Marca mensagens de um contato como lidas
