@@ -3,12 +3,13 @@ import React, { useState, useEffect, useRef } from "react";
 import { format } from "date-fns";
 import {
   X, Trash2, CheckCircle, XCircle, User, Phone, Mail, Instagram,
-  Edit3, Link2, Trophy, Pencil, Search, Check, Package, Layers, Briefcase, ChevronDown, Plus
+  Edit3, Link2, Trophy, Pencil, Search, Check, Package, Layers, Briefcase, ChevronDown, Plus, MessageCircle
 } from "lucide-react";
 import { ConfirmModal } from "../ui/ConfirmModal";
 import { Deal, Client, PipelineStage, DealActivity, StageHistoryEntry, Produto, Servico, Combo, DealItem } from "../../types";
 import { authFetch } from "../../utils/authFetch";
 import { DealConversionModal } from "../pipeline/DealConversionModal";
+import { ChatView } from "./inbox/ChatView";
 
 // ─── Tier badge ───────────────────────────────────────────────────────────────
 const TIER_CONFIG: Record<string, { label: string; cls: string }> = {
@@ -144,6 +145,7 @@ interface DealDetailDrawerProps {
   stages: PipelineStage[];
   onClose: () => void;
   onUpdate: (options?: { silent?: boolean }) => void | Promise<void>;
+  onOpenChat?: (phone: string, name: string) => void;
 }
 
 const PRIORITY_OPTIONS = [
@@ -154,7 +156,7 @@ const PRIORITY_OPTIONS = [
 const PRIORITY_LABELS: Record<string, string> = { low: "Baixa", medium: "Média", high: "Alta" };
 
 export function DealDetailDrawer({
-  deal, client, clients = [], stages, onClose, onUpdate,
+  deal, client, clients = [], stages, onClose, onUpdate, onOpenChat,
 }: DealDetailDrawerProps) {
   const [activities, setActivities] = useState<DealActivity[]>([]);
   const [loadingActivities, setLoadingActivities] = useState(false);
@@ -165,6 +167,7 @@ export function DealDetailDrawer({
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historyError, setHistoryError] = useState(false);
 
+  const [activeTab, setActiveTab] = useState<'info' | 'chat'>('chat');
   const [showConversionModal, setShowConversionModal] = useState(false);
   const [isEditingContact, setIsEditingContact] = useState(false);
   const [contactData, setContactData] = useState({
@@ -321,6 +324,7 @@ export function DealDetailDrawer({
       setEditingValue(false);
       setEditingDate(false);
       setEditingPriority(false);
+      setActiveTab(deal.contact_phone || undefined ? 'chat' : 'info');
       loadActivities();
       loadHistory();
     }
@@ -440,22 +444,29 @@ export function DealDetailDrawer({
 
   const inputClasses = "w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:border-gray-400 dark:focus:border-gray-600";
 
+  const chatPhone = linkedClient?.phone || deal.contact_phone;
+  const chatName  = linkedClient?.name  || deal.contact_name || deal.title;
+
   return (
     <>
-      <div className="fixed inset-0 z-50 flex justify-end">
-        <div className="absolute inset-0 bg-black/30 dark:bg-black/60" onClick={onClose} />
-        <div className="relative w-full max-w-lg bg-white dark:bg-gray-900 h-full shadow-xl dark:shadow-2xl dark:shadow-black/40 overflow-y-auto">
+      {/* Modal centralizado com backdrop blur */}
+      <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
 
+        <div
+          className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+          style={{ width: '65vw', height: '85vh' }}
+        >
           {/* Header */}
-          <div className={`sticky top-0 border-b border-gray-200 dark:border-gray-800 p-4 z-10 ${
+          <div className={`border-b border-gray-200 dark:border-gray-800 px-5 pt-4 pb-0 flex-shrink-0 ${
             isWon ? "bg-emerald-50 dark:bg-emerald-950/30" :
             isLost ? "bg-red-50 dark:bg-red-950/30" :
             "bg-white dark:bg-gray-900"
           }`}>
-            <div className="flex items-start justify-between">
+            <div className="flex items-start justify-between mb-3">
               <div className="flex-1 min-w-0">
                 {isFinal && (
-                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-semibold rounded-full mb-2 ${
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-semibold rounded-full mb-1 ${
                     isWon
                       ? "bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300"
                       : "bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300"
@@ -463,16 +474,51 @@ export function DealDetailDrawer({
                     {isWon ? <><Trophy size={12} /> Convertido</> : <><XCircle size={12} /> Perdido</>}
                   </span>
                 )}
-                <h2 className="text-lg font-bold text-gray-900 dark:text-white truncate">{deal.title}</h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Etapa: {currentStage?.name || deal.stage}</p>
+                <h2 className="text-base font-bold text-gray-900 dark:text-white truncate">{deal.title}</h2>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Etapa: {currentStage?.name || deal.stage}</p>
               </div>
-              <button onClick={onClose} className="p-1 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 rounded transition-colors">
-                <X size={20} />
+              <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors ml-3">
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Abas */}
+            <div className="flex gap-1">
+              <button
+                onClick={() => setActiveTab('chat')}
+                disabled={!chatPhone}
+                className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                  activeTab === 'chat'
+                    ? 'border-green-500 text-green-600 dark:text-green-400'
+                    : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                }`}
+                title={!chatPhone ? 'Nenhum telefone cadastrado' : undefined}
+              >
+                <MessageCircle size={14} /> Chat
+                {!chatPhone && <span className="text-[10px] text-gray-400">(sem telefone)</span>}
+              </button>
+              <button
+                onClick={() => setActiveTab('info')}
+                className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                  activeTab === 'info'
+                    ? 'border-violet-600 text-violet-600 dark:text-violet-400'
+                    : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                }`}
+              >
+                <User size={14} /> Informações
               </button>
             </div>
           </div>
 
-          <div className="p-4 space-y-6">
+          {/* Aba Chat */}
+          {activeTab === 'chat' && chatPhone && (
+            <div className="flex-1 min-h-0" style={{ background: '#ECE5DD' }}>
+              <ChatView phone={chatPhone} contactName={chatName} showHeader={false} />
+            </div>
+          )}
+
+          {/* Aba Informações */}
+          {activeTab === 'info' && <div className="flex-1 overflow-y-auto p-4 space-y-6">
 
             {/* ── Info principal: Valor / Previsão / Prioridade ── */}
             <div className="grid grid-cols-3 gap-3">
@@ -623,7 +669,19 @@ export function DealDetailDrawer({
                     <TierBadge tier={linkedClient.tier || linkedClient.status} />
                   </div>
                   <div className="mt-2 space-y-1 text-sm text-gray-500 dark:text-gray-400">
-                    {linkedClient.phone && <p className="flex items-center gap-2"><Phone size={12} /> {linkedClient.phone}</p>}
+                    {linkedClient.phone && (
+                      <p className="flex items-center gap-2">
+                        <Phone size={12} /> {linkedClient.phone}
+                        {onOpenChat && (
+                          <button
+                            onClick={() => onOpenChat(linkedClient.phone!, linkedClient.name)}
+                            className="ml-auto flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/40 transition-colors"
+                          >
+                            <MessageCircle size={11} /> Chat
+                          </button>
+                        )}
+                      </p>
+                    )}
                     {linkedClient.email && <p className="flex items-center gap-2"><Mail size={12} /> {linkedClient.email}</p>}
                     {linkedClient.instagram && <p className="flex items-center gap-2"><Instagram size={12} /> {linkedClient.instagram}</p>}
                   </div>
@@ -645,7 +703,19 @@ export function DealDetailDrawer({
                       <p className="font-medium text-gray-900 dark:text-white">
                         {deal.contact_name || deal.client_name || "Não informado"}
                       </p>
-                      {deal.contact_phone && <p className="text-gray-500 dark:text-gray-400 flex items-center gap-2"><Phone size={12} /> {deal.contact_phone}</p>}
+                      {deal.contact_phone && (
+                        <p className="text-gray-500 dark:text-gray-400 flex items-center gap-2">
+                          <Phone size={12} /> {deal.contact_phone}
+                          {onOpenChat && (
+                            <button
+                              onClick={() => onOpenChat(deal.contact_phone!, deal.contact_name || deal.title)}
+                              className="ml-auto flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/40 transition-colors"
+                            >
+                              <MessageCircle size={11} /> Chat
+                            </button>
+                          )}
+                        </p>
+                      )}
                       {deal.contact_email && <p className="text-gray-500 dark:text-gray-400 flex items-center gap-2"><Mail size={12} /> {deal.contact_email}</p>}
                       {deal.contact_instagram && <p className="text-gray-500 dark:text-gray-400 flex items-center gap-2"><Instagram size={12} /> {deal.contact_instagram}</p>}
                     </div>
@@ -966,9 +1036,10 @@ export function DealDetailDrawer({
                 <Trash2 size={16} /> Excluir Negócio
               </button>
             </div>
-          </div>
-        </div>
-      </div>
+          </div>} {/* fim aba info */}
+
+        </div> {/* fim modal */}
+      </div> {/* fim overlay */}
 
       {showConversionModal && (
         <DealConversionModal

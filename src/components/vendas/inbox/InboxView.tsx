@@ -23,6 +23,7 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
   const [refreshing, setRefreshing] = useState(false);
   const [waStatus, setWaStatus] = useState<WaStatus>("checking");
   const [connectOpen, setConnectOpen] = useState(false);
+  const [connectChoiceOpen, setConnectChoiceOpen] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchConversations = useCallback(async (silent = false) => {
@@ -124,7 +125,7 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
           </div>
           {waStatus === "disconnected" && (
             <button
-              onClick={() => setConnectOpen(true)}
+              onClick={() => setConnectChoiceOpen(true)}
               className="flex items-center gap-1.5 px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-lg transition-colors flex-shrink-0"
             >
               <Wifi size={12} />
@@ -194,6 +195,53 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
         </div>
       </div>
     </div>
+
+    {/* Modal de escolha: QR Code vs API Oficial */}
+    {connectChoiceOpen && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+        <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-sm p-6">
+          <h2 className="text-base font-bold text-gray-900 dark:text-white mb-1">Como deseja conectar?</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-5">Escolha o método de integração com o WhatsApp</p>
+
+          <div className="space-y-3">
+            {/* QR Code */}
+            <button
+              onClick={() => { setConnectChoiceOpen(false); setConnectOpen(true); }}
+              className="w-full flex items-start gap-4 p-4 rounded-xl border-2 border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 hover:border-green-400 dark:hover:border-green-600 transition-colors text-left"
+            >
+              <span className="text-2xl flex-shrink-0">📱</span>
+              <div>
+                <p className="font-semibold text-gray-900 dark:text-white text-sm">QR Code (recomendado)</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                  Conecta igual ao WhatsApp Web. <strong className="text-green-600">Grátis</strong>, sem aprovação. Recebe nome, fotos e histórico de mensagens.
+                </p>
+              </div>
+            </button>
+
+            {/* API Oficial Meta */}
+            <button
+              onClick={() => { setConnectChoiceOpen(false); window.open('https://developers.facebook.com/docs/whatsapp', '_blank'); }}
+              className="w-full flex items-start gap-4 p-4 rounded-xl border-2 border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 hover:border-gray-400 dark:hover:border-gray-600 transition-colors text-left"
+            >
+              <span className="text-2xl flex-shrink-0">🏢</span>
+              <div>
+                <p className="font-semibold text-gray-900 dark:text-white text-sm">API Oficial Meta</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                  Requer aprovação empresarial no Meta. Gratuito até 1.000 conversas/mês. Mais restrito — não acessa fotos de perfil nem histórico.
+                </p>
+              </div>
+            </button>
+          </div>
+
+          <button
+            onClick={() => setConnectChoiceOpen(false)}
+            className="w-full mt-4 py-2 text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+          >
+            Cancelar
+          </button>
+        </div>
+      </div>
+    )}
 
     <ConnectChannelModal
       open={connectOpen}

@@ -34,7 +34,7 @@ export default function Conciliacao() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await authFetch('/api/fin/transacoes');
+      const res = await authFetch('/api/fin/ofx/transacoes');
       if (res.ok) setTransacoes(await res.json());
     } finally {
       setLoading(false);
@@ -67,7 +67,7 @@ export default function Conciliacao() {
   };
 
   const conciliar = async (transacaoId: string, tipo: 'receita' | 'despesa', lancamentoId: string) => {
-    const res = await authFetch('/api/fin/conciliar', {
+    const res = await authFetch('/api/fin/ofx/conciliar', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ transacao_id: transacaoId, tipo, lancamento_id: lancamentoId }),
