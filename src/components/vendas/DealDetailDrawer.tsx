@@ -3,10 +3,10 @@ import React, { useState, useEffect, useRef } from "react";
 import { format } from "date-fns";
 import {
   X, Trash2, CheckCircle, XCircle, User, Phone, Mail, Instagram,
-  Edit3, Link2, Trophy, Pencil, Search, Check, Package, Layers, Briefcase, ChevronDown, Plus, MessageCircle
+  Edit3, Link2, Trophy, Pencil, Search, Check, Package, Layers, Briefcase, ChevronDown, Plus, MessageCircle, Tag
 } from "lucide-react";
 import { ConfirmModal } from "../ui/ConfirmModal";
-import { Deal, Client, PipelineStage, DealActivity, StageHistoryEntry, Produto, Servico, Combo, DealItem } from "../../types";
+import { Deal, Client, PipelineStage, DealActivity, StageHistoryEntry, Produto, Servico, Combo, DealItem, PipelineLabel } from "../../types";
 import { authFetch } from "../../utils/authFetch";
 import { DealConversionModal } from "../pipeline/DealConversionModal";
 import { ChatView } from "./inbox/ChatView";
@@ -191,6 +191,21 @@ export function DealDetailDrawer({
     open: boolean; onConfirm: () => void; title: string; message: string; variant?: "danger" | "warning";
   }>({ open: false, onConfirm: () => {}, title: "", message: "" });
 
+  // Labels
+  const [availableLabels, setAvailableLabels] = useState<PipelineLabel[]>([]);
+  const [dealLabels, setDealLabels] = useState<string[]>([]);
+  const [showLabelPicker, setShowLabelPicker] = useState(false);
+  const [newLabelName, setNewLabelName] = useState("");
+  const [newLabelColor, setNewLabelColor] = useState("#6B7280");
+  const [creatingLabel, setCreatingLabel] = useState(false);
+  const labelPickerRef = useRef<HTMLDivElement>(null);
+
+  // WhatsApp profile photo
+  const [contactPhotoUrl, setContactPhotoUrl] = useState<string | null>(null);
+  // Inline title editing
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [editingTitleVal, setEditingTitleVal] = useState("");
+
   // ── Catálogo vinculado (múltiplos itens) ──────────────────────────────────
   const [catalogType, setCatalogType] = useState<'combo' | 'produto' | 'servico'>('combo');
   const [catalogSearch, setCatalogSearch] = useState('');
@@ -214,6 +229,7 @@ export function DealDetailDrawer({
     authFetch('/api/produtos').then(r => r.json()).then(d => setCatalogProdutos(Array.isArray(d) ? d : [])).catch(() => {});
     authFetch('/api/servicos').then(r => r.json()).then(d => setCatalogServicos(Array.isArray(d) ? d : [])).catch(() => {});
     authFetch('/api/combos').then(r => r.json()).then(d => setCatalogCombos(Array.isArray(d) ? d : [])).catch(() => {});
+    authFetch('/api/pipeline/labels').then(r => r.json()).then(d => setAvailableLabels(Array.isArray(d) ? d : [])).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -226,6 +242,20 @@ export function DealDetailDrawer({
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  // Fetch WhatsApp profile picture when phone changes
+  useEffect(() => {
+    if (!deal) { setContactPhotoUrl(null); return; }
+    const linkedC = selectedClientId ? clients.find(c => c.id === selectedClientId) : null;
+    const phone = linkedC?.phone || deal.contact_phone;
+    if (!phone) { setContactPhotoUrl(null); return; }
+    const cleanPhone = phone.replace(/\D/g, '');
+    setContactPhotoUrl(null);
+    authFetch(`/api/inbox/profile-picture/${cleanPhone}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.url) setContactPhotoUrl(d.url); })
+      .catch(() => {});
+  }, [deal?.id, deal?.contact_phone, selectedClientId]);
 
   const catalogItems = catalogType === 'produto'
     ? catalogProdutos.filter(p => p.ativo).map(p => ({ id: p.id, nome: p.nome, value: p.preco_venda }))
@@ -325,6 +355,10 @@ export function DealDetailDrawer({
       setEditingDate(false);
       setEditingPriority(false);
       setActiveTab(deal.contact_phone || undefined ? 'chat' : 'info');
+      setEditingTitleVal(deal.title || "");
+      setEditingTitle(false);
+      setDealLabels(Array.isArray(deal.labels) ? deal.labels : []);
+      setShowLabelPicker(false);
       loadActivities();
       loadHistory();
     }
@@ -418,6 +452,69 @@ export function DealDetailDrawer({
     setEditingPriority(false);
   };
 
+  // Label picker click-outside
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (labelPickerRef.current && !labelPickerRef.current.contains(e.target as Node)) {
+        setShowLabelPicker(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const toggleLabel = async (labelId: string) => {
+    if (!deal) return;
+    const next = dealLabels.includes(labelId)
+      ? dealLabels.filter(l => l !== labelId)
+      : [...dealLabels, labelId];
+    setDealLabels(next);
+    await authFetch(`/api/deals/${deal.id}/labels`, {
+      method: 'PATCH',
+      body: JSON.stringify({ labels: next }),
+    });
+    onUpdate({ silent: true });
+  };
+
+  const createLabel = async () => {
+    if (!newLabelName.trim()) return;
+    setCreatingLabel(true);
+    try {
+      const res = await authFetch('/api/pipeline/labels', {
+        method: 'POST',
+        body: JSON.stringify({ name: newLabelName.trim(), color: newLabelColor }),
+      });
+      const label = await res.json();
+      setAvailableLabels(prev => [...prev, label].sort((a, b) => a.name.localeCompare(b.name)));
+      setNewLabelName('');
+    } finally {
+      setCreatingLabel(false);
+    }
+  };
+
+  const deleteLabel = async (labelId: string) => {
+    await authFetch(`/api/pipeline/labels/${labelId}`, { method: 'DELETE' });
+    setAvailableLabels(prev => prev.filter(l => l.id !== labelId));
+    if (dealLabels.includes(labelId)) {
+      const next = dealLabels.filter(l => l !== labelId);
+      setDealLabels(next);
+      if (deal) {
+        await authFetch(`/api/deals/${deal.id}/labels`, {
+          method: 'PATCH',
+          body: JSON.stringify({ labels: next }),
+        });
+      }
+    }
+  };
+
+  const saveTitle = async () => {
+    const trimmed = editingTitleVal.trim();
+    if (trimmed && trimmed !== deal?.title) {
+      await updateDeal({ title: trimmed });
+    }
+    setEditingTitle(false);
+  };
+
   if (!deal) return null;
 
   const currentStage = stages.find(s => s.id === deal.stage);
@@ -463,21 +560,97 @@ export function DealDetailDrawer({
             isLost ? "bg-red-50 dark:bg-red-950/30" :
             "bg-white dark:bg-gray-900"
           }`}>
-            <div className="flex items-start justify-between mb-3">
+            {/* Row 1: Photo + Name/Phone + Action buttons + Close */}
+            <div className="flex items-center gap-3 mb-3">
+              {/* WhatsApp profile photo */}
+              <div className="flex-shrink-0">
+                {contactPhotoUrl ? (
+                  <img
+                    src={contactPhotoUrl}
+                    alt={chatName || ""}
+                    className="w-11 h-11 rounded-full object-cover"
+                    onError={() => setContactPhotoUrl(null)}
+                  />
+                ) : (
+                  <div className="w-11 h-11 rounded-full bg-gold-500 flex items-center justify-center text-white font-bold text-sm">
+                    {(chatName || "?").slice(0, 2).toUpperCase()}
+                  </div>
+                )}
+              </div>
+
+              {/* Name + Phone + Stage */}
               <div className="flex-1 min-w-0">
                 {isFinal && (
-                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-semibold rounded-full mb-1 ${
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded-full mb-0.5 ${
                     isWon
                       ? "bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300"
                       : "bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300"
                   }`}>
-                    {isWon ? <><Trophy size={12} /> Convertido</> : <><XCircle size={12} /> Perdido</>}
+                    {isWon ? <><Trophy size={10} /> Convertido</> : <><XCircle size={10} /> Perdido</>}
                   </span>
                 )}
-                <h2 className="text-base font-bold text-gray-900 dark:text-white truncate">{deal.title}</h2>
-                <p className="text-xs text-gray-500 dark:text-gray-400">Etapa: {currentStage?.name || deal.stage}</p>
+                {editingTitle ? (
+                  <input
+                    autoFocus
+                    value={editingTitleVal}
+                    onChange={e => setEditingTitleVal(e.target.value)}
+                    onBlur={saveTitle}
+                    onKeyDown={e => { if (e.key === "Enter") saveTitle(); if (e.key === "Escape") setEditingTitle(false); }}
+                    className="text-base font-bold text-gray-900 dark:text-white bg-transparent border-b border-gold-400 dark:border-gold-500 outline-none w-full"
+                  />
+                ) : (
+                  <div className="flex items-center gap-1 group">
+                    <h2 className="text-base font-bold text-gray-900 dark:text-white truncate">{deal.title}</h2>
+                    <button
+                      onClick={() => { setEditingTitleVal(deal.title); setEditingTitle(true); }}
+                      className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400 transition-all flex-shrink-0"
+                      title="Editar nome"
+                    >
+                      <Pencil size={11} />
+                    </button>
+                  </div>
+                )}
+                <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                  {chatPhone && (
+                    <span className="flex items-center gap-1">
+                      <Phone size={10} /> {chatPhone}
+                    </span>
+                  )}
+                  {chatPhone && <span>·</span>}
+                  <span>{currentStage?.name || deal.stage}</span>
+                </div>
               </div>
-              <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors ml-3">
+
+              {/* Action buttons */}
+              {!isFinal && (
+                <>
+                  <button
+                    onClick={markAsWon}
+                    title="Converter em venda"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold transition-colors flex-shrink-0"
+                  >
+                    <Trophy size={13} /> Converter
+                  </button>
+                  <button
+                    onClick={markAsLost}
+                    title="Marcar como perdido"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 text-xs font-semibold transition-colors flex-shrink-0"
+                  >
+                    <XCircle size={13} /> Perdido
+                  </button>
+                </>
+              )}
+              <button
+                onClick={deleteDeal}
+                title="Excluir negócio"
+                className="p-1.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors flex-shrink-0"
+              >
+                <Trash2 size={16} />
+              </button>
+              <button
+                onClick={onClose}
+                className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex-shrink-0"
+              >
                 <X size={18} />
               </button>
             </div>
@@ -889,6 +1062,109 @@ export function DealDetailDrawer({
                 </p>
               )}
               {catalogSaving && <p className="text-[11px] text-gray-400 mt-1 text-center">Salvando...</p>}
+            </div>
+
+            {/* ── Etiquetas ── */}
+            <div ref={labelPickerRef} className="relative">
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase flex items-center gap-1">
+                  <Tag size={12} /> Etiquetas
+                </label>
+                <button
+                  onClick={() => setShowLabelPicker(v => !v)}
+                  className="flex items-center gap-1 text-xs text-gold-600 dark:text-gold-400 hover:text-gold-700 dark:hover:text-gold-300 transition-colors font-medium"
+                >
+                  <Plus size={12} /> Gerenciar
+                </button>
+              </div>
+
+              {/* Current labels */}
+              <div className="flex flex-wrap gap-1.5 min-h-[28px]">
+                {dealLabels.length === 0 && !showLabelPicker && (
+                  <p className="text-[11px] text-gray-400 dark:text-gray-500 py-1">Nenhuma etiqueta. Clique em "Gerenciar" para adicionar.</p>
+                )}
+                {dealLabels.map(lId => {
+                  const label = availableLabels.find(l => l.id === lId);
+                  if (!label) return null;
+                  return (
+                    <span
+                      key={lId}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium text-white cursor-pointer hover:opacity-80 transition-opacity"
+                      style={{ backgroundColor: label.color }}
+                      onClick={() => toggleLabel(lId)}
+                      title="Clique para remover"
+                    >
+                      {label.name}
+                      <X size={10} className="opacity-70" />
+                    </span>
+                  );
+                })}
+              </div>
+
+              {/* Label picker dropdown */}
+              {showLabelPicker && (
+                <div className="mt-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl p-3 space-y-3 z-20 relative">
+                  {/* Available labels */}
+                  {availableLabels.length > 0 && (
+                    <div>
+                      <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase mb-2">Clique para aplicar / remover</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {availableLabels.map(label => {
+                          const active = dealLabels.includes(label.id);
+                          return (
+                            <span
+                              key={label.id}
+                              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium cursor-pointer transition-all ${
+                                active ? 'text-white ring-2 ring-offset-1 ring-gray-400 dark:ring-offset-gray-800' : 'opacity-60 hover:opacity-100'
+                              }`}
+                              style={{ backgroundColor: label.color, color: active ? 'white' : undefined }}
+                              onClick={() => toggleLabel(label.id)}
+                            >
+                              {active && <Check size={10} />}
+                              {label.name}
+                              <button
+                                onClick={e => { e.stopPropagation(); deleteLabel(label.id); }}
+                                className="ml-0.5 opacity-0 hover:opacity-100 transition-opacity"
+                                title="Excluir etiqueta"
+                              >
+                                <X size={9} />
+                              </button>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Create new label */}
+                  <div className="border-t border-gray-100 dark:border-gray-700 pt-3">
+                    <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase mb-2">Nova etiqueta</p>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={newLabelColor}
+                        onChange={e => setNewLabelColor(e.target.value)}
+                        className="w-8 h-8 rounded cursor-pointer border-0 p-0.5 bg-transparent"
+                        title="Cor da etiqueta"
+                      />
+                      <input
+                        value={newLabelName}
+                        onChange={e => setNewLabelName(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') createLabel(); }}
+                        placeholder="Nome da etiqueta..."
+                        className="flex-1 text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 rounded-lg px-3 py-1.5 outline-none focus:border-gold-400 dark:focus:border-gold-500 text-gray-800 dark:text-gray-200 placeholder-gray-400"
+                      />
+                      <button
+                        onClick={createLabel}
+                        disabled={!newLabelName.trim() || creatingLabel}
+                        className="px-3 py-1.5 bg-gold-600 hover:bg-gold-700 disabled:opacity-40 text-white text-xs rounded-lg font-medium transition-colors"
+                      >
+                        {creatingLabel ? '...' : 'Criar'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Histórico do Lead */}

@@ -3,12 +3,13 @@ import { useNavigate } from "react-router-dom";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { MessageCircle, Package, Layers, Briefcase } from "lucide-react";
-import { Deal, Client } from "../../types";
+import { Deal, Client, PipelineLabel } from "../../types";
 
 interface DealCardProps {
   deal: Deal;
   client?: Client;
   onClick: () => void;
+  labelMap?: Map<string, PipelineLabel>;
 }
 
 function TierBadge({ tier }: { tier?: string | null }) {
@@ -34,7 +35,7 @@ function getStaleness(enteredAt?: string | null): 'urgent' | 'warning' | null {
   return null;
 }
 
-export function DealCard({ deal, client, onClick }: DealCardProps) {
+export function DealCard({ deal, client, onClick, labelMap }: DealCardProps) {
   const navigate = useNavigate();
   const {
     attributes,
@@ -117,6 +118,27 @@ export function DealCard({ deal, client, onClick }: DealCardProps) {
           <span className="text-[11px] text-gray-400 dark:text-gray-500 truncate">{deal.catalog_name}</span>
         </div>
       ) : null}
+      {/* Labels */}
+      {labelMap && Array.isArray(deal.labels) && deal.labels.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-1.5">
+          {deal.labels.slice(0, 3).map(lId => {
+            const label = labelMap.get(lId);
+            if (!label) return null;
+            return (
+              <span
+                key={lId}
+                className="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium text-white leading-none"
+                style={{ backgroundColor: label.color }}
+              >
+                {label.name}
+              </span>
+            );
+          })}
+          {deal.labels.length > 3 && (
+            <span className="text-[10px] text-gray-400 dark:text-gray-500">+{deal.labels.length - 3}</span>
+          )}
+        </div>
+      )}
       <div className="flex items-center justify-between mt-2">
         <span className="text-sm font-semibold text-gray-900 dark:text-white">
           R$ {(deal.value || 0).toLocaleString("pt-BR")}

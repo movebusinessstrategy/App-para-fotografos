@@ -12,7 +12,7 @@ import {
 import { SortableContext } from "@dnd-kit/sortable";
 import { Send, X, Loader2, CheckCircle2, AlertCircle, Rocket } from "lucide-react";
 
-import { Deal, PipelineStage, Client } from "../../types";
+import { Deal, PipelineStage, Client, PipelineLabel } from "../../types";
 import { authFetch } from "../../utils/authFetch";
 import { DealCard } from "./DealCard";
 import { DealDetailDrawer } from "./DealDetailDrawer";
@@ -390,6 +390,7 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
   const [activeDeal, setActiveDeal] = useState<Deal | null>(null);
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
   const [blastStage, setBlastStage] = useState<PipelineStage | null>(null);
+  const [pipelineLabels, setPipelineLabels] = useState<PipelineLabel[]>([]);
   const boardRef = useRef<HTMLDivElement>(null);
 
   const sensors = useSensors(
@@ -403,6 +404,16 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
       return deals.find((d) => d.id === prev.id) ?? prev;
     });
   }, [deals]);
+
+  useEffect(() => {
+    authFetch('/api/pipeline/labels').then(r => r.json()).then(d => setPipelineLabels(Array.isArray(d) ? d : [])).catch(() => {});
+  }, []);
+
+  const labelMap = useMemo(() => {
+    const map = new Map<string, PipelineLabel>();
+    pipelineLabels.forEach(l => map.set(l.id, l));
+    return map;
+  }, [pipelineLabels]);
 
   const clientMap = useMemo(() => {
     const map = new Map<number, Client>();
@@ -472,6 +483,7 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
                     clientMap={clientMap}
                     onDealClick={setSelectedDeal}
                     onFollowUp={() => setBlastStage(stage)}
+                    labelMap={labelMap}
                   />
                 </React.Fragment>
               ))}
@@ -519,9 +531,10 @@ interface StageColumnProps {
   clientMap: Map<number, Client>;
   onDealClick: (deal: Deal) => void;
   onFollowUp: () => void;
+  labelMap: Map<string, PipelineLabel>;
 }
 
-function StageColumn({ stage, deals, clientMap, onDealClick, onFollowUp }: StageColumnProps) {
+function StageColumn({ stage, deals, clientMap, onDealClick, onFollowUp, labelMap }: StageColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const totalValue = deals.reduce((sum, d) => sum + (d.value || 0), 0);
 
@@ -567,6 +580,7 @@ function StageColumn({ stage, deals, clientMap, onDealClick, onFollowUp }: Stage
                 deal={deal}
                 client={deal.client_id ? clientMap.get(deal.client_id) : undefined}
                 onClick={() => onDealClick(deal)}
+                labelMap={labelMap}
               />
             </React.Fragment>
           ))}
