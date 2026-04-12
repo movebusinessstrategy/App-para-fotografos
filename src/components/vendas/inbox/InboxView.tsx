@@ -23,7 +23,6 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
   const [refreshing, setRefreshing] = useState(false);
   const [waStatus, setWaStatus] = useState<WaStatus>("checking");
   const [connectOpen, setConnectOpen] = useState(false);
-  const [connectChoiceOpen, setConnectChoiceOpen] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchConversations = useCallback(async (silent = false) => {
@@ -39,13 +38,11 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
           );
           setConversations(sorted);
 
-          // Auto-select se veio de um DealCard com phone na URL
           if (initialPhone && !selected) {
             const match = sorted.find((c) => c.phone === initialPhone);
             if (match) {
               setSelected(match);
             } else {
-              // Ainda não tem conversa — cria placeholder para abrir o chat
               setSelected({ phone: initialPhone, contact_name: null, last_message: '', last_message_at: new Date().toISOString(), unread_count: 0 });
             }
           }
@@ -80,7 +77,6 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [fetchConversations, checkWaStatus]);
 
-  // Quando deals mudam, atualiza contato selecionado se necessário
   useEffect(() => {
     if (selected) {
       const updated = conversations.find((c) => c.phone === selected.phone);
@@ -88,7 +84,6 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
     }
   }, [conversations]);
 
-  // Reage quando initialPhone muda (clique em outro DealCard)
   useEffect(() => {
     if (!initialPhone) return;
     const match = conversations.find((c) => c.phone === initialPhone);
@@ -107,46 +102,46 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
     <>
     <div className="flex flex-col h-full overflow-hidden">
       {/* Banner de status WhatsApp */}
-      <div className={`flex items-center justify-between gap-3 px-5 py-2.5 text-sm flex-shrink-0 border-b ${
+      <div className={`flex items-center justify-between gap-3 px-5 py-2 text-sm flex-shrink-0 border-b ${
         waStatus === "checking"
-          ? "bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-400"
+          ? "bg-gray-50 dark:bg-gray-800/60 border-gray-200 dark:border-gray-700"
           : waStatus === "connected"
           ? "bg-green-50 dark:bg-green-900/10 border-green-100 dark:border-green-900/30"
           : "bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800"
       }`}>
         <div className="flex items-center gap-2">
           {waStatus === "checking" ? (
-            <Loader2 size={14} className="animate-spin text-gray-400" />
+            <Loader2 size={13} className="animate-spin text-gray-400" />
           ) : waStatus === "connected" ? (
-            <Wifi size={14} className="text-green-500" />
+            <Wifi size={13} className="text-green-500" />
           ) : (
-            <WifiOff size={14} className="text-amber-500" />
+            <WifiOff size={13} className="text-amber-500" />
           )}
-          <span className={
+          <span className={`text-xs ${
             waStatus === "checking" ? "text-gray-400" :
             waStatus === "connected" ? "text-green-700 dark:text-green-400 font-medium" :
             "text-amber-700 dark:text-amber-400 font-medium"
-          }>
+          }`}>
             {waStatus === "checking" ? "Verificando conexão..." :
              waStatus === "connected" ? "WhatsApp conectado" :
-             "WhatsApp desconectado — conecte para enviar e receber mensagens"}
+             "WhatsApp desconectado"}
           </span>
         </div>
         <button
-          onClick={() => setConnectChoiceOpen(true)}
-          className={`flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-lg transition-colors flex-shrink-0 ${
+          onClick={() => setConnectOpen(true)}
+          className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md transition-colors flex-shrink-0 ${
             waStatus === "connected"
               ? "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
               : "bg-amber-500 hover:bg-amber-600 text-white"
           }`}
         >
-          <Wifi size={12} />
+          <Wifi size={11} />
           {waStatus === "connected" ? "Gerenciar" : "Conectar"}
         </button>
       </div>
 
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        {/* Lista de conversas — 280px fixo com scroll interno */}
+        {/* Lista de conversas */}
         <div className="w-[280px] flex-shrink-0 flex flex-col min-h-0 overflow-hidden border-r border-gray-200 dark:border-gray-700">
           <div className="flex items-center justify-between px-4 pt-3 pb-1 flex-shrink-0">
             <span className="text-[11px] text-gray-400 font-semibold uppercase tracking-wider">
@@ -161,16 +156,16 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
               <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
             </button>
           </div>
-        <ConversationList
-          className="flex-1 min-h-0"
-          conversations={conversations}
-          selectedPhone={selected?.phone ?? null}
-          loading={loading}
-          onSelect={handleSelect}
-        />
-      </div>
+          <ConversationList
+            className="flex-1 min-h-0"
+            conversations={conversations}
+            selectedPhone={selected?.phone ?? null}
+            loading={loading}
+            onSelect={handleSelect}
+          />
+        </div>
 
-        {/* Chat — flex 1, tamanho fixo pelo flex */}
+        {/* Chat */}
         <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
           {selected ? (
             <ChatView phone={selected.phone} contactName={selected.contact_name} />
@@ -187,7 +182,7 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
           )}
         </div>
 
-        {/* Painel CRM — 260px fixo com scroll */}
+        {/* Painel CRM */}
         <div className="w-[260px] flex-shrink-0 min-h-0 overflow-hidden">
           {selected ? (
             <CrmPanel
@@ -205,53 +200,6 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
         </div>
       </div>
     </div>
-
-    {/* Modal de escolha: QR Code vs API Oficial */}
-    {connectChoiceOpen && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-        <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-sm p-6">
-          <h2 className="text-base font-bold text-gray-900 dark:text-white mb-1">Como deseja conectar?</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-5">Escolha o método de integração com o WhatsApp</p>
-
-          <div className="space-y-3">
-            {/* QR Code */}
-            <button
-              onClick={() => { setConnectChoiceOpen(false); setConnectOpen(true); }}
-              className="w-full flex items-start gap-4 p-4 rounded-xl border-2 border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 hover:border-green-400 dark:hover:border-green-600 transition-colors text-left"
-            >
-              <span className="text-2xl flex-shrink-0">📱</span>
-              <div>
-                <p className="font-semibold text-gray-900 dark:text-white text-sm">QR Code (recomendado)</p>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                  Conecta igual ao WhatsApp Web. <strong className="text-green-600">Grátis</strong>, sem aprovação. Recebe nome, fotos e histórico de mensagens.
-                </p>
-              </div>
-            </button>
-
-            {/* API Oficial Meta */}
-            <button
-              onClick={() => { setConnectChoiceOpen(false); window.open('https://developers.facebook.com/docs/whatsapp', '_blank'); }}
-              className="w-full flex items-start gap-4 p-4 rounded-xl border-2 border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 hover:border-gray-400 dark:hover:border-gray-600 transition-colors text-left"
-            >
-              <span className="text-2xl flex-shrink-0">🏢</span>
-              <div>
-                <p className="font-semibold text-gray-900 dark:text-white text-sm">API Oficial Meta</p>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                  Requer aprovação empresarial no Meta. Gratuito até 1.000 conversas/mês. Mais restrito — não acessa fotos de perfil nem histórico.
-                </p>
-              </div>
-            </button>
-          </div>
-
-          <button
-            onClick={() => setConnectChoiceOpen(false)}
-            className="w-full mt-4 py-2 text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-          >
-            Cancelar
-          </button>
-        </div>
-      </div>
-    )}
 
     <ConnectChannelModal
       open={connectOpen}

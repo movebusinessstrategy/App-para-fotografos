@@ -753,8 +753,8 @@ async function startServer() {
       const webhookConfig = serverUrl ? {
         enabled: true,
         url: `${serverUrl}/api/whatsapp/webhook`,
-        byEvents: false,
-        base64: true,
+        webhookByEvents: false,
+        webhookBase64: true,
         events: ['QRCODE_UPDATED', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE'],
       } : undefined;
 
@@ -765,8 +765,14 @@ async function startServer() {
       });
 
       if (stateCheckRes.ok) {
-        // Instance exists — configure webhook and trigger QR
-        console.log(`[WA] Instância ${instanceName} já existe. Configurando webhook e gerando QR...`);
+        // Instance exists — logout (reset to close) + configure webhook
+        console.log(`[WA] Instância ${instanceName} existe. Fazendo logout para gerar novo QR...`);
+        await fetch(`${EVOLUTION_API_URL}/instance/logout/${instanceName}`, {
+          method: 'DELETE',
+          headers: { 'apikey': EVOLUTION_API_KEY },
+        }).catch(() => {});
+        // Aguarda o logout ter efeito
+        await new Promise<void>((resolve) => setTimeout(resolve, 1200));
         if (webhookConfig) {
           await fetch(`${EVOLUTION_API_URL}/webhook/set/${instanceName}`, {
             method: 'POST',
@@ -775,10 +781,6 @@ async function startServer() {
           }).catch((e) => console.warn('[WA] Webhook config failed:', e.message));
         }
         qrCodeByInstance.delete(instanceName);
-        await fetch(`${EVOLUTION_API_URL}/instance/connect/${instanceName}`, {
-          method: 'GET',
-          headers: { 'apikey': EVOLUTION_API_KEY },
-        }).catch(() => {});
         return res.json({ success: true, provider: 'evolution', exists: true, triggered: true });
       }
 
@@ -817,9 +819,9 @@ async function startServer() {
           webhook: {
             enabled: true,
             url: `${serverUrl}/api/whatsapp/webhook`,
-            byEvents: false,
-            base64: true,
-            events: ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE']
+            webhookByEvents: false,
+            webhookBase64: true,
+            events: ['QRCODE_UPDATED', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE']
           }
         })
       });
@@ -918,21 +920,32 @@ async function startServer() {
       }
     }
 
-    // Evolution API — long-poll até 20s esperando QR chegar via webhook
+    // Evolution API — dispara connect UMA vez e aguarda QR chegar via webhook
     try {
-      // Trigger QR generation (resposta imediata é {"count":0} em v2)
-      await fetch(`${EVOLUTION_API_URL}/instance/connect/${instanceName}`, {
+      // Dispara geração do QR (uma única chamada — chamadas repetidas invalidam o QR anterior)
+      const connectRes = await fetch(`${EVOLUTION_API_URL}/instance/connect/${instanceName}`, {
         method: 'GET',
         headers: { 'apikey': EVOLUTION_API_KEY },
-      }).catch(() => {});
+      }).catch(() => null);
 
-      // Aguarda até 20s pelo QR vindo via webhook (qrcode.updated)
+      // Algumas versões da Evolution retornam o QR inline na resposta do connect
+      if (connectRes?.ok) {
+        const connectData = await connectRes.json().catch(() => ({}));
+        const inlineQr: string = connectData?.base64 ?? connectData?.qrcode?.base64 ?? '';
+        if (inlineQr && inlineQr.length > 50) {
+          const base64 = inlineQr.startsWith('data:') ? inlineQr : `data:image/png;base64,${inlineQr}`;
+          console.log(`[WA] QR Code inline para ${instanceName}`);
+          return res.json({ base64, qrcode: { base64 }, provider: 'evolution' });
+        }
+      }
+
+      // QR não veio inline — aguarda via webhook até 20s (polling sem re-disparar connect)
       const deadline = Date.now() + 20000;
       while (Date.now() < deadline) {
         const cached = qrCodeByInstance.get(instanceName);
         if (cached) {
           const base64 = cached.startsWith('data:') ? cached : `data:image/png;base64,${cached}`;
-          console.log(`[WA] QR Code pronto para ${instanceName}`);
+          console.log(`[WA] QR Code via webhook para ${instanceName}`);
           return res.json({ base64, qrcode: { base64 }, provider: 'evolution' });
         }
         await new Promise<void>((resolve) => setTimeout(resolve, 500));

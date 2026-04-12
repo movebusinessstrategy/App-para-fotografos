@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   X, RefreshCw, Smartphone, Instagram, CheckCircle,
-  WifiOff, Loader2, AlertCircle
+  WifiOff, Loader2, AlertCircle, ExternalLink
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { authFetch } from "../../utils/authFetch";
 
 type Channel = "whatsapp" | "instagram";
@@ -15,6 +16,7 @@ interface ConnectChannelModalProps {
 }
 
 export function ConnectChannelModal({ open, onClose, onStatusChange }: ConnectChannelModalProps) {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<Channel>("whatsapp");
   const [waStatus, setWaStatus] = useState<ConnStatus>("disconnected");
   const [waQrCode, setWaQrCode] = useState<string | null>(null);
@@ -218,6 +220,7 @@ export function ConnectChannelModal({ open, onClose, onStatusChange }: ConnectCh
               onConnect={handleConnectWhatsApp}
               onDisconnect={handleDisconnectWhatsApp}
               onRefresh={handleConnectWhatsApp}
+              onGoToSettings={() => { onClose(); navigate("/settings"); }}
             />
           ) : (
             <InstagramPanel status={igStatus} onRefresh={checkIgStatus} />
@@ -244,9 +247,10 @@ interface WhatsAppPanelProps {
   onConnect: () => void;
   onDisconnect: () => void;
   onRefresh: () => void;
+  onGoToSettings: () => void;
 }
 
-function WhatsAppPanel({ status, qrCode, loading, error, onConnect, onDisconnect, onRefresh }: WhatsAppPanelProps) {
+function WhatsAppPanel({ status, qrCode, loading, error, onConnect, onDisconnect, onRefresh, onGoToSettings }: WhatsAppPanelProps) {
   if (status === "connected") {
     return (
       <div className="flex flex-col items-center gap-4 py-4 text-center">
@@ -326,6 +330,20 @@ function WhatsAppPanel({ status, qrCode, loading, error, onConnect, onDisconnect
       >
         {loading ? <Loader2 size={15} className="animate-spin" /> : <Smartphone size={15} />}
         {loading ? "Aguardando QR Code… (pode levar até 25s)" : "Conectar via QR Code"}
+      </button>
+
+      <div className="flex items-center gap-2 mt-1">
+        <div className="flex-1 h-px bg-gray-100 dark:bg-gray-700" />
+        <span className="text-xs text-gray-400">ou</span>
+        <div className="flex-1 h-px bg-gray-100 dark:bg-gray-700" />
+      </div>
+
+      <button
+        onClick={onGoToSettings}
+        className="flex w-full items-center justify-center gap-1.5 py-2 text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+      >
+        <ExternalLink size={11} />
+        Conectar via API Oficial Meta (WhatsApp Business)
       </button>
     </div>
   );
