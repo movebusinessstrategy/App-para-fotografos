@@ -1,13 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   X, RefreshCw, Smartphone, Instagram, CheckCircle,
-  WifiOff, Loader2, AlertCircle, ExternalLink
+  WifiOff, Loader2, AlertCircle, ExternalLink, KeyRound, QrCode, RotateCcw
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { authFetch } from "../../utils/authFetch";
 
 type Channel = "whatsapp" | "instagram";
 type ConnStatus = "disconnected" | "connecting" | "connected" | "error";
+type ConnectMethod = "qr" | "code";
 
 interface ConnectChannelModalProps {
   open: boolean;
@@ -24,6 +25,13 @@ export function ConnectChannelModal({ open, onClose, onStatusChange }: ConnectCh
   const [waError, setWaError] = useState<string | null>(null);
   const [igStatus, setIgStatus] = useState<ConnStatus>("disconnected");
 
+  // Pairing code state
+  const [connectMethod, setConnectMethod] = useState<ConnectMethod>("qr");
+  const [pairingPhone, setPairingPhone] = useState("");
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [pairingLoading, setPairingLoading] = useState(false);
+  const [pairingError, setPairingError] = useState<string | null>(null);
+
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPolling = () => {
@@ -32,14 +40,10 @@ export function ConnectChannelModal({ open, onClose, onStatusChange }: ConnectCh
 
   /* ---- extrai o base64 do QR independente do provedor ---- */
   const extractQr = (data: any): string | null => {
-    // v1: { base64: "data:image/png;base64,..." }
     if (typeof data?.base64 === "string" && data.base64.length > 20) return data.base64;
-    // v2: { qrcode: { base64: "..." } }
     if (typeof data?.qrcode?.base64 === "string") return data.qrcode.base64;
-    // v2 flat: { code: "...", base64: "..." }
     if (typeof data?.code === "string" && data.code.length > 20 && !data.code.startsWith("2@"))
       return `data:image/png;base64,${data.code}`;
-    // v2 inner: { instance: { qrcode: { base64: "..." } } }
     if (typeof data?.instance?.qrcode?.base64 === "string") return data.instance.qrcode.base64;
     return null;
   };
@@ -51,9 +55,10 @@ export function ConnectChannelModal({ open, onClose, onStatusChange }: ConnectCh
       const data = await res.json();
       const state: string =
         data?.instance?.state ?? data?.state ?? data?.connectionStatus ?? "";
-      if (state === "open") {
+      if (state === "open" || data?.connected === true) {
         setWaStatus("connected");
         setWaQrCode(null);
+        setPairingCode(null);
         setWaError(null);
         stopPolling();
         onStatusChange?.("whatsapp", true);
@@ -63,24 +68,20 @@ export function ConnectChannelModal({ open, onClose, onStatusChange }: ConnectCh
     return false;
   }, [onStatusChange]);
 
-  /* ---- tenta criar + busca QR Code ---- */
+  /* ---- conectar via QR Code ---- */
   const handleConnectWhatsApp = async () => {
     setWaLoading(true);
     setWaQrCode(null);
     setWaError(null);
 
-    // Passo 1: verifica se já está conectado antes de criar instância
     const alreadyConnected = await checkWaStatus();
     if (alreadyConnected) { setWaLoading(false); return; }
 
-    // Passo 2: inicia conexão Baileys no servidor
     let qr: string | null = null;
     try {
       const createRes = await authFetch("/api/whatsapp/instance", { method: "POST" });
-      console.log("[WA] create instance status:", createRes.status);
       const createData = await createRes.json().catch(() => ({}));
       qr = extractQr(createData);
-      if (qr) console.log("[WA] QR na resposta de criação!");
     } catch { /* continua para polling */ }
 
     if (qr) {
@@ -91,17 +92,12 @@ export function ConnectChannelModal({ open, onClose, onStatusChange }: ConnectCh
       return;
     }
 
-    // Passo 3: chama /api/whatsapp/qrcode — o servidor aguarda internamente até 20s pelo QR
-    // Fazemos até 3 tentativas (cobrindo ~60s no total)
     let lastData: any = null;
-
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        console.log(`[WA] Chamando /qrcode (tentativa ${attempt}/3, servidor aguardará até 20s)...`);
         const res = await authFetch("/api/whatsapp/qrcode");
         const data = await res.json();
         lastData = data;
-        console.log(`[WA] /qrcode resposta (tentativa ${attempt}):`, JSON.stringify(data).substring(0, 300));
 
         const state: string = data?.instance?.state ?? data?.state ?? data?.connectionStatus ?? "";
         if (state === "open") {
@@ -127,36 +123,94 @@ export function ConnectChannelModal({ open, onClose, onStatusChange }: ConnectCh
       const already = await checkWaStatus();
       if (!already) {
         const detail = lastData ? ` (resposta: ${JSON.stringify(lastData).substring(0, 120)})` : "";
-        setWaError(`QR Code não disponível. Verifique as credenciais e a conexão com o provedor WhatsApp.${detail}`);
+        setWaError(`QR Code não disponível. Verifique a conexão com o servidor.${detail}`);
       }
     }
 
     setWaLoading(false);
+  };
+
+  /* ---- conectar via código de pareamento ---- */
+  const handlePairingCode = async () => {
+    const clean = pairingPhone.replace(/\D/g, "");
+    if (clean.length < 10) {
+      setPairingError("Informe o número com DDD (ex: 11999999999)");
+      return;
+    }
+
+    setPairingLoading(true);
+    setPairingCode(null);
+    setPairingError(null);
+
+    try {
+      const res = await authFetch("/api/whatsapp/pairing-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: clean }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setPairingError(data.error || "Erro ao gerar código");
+        setPairingLoading(false);
+        return;
+      }
+
+      if (data.already_connected) {
+        setWaStatus("connected");
+        onStatusChange?.("whatsapp", true);
+        setPairingLoading(false);
+        return;
+      }
+
+      setPairingCode(data.code);
+      setWaStatus("connecting");
+      // Inicia polling para detectar quando o usuário inseriu o código
+      pollingRef.current = setInterval(checkWaStatus, 3000);
+    } catch (err: any) {
+      setPairingError(err.message || "Erro ao conectar");
+    }
+    setPairingLoading(false);
   };
 
   const handleDisconnectWhatsApp = async () => {
     stopPolling();
     setWaLoading(true);
     try {
-      const res = await authFetch("/api/whatsapp/instance", { method: "DELETE" });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        console.error("[WA] Disconnect failed:", data);
-      }
+      await authFetch("/api/whatsapp/instance", { method: "DELETE" });
     } catch (err) {
       console.error("[WA] Disconnect error:", err);
     }
     setWaStatus("disconnected");
     setWaQrCode(null);
+    setPairingCode(null);
     setWaError(null);
+    setPairingError(null);
     setWaLoading(false);
     onStatusChange?.("whatsapp", false);
+  };
+
+  const handleResyncWhatsApp = async () => {
+    stopPolling();
+    setWaLoading(true);
+    setWaQrCode(null);
+    setWaError(null);
+    // Desconecta (apaga sessão para forçar sync completo)
+    try {
+      await authFetch("/api/whatsapp/instance", { method: "DELETE" });
+    } catch {}
+    setWaStatus("disconnected");
+    onStatusChange?.("whatsapp", false);
+    // Pequena pausa antes de iniciar nova sessão
+    await new Promise(r => setTimeout(r, 800));
+    // Inicia nova sessão com QR fresco (isso vai triggar sync completo)
+    await handleConnectWhatsApp();
   };
 
   const checkIgStatus = useCallback(async () => {
     try {
       const res = await authFetch("/api/instagram/status");
-      if (!res.ok) { setIgStatus("disconnected"); return; } // 503 = não configurado, ignora
+      if (!res.ok) { setIgStatus("disconnected"); return; }
       const data = await res.json();
       const state: string = data?.instance?.state ?? data?.state ?? "";
       const connected = state === "open";
@@ -217,10 +271,19 @@ export function ConnectChannelModal({ open, onClose, onStatusChange }: ConnectCh
               qrCode={waQrCode}
               loading={waLoading}
               error={waError}
+              connectMethod={connectMethod}
+              pairingPhone={pairingPhone}
+              pairingCode={pairingCode}
+              pairingLoading={pairingLoading}
+              pairingError={pairingError}
               onConnect={handleConnectWhatsApp}
               onDisconnect={handleDisconnectWhatsApp}
+              onResync={handleResyncWhatsApp}
               onRefresh={handleConnectWhatsApp}
               onGoToSettings={() => { onClose(); navigate("/settings"); }}
+              onMethodChange={(m) => { setConnectMethod(m); setWaError(null); setPairingError(null); setPairingCode(null); setWaQrCode(null); stopPolling(); setWaStatus("disconnected"); }}
+              onPairingPhoneChange={setPairingPhone}
+              onRequestPairingCode={handlePairingCode}
             />
           ) : (
             <InstagramPanel status={igStatus} onRefresh={checkIgStatus} />
@@ -244,13 +307,28 @@ interface WhatsAppPanelProps {
   qrCode: string | null;
   loading: boolean;
   error: string | null;
+  connectMethod: ConnectMethod;
+  pairingPhone: string;
+  pairingCode: string | null;
+  pairingLoading: boolean;
+  pairingError: string | null;
   onConnect: () => void;
   onDisconnect: () => void;
+  onResync: () => void;
   onRefresh: () => void;
   onGoToSettings: () => void;
+  onMethodChange: (m: ConnectMethod) => void;
+  onPairingPhoneChange: (v: string) => void;
+  onRequestPairingCode: () => void;
 }
 
-function WhatsAppPanel({ status, qrCode, loading, error, onConnect, onDisconnect, onRefresh, onGoToSettings }: WhatsAppPanelProps) {
+function WhatsAppPanel({
+  status, qrCode, loading, error,
+  connectMethod, pairingPhone, pairingCode, pairingLoading, pairingError,
+  onConnect, onDisconnect, onResync, onRefresh, onGoToSettings,
+  onMethodChange, onPairingPhoneChange, onRequestPairingCode,
+}: WhatsAppPanelProps) {
+
   if (status === "connected") {
     return (
       <div className="flex flex-col items-center gap-4 py-4 text-center">
@@ -261,9 +339,23 @@ function WhatsAppPanel({ status, qrCode, loading, error, onConnect, onDisconnect
           <p className="text-base font-semibold text-gray-900 dark:text-gray-100">WhatsApp conectado!</p>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Mensagens chegando em tempo real.</p>
         </div>
-        <button onClick={onDisconnect} className="flex items-center gap-2 rounded-lg border border-red-200 px-4 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-50 dark:border-red-900 dark:hover:bg-red-900/20">
-          <WifiOff size={15} /> Desconectar
-        </button>
+        <div className="w-full rounded-xl border border-blue-100 bg-blue-50 p-3 text-left dark:border-blue-900/40 dark:bg-blue-900/10">
+          <p className="text-xs font-semibold text-blue-700 dark:text-blue-400 mb-1">Conversas não aparecem?</p>
+          <p className="text-xs text-blue-600 dark:text-blue-500">
+            O WhatsApp só envia o histórico completo na primeira conexão. Clique em "Ressincronizar" para reconectar e importar todas as suas conversas.
+          </p>
+        </div>
+        <div className="flex gap-2 w-full">
+          <button
+            onClick={onResync}
+            className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-blue-200 px-3 py-2 text-sm font-semibold text-blue-600 transition hover:bg-blue-50 dark:border-blue-800 dark:hover:bg-blue-900/20"
+          >
+            <RotateCcw size={14} /> Ressincronizar histórico
+          </button>
+          <button onClick={onDisconnect} className="flex items-center justify-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-50 dark:border-red-900 dark:hover:bg-red-900/20">
+            <WifiOff size={14} /> Desconectar
+          </button>
+        </div>
       </div>
     );
   }
@@ -293,6 +385,35 @@ function WhatsAppPanel({ status, qrCode, loading, error, onConnect, onDisconnect
     );
   }
 
+  if (status === "connecting" && pairingCode) {
+    const formatted = pairingCode.length === 8
+      ? `${pairingCode.slice(0, 4)}-${pairingCode.slice(4)}`
+      : pairingCode;
+    return (
+      <div className="flex flex-col items-center gap-4 text-center">
+        <p className="text-sm font-semibold text-gray-700 dark:text-gray-200">Insira o código no WhatsApp</p>
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          Abra o WhatsApp → <strong>Dispositivos vinculados</strong> → Vincular com número de telefone
+        </p>
+        <div className="rounded-xl border-2 border-green-300 bg-green-50 px-8 py-5 shadow-md dark:border-green-700 dark:bg-green-900/20">
+          <p className="text-3xl font-mono font-bold tracking-widest text-green-700 dark:text-green-300">{formatted}</p>
+        </div>
+        <div className="flex items-center gap-1.5 text-xs text-yellow-600 dark:text-yellow-400">
+          <Loader2 size={13} className="animate-spin" />
+          Aguardando vinculação…
+        </div>
+        <p className="text-xs text-gray-400">O código expira em ~60 segundos. Se expirar, clique em "Gerar novo código".</p>
+        <button
+          onClick={onRequestPairingCode}
+          disabled={pairingLoading}
+          className="flex items-center gap-1.5 text-xs text-gray-400 underline hover:text-gray-600 dark:hover:text-gray-200"
+        >
+          <RefreshCw size={12} /> Gerar novo código
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col items-center gap-4 py-4 text-center">
       <div className="flex h-16 w-16 items-center justify-center rounded-full bg-green-50 dark:bg-green-900/20">
@@ -305,34 +426,89 @@ function WhatsAppPanel({ status, qrCode, loading, error, onConnect, onDisconnect
         </p>
       </div>
 
-      {error && (
-        <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-left dark:border-red-800 dark:bg-red-900/20">
+      {/* Toggle de método */}
+      <div className="flex w-full rounded-xl border border-gray-200 bg-gray-50 p-1 dark:border-gray-700 dark:bg-gray-800">
+        <button
+          onClick={() => onMethodChange("qr")}
+          className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition ${
+            connectMethod === "qr"
+              ? "bg-white text-green-600 shadow dark:bg-gray-700 dark:text-green-400"
+              : "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+          }`}
+        >
+          <QrCode size={13} /> QR Code
+        </button>
+        <button
+          onClick={() => onMethodChange("code")}
+          className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition ${
+            connectMethod === "code"
+              ? "bg-white text-green-600 shadow dark:bg-gray-700 dark:text-green-400"
+              : "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+          }`}
+        >
+          <KeyRound size={13} /> Código por telefone
+        </button>
+      </div>
+
+      {(error || pairingError) && (
+        <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-left w-full dark:border-red-800 dark:bg-red-900/20">
           <AlertCircle size={15} className="mt-0.5 shrink-0 text-red-500" />
-          <p className="text-xs text-red-700 dark:text-red-400">{error}</p>
+          <p className="text-xs text-red-700 dark:text-red-400">{error || pairingError}</p>
         </div>
       )}
 
-      {/* Instruções rápidas */}
-      <div className="w-full rounded-xl border border-gray-200 bg-gray-50 p-4 text-left text-xs text-gray-600 dark:border-gray-700 dark:bg-gray-800/60 dark:text-gray-400">
-        <p className="mb-2 font-semibold text-gray-700 dark:text-gray-300">Como conectar:</p>
-        <ol className="space-y-1 list-decimal list-inside">
-          <li>Clique em <strong>"Conectar via QR Code"</strong> abaixo</li>
-          <li>Abra o WhatsApp no celular</li>
-          <li>Toque em <strong>⋮ → Dispositivos vinculados</strong></li>
-          <li>Escaneie o QR Code que aparecer aqui</li>
-        </ol>
-      </div>
+      {connectMethod === "qr" ? (
+        <>
+          <div className="w-full rounded-xl border border-gray-200 bg-gray-50 p-4 text-left text-xs text-gray-600 dark:border-gray-700 dark:bg-gray-800/60 dark:text-gray-400">
+            <p className="mb-2 font-semibold text-gray-700 dark:text-gray-300">Como conectar:</p>
+            <ol className="space-y-1 list-decimal list-inside">
+              <li>Clique em <strong>"Gerar QR Code"</strong> abaixo</li>
+              <li>Abra o WhatsApp no celular</li>
+              <li>Toque em <strong>⋮ → Dispositivos vinculados</strong></li>
+              <li>Escaneie o QR Code que aparecer aqui</li>
+            </ol>
+          </div>
+          <button
+            onClick={onConnect}
+            disabled={loading}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-green-500 px-6 py-3 text-sm font-bold text-white shadow-md transition hover:bg-green-600 disabled:opacity-60"
+          >
+            {loading ? <Loader2 size={15} className="animate-spin" /> : <QrCode size={15} />}
+            {loading ? "Gerando QR Code… (aguarde até 25s)" : "Gerar QR Code"}
+          </button>
+        </>
+      ) : (
+        <>
+          <div className="w-full rounded-xl border border-gray-200 bg-gray-50 p-4 text-left text-xs text-gray-600 dark:border-gray-700 dark:bg-gray-800/60 dark:text-gray-400">
+            <p className="mb-2 font-semibold text-gray-700 dark:text-gray-300">Como conectar via código:</p>
+            <ol className="space-y-1 list-decimal list-inside">
+              <li>Digite o número do celular com DDD abaixo</li>
+              <li>Clique em <strong>"Gerar código"</strong></li>
+              <li>No WhatsApp: <strong>Dispositivos vinculados → Vincular com número</strong></li>
+              <li>Insira o código de 8 dígitos que aparecer aqui</li>
+            </ol>
+          </div>
+          <div className="w-full">
+            <input
+              type="tel"
+              value={pairingPhone}
+              onChange={(e) => onPairingPhoneChange(e.target.value)}
+              placeholder="Ex: 11999999999"
+              className="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm text-gray-900 outline-none focus:border-green-400 focus:ring-2 focus:ring-green-100 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:focus:border-green-500"
+            />
+          </div>
+          <button
+            onClick={onRequestPairingCode}
+            disabled={pairingLoading || pairingPhone.replace(/\D/g, "").length < 10}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-green-500 px-6 py-3 text-sm font-bold text-white shadow-md transition hover:bg-green-600 disabled:opacity-60"
+          >
+            {pairingLoading ? <Loader2 size={15} className="animate-spin" /> : <KeyRound size={15} />}
+            {pairingLoading ? "Gerando código…" : "Gerar código de pareamento"}
+          </button>
+        </>
+      )}
 
-      <button
-        onClick={onConnect}
-        disabled={loading}
-        className="flex w-full items-center justify-center gap-2 rounded-xl bg-green-500 px-6 py-3 text-sm font-bold text-white shadow-md transition hover:bg-green-600 disabled:opacity-60"
-      >
-        {loading ? <Loader2 size={15} className="animate-spin" /> : <Smartphone size={15} />}
-        {loading ? "Aguardando QR Code… (pode levar até 25s)" : "Conectar via QR Code"}
-      </button>
-
-      <div className="flex items-center gap-2 mt-1">
+      <div className="flex items-center gap-2 mt-1 w-full">
         <div className="flex-1 h-px bg-gray-100 dark:bg-gray-700" />
         <span className="text-xs text-gray-400">ou</span>
         <div className="flex-1 h-px bg-gray-100 dark:bg-gray-700" />
