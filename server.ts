@@ -5,6 +5,12 @@ import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
 import dotenv from 'dotenv';
 import Papa from 'papaparse';
+import ffmpeg from 'fluent-ffmpeg';
+import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+import { Readable, PassThrough } from 'stream';
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+
+import * as BaileysManager from './baileys-manager.js';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createSupabaseClient, supabaseAdmin } from './supabase.js';
 import {
@@ -26,6 +32,25 @@ import {
 dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Transcodifica áudio webm → ogg (opus) para compatibilidade com Meta API
+function transcodeWebmToOgg(inputBase64: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const inputBuffer = Buffer.from(inputBase64, 'base64');
+    const readable = new Readable({ read() { this.push(inputBuffer); this.push(null); } });
+    const passthrough = new PassThrough();
+    const chunks: Buffer[] = [];
+    passthrough.on('data', (chunk) => chunks.push(chunk));
+    passthrough.on('end', () => resolve(Buffer.concat(chunks)));
+    passthrough.on('error', reject);
+    ffmpeg(readable)
+      .inputFormat('webm')
+      .audioCodec('libopus')
+      .format('ogg')
+      .on('error', reject)
+      .pipe(passthrough);
+  });
+}
 
 // ============ WHATSAPP PROVIDER CONFIG ============
 const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL || 'https://evolution-api-ocpq.onrender.com';
@@ -789,97 +814,23 @@ async function startServer() {
 
   app.post('/api/whatsapp/instance', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const instanceName = getInstanceName(userId);
-
-    if (isZApiEnabled()) {
-      if (getMissingZApiConfig().length > 0) {
-        return res.status(500).json(zapiConfigError());
-      }
-
-      try {
-        const response = await fetch(zapiUrl('/status'), {
-          method: 'GET',
-          headers: zapiHeaders(),
-        });
-        const parsed = await parseHttpResponse(response);
-        if (!response.ok) {
-          return res.status(response.status).json({
-            error: 'Falha ao consultar status na Z-API',
-            provider: 'zapi',
-            details: parsed.data,
-          });
-        }
-        const state = normalizeWhatsappState(parsed.data);
-
-        return res.status(response.status).json({
-          success: response.ok,
-          provider: 'zapi',
-          state,
-          connectionStatus: state,
-          instance: { state },
-          details: parsed.data,
-        });
-      } catch (error) {
-        console.error('Erro ao inicializar sessão Z-API:', error);
-        return res.status(500).json({ error: 'Falha ao inicializar sessão WhatsApp (Z-API)' });
-      }
-    }
-
-    // Evolution API
     try {
-      const serverUrl = (process.env.SERVER_URL || '').replace(/\/$/, '');
-      const webhookConfig = serverUrl ? {
-        enabled: true,
-        url: `${serverUrl}/api/whatsapp/webhook`,
-        webhookByEvents: false,
-        webhookBase64: true,
-        events: ['QRCODE_UPDATED', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE'],
-      } : undefined;
-
-      // Check if instance already exists
-      const stateCheckRes = await fetch(`${EVOLUTION_API_URL}/instance/connectionState/${instanceName}`, {
-        method: 'GET',
-        headers: { 'apikey': EVOLUTION_API_KEY },
-      });
-
-      if (stateCheckRes.ok) {
-        // Instance exists — logout (reset to close) + configure webhook
-        console.log(`[WA] Instância ${instanceName} existe. Fazendo logout para gerar novo QR...`);
-        await fetch(`${EVOLUTION_API_URL}/instance/logout/${instanceName}`, {
-          method: 'DELETE',
-          headers: { 'apikey': EVOLUTION_API_KEY },
-        }).catch(() => {});
-        // Aguarda o logout ter efeito
-        await new Promise<void>((resolve) => setTimeout(resolve, 1200));
-        if (webhookConfig) {
-          await fetch(`${EVOLUTION_API_URL}/webhook/set/${instanceName}`, {
-            method: 'POST',
-            headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ webhook: webhookConfig }),
-          }).catch((e) => console.warn('[WA] Webhook config failed:', e.message));
-        }
-        qrCodeByInstance.delete(instanceName);
-        return res.json({ success: true, provider: 'evolution', exists: true, triggered: true });
+      console.log(`[Baileys] Iniciando sessão para usuário ${userId}`);
+      await BaileysManager.startSession(userId);
+      // Aguarda QR (até 35s) — retorna inline se disponível
+      const qr = await BaileysManager.waitForQR(userId, 35000);
+      if (qr) {
+        return res.json({ success: true, provider: 'baileys', base64: qr, qrcode: { base64: qr } });
       }
-
-      // Instance does not exist — create it with webhook embedded
-      const createBody: Record<string, unknown> = {
-        instanceName,
-        qrcode: true,
-        integration: 'WHATSAPP-BAILEYS',
-        ...(webhookConfig ? { webhook: webhookConfig } : {}),
-      };
-      const createRes = await fetch(`${EVOLUTION_API_URL}/instance/create`, {
-        method: 'POST',
-        headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify(createBody),
-      });
-      const parsed = await parseHttpResponse(createRes);
-      qrCodeByInstance.delete(instanceName);
-      return res.status(createRes.status).json({ success: createRes.ok, provider: 'evolution', ...parsed.data });
-    } catch (error) {
-      console.error('Erro ao inicializar sessão Evolution API:', error);
-      return res.status(500).json({ error: 'Falha ao inicializar sessão WhatsApp' });
+      // Se não veio QR, pode já estar conectado
+      const status = BaileysManager.getStatus(userId);
+      if (status === 'open') {
+        return res.json({ success: true, provider: 'baileys', state: 'open', instance: { state: 'open' } });
+      }
+      return res.json({ success: true, provider: 'baileys', triggered: true });
+    } catch (error: any) {
+      console.error('[Baileys] Erro ao iniciar sessão:', error);
+      return res.status(500).json({ error: error.message || 'Falha ao iniciar sessão WhatsApp' });
     }
   });
 
@@ -911,6 +862,53 @@ async function startServer() {
   });
 
   app.get('/api/whatsapp/qrcode', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+
+    // Baileys direto — aguarda QR por até 30s
+    const status = BaileysManager.getStatus(userId);
+    if (status === 'open') {
+      return res.json({ state: 'open', connectionStatus: 'open', instance: { state: 'open' }, provider: 'baileys' });
+    }
+    if (status === 'not_initialized') {
+      // Sessão não iniciada — inicia agora
+      await BaileysManager.startSession(userId);
+    }
+    const qr = await BaileysManager.waitForQR(userId, 30000);
+    if (qr) {
+      return res.json({ base64: qr, qrcode: { base64: qr }, provider: 'baileys' });
+    }
+    return res.status(408).json({ error: 'QR Code não gerado. Tente novamente.', provider: 'baileys' });
+  });
+
+  // Conectar via código de pareamento (alternativa ao QR)
+  app.post('/api/whatsapp/pairing-code', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const { phone } = req.body;
+
+    if (!phone) return res.status(400).json({ error: 'Informe o número de telefone com DDD (ex: 11999999999)' });
+
+    const cleanPhone = phone.replace(/\D/g, '');
+    if (cleanPhone.length < 10) return res.status(400).json({ error: 'Número inválido. Use formato: 11999999999' });
+
+    try {
+      const status = BaileysManager.getStatus(userId);
+      if (status === 'open') {
+        return res.json({ success: true, already_connected: true });
+      }
+      if (status === 'not_initialized') {
+        await BaileysManager.startSession(userId);
+        // Aguarda socket ficar disponível
+        await new Promise(r => setTimeout(r, 2000));
+      }
+      const code = await BaileysManager.requestPairingCode(userId, cleanPhone);
+      if (!code) return res.status(500).json({ error: 'Não foi possível gerar o código. Tente o QR Code.' });
+      return res.json({ success: true, code });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Erro ao gerar código de pareamento' });
+    }
+  });
+
+  app.get('/api/whatsapp/qrcode_legacy', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const instanceName = getInstanceName(userId);
 
@@ -998,38 +996,57 @@ async function startServer() {
       }
     }
 
-    // Evolution API — dispara connect UMA vez e aguarda QR chegar via webhook
+    // Evolution API — busca QR por polling direto (não depende de webhook)
     try {
-      // Dispara geração do QR (uma única chamada — chamadas repetidas invalidam o QR anterior)
-      const connectRes = await fetch(`${EVOLUTION_API_URL}/instance/connect/${instanceName}`, {
+      // 1. Dispara o connect para gerar o QR
+      await fetch(`${EVOLUTION_API_URL}/instance/connect/${instanceName}`, {
         method: 'GET',
         headers: { 'apikey': EVOLUTION_API_KEY },
       }).catch(() => null);
 
-      // Algumas versões da Evolution retornam o QR inline na resposta do connect
-      if (connectRes?.ok) {
-        const connectData = await connectRes.json().catch(() => ({}));
-        const inlineQr: string = connectData?.base64 ?? connectData?.qrcode?.base64 ?? '';
-        if (inlineQr && inlineQr.length > 50) {
-          const base64 = inlineQr.startsWith('data:') ? inlineQr : `data:image/png;base64,${inlineQr}`;
-          console.log(`[WA] QR Code inline para ${instanceName}`);
-          return res.json({ base64, qrcode: { base64 }, provider: 'evolution' });
-        }
-      }
+      // 2. Polling direto na Evolution API até o QR aparecer (30s, intervalo 2s)
+      const deadline = Date.now() + 30000;
+      let lastQr: string | null = null;
 
-      // QR não veio inline — aguarda via webhook até 20s (polling sem re-disparar connect)
-      const deadline = Date.now() + 20000;
       while (Date.now() < deadline) {
+        // Tenta buscar QR direto do endpoint de connect
+        const pollRes = await fetch(`${EVOLUTION_API_URL}/instance/connect/${instanceName}`, {
+          method: 'GET',
+          headers: { 'apikey': EVOLUTION_API_KEY },
+        }).catch(() => null);
+
+        if (pollRes?.ok) {
+          const pollData = await pollRes.json().catch(() => ({}));
+
+          // Verifica se já conectou
+          const state = normalizeWhatsappState(pollData);
+          if (state === 'open') {
+            console.log(`[WA] Instância ${instanceName} já conectada durante polling`);
+            return res.json({ state: 'open', connectionStatus: 'open', instance: { state: 'open' }, provider: 'evolution' });
+          }
+
+          // Extrai QR de qualquer campo possível
+          const qr = extractQrCandidate(pollData, JSON.stringify(pollData));
+          if (qr && qr.length > 50 && qr !== lastQr) {
+            lastQr = qr;
+            const base64 = qr.startsWith('data:') ? qr : `data:image/png;base64,${qr}`;
+            console.log(`[WA] QR Code obtido por polling direto para ${instanceName}`);
+            return res.json({ base64, qrcode: { base64 }, provider: 'evolution' });
+          }
+        }
+
+        // Também verifica cache do webhook (caso chegue enquanto faz polling)
         const cached = qrCodeByInstance.get(instanceName);
         if (cached) {
           const base64 = cached.startsWith('data:') ? cached : `data:image/png;base64,${cached}`;
           console.log(`[WA] QR Code via webhook para ${instanceName}`);
           return res.json({ base64, qrcode: { base64 }, provider: 'evolution' });
         }
-        await new Promise<void>((resolve) => setTimeout(resolve, 500));
+
+        await new Promise<void>((resolve) => setTimeout(resolve, 2000));
       }
 
-      // Timeout — verifica se por acaso já conectou durante a espera
+      // Timeout final — verifica estado
       try {
         const statusRes = await fetch(`${EVOLUTION_API_URL}/instance/connectionState/${instanceName}`, {
           headers: { 'apikey': EVOLUTION_API_KEY },
@@ -1043,9 +1060,9 @@ async function startServer() {
         }
       } catch { /* ignora */ }
 
-      console.warn(`[WA] Timeout aguardando QR para ${instanceName} — webhook pode não estar configurado`);
+      console.warn(`[WA] Timeout no polling de QR para ${instanceName}`);
       return res.status(408).json({
-        error: 'Timeout aguardando QR Code. Certifique-se de que o webhook está configurado (clique em Conectar para reconfigurar).',
+        error: 'QR Code não gerado. Verifique se a Evolution API está online e tente novamente.',
         provider: 'evolution',
         count: 0,
       });
@@ -1140,6 +1157,35 @@ async function startServer() {
   });
 
   app.get('/api/whatsapp/status', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const instanceName = getInstanceName(userId);
+
+    // Baileys direto
+    const baileysStatus = BaileysManager.getStatus(userId);
+    if (baileysStatus === 'open') {
+      return res.json({ connected: true, provider: 'baileys', whatsapp: { connected: true } });
+    }
+    if (baileysStatus === 'connecting') {
+      return res.json({ connected: false, provider: 'baileys', state: 'connecting', whatsapp: { connected: false } });
+    }
+
+    // Fallback: Meta API se configurada
+    try {
+      const { data: metaAccount } = await supabase
+        .from('whatsapp_business_accounts')
+        .select('phone_number, display_name')
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (metaAccount) {
+        return res.json({ connected: true, provider: 'meta', phone: metaAccount.phone_number, whatsapp: { connected: true } });
+      }
+    } catch {}
+
+    return res.json({ connected: false, provider: 'baileys', whatsapp: { connected: false } });
+  });
+
+  app.get('/api/whatsapp/status_legacy', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const instanceName = getInstanceName(userId);
@@ -1297,37 +1343,20 @@ async function startServer() {
 
   app.delete('/api/whatsapp/instance', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const instanceName = getInstanceName(userId);
-
-    if (isZApiEnabled()) {
-      if (getMissingZApiConfig().length > 0) {
-        return res.status(500).json(zapiConfigError());
-      }
-
-      try {
-        const response = await fetch(zapiUrl('/disconnect'), {
-          method: 'GET',
-          headers: zapiHeaders(),
-        });
-        const parsed = await parseHttpResponse(response);
-        return res.status(response.status).json(parsed.data);
-      } catch (error) {
-        console.error('Erro ao desconectar Z-API:', error);
-        return res.status(500).json({ error: 'Falha ao desconectar WhatsApp (Z-API)' });
-      }
-    }
-
-    // Evolution API
     try {
-      const response = await fetch(`${EVOLUTION_API_URL}/instance/delete/${instanceName}`, {
-        method: 'DELETE',
-        headers: { 'apikey': EVOLUTION_API_KEY },
-      });
-      const parsed = await parseHttpResponse(response);
-      return res.status(response.status).json(parsed.data);
-    } catch (error) {
-      console.error('Erro ao deletar instância (Evolution API):', error);
-      return res.status(500).json({ error: 'Falha ao desconectar WhatsApp' });
+      await BaileysManager.stopSession(userId);
+
+      // Limpa histórico vinculado a este número — ao reconectar com outro WhatsApp
+      // não aparecem mensagens antigas do número anterior
+      if (supabaseAdmin) {
+        await supabaseAdmin.from('wa_messages').delete().eq('user_id', userId);
+        await supabaseAdmin.from('wa_conversations').delete().eq('user_id', userId);
+        console.log(`[Baileys] Histórico limpo para usuário ${userId}`);
+      }
+
+      return res.json({ success: true });
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
     }
   });
 
@@ -1489,6 +1518,9 @@ async function startServer() {
         const fromNumber = message.from;
         const msgId = message.id;
 
+        // Nome do contato vem em value.contacts[0].profile.name
+        const contactName: string | null = value.contacts?.[0]?.profile?.name || null;
+
         // Precisa do access_token para baixar mídia — busca antes do processamento
         const { data: waAccount, error: waErr } = await supabaseAdmin
           .from('whatsapp_business_accounts')
@@ -1563,6 +1595,7 @@ async function startServer() {
           last_message: lastMsg,
           last_message_at: now,
           unread_count: 1,
+          ...(contactName ? { contact_name: contactName } : {}),
         }, { onConflict: 'user_id,phone' });
 
         if (convErr) console.error('[Webhook Meta] Erro ao atualizar conversa:', convErr.message);
@@ -1577,6 +1610,16 @@ async function startServer() {
           .eq('user_id', metaUserId)
           .or(`contact_phone.eq.${cleanFrom},contact_phone.eq.${phoneShortMeta}`)
           .limit(1);
+
+        // Se lead já existe mas sem nome, atualiza com o nome recebido
+        if (contactName && existingDealsMeta && existingDealsMeta.length > 0) {
+          const existingDeal = existingDealsMeta[0] as any;
+          await supabaseAdmin.from('deals')
+            .update({ contact_name: contactName, title: contactName })
+            .eq('id', existingDeal.id)
+            .eq('user_id', metaUserId)
+            .is('contact_name', null);
+        }
 
         if (!existingDealsMeta || existingDealsMeta.length === 0) {
           const { data: stagesMeta } = await supabaseAdmin
@@ -1593,8 +1636,8 @@ async function startServer() {
             const nowMeta = new Date().toISOString();
             await supabaseAdmin.from('deals').insert({
               user_id: metaUserId,
-              title: cleanFrom,
-              contact_name: null,
+              title: contactName || cleanFrom,
+              contact_name: contactName,
               contact_phone: cleanFrom,
               stage: firstStageMeta.id,
               value: 0,
@@ -1859,7 +1902,7 @@ async function startServer() {
     return res.json({ ok: true });
   });
 
-  // Envia mensagem via Meta WhatsApp Business API
+  // Envia mensagem de texto
   app.post('/api/inbox/send', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
@@ -1868,7 +1911,6 @@ async function startServer() {
     if (!phone || !text) return res.status(400).json({ error: 'phone e text são obrigatórios' });
 
     const cleanPhone = normalizeBrazilianPhone(phone.replace(/\D/g, ''));
-    const instanceName = `user_${userId.replace(/-/g, '_')}`;
 
     const saveToDb = async (msgId: string) => {
       const now = new Date().toISOString();
@@ -1881,42 +1923,14 @@ async function startServer() {
       }, { onConflict: 'user_id,phone' });
     };
 
-    // ── Z-API ────────────────────────────────────────────────────────────────
-    if (isZApiEnabled()) {
+    // ── Baileys (primário) ───────────────────────────────────────────────────
+    if (BaileysManager.getStatus(userId) === 'open') {
       try {
-        const response = await fetch(zapiUrl('/send-text'), {
-          method: 'POST',
-          headers: zapiHeaders(true),
-          body: JSON.stringify({ phone: cleanPhone, message: String(text) }),
-        });
-        const parsed = await parseHttpResponse(response);
-        if (!response.ok) return res.status(response.status).json({ error: parsed.data?.error || 'Erro Z-API' });
-        const msgId = parsed.data?.messageId || `zapi-${Date.now()}`;
+        const msgId = await BaileysManager.sendText(userId, cleanPhone, text);
         await saveToDb(msgId);
         return res.json({ success: true, message_id: msgId });
       } catch (err: any) {
-        return res.status(500).json({ error: err.message });
-      }
-    }
-
-    // ── Evolution API ─────────────────────────────────────────────────────────
-    if (WHATSAPP_PROVIDER === 'evolution') {
-      try {
-        const response = await fetch(`${EVOLUTION_API_URL}/message/sendText/${instanceName}`, {
-          method: 'POST',
-          headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ number: cleanPhone, textMessage: { text: String(text) } }),
-        });
-        const parsed = await parseHttpResponse(response);
-        if (response.ok) {
-          const msgId = parsed.data?.key?.id || `evo-${Date.now()}`;
-          await saveToDb(msgId);
-          return res.json({ success: true, message_id: msgId });
-        }
-        // Evolution falhou (instância desconectada?) — tenta Meta como fallback
-        console.warn(`[Send] Evolution retornou ${response.status}, tentando Meta como fallback...`);
-      } catch (err: any) {
-        console.warn('[Send] Evolution erro de rede, tentando Meta como fallback...', err.message);
+        console.warn('[Send] Baileys erro:', err.message);
       }
     }
 
@@ -1982,12 +1996,30 @@ async function startServer() {
     };
     const mediaType = getMediaType(mimetype);
 
+    // Transcodifica webm → ogg para compatibilidade com Meta API
+    let finalBase64 = mediaBase64;
+    let finalMimetype = mimetype;
+    if (mimetype.startsWith('audio/webm')) {
+      try {
+        const oggBuffer = await transcodeWebmToOgg(mediaBase64);
+        finalBase64 = oggBuffer.toString('base64');
+        finalMimetype = 'audio/ogg';
+        console.log('[SendMedia] Áudio transcodificado: webm → ogg');
+      } catch (err: any) {
+        console.warn('[SendMedia] Falha ao transcodar áudio, enviando como webm:', err.message);
+      }
+    }
+
+    // Monta data URL para armazenar no banco (necessário para exibir no chat)
+    const mediaDataUrl = `data:${finalMimetype};base64,${finalBase64}`;
+
     const saveToDb = async (msgId: string) => {
       const now = new Date().toISOString();
       await supabase.from('wa_messages').insert({
         user_id: userId, phone: cleanPhone, message_id: msgId,
         body: caption || '', from_me: true, timestamp: now,
         type: mediaType, status: 'sent',
+        media_url: mediaDataUrl,
       });
       await supabase.from('wa_conversations').upsert({
         user_id: userId, phone: cleanPhone,
@@ -1995,30 +2027,14 @@ async function startServer() {
       }, { onConflict: 'user_id,phone' });
     };
 
-    // ── Evolution API ────────────────────────────────────────────────────────
-    if (WHATSAPP_PROVIDER === 'evolution') {
+    // ── Baileys (primário) ───────────────────────────────────────────────────
+    if (BaileysManager.getStatus(userId) === 'open') {
       try {
-        const endpoint = mediaType === 'audio'
-          ? `/message/sendAudio/${instanceName}`
-          : `/message/sendMedia/${instanceName}`;
-        const body = mediaType === 'audio'
-          ? { number: cleanPhone, audio: mediaBase64, encoding: true }
-          : { number: cleanPhone, mediatype: mediaType, media: mediaBase64, caption: caption || '', fileName: filename || `file.${mimetype.split('/')[1]}` };
-
-        const response = await fetch(`${EVOLUTION_API_URL}${endpoint}`, {
-          method: 'POST',
-          headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        const parsed = await parseHttpResponse(response);
-        if (response.ok) {
-          const msgId = parsed.data?.key?.id || `evo-${Date.now()}`;
-          await saveToDb(msgId);
-          return res.json({ success: true, message_id: msgId });
-        }
-        console.warn(`[SendMedia] Evolution retornou ${response.status}, tentando Meta...`);
+        const msgId = await BaileysManager.sendMedia(userId, cleanPhone, finalBase64, finalMimetype, filename || `media.${finalMimetype.split('/')[1]}`, caption || '');
+        await saveToDb(msgId);
+        return res.json({ success: true, message_id: msgId });
       } catch (err: any) {
-        console.warn('[SendMedia] Evolution erro:', err.message);
+        console.warn('[SendMedia] Baileys erro:', err.message);
       }
     }
 
@@ -2033,10 +2049,10 @@ async function startServer() {
 
     try {
       // 1. Upload da mídia
-      const buffer = Buffer.from(mediaBase64, 'base64');
+      const buffer = Buffer.from(finalBase64, 'base64');
       const formData = new FormData();
       formData.append('messaging_product', 'whatsapp');
-      formData.append('file', new Blob([buffer], { type: mimetype }), filename || `media.${mimetype.split('/')[1]}`);
+      formData.append('file', new Blob([buffer], { type: finalMimetype }), filename || `media.${finalMimetype.split('/')[1]}`);
 
       const uploadRes = await fetch(
         `https://graph.facebook.com/v21.0/${waAccount.phone_number_id}/media`,
@@ -2089,23 +2105,54 @@ async function startServer() {
     res.json({ synced: total, total, note: 'Mensagens recebidas via webhook da Evolution API / Z-API' });
   });
 
-  // Foto de perfil do contato via Evolution API
+  // Foto de perfil do contato via Baileys
   app.get('/api/inbox/profile-picture/:phone', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const phone = normalizeBrazilianPhone(req.params.phone.replace(/\D/g, ''));
-    const instanceName = `user_${userId.replace(/-/g, '_')}`;
     try {
-      const response = await fetch(`${EVOLUTION_API_URL}/chat/fetchProfilePictureUrl/${instanceName}`, {
-        method: 'POST',
-        headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ number: phone }),
-      });
-      if (!response.ok) return res.json({ url: null });
-      const data = await response.json().catch(() => ({}));
-      const url: string = data?.profilePictureUrl ?? data?.picture ?? data?.url ?? '';
-      return res.json({ url: url || null });
+      const url = await BaileysManager.getProfilePicture(userId, phone);
+      return res.json({ url });
     } catch {
       return res.json({ url: null });
+    }
+  });
+
+  // Info completa do contato (foto + sobre + nome salvo)
+  app.get('/api/inbox/contact-info/:phone', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const phone = normalizeBrazilianPhone(req.params.phone.replace(/\D/g, ''));
+    try {
+      const [pictureUrl, about, convRow] = await Promise.all([
+        BaileysManager.getProfilePicture(userId, phone).catch(() => null),
+        BaileysManager.fetchContactAbout(userId, phone).catch(() => null),
+        supabase.from('wa_conversations').select('contact_name, last_message_at, unread_count').eq('user_id', userId).eq('phone', phone).maybeSingle(),
+      ]);
+      return res.json({
+        profile_picture_url: pictureUrl,
+        about,
+        contact_name: convRow.data?.contact_name ?? null,
+        last_message_at: convRow.data?.last_message_at ?? null,
+      });
+    } catch {
+      return res.json({ profile_picture_url: null, about: null, contact_name: null, last_message_at: null });
+    }
+  });
+
+  // Salva nome de contato manualmente
+  app.patch('/api/inbox/contact-name/:phone', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const phone = normalizeBrazilianPhone(req.params.phone.replace(/\D/g, ''));
+    const { name } = req.body;
+    if (!name?.trim()) return res.status(400).json({ error: 'Nome inválido' });
+    try {
+      await supabase.from('wa_conversations').upsert({
+        user_id: userId, phone, contact_name: name.trim(),
+      }, { onConflict: 'user_id,phone' });
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
     }
   });
 
@@ -5066,7 +5113,7 @@ async function startServer() {
     let dataRecebimentoReal = data_pagamento;
     if (receita.meio_id) {
       const { data: meio } = await supabase.from('fin_meios').select('prazo_recebimento').eq('id', receita.meio_id).single();
-      if (meio?.prazo_recebimento > 0) {
+      if (meio && meio.prazo_recebimento > 0) {
         const d = new Date(data_pagamento + 'T12:00:00');
         d.setDate(d.getDate() + meio.prazo_recebimento);
         dataRecebimentoReal = d.toISOString().slice(0, 10);
@@ -6956,6 +7003,206 @@ async function startServer() {
   });
 
   startFollowUpWorker();
+
+  // ── Baileys: upload de mídia para Supabase Storage ───────────────────────
+  const WA_MEDIA_BUCKET = 'wa-media';
+  let waBucketEnsured = false;
+
+  async function ensureWaMediaBucket() {
+    if (waBucketEnsured || !supabaseAdmin) return;
+    try {
+      const { data: buckets } = await supabaseAdmin.storage.listBuckets();
+      const exists = (buckets || []).some((b: any) => b.name === WA_MEDIA_BUCKET);
+      if (!exists) {
+        await supabaseAdmin.storage.createBucket(WA_MEDIA_BUCKET, { public: true, fileSizeLimit: 52428800 }); // 50MB
+        console.log(`[Baileys] Bucket '${WA_MEDIA_BUCKET}' criado.`);
+      }
+      waBucketEnsured = true;
+    } catch (e: any) {
+      console.error('[Baileys] Erro ao verificar/criar bucket de mídia:', e?.message);
+    }
+  }
+
+  async function uploadWaMedia(userId: string, buffer: Buffer, mimetype: string): Promise<string | null> {
+    if (!supabaseAdmin) return null;
+    await ensureWaMediaBucket();
+    try {
+      const ext = mimetype.split('/')[1]?.split(';')[0] || 'bin';
+      const filename = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const { error } = await supabaseAdmin.storage.from(WA_MEDIA_BUCKET).upload(filename, buffer, {
+        contentType: mimetype,
+        upsert: false,
+      });
+      if (error) {
+        console.error('[Baileys] Erro ao fazer upload de mídia:', error.message);
+        return null;
+      }
+      const { data } = supabaseAdmin.storage.from(WA_MEDIA_BUCKET).getPublicUrl(filename);
+      return data?.publicUrl ?? null;
+    } catch (e: any) {
+      console.error('[Baileys] Exceção ao fazer upload de mídia:', e?.message);
+      return null;
+    }
+  }
+
+  // ── Baileys: lista de conversas ao conectar ──────────────────────────────
+  BaileysManager.setChatsSetHandler(async (userId, chats) => {
+    if (!supabaseAdmin) return;
+    // Filtra apenas conversas individuais (não grupos)
+    const individual = chats.filter((c: any) =>
+      typeof c.id === 'string' && c.id.endsWith('@s.whatsapp.net')
+    );
+    console.log(`[Baileys] Sincronizando ${individual.length} conversas individuais para ${userId} (total recebido: ${chats.length})`);
+    if (individual.length > 0) {
+      const sample = individual[0];
+      console.log(`[Baileys] Exemplo de chat: id=${sample.id} name=${sample.name} conversationTimestamp=${sample.conversationTimestamp} lastMsgTimestamp=${(sample as any).lastMsgTimestamp}`);
+    }
+    let saved = 0, errors = 0;
+    for (const chat of individual) {
+      try {
+        const phone = normalizeBrazilianPhone((chat.id as string).replace('@s.whatsapp.net', ''));
+        const rawTs = (chat as any).conversationTimestamp ?? (chat as any).lastMsgTimestamp;
+        const ts = rawTs
+          ? new Date(Number(rawTs) * 1000).toISOString()
+          : new Date().toISOString();
+        const name: string | null = (chat as any).name || (chat as any).displayName || null;
+        const { error } = await supabaseAdmin.from('wa_conversations').upsert({
+          user_id: userId, phone,
+          ...(name ? { contact_name: name } : {}),
+          last_message_at: ts,
+          unread_count: Number((chat as any).unreadCount) || 0,
+        }, { onConflict: 'user_id,phone' });
+        if (error) {
+          console.error(`[Baileys] Erro ao salvar conversa ${phone}:`, error.message, error.code);
+          errors++;
+        } else {
+          saved++;
+        }
+      } catch (e: any) {
+        console.error(`[Baileys] Exceção ao salvar conversa:`, e?.message);
+        errors++;
+      }
+    }
+    console.log(`[Baileys] ✅ ${saved} conversas salvas, ${errors} erros`);
+  });
+
+  // ── Baileys: handler de mensagens ────────────────────────────────────────
+  BaileysManager.setMessageHandler(async (userId, msg, sock, isHistory = false) => {
+    if (!supabaseAdmin) return;
+    const remoteJid = msg.key.remoteJid || '';
+    if (!remoteJid.endsWith('@s.whatsapp.net')) return; // ignora grupos
+
+    // Mensagens em tempo real enviadas por nós já foram salvas no envio
+    if (msg.key.fromMe && !isHistory) return;
+
+    const phone = normalizeBrazilianPhone(remoteJid.replace('@s.whatsapp.net', ''));
+    const msgId = msg.key.id || `baileys-${Date.now()}`;
+    const ts = msg.messageTimestamp
+      ? new Date(Number(msg.messageTimestamp) * 1000).toISOString()
+      : new Date().toISOString();
+
+    // Tipo e conteúdo
+    const msgContent = msg.message || {};
+    const firstKey = Object.keys(msgContent)[0] || '';
+    let msgType = 'text';
+    let msgBody = '';
+    let mediaDataUrl: string | null = null;
+
+    if (firstKey === 'conversation' || firstKey === 'extendedTextMessage') {
+      msgType = 'text';
+      msgBody = (msgContent as any).conversation || (msgContent as any).extendedTextMessage?.text || '';
+    } else if (firstKey === 'imageMessage') {
+      msgType = 'image';
+      msgBody = (msgContent as any).imageMessage?.caption || '';
+      const media = await BaileysManager.downloadIncomingMedia(msg, sock);
+      if (media) mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype);
+    } else if (firstKey === 'audioMessage' || firstKey === 'pttMessage') {
+      msgType = 'audio';
+      const media = await BaileysManager.downloadIncomingMedia(msg, sock);
+      if (media) mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype);
+    } else if (firstKey === 'videoMessage') {
+      msgType = 'video';
+      msgBody = (msgContent as any).videoMessage?.caption || '';
+      const media = await BaileysManager.downloadIncomingMedia(msg, sock);
+      if (media) mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype);
+    } else if (firstKey === 'documentMessage') {
+      msgType = 'document';
+      msgBody = (msgContent as any).documentMessage?.title || (msgContent as any).documentMessage?.fileName || '';
+      const media = await BaileysManager.downloadIncomingMedia(msg, sock);
+      if (media) mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype);
+    } else {
+      return; // ignora reactions, stickers etc.
+    }
+
+    // Salva mensagem (ignora duplicatas)
+    const { error: msgSaveErr } = await supabaseAdmin.from('wa_messages').insert({
+      user_id: userId, phone, message_id: msgId,
+      body: msgBody, from_me: !!msg.key.fromMe, timestamp: ts,
+      type: msgType, status: msg.key.fromMe ? 'sent' : 'received',
+      ...(mediaDataUrl ? { media_url: mediaDataUrl } : {}),
+    });
+    if (msgSaveErr && !msgSaveErr.message.includes('duplicate')) {
+      console.error('[Baileys] Erro ao salvar msg:', msgSaveErr.message);
+    }
+
+    // Atualiza conversa
+    const contactName = msg.pushName || null;
+    const { error: convErr } = await supabaseAdmin.from('wa_conversations').upsert({
+      user_id: userId, phone,
+      last_message: msgBody || `[${msgType}]`,
+      last_message_at: ts,
+      updated_at: new Date().toISOString(),
+      ...(!isHistory ? { unread_count: msg.key.fromMe ? 0 : 1 } : {}),
+      ...(contactName ? { contact_name: contactName } : {}),
+    }, { onConflict: 'user_id,phone' });
+    if (convErr) {
+      console.error('[Baileys] Erro ao salvar conversa:', convErr.message, convErr.code);
+    }
+
+    // Auto-cria lead apenas para mensagens novas recebidas
+    if (!isHistory && !msg.key.fromMe) {
+      // Tenta com vários formatos para não criar lead duplicado
+      const phoneShort = phone.startsWith('55') ? phone.slice(2) : phone; // sem código do país
+      const phoneOld = phone.length === 13 && phone.startsWith('55')     // formato antigo sem o 9
+        ? phone.slice(0, 4) + phone.slice(5)
+        : null;
+      const orFilter = [phone, phoneShort, phoneOld].filter(Boolean).map(p => `contact_phone.eq.${p}`).join(',');
+      const { data: existing } = await supabaseAdmin.from('deals').select('id, contact_name')
+        .eq('user_id', userId)
+        .or(orFilter)
+        .limit(1);
+
+      if (!existing || existing.length === 0) {
+        const { data: stages } = await supabaseAdmin.from('deal_stages').select('id, name, position')
+          .eq('user_id', userId).not('id', 'like', 'prod-%').eq('is_final', false)
+          .order('position', { ascending: true }).limit(1);
+        if (stages?.length) {
+          const now = new Date().toISOString();
+          await supabaseAdmin.from('deals').insert({
+            user_id: userId, title: contactName || phone,
+            contact_name: contactName, contact_phone: phone,
+            stage: stages[0].id, value: 0,
+            created_at: now, updated_at: now, current_stage_entered_at: now,
+            stage_history: JSON.stringify([{ stage_id: stages[0].id, stage_name: stages[0].name, entered_at: now, left_at: null }]),
+          });
+          console.log(`[Baileys] Lead auto-criado: ${contactName || phone}`);
+        }
+      } else if (contactName && existing[0] && !existing[0].contact_name) {
+        await supabaseAdmin.from('deals').update({ contact_name: contactName, title: contactName })
+          .eq('id', existing[0].id).eq('user_id', userId);
+      }
+    }
+
+    if (!isHistory) {
+      console.log(`[Baileys] ✅ msg ${msg.key.fromMe ? 'enviada' : 'recebida'} | ${msgType} | ${phone} | ${contactName || 'sem nome'}`);
+    }
+  });
+
+  // Restaura sessões existentes (arquivos de credenciais salvas)
+  // Restaura sessões salvas em disco (handler já foi registrado acima via setMessageHandler)
+  BaileysManager.restoreAllSessions()
+    .then(n => { if (n > 0) console.log(`[Baileys] ${n} sessão(ões) restaurada(s)`); })
+    .catch(() => {});
 }
 
 // ─── Worker de follow-ups automáticos ────────────────────────────────────────

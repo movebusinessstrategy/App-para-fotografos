@@ -153,14 +153,20 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
   const [recording, setRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [showEmoji, setShowEmoji] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [waveHeights, setWaveHeights] = useState<number[]>(Array(8).fill(4));
 
   const bottomRef = useRef<HTMLDivElement>(null);
+  const prevMsgCountRef = useRef(0);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const animFrameRef = useRef<number | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
 
   const fetchMessages = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -206,7 +212,11 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
   }, [phone, fetchMessages]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    // Só scrolla quando chegar mensagem nova (não em cada poll sem novidades)
+    if (messages.length > prevMsgCountRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+    prevMsgCountRef.current = messages.length;
   }, [messages]);
 
   // Auto-resize textarea
@@ -311,19 +321,47 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
     e.target.value = "";
   };
 
+  const stopWaveform = () => {
+    if (animFrameRef.current) { cancelAnimationFrame(animFrameRef.current); animFrameRef.current = null; }
+    audioCtxRef.current?.close();
+    audioCtxRef.current = null;
+    analyserRef.current = null;
+    setWaveHeights(Array(8).fill(4));
+  };
+
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      // Waveform real via AudioContext
+      const audioCtx = new AudioContext();
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 32;
+      audioCtx.createMediaStreamSource(stream).connect(analyser);
+      analyserRef.current = analyser;
+      audioCtxRef.current = audioCtx;
+
+      const tick = () => {
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteFrequencyData(data);
+        const heights = Array.from({ length: 8 }, (_, i) => {
+          const val = data[Math.floor((i * data.length) / 8)] ?? 0;
+          return Math.max(4, Math.round((val / 255) * 28));
+        });
+        setWaveHeights(heights);
+        animFrameRef.current = requestAnimationFrame(tick);
+      };
+      tick();
+
       const mimeType = MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")
         ? "audio/ogg;codecs=opus"
-        : MediaRecorder.isTypeSupported("audio/webm")
-        ? "audio/webm"
-        : "";
-      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+        : "audio/webm";
+      const recorder = new MediaRecorder(stream, { mimeType });
       audioChunksRef.current = [];
       recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
+        stopWaveform();
         const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
         const ext = recorder.mimeType?.includes("ogg") ? "ogg" : "webm";
         const file = new File([blob], `audio-${Date.now()}.${ext}`, { type: blob.type });
@@ -347,6 +385,7 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
 
   const cancelRecording = () => {
     if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    stopWaveform();
     mediaRecorderRef.current?.stream?.getTracks().forEach((t) => t.stop());
     if (mediaRecorderRef.current?.state !== "inactive") {
       mediaRecorderRef.current!.ondataavailable = null;
@@ -360,7 +399,7 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
   const groups = groupByDate(messages);
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-gray-50 dark:bg-gray-900">
+    <div className="relative flex flex-col h-full min-h-0 bg-gray-50 dark:bg-gray-900">
       {/* Header */}
       {showHeader && (
         <div className="flex items-center gap-3 px-5 py-3 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
@@ -428,14 +467,17 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
                   >
                     {/* Imagem */}
                     {msg.media_url && msg.type === "image" && (
-                      <a href={msg.media_url} target="_blank" rel="noopener noreferrer">
+                      <button
+                        onClick={() => setLightboxUrl(msg.media_url!)}
+                        className="block w-full cursor-zoom-in"
+                      >
                         <img
                           src={msg.media_url}
                           alt="imagem"
-                          className="max-w-full max-h-64 object-cover block"
+                          className="max-w-full max-h-64 object-cover block w-full"
                           style={{ borderRadius: "12px 12px 0 0" }}
                         />
-                      </a>
+                      </button>
                     )}
                     {/* Áudio */}
                     {msg.media_url && msg.type === "audio" && (
@@ -480,6 +522,31 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
         <div ref={bottomRef} />
       </div>
 
+      {/* Lightbox */}
+      {lightboxUrl && (
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+          onClick={() => setLightboxUrl(null)}
+        >
+          <div
+            className="relative max-w-[90%] max-h-[85%]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img
+              src={lightboxUrl}
+              alt="imagem ampliada"
+              className="max-w-full max-h-[80vh] object-contain rounded-xl shadow-2xl"
+            />
+            <button
+              onClick={() => setLightboxUrl(null)}
+              className="absolute -top-3 -right-3 w-8 h-8 rounded-full bg-white dark:bg-gray-800 shadow-lg flex items-center justify-center text-gray-700 dark:text-gray-200 hover:bg-red-50 hover:text-red-600 transition-colors"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Input area */}
       <div className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 flex-shrink-0">
         {/* Media preview */}
@@ -519,13 +586,6 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
           {recording ? (
             /* Recording UI with waveform */
             <div className="flex items-center gap-2">
-              <style>{`
-                @keyframes wave1 { 0%,100%{height:6px} 50%{height:20px} }
-                @keyframes wave2 { 0%,100%{height:10px} 50%{height:28px} }
-                @keyframes wave3 { 0%,100%{height:4px} 50%{height:16px} }
-                @keyframes wave4 { 0%,100%{height:14px} 50%{height:24px} }
-                @keyframes wave5 { 0%,100%{height:8px} 50%{height:22px} }
-              `}</style>
               <button
                 onClick={cancelRecording}
                 className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-100 dark:bg-gray-700 text-gray-500 hover:text-red-500 transition-colors flex-shrink-0"
@@ -534,26 +594,13 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
                 <X size={16} />
               </button>
               <div className="flex-1 flex items-center gap-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-xl px-4 py-2">
-                {/* Waveform bars */}
-                <div className="flex items-center gap-[3px] h-8">
-                  {[
-                    { anim: 'wave1', delay: '0ms' },
-                    { anim: 'wave2', delay: '120ms' },
-                    { anim: 'wave3', delay: '60ms' },
-                    { anim: 'wave4', delay: '180ms' },
-                    { anim: 'wave5', delay: '90ms' },
-                    { anim: 'wave1', delay: '150ms' },
-                    { anim: 'wave3', delay: '30ms' },
-                    { anim: 'wave2', delay: '210ms' },
-                  ].map((bar, i) => (
+                {/* Waveform real via AudioContext */}
+                <div className="flex items-end gap-[3px] h-8">
+                  {waveHeights.map((h, i) => (
                     <div
                       key={i}
-                      className="w-1 rounded-full bg-red-500"
-                      style={{
-                        animation: `${bar.anim} 0.8s ease-in-out infinite`,
-                        animationDelay: bar.delay,
-                        height: 8,
-                      }}
+                      className="w-1 rounded-full bg-red-500 transition-all duration-75"
+                      style={{ height: h }}
                     />
                   ))}
                 </div>

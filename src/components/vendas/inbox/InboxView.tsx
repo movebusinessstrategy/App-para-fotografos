@@ -73,14 +73,21 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
     pollRef.current = setInterval(() => {
       fetchConversations(true);
       checkWaStatus();
-    }, 8000);
+    }, 4000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [fetchConversations, checkWaStatus]);
 
   useEffect(() => {
     if (selected) {
       const updated = conversations.find((c) => c.phone === selected.phone);
-      if (updated) setSelected(updated);
+      // Só atualiza se mudou algo relevante para evitar re-renders desnecessários
+      if (updated && (
+        updated.unread_count !== selected.unread_count ||
+        updated.last_message !== selected.last_message ||
+        updated.contact_name !== selected.contact_name
+      )) {
+        setSelected(updated);
+      }
     }
   }, [conversations]);
 
@@ -96,6 +103,23 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
 
   const handleSelect = (conv: Conversation) => {
     setSelected(conv);
+  };
+
+  const handleNewConversation = (phone: string, name?: string) => {
+    const existing = conversations.find((c) => c.phone.replace(/\D/g, "") === phone.replace(/\D/g, ""));
+    if (existing) {
+      setSelected(existing);
+    } else {
+      const newConv: Conversation = {
+        phone,
+        contact_name: name || null,
+        last_message: "",
+        last_message_at: new Date().toISOString(),
+        unread_count: 0,
+      };
+      setConversations((prev) => [newConv, ...prev]);
+      setSelected(newConv);
+    }
   };
 
   return (
@@ -162,6 +186,7 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
             selectedPhone={selected?.phone ?? null}
             loading={loading}
             onSelect={handleSelect}
+            onNewConversation={handleNewConversation}
           />
         </div>
 
