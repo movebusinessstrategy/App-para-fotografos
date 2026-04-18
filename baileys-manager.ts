@@ -24,6 +24,8 @@ interface Session {
   qrWaiters: Array<(qr: string) => void>;
   connectWaiters: Array<() => void>;
   userId: string;
+  reconnecting: boolean; // guard: impede múltiplos _initSocket simultâneos
+  failCount: number;     // contador de falhas consecutivas para detectar credenciais corrompidas
 }
 
 const sessions = new Map<string, Session>();
@@ -43,13 +45,25 @@ export function setChatsSetHandler(handler: ChatsSetHandler) {
   globalChatsSetHandler = handler;
 }
 
+// Handler chamado quando a conexão abre — útil para migrações e sincronização inicial
+export type ConnectHandler = (userId: string, phone: string) => Promise<void>;
+let globalConnectHandler: ConnectHandler = async () => {};
+
+export function setConnectHandler(handler: ConnectHandler) {
+  globalConnectHandler = handler;
+}
+
 // ─── Iniciar / Reconectar sessão ─────────────────────────────────────────────
 
 export async function startSession(userId: string): Promise<void> {
   // Encerra sessão anterior sem apagar arquivos (pode ter credenciais válidas)
+  // Marca como reconnecting=true para que o handler 'close' não tente reconectar sozinho
   const existing = sessions.get(userId);
-  if (existing?.sock) {
-    try { existing.sock.end(undefined); } catch {}
+  if (existing) {
+    existing.reconnecting = true;
+    if (existing.sock) {
+      try { existing.sock.end(undefined); } catch {}
+    }
   }
 
   const sessionDir = path.join(SESSIONS_DIR, userId);
@@ -62,6 +76,8 @@ export async function startSession(userId: string): Promise<void> {
     qrWaiters: [],
     connectWaiters: [],
     userId,
+    reconnecting: false,
+    failCount: 0,
   };
   sessions.set(userId, session);
 
@@ -113,10 +129,16 @@ async function _initSocket(session: Session, sessionDir: string) {
     if (connection === 'open') {
       session.status = 'open';
       session.qrBase64 = null;
+      session.failCount = 0; // zera contador de falhas ao conectar com sucesso
       console.log(`[Baileys] ✅ Conectado — usuário ${userId}`);
       const waiters = [...session.connectWaiters];
       session.connectWaiters = [];
       waiters.forEach(cb => cb());
+      // Notifica handler de conexão (ex: migrar conversas órfãs para este número)
+      const connectedPhone = getConnectedPhone(userId);
+      if (connectedPhone) {
+        try { await globalConnectHandler(userId, connectedPhone); } catch {}
+      }
     }
 
     if (connection === 'close') {
@@ -130,10 +152,31 @@ async function _initSocket(session: Session, sessionDir: string) {
         fs.rmSync(sessionDir, { recursive: true, force: true });
         sessions.delete(userId);
       } else {
-        // Reconecta automaticamente
+        // Guard: impede múltiplos _initSocket simultâneos (evita loop de erro 440)
+        if (session.reconnecting) {
+          console.log(`[Baileys] Reconexão já em andamento para ${userId}, ignorando evento duplicado.`);
+          return;
+        }
+
+        session.failCount = (session.failCount || 0) + 1;
+
+        // Após 3 falhas consecutivas (ex: loop de 408), limpa credenciais e exige novo QR
+        if (session.failCount >= 3) {
+          console.log(`[Baileys] ${session.failCount} falhas consecutivas para ${userId} — limpando credenciais e aguardando novo QR.`);
+          fs.rmSync(sessionDir, { recursive: true, force: true });
+          fs.mkdirSync(sessionDir, { recursive: true });
+          session.failCount = 0;
+        }
+
+        session.reconnecting = true;
         await new Promise(r => setTimeout(r, 3000));
-        if (sessions.has(userId)) {
+        // Verifica se a sessão ainda é a mesma (não foi substituída por startSession)
+        if (sessions.get(userId) === session) {
+          session.reconnecting = false;
           await _initSocket(session, sessionDir);
+        } else {
+          session.reconnecting = false;
+          console.log(`[Baileys] Sessão para ${userId} foi substituída, reconexão cancelada.`);
         }
       }
     }
@@ -187,6 +230,16 @@ export async function stopSession(userId: string): Promise<void> {
 
 export function getStatus(userId: string): 'open' | 'connecting' | 'close' | 'not_initialized' {
   return sessions.get(userId)?.status ?? 'not_initialized';
+}
+
+// Retorna o número de telefone (somente dígitos) do WhatsApp conectado, ou null se não conectado
+export function getConnectedPhone(userId: string): string | null {
+  const session = sessions.get(userId);
+  if (session?.status !== 'open' || !session.sock?.user?.id) return null;
+  // sock.user.id pode ser "5511999999999:0@s.whatsapp.net" ou "5511999999999@s.whatsapp.net"
+  const rawId = session.sock.user.id;
+  const phone = rawId.split('@')[0].split(':')[0].replace(/\D/g, '');
+  return phone || null;
 }
 
 export async function waitForQR(userId: string, timeoutMs = 40000): Promise<string | null> {
@@ -243,14 +296,26 @@ export async function sendMedia(
 
 export async function requestPairingCode(userId: string, phone: string): Promise<string | null> {
   const session = sessions.get(userId);
-  if (!session?.sock) return null;
+  if (!session?.sock) {
+    console.log(`[Baileys] requestPairingCode: sessão/socket não disponível para ${userId}`);
+    return null;
+  }
   try {
-    // Precisa estar no estado "connecting" (antes do QR ser exibido)
+    // requestPairingCode deve ser chamado enquanto o socket está conectando,
+    // antes do WhatsApp gerar o QR. O número precisa incluir o código do país (ex: 5511999999999).
     const code = await session.sock.requestPairingCode(phone);
-    console.log(`[Baileys] Código de pareamento gerado para ${userId}: ${code}`);
+    if (code) {
+      console.log(`[Baileys] ✅ Código de pareamento gerado para ${userId}: ${code}`);
+    } else {
+      console.warn(`[Baileys] requestPairingCode retornou vazio para ${userId}`);
+    }
     return code ?? null;
-  } catch (e) {
-    console.error('[Baileys] Erro ao gerar código de pareamento:', e);
+  } catch (e: any) {
+    // Ignora erros esperados de "ainda não pronto" — o caller vai tentar novamente
+    const msg = e?.message || String(e);
+    if (!msg.includes('not-authorized') && !msg.includes('stream') && !msg.includes('connection')) {
+      console.error('[Baileys] Erro ao gerar código de pareamento:', msg);
+    }
     return null;
   }
 }
@@ -296,17 +361,11 @@ export async function getProfilePicture(userId: string, phone: string): Promise<
 
 // ─── Buscar histórico de mensagens ───────────────────────────────────────────
 
-export async function fetchMessageHistory(userId: string, phone: string, count = 50): Promise<WAMessage[]> {
+export async function fetchMessageHistory(userId: string, _phone: string, _count = 50): Promise<WAMessage[]> {
   const session = sessions.get(userId);
   if (session?.status !== 'open' || !session.sock) return [];
-  try {
-    const jid = _jid(phone);
-    // Busca o histórico via store do Baileys (mensagens recentes)
-    // O histórico completo está no banco; isso é para mensagens novas
-    return [];
-  } catch {
-    return [];
-  }
+  // Histórico completo está no banco (Supabase); Baileys não é usado para busca retroativa
+  return [];
 }
 
 // ─── Inicialização: restaura sessões existentes no boot ──────────────────────

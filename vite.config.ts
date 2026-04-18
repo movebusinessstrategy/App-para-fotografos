@@ -21,7 +21,7 @@ export default defineConfig(({mode}) => {
       hmr: process.env.DISABLE_HMR !== 'true',
       watch: {
         // Ignora sessões do WhatsApp para não triggerar HMR a cada arquivo de sessão
-        ignored: ['**/sessions/**', '**/node_modules/**'],
+        ignored: ['**/sessions/**', '**/node_modules/**', '**/server.ts', '**/baileys-manager.ts', '**/supabase.ts', '**/pipeline-helpers.ts'],
       },
     },
   };

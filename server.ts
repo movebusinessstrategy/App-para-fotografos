@@ -887,21 +887,38 @@ async function startServer() {
 
     if (!phone) return res.status(400).json({ error: 'Informe o número de telefone com DDD (ex: 11999999999)' });
 
-    const cleanPhone = phone.replace(/\D/g, '');
+    let cleanPhone = phone.replace(/\D/g, '');
     if (cleanPhone.length < 10) return res.status(400).json({ error: 'Número inválido. Use formato: 11999999999' });
+
+    // Baileys exige código do país. Adiciona 55 (Brasil) se não tiver.
+    if (!cleanPhone.startsWith('55')) cleanPhone = '55' + cleanPhone;
 
     try {
       const status = BaileysManager.getStatus(userId);
       if (status === 'open') {
         return res.json({ success: true, already_connected: true });
       }
-      if (status === 'not_initialized') {
-        await BaileysManager.startSession(userId);
-        // Aguarda socket ficar disponível
-        await new Promise(r => setTimeout(r, 2000));
+
+      // Garante sessão fresca — requestPairingCode deve ser chamado ANTES do QR ser gerado
+      if (status !== 'not_initialized') {
+        try { await BaileysManager.stopSession(userId); } catch {}
+        await new Promise(r => setTimeout(r, 1500));
       }
-      const code = await BaileysManager.requestPairingCode(userId, cleanPhone);
-      if (!code) return res.status(500).json({ error: 'Não foi possível gerar o código. Tente o QR Code.' });
+
+      await BaileysManager.startSession(userId);
+
+      // Aguarda o socket estar pronto (conectado ao WS do WhatsApp mas antes do QR)
+      // Tenta a cada 500ms por até 8 segundos
+      let code: string | null = null;
+      for (let i = 0; i < 16; i++) {
+        await new Promise(r => setTimeout(r, 500));
+        const sess = BaileysManager.getStatus(userId);
+        if (sess === 'open') return res.json({ success: true, already_connected: true });
+        code = await BaileysManager.requestPairingCode(userId, cleanPhone);
+        if (code) break;
+      }
+
+      if (!code) return res.status(500).json({ error: 'Não foi possível gerar o código. Verifique se o número está correto e tente o QR Code.' });
       return res.json({ success: true, code });
     } catch (err: any) {
       return res.status(500).json({ error: err.message || 'Erro ao gerar código de pareamento' });
@@ -1345,15 +1362,8 @@ async function startServer() {
     const userId = (req as any).userId;
     try {
       await BaileysManager.stopSession(userId);
-
-      // Limpa histórico vinculado a este número — ao reconectar com outro WhatsApp
-      // não aparecem mensagens antigas do número anterior
-      if (supabaseAdmin) {
-        await supabaseAdmin.from('wa_messages').delete().eq('user_id', userId);
-        await supabaseAdmin.from('wa_conversations').delete().eq('user_id', userId);
-        console.log(`[Baileys] Histórico limpo para usuário ${userId}`);
-      }
-
+      // Histórico preservado — cada número tem seu próprio histórico vinculado por wa_number
+      console.log(`[Baileys] Sessão desconectada para ${userId} (histórico preservado por número)`);
       return res.json({ success: true });
     } catch (error: any) {
       return res.status(500).json({ error: error.message });
@@ -1790,13 +1800,17 @@ async function startServer() {
   app.get('/api/inbox/conversations', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
+    const waNumber = BaileysManager.getConnectedPhone(userId) || '';
+    const db = supabaseAdmin || supabase;
     try {
-      const { data, error } = await supabase
+      let query = db
         .from('wa_conversations')
         .select('*')
         .eq('user_id', userId)
         .order('last_message_at', { ascending: false })
         .limit(200);
+
+      const { data, error } = await query;
 
       if (error) throw error;
 
@@ -1839,14 +1853,18 @@ async function startServer() {
     const supabase = (req as any).supabase as SupabaseClient;
     const phone = normalizeBrazilianPhone(req.params.phone.replace(/\D/g, '')); // normaliza + trata 9 BR
     const limit = Number(req.query.limit) || 60;
+    const waNumber = BaileysManager.getConnectedPhone(userId) || '';
+    const dbMsg = supabaseAdmin || supabase;
     try {
-      const { data, error } = await supabase
+      let msgQuery = dbMsg
         .from('wa_messages')
         .select('*')
         .eq('user_id', userId)
         .eq('phone', phone)
         .order('timestamp', { ascending: true })
         .limit(limit);
+
+      const { data, error } = await msgQuery;
 
       if (error) throw error;
 
@@ -7046,13 +7064,34 @@ async function startServer() {
   }
 
   // ── Baileys: lista de conversas ao conectar ──────────────────────────────
+  // Ao conectar: vincula conversas/mensagens sem wa_number ao número atual
+  BaileysManager.setConnectHandler(async (userId, phone) => {
+    if (!supabaseAdmin) return;
+    console.log(`[Baileys] Vinculando histórico ao número ${phone} para ${userId}`);
+    // Corrige QUALQUER wa_number diferente do número atual (inclui '' e valores corrompidos como "55438841668246")
+    const { error: eConv } = await supabaseAdmin
+      .from('wa_conversations')
+      .update({ wa_number: phone })
+      .eq('user_id', userId)
+      .neq('wa_number', phone);
+    const { error: eMsg } = await supabaseAdmin
+      .from('wa_messages')
+      .update({ wa_number: phone })
+      .eq('user_id', userId)
+      .neq('wa_number', phone);
+    if (eConv) console.error('[Baileys] Erro ao migrar conversas:', eConv.message);
+    if (eMsg) console.error('[Baileys] Erro ao migrar mensagens:', eMsg.message);
+    if (!eConv && !eMsg) console.log(`[Baileys] ✅ Histórico vinculado ao número ${phone}`);
+  });
+
   BaileysManager.setChatsSetHandler(async (userId, chats) => {
     if (!supabaseAdmin) return;
+    const waNumber = BaileysManager.getConnectedPhone(userId) || '';
     // Filtra apenas conversas individuais (não grupos)
     const individual = chats.filter((c: any) =>
       typeof c.id === 'string' && c.id.endsWith('@s.whatsapp.net')
     );
-    console.log(`[Baileys] Sincronizando ${individual.length} conversas individuais para ${userId} (total recebido: ${chats.length})`);
+    console.log(`[Baileys] Sincronizando ${individual.length} conversas individuais para ${userId} wa_number=${waNumber} (total recebido: ${chats.length})`);
     if (individual.length > 0) {
       const sample = individual[0];
       console.log(`[Baileys] Exemplo de chat: id=${sample.id} name=${sample.name} conversationTimestamp=${sample.conversationTimestamp} lastMsgTimestamp=${(sample as any).lastMsgTimestamp}`);
@@ -7066,12 +7105,18 @@ async function startServer() {
           ? new Date(Number(rawTs) * 1000).toISOString()
           : new Date().toISOString();
         const name: string | null = (chat as any).name || (chat as any).displayName || null;
-        const { error } = await supabaseAdmin.from('wa_conversations').upsert({
+        const chatPayload: Record<string, any> = {
           user_id: userId, phone,
-          ...(name ? { contact_name: name } : {}),
           last_message_at: ts,
           unread_count: Number((chat as any).unreadCount) || 0,
-        }, { onConflict: 'user_id,phone' });
+          ...(name ? { contact_name: name } : {}),
+          ...(waNumber ? { wa_number: waNumber } : {}),
+        };
+        const { data: existingChat } = await supabaseAdmin
+          .from('wa_conversations').select('id').eq('user_id', userId).eq('phone', phone).maybeSingle();
+        const { error } = existingChat
+          ? await supabaseAdmin.from('wa_conversations').update(chatPayload).eq('user_id', userId).eq('phone', phone)
+          : await supabaseAdmin.from('wa_conversations').insert(chatPayload);
         if (error) {
           console.error(`[Baileys] Erro ao salvar conversa ${phone}:`, error.message, error.code);
           errors++;
@@ -7095,6 +7140,8 @@ async function startServer() {
     // Mensagens em tempo real enviadas por nós já foram salvas no envio
     if (msg.key.fromMe && !isHistory) return;
 
+    const waNumber = BaileysManager.getConnectedPhone(userId) || '';
+    if (!waNumber) console.warn(`[Baileys] ⚠️ waNumber vazio para ${userId} — sock.user pode ainda não estar disponível`);
     const phone = normalizeBrazilianPhone(remoteJid.replace('@s.whatsapp.net', ''));
     const msgId = msg.key.id || `baileys-${Date.now()}`;
     const ts = msg.messageTimestamp
@@ -7136,7 +7183,7 @@ async function startServer() {
 
     // Salva mensagem (ignora duplicatas)
     const { error: msgSaveErr } = await supabaseAdmin.from('wa_messages').insert({
-      user_id: userId, phone, message_id: msgId,
+      user_id: userId, phone, wa_number: waNumber, message_id: msgId,
       body: msgBody, from_me: !!msg.key.fromMe, timestamp: ts,
       type: msgType, status: msg.key.fromMe ? 'sent' : 'received',
       ...(mediaDataUrl ? { media_url: mediaDataUrl } : {}),
@@ -7145,18 +7192,26 @@ async function startServer() {
       console.error('[Baileys] Erro ao salvar msg:', msgSaveErr.message);
     }
 
-    // Atualiza conversa
+    // Atualiza conversa (manual upsert — evita dependência de constraint específica)
     const contactName = msg.pushName || null;
-    const { error: convErr } = await supabaseAdmin.from('wa_conversations').upsert({
+    const convPayload: Record<string, any> = {
       user_id: userId, phone,
       last_message: msgBody || `[${msgType}]`,
       last_message_at: ts,
       updated_at: new Date().toISOString(),
       ...(!isHistory ? { unread_count: msg.key.fromMe ? 0 : 1 } : {}),
       ...(contactName ? { contact_name: contactName } : {}),
-    }, { onConflict: 'user_id,phone' });
+      ...(waNumber ? { wa_number: waNumber } : {}),
+    };
+    const { data: existingConv } = await supabaseAdmin
+      .from('wa_conversations').select('id').eq('user_id', userId).eq('phone', phone).maybeSingle();
+    const { error: convErr } = existingConv
+      ? await supabaseAdmin.from('wa_conversations').update(convPayload).eq('user_id', userId).eq('phone', phone)
+      : await supabaseAdmin.from('wa_conversations').insert(convPayload);
     if (convErr) {
-      console.error('[Baileys] Erro ao salvar conversa:', convErr.message, convErr.code);
+      console.error('[Baileys] Erro ao salvar conversa:', convErr.message);
+    } else {
+      console.log(`[Baileys] ✅ conversa salva | phone=${phone}`);
     }
 
     // Auto-cria lead apenas para mensagens novas recebidas
