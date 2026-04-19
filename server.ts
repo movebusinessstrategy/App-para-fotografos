@@ -243,7 +243,8 @@ function computeScheduledAt(delayHours: number): Date {
 }
 
 const parseWebhookTimestamp = (payload: any) => {
-  const candidates = [payload?.momment, payload?.moment, payload?.timestamp, payload?.ts];
+  // messageTimestamp é o campo padrão da Evolution API v2
+  const candidates = [payload?.messageTimestamp, payload?.momment, payload?.moment, payload?.timestamp, payload?.ts];
   for (const candidate of candidates) {
     const parsed = Number(candidate);
     if (!Number.isFinite(parsed) || parsed <= 0) continue;
@@ -253,18 +254,18 @@ const parseWebhookTimestamp = (payload: any) => {
 };
 
 const extractWebhookMedia = (payload: any): { type: 'image'|'audio'|'video'|'document'; base64: string; mimetype: string } | null => {
-  // Evolution API com base64: true envia assim:
-  // payload.imageMessage.base64 | payload.image.base64 | payload.data.message.imageMessage.base64
-  const img = payload?.imageMessage ?? payload?.image ?? payload?.data?.message?.imageMessage ?? payload?.message?.imageMessage;
+  // Evolution API v2: payload.message.imageMessage.base64
+  // Outros formatos: payload.imageMessage.base64 | payload.image.base64
+  const img = payload?.message?.imageMessage ?? payload?.imageMessage ?? payload?.image ?? payload?.data?.message?.imageMessage;
   if (img?.base64) return { type: 'image', base64: img.base64, mimetype: img.mimetype || 'image/jpeg' };
 
-  const audio = payload?.audioMessage ?? payload?.audio ?? payload?.data?.message?.audioMessage;
+  const audio = payload?.message?.audioMessage ?? payload?.message?.pttMessage ?? payload?.audioMessage ?? payload?.audio ?? payload?.data?.message?.audioMessage;
   if (audio?.base64) return { type: 'audio', base64: audio.base64, mimetype: audio.mimetype || 'audio/ogg' };
 
-  const video = payload?.videoMessage ?? payload?.video ?? payload?.data?.message?.videoMessage;
+  const video = payload?.message?.videoMessage ?? payload?.videoMessage ?? payload?.video ?? payload?.data?.message?.videoMessage;
   if (video?.base64) return { type: 'video', base64: video.base64, mimetype: video.mimetype || 'video/mp4' };
 
-  const doc = payload?.documentMessage ?? payload?.document ?? payload?.data?.message?.documentMessage;
+  const doc = payload?.message?.documentMessage ?? payload?.documentMessage ?? payload?.document ?? payload?.data?.message?.documentMessage;
   if (doc?.base64) return { type: 'document', base64: doc.base64, mimetype: doc.mimetype || 'application/octet-stream' };
 
   return null;
@@ -272,6 +273,14 @@ const extractWebhookMedia = (payload: any): { type: 'image'|'audio'|'video'|'doc
 
 const extractWebhookText = (payload: any): string | null => {
   const candidates = [
+    // Evolution API v2: { message: { conversation: "..." } }
+    payload?.message?.conversation,
+    payload?.message?.extendedTextMessage?.text,
+    payload?.message?.imageMessage?.caption,
+    payload?.message?.videoMessage?.caption,
+    payload?.message?.documentMessage?.caption,
+    payload?.message?.audioMessage?.caption,
+    // Outros formatos / Z-API
     payload?.text?.message,
     payload?.extendedTextMessage?.text,
     payload?.extendedTextMessage?.description,
@@ -280,7 +289,6 @@ const extractWebhookText = (payload: any): string | null => {
     payload?.document?.caption,
     payload?.caption,
     payload?.conversation,
-    payload?.message,
     payload?.button?.text,
     payload?.reaction?.emoji,
   ];
@@ -1756,9 +1764,12 @@ async function startServer() {
 
       let processed = 0;
       for (const event of events) {
+        // Evolution API v2: phone está em event.key.remoteJid (ex: "5511...@s.whatsapp.net")
+        const remoteJid: string = event?.key?.remoteJid ?? '';
         const rawPhone = String(
-          event?.phone ?? event?.chatId ?? event?.chatLid ??
-          event?.senderPhone ?? event?.participantPhone ?? ''
+          remoteJid.split('@')[0] ||
+          (event?.phone ?? event?.chatId ?? event?.chatLid ??
+          event?.senderPhone ?? event?.participantPhone ?? '')
         );
 
         const isGroup =
@@ -1774,23 +1785,28 @@ async function startServer() {
         if (!phone || (!text && !media)) continue;
 
         const name = String(
-          event?.senderName ?? event?.pushName ?? event?.chatName ??
+          // Evolution API v2: pushName vem no campo raiz do data
+          event?.pushName ?? event?.senderName ?? event?.chatName ??
           event?.contact?.name ?? event?.name ?? ''
         ).trim() || undefined;
 
         const timestamp = parseWebhookTimestamp(event);
-        const messageIdRaw = event?.messageId ?? event?.id ?? event?.messageID;
+        // Evolution API v2: id fica em event.key.id
+        const messageIdRaw = event?.key?.id ?? event?.messageId ?? event?.id ?? event?.messageID;
         const messageId =
           (typeof messageIdRaw === 'string' && messageIdRaw.trim())
             ? messageIdRaw.trim()
             : `${phone}-${timestamp}-${processed}`;
+
+        // Evolution API v2: fromMe fica em event.key.fromMe
+        const fromMe = Boolean(event?.key?.fromMe ?? event?.fromMe);
 
         cacheLiveWhatsAppMessage({
           id: messageId,
           phone,
           name,
           text: text || (media ? `[${media.type}]` : ''),
-          fromMe: Boolean(event?.fromMe),
+          fromMe,
           timestamp,
           source: 'webhook',
           ...(media ? { mediaType: media.type, mediaBase64: media.base64, mediaMimetype: media.mimetype } : {}),
@@ -1940,7 +1956,7 @@ async function startServer() {
         from_me: m.fromMe,
         timestamp: new Date(m.timestamp).toISOString(),
         type: m.mediaType || 'text',
-        status: 'received',
+        status: m.fromMe ? 'sent' : 'received',
         media_url: m.mediaBase64
           ? (m.mediaBase64.startsWith('data:') ? m.mediaBase64 : `data:${m.mediaMimetype||'image/jpeg'};base64,${m.mediaBase64}`)
           : null,
@@ -1952,7 +1968,7 @@ async function startServer() {
   // Marcar conversa como lida (zera unread no Supabase)
   app.post('/api/inbox/mark-read/:phone', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const phone = req.params.phone.replace(/\D/g, '');
+    const phone = normalizeBrazilianPhone(req.params.phone.replace(/\D/g, ''));
     readUpToTimestampByPhone.set(phone, Date.now());
     try {
       const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
@@ -2023,7 +2039,7 @@ async function startServer() {
       }
       // UPDATE primeiro, INSERT se não existir
       const { data: upd } = await db.from('wa_conversations')
-        .update({ user_id: userId, phone: cleanPhone, last_message: text, last_message_at: now, updated_at: now, wa_number: '' })
+        .update({ last_message: text, last_message_at: now, updated_at: now })
         .eq('user_id', userId).eq('phone', cleanPhone).select('id');
       if (!upd || upd.length === 0) {
         await db.from('wa_conversations').insert({
@@ -7481,22 +7497,24 @@ function startFollowUpWorker() {
 }
 
 // ─── Worker: sincroniza mensagens da Evolution API periodicamente ────────────
-// Resolve o problema de webhooks chegando apenas em produção:
-// o worker puxa mensagens diretamente da API REST e persiste no DB.
 async function syncEvolutionMessages() {
-  if (!supabaseAdmin || !EVOLUTION_API_URL || !EVOLUTION_API_KEY) return;
+  if (!supabaseAdmin || !EVOLUTION_API_URL || !EVOLUTION_API_KEY) {
+    console.warn('[EvolutionSync] Abortando: supabaseAdmin ou variáveis de ambiente ausentes');
+    return;
+  }
 
   try {
-    // Busca todos os usuários que têm conversas no DB (para saber quais instâncias sincronizar)
     const { data: convs } = await supabaseAdmin
       .from('wa_conversations')
       .select('user_id, phone')
       .order('last_message_at', { ascending: false })
       .limit(200);
 
-    if (!convs || convs.length === 0) return;
+    if (!convs || convs.length === 0) {
+      console.log('[EvolutionSync] Nenhuma conversa no DB para sincronizar');
+      return;
+    }
 
-    // Agrupa por user_id
     const byUser = new Map<string, string[]>();
     for (const c of convs) {
       const phones = byUser.get(c.user_id) || [];
@@ -7507,36 +7525,50 @@ async function syncEvolutionMessages() {
     for (const [userId, phones] of byUser.entries()) {
       const instanceName = `user_${userId.replace(/-/g, '_')}`;
 
-      // Verifica se instância está conectada na Evolution API
+      // Usa o endpoint correto de status
       let isConnected = false;
       try {
-        const statusRes = await fetch(`${EVOLUTION_API_URL}/instance/fetchInstances?instanceName=${instanceName}`, {
+        const statusRes = await fetch(`${EVOLUTION_API_URL}/instance/connectionState/${instanceName}`, {
           headers: { 'apikey': EVOLUTION_API_KEY },
         });
-        if (statusRes.ok) {
-          const statusData = await statusRes.json();
-          const inst = Array.isArray(statusData) ? statusData[0] : statusData;
-          isConnected = inst?.instance?.state === 'open' || inst?.state === 'open';
-        }
-      } catch { continue; }
+        const statusData = statusRes.ok ? await statusRes.json() : null;
+        const state = normalizeWhatsappState(statusData);
+        isConnected = state === 'open';
+        console.log(`[EvolutionSync] Instância ${instanceName}: status=${state}`);
+      } catch (e: any) {
+        console.warn(`[EvolutionSync] Falha ao checar status de ${instanceName}:`, e.message);
+        continue;
+      }
 
-      if (!isConnected) continue;
+      if (!isConnected) {
+        console.log(`[EvolutionSync] ${instanceName} não está conectado, pulando`);
+        continue;
+      }
 
-      // Para cada conversa, busca as últimas mensagens
-      for (const phone of phones.slice(0, 10)) { // max 10 por usuário por ciclo
+      for (const phone of phones.slice(0, 10)) {
         try {
           const chatId = `${phone}@s.whatsapp.net`;
           const msgsRes = await fetch(`${EVOLUTION_API_URL}/chat/findMessages/${instanceName}`, {
             method: 'POST',
             headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ where: { key: { remoteJid: chatId } }, limit: 20 }),
+            body: JSON.stringify({ where: { key: { remoteJid: chatId } }, limit: 30 }),
           });
-          if (!msgsRes.ok) continue;
+
+          if (!msgsRes.ok) {
+            const errText = await msgsRes.text().catch(() => '');
+            console.warn(`[EvolutionSync] findMessages falhou para ${phone}: ${msgsRes.status} ${errText.slice(0, 100)}`);
+            continue;
+          }
+
           const msgsData = await msgsRes.json();
           const messages: any[] = Array.isArray(msgsData?.messages?.records)
             ? msgsData.messages.records
+            : Array.isArray(msgsData?.messages) ? msgsData.messages
             : Array.isArray(msgsData) ? msgsData : [];
 
+          console.log(`[EvolutionSync] ${phone}: ${messages.length} mensagens retornadas da API`);
+
+          let savedCount = 0;
           for (const msg of messages) {
             const msgId: string = msg?.key?.id || msg?.messageId || '';
             const fromMe: boolean = msg?.key?.fromMe ?? false;
@@ -7547,38 +7579,39 @@ async function syncEvolutionMessages() {
               msg?.message?.conversation ||
               msg?.message?.extendedTextMessage?.text ||
               msg?.message?.imageMessage?.caption ||
-              msg?.message?.videoMessage?.caption || '';
+              msg?.message?.videoMessage?.caption ||
+              msg?.message?.audioMessage?.caption || '';
 
-            if (!msgId || !textContent) continue;
+            if (!msgId) continue;
+            const body = textContent || (msg?.message ? `[${Object.keys(msg.message)[0] || 'mídia'}]` : '');
+            if (!body) continue;
 
-            // Verifica se mensagem já existe para não duplicar
             const { data: existing } = await supabaseAdmin
-              .from('wa_messages')
-              .select('id')
-              .eq('user_id', userId)
-              .eq('message_id', msgId)
-              .maybeSingle();
+              .from('wa_messages').select('id').eq('user_id', userId).eq('message_id', msgId).maybeSingle();
             if (existing) continue;
 
             const { error: insErr } = await supabaseAdmin.from('wa_messages').insert({
               user_id: userId, phone, message_id: msgId,
-              body: textContent, from_me: fromMe,
-              type: 'text', timestamp: ts, status: fromMe ? 'sent' : 'received', wa_number: '',
+              body, from_me: fromMe, type: 'text', timestamp: ts,
+              status: fromMe ? 'sent' : 'received', wa_number: '',
             });
             if (insErr && !insErr.code?.includes('23505')) {
               console.error(`[EvolutionSync] Erro ao salvar msg ${msgId}:`, insErr.message);
               continue;
             }
+            savedCount++;
 
-            // Atualiza conversa com última mensagem
-            if (!fromMe) {
-              const convPayload = { user_id: userId, phone, last_message: textContent, last_message_at: ts, updated_at: new Date().toISOString(), unread_count: 1 };
-              const { data: upd } = await supabaseAdmin.from('wa_conversations').update(convPayload).eq('user_id', userId).eq('phone', phone).select('id');
-              if (!upd || upd.length === 0) { await supabaseAdmin.from('wa_conversations').insert(convPayload); }
-              console.log(`[EvolutionSync] ✅ Nova msg de ${phone} para user ${userId}: "${textContent.slice(0, 50)}"`);
-            }
+            const convPayload = { user_id: userId, phone, last_message: body, last_message_at: ts, updated_at: new Date().toISOString(), ...(!fromMe ? { unread_count: 1 } : {}) };
+            const { data: upd } = await supabaseAdmin.from('wa_conversations').update(convPayload).eq('user_id', userId).eq('phone', phone).select('id');
+            if (!upd || upd.length === 0) { await supabaseAdmin.from('wa_conversations').insert(convPayload); }
           }
-        } catch { /* ignora erros por conversa individual */ }
+
+          if (savedCount > 0) {
+            console.log(`[EvolutionSync] ✅ ${savedCount} nova(s) msg salva(s) para ${phone}`);
+          }
+        } catch (e: any) {
+          console.error(`[EvolutionSync] Erro ao processar ${phone}:`, e.message);
+        }
       }
     }
   } catch (err: any) {
@@ -7586,8 +7619,8 @@ async function syncEvolutionMessages() {
   }
 }
 
-// Inicia o worker após 10s (para servidor inicializar) e repete a cada 15s
 setTimeout(() => {
+  console.log('[EvolutionSync] Worker iniciado');
   syncEvolutionMessages();
   setInterval(syncEvolutionMessages, 15 * 1000);
 }, 10_000);
