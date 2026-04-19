@@ -1868,7 +1868,6 @@ async function startServer() {
       }
 
       const rows = data || [];
-      console.log(`[Inbox] /conversations userId=${userId} → ${rows.length} rows do DB`);
 
       // Merge com cache em memória (conversas chegadas mas ainda não persistidas)
       const dbPhones = new Set(rows.map((c: any) => c.phone));
@@ -7619,10 +7618,8 @@ async function syncEvolutionMessages() {
   }
 }
 
-setTimeout(() => {
-  console.log('[EvolutionSync] Worker iniciado');
-  syncEvolutionMessages();
-  setInterval(syncEvolutionMessages, 15 * 1000);
-}, 10_000);
+if (WHATSAPP_PROVIDER !== 'baileys') {
+  setTimeout(() => { syncEvolutionMessages(); setInterval(syncEvolutionMessages, 15_000); }, 10_000);
+}
 
 startServer();
