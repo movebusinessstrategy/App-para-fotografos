@@ -100,7 +100,7 @@ async function _initSocket(session: Session, sessionDir: string) {
     logger: silentLogger as any,
     browser: ['FotoMove CRM', 'Chrome', '120.0.0'],
     generateHighQualityLinkPreview: false,
-    syncFullHistory: true,
+    syncFullHistory: false,
     mobile: false,
   });
 
