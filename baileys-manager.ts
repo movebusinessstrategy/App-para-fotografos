@@ -145,39 +145,46 @@ async function _initSocket(session: Session, sessionDir: string) {
       session.status = 'close';
       const code = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const loggedOut = code === DisconnectReason.loggedOut;
-      console.log(`[Baileys] Desconectado (${code}) — usuário ${userId}${loggedOut ? ' (logout)' : ' (reconectando...)'}`);
+      console.log(`[Baileys] Desconectado (código ${code}) — usuário ${userId}`);
 
-      if (loggedOut) {
-        // Limpa arquivos de sessão
+      if (loggedOut || code === DisconnectReason.badSession) {
+        // Logout explícito ou sessão inválida: limpa tudo e para
+        console.log(`[Baileys] ${loggedOut ? 'Logout' : 'Sessão inválida'} — removendo sessão de ${userId}`);
         fs.rmSync(sessionDir, { recursive: true, force: true });
         sessions.delete(userId);
+        return;
+      }
+
+      // Guard: impede múltiplos _initSocket simultâneos (evita loop de erro 440)
+      if (session.reconnecting) {
+        console.log(`[Baileys] Reconexão já em andamento para ${userId}, ignorando evento duplicado.`);
+        return;
+      }
+
+      session.failCount = (session.failCount || 0) + 1;
+      console.log(`[Baileys] Falha #${session.failCount} para ${userId} (código ${code})`);
+
+      // Após 5 falhas consecutivas: para de tentar, exige reconexão manual via UI
+      if (session.failCount >= 5) {
+        console.log(`[Baileys] ⛔ ${session.failCount} falhas para ${userId} — parando auto-reconexão. Reconecte manualmente pelo app.`);
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+        sessions.delete(userId); // Remove da memória → UI vai mostrar "desconectado"
+        return;
+      }
+
+      // Delay progressivo: 3s, 6s, 10s, 15s...
+      const delayMs = Math.min(3000 * session.failCount, 15000);
+      console.log(`[Baileys] Reconectando em ${delayMs / 1000}s...`);
+      session.reconnecting = true;
+      await new Promise(r => setTimeout(r, delayMs));
+
+      // Verifica se a sessão ainda é a mesma (não foi substituída por startSession)
+      if (sessions.get(userId) === session) {
+        session.reconnecting = false;
+        await _initSocket(session, sessionDir);
       } else {
-        // Guard: impede múltiplos _initSocket simultâneos (evita loop de erro 440)
-        if (session.reconnecting) {
-          console.log(`[Baileys] Reconexão já em andamento para ${userId}, ignorando evento duplicado.`);
-          return;
-        }
-
-        session.failCount = (session.failCount || 0) + 1;
-
-        // Após 3 falhas consecutivas (ex: loop de 408), limpa credenciais e exige novo QR
-        if (session.failCount >= 3) {
-          console.log(`[Baileys] ${session.failCount} falhas consecutivas para ${userId} — limpando credenciais e aguardando novo QR.`);
-          fs.rmSync(sessionDir, { recursive: true, force: true });
-          fs.mkdirSync(sessionDir, { recursive: true });
-          session.failCount = 0;
-        }
-
-        session.reconnecting = true;
-        await new Promise(r => setTimeout(r, 3000));
-        // Verifica se a sessão ainda é a mesma (não foi substituída por startSession)
-        if (sessions.get(userId) === session) {
-          session.reconnecting = false;
-          await _initSocket(session, sessionDir);
-        } else {
-          session.reconnecting = false;
-          console.log(`[Baileys] Sessão para ${userId} foi substituída, reconexão cancelada.`);
-        }
+        session.reconnecting = false;
+        console.log(`[Baileys] Sessão para ${userId} foi substituída, reconexão cancelada.`);
       }
     }
   });

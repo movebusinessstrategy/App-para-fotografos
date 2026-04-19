@@ -313,10 +313,14 @@ const cacheLiveWhatsAppMessage = (message: LiveWhatsAppMessage, userId?: string)
 
 async function persistMessageToSupabase(userId: string, message: LiveWhatsAppMessage) {
   try {
-    const supabase = createSupabaseClient();
+    // Sempre usa supabaseAdmin para bypasses de RLS
+    const db = supabaseAdmin;
+    if (!db) { console.warn('[persistMessage] supabaseAdmin não disponível, abortando'); return; }
     const ts = new Date(message.timestamp).toISOString();
+    const phone = normalizeBrazilianPhone(message.phone.replace(/\D/g, ''));
+    const now = new Date().toISOString();
 
-    // Upsert mensagem
+    // Salva mensagem
     const msgType = message.mediaType || 'text';
     const mediaDataUrl = message.mediaBase64
       ? (message.mediaBase64.startsWith('data:')
@@ -324,27 +328,49 @@ async function persistMessageToSupabase(userId: string, message: LiveWhatsAppMes
           : `data:${message.mediaMimetype || 'image/jpeg'};base64,${message.mediaBase64}`)
       : null;
 
-    await supabase.from('wa_messages').upsert({
+    const { error: msgErr } = await db.from('wa_messages').insert({
       user_id: userId,
-      phone: message.phone,
+      phone,
       message_id: message.id,
       body: message.text,
       from_me: message.fromMe,
       type: msgType,
       timestamp: ts,
       status: 'received',
+      wa_number: '',
       ...(mediaDataUrl ? { media_url: mediaDataUrl } : {}),
-    }, { onConflict: 'user_id,message_id', ignoreDuplicates: true });
+    });
+    if (msgErr && !msgErr.message.includes('duplicate') && !msgErr.code?.includes('23505')) {
+      console.error('[persistMessage] Erro ao salvar mensagem:', msgErr.message);
+    }
 
-    // Upsert conversa (atualiza último msg)
-    await supabase.from('wa_conversations').upsert({
-      user_id: userId,
-      phone: message.phone,
-      contact_name: message.name || null,
-      last_message: message.text,
+    // Salva conversa — UPDATE primeiro, INSERT se não existir
+    const convPayload: Record<string, any> = {
+      user_id: userId, phone,
+      last_message: message.text || `[${msgType}]`,
       last_message_at: ts,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'user_id,phone' });
+      updated_at: now,
+      wa_number: '',
+      ...(!message.fromMe ? { unread_count: 1 } : {}),
+      ...(message.name ? { contact_name: message.name } : {}),
+    };
+
+    const { data: updated, error: updateErr } = await db
+      .from('wa_conversations')
+      .update(convPayload)
+      .eq('user_id', userId)
+      .eq('phone', phone)
+      .select('id');
+
+    if (updateErr) {
+      console.error('[persistMessage] Erro ao UPDATE conversa:', updateErr.message);
+    } else if (!updated || updated.length === 0) {
+      const { error: insertErr } = await db.from('wa_conversations').insert(convPayload);
+      if (insertErr) console.error('[persistMessage] Erro ao INSERT conversa:', insertErr.message);
+      else console.log(`[persistMessage] ✅ Conversa CRIADA | phone=${phone}`);
+    } else {
+      console.log(`[persistMessage] ✅ Conversa ATUALIZADA | phone=${phone}`);
+    }
 
     // Auto-criar lead no pipeline quando mensagem chega de fora
     if (!message.fromMe && supabaseAdmin) {
@@ -1599,17 +1625,22 @@ async function startServer() {
         if (msgErr) console.error('[Webhook Meta] Erro ao salvar mensagem:', msgErr.message);
 
         const lastMsg = msgBody || `[${normalizedType}]`;
-        const { error: convErr } = await supabaseAdmin.from('wa_conversations').upsert({
-          user_id: waAccount.user_id,
-          phone: cleanFrom,
-          last_message: lastMsg,
-          last_message_at: now,
-          unread_count: 1,
+        // UPDATE primeiro, INSERT se não existir (sem dependência de onConflict)
+        const metaConvPayload: Record<string, any> = {
+          user_id: waAccount.user_id, phone: cleanFrom,
+          last_message: lastMsg, last_message_at: now, unread_count: 1,
           ...(contactName ? { contact_name: contactName } : {}),
-        }, { onConflict: 'user_id,phone' });
-
-        if (convErr) console.error('[Webhook Meta] Erro ao atualizar conversa:', convErr.message);
-        else console.log(`[Webhook Meta] ✅ ${normalizedType} salvo — user ${waAccount.user_id}, phone ${cleanFrom}`);
+        };
+        const { data: metaUpdated, error: metaUpdateErr } = await supabaseAdmin
+          .from('wa_conversations').update(metaConvPayload)
+          .eq('user_id', waAccount.user_id).eq('phone', cleanFrom).select('id');
+        if (metaUpdateErr) {
+          console.error('[Webhook Meta] Erro ao UPDATE conversa:', metaUpdateErr.message);
+        } else if (!metaUpdated || metaUpdated.length === 0) {
+          const { error: metaInsertErr } = await supabaseAdmin.from('wa_conversations').insert(metaConvPayload);
+          if (metaInsertErr) console.error('[Webhook Meta] Erro ao INSERT conversa:', metaInsertErr.message);
+        }
+        console.log(`[Webhook Meta] ✅ ${normalizedType} salvo — user ${waAccount.user_id}, phone ${cleanFrom}`);
 
         // Auto-criar lead no pipeline (Meta)
         const metaUserId = waAccount.user_id;
@@ -1799,23 +1830,32 @@ async function startServer() {
   // Lista conversas do Supabase (persistido) + merge com cache em memória
   app.get('/api/inbox/conversations', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
-    const waNumber = BaileysManager.getConnectedPhone(userId) || '';
-    const db = supabaseAdmin || supabase;
+    const db = supabaseAdmin;
+    if (!db) {
+      // Fallback sem admin: tenta com supabase user-scoped
+      const userDb = (req as any).supabase as SupabaseClient;
+      const { data } = await userDb.from('wa_conversations').select('*').eq('user_id', userId).order('last_message_at', { ascending: false }).limit(200);
+      console.log(`[Inbox] /conversations userId=${userId} (sem admin) → ${(data||[]).length} rows`);
+      return res.json(data || []);
+    }
     try {
-      let query = db
+      const { data, error } = await db
         .from('wa_conversations')
         .select('*')
         .eq('user_id', userId)
         .order('last_message_at', { ascending: false })
         .limit(200);
 
-      const { data, error } = await query;
+      if (error) {
+        console.error('[Inbox] Erro ao buscar conversas:', error.message, error.code);
+        throw error;
+      }
 
-      if (error) throw error;
+      const rows = data || [];
+      console.log(`[Inbox] /conversations userId=${userId} → ${rows.length} rows do DB`);
 
-      // Merge com cache em memória (conversas novas ainda não persistidas)
-      const dbPhones = new Set((data || []).map((c: any) => c.phone));
+      // Merge com cache em memória (conversas chegadas mas ainda não persistidas)
+      const dbPhones = new Set(rows.map((c: any) => c.phone));
       const memContacts = [...liveWhatsAppMessagesByPhone.entries()]
         .filter(([phone]) => !dbPhones.has(phone))
         .map(([phone, messages]) => {
@@ -1830,8 +1870,13 @@ async function startServer() {
           };
         });
 
-      return res.json([...(data || []), ...memContacts]);
-    } catch (err) {
+      if (memContacts.length > 0) {
+        console.log(`[Inbox] + ${memContacts.length} conversas do cache de memória`);
+      }
+
+      return res.json([...rows, ...memContacts]);
+    } catch (err: any) {
+      console.error('[Inbox] Exceção em /conversations:', err?.message || err);
       // Fallback: cache em memória
       const contacts = [...liveWhatsAppMessagesByPhone.entries()].map(([phone, messages]) => {
         const latest = messages[messages.length - 1];
@@ -1910,8 +1955,8 @@ async function startServer() {
     const phone = req.params.phone.replace(/\D/g, '');
     readUpToTimestampByPhone.set(phone, Date.now());
     try {
-      const supabase = createSupabaseClient();
-      await supabase
+      const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
+      await db
         .from('wa_conversations')
         .update({ unread_count: 0, updated_at: new Date().toISOString() })
         .eq('user_id', userId)
@@ -1920,25 +1965,71 @@ async function startServer() {
     return res.json({ ok: true });
   });
 
+  // Debug: verifica estado do DB — sem auth, só localhost
+  app.get('/api/inbox/debug', async (req, res) => {
+    const userIdParam = (req.query.userId as string) || '';
+    const result: any = { supabaseAdminAvailable: !!supabaseAdmin, sessions: [] };
+
+    // Lista todas as sessões Baileys ativas
+    const allSessions = ['connecting','open','close','not_initialized'];
+    // Mostra status de todas as sessões se não informou userId
+    if (!userIdParam) {
+      result.tip = 'Passe ?userId=SEU_USER_ID para ver conversas. Reinicie o servidor e verifique os logs.';
+      return res.json(result);
+    }
+
+    const waPhone = BaileysManager.getConnectedPhone(userIdParam);
+    const waStatus = BaileysManager.getStatus(userIdParam);
+    result.userId = userIdParam;
+    result.waStatus = waStatus;
+    result.waPhone = waPhone;
+
+    if (supabaseAdmin) {
+      const { data: convs, error: convErr } = await supabaseAdmin
+        .from('wa_conversations')
+        .select('phone, last_message, last_message_at, wa_number, unread_count')
+        .eq('user_id', userIdParam)
+        .order('last_message_at', { ascending: false })
+        .limit(10);
+      const { count: msgCount } = await supabaseAdmin
+        .from('wa_messages')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', userIdParam);
+      result.conversationsInDB = convs || [];
+      result.conversationError = convErr?.message;
+      result.messageCount = msgCount;
+    }
+    return res.json(result);
+  });
+
   // Envia mensagem de texto
   app.post('/api/inbox/send', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
     const { phone, text } = req.body;
 
     if (!phone || !text) return res.status(400).json({ error: 'phone e text são obrigatórios' });
 
     const cleanPhone = normalizeBrazilianPhone(phone.replace(/\D/g, ''));
+    const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
 
     const saveToDb = async (msgId: string) => {
       const now = new Date().toISOString();
-      await supabase.from('wa_messages').insert({
+      const { error: msgErr } = await db.from('wa_messages').insert({
         user_id: userId, phone: cleanPhone, message_id: msgId,
-        body: text, from_me: true, timestamp: now, type: 'text', status: 'sent',
+        body: text, from_me: true, timestamp: now, type: 'text', status: 'sent', wa_number: '',
       });
-      await supabase.from('wa_conversations').upsert({
-        user_id: userId, phone: cleanPhone, last_message: text, last_message_at: now,
-      }, { onConflict: 'user_id,phone' });
+      if (msgErr && !msgErr.message.includes('duplicate') && !msgErr.code?.includes('23505')) {
+        console.error('[Send] Erro ao salvar mensagem:', msgErr.message);
+      }
+      // UPDATE primeiro, INSERT se não existir
+      const { data: upd } = await db.from('wa_conversations')
+        .update({ user_id: userId, phone: cleanPhone, last_message: text, last_message_at: now, updated_at: now, wa_number: '' })
+        .eq('user_id', userId).eq('phone', cleanPhone).select('id');
+      if (!upd || upd.length === 0) {
+        await db.from('wa_conversations').insert({
+          user_id: userId, phone: cleanPhone, last_message: text, last_message_at: now, updated_at: now, wa_number: '',
+        });
+      }
     };
 
     // ── Baileys (primário) ───────────────────────────────────────────────────
@@ -1953,7 +2044,7 @@ async function startServer() {
     }
 
     // ── Meta WhatsApp Business API (fallback) ────────────────────────────────
-    const { data: waAccount } = await supabase
+    const { data: waAccount } = await db
       .from('whatsapp_business_accounts')
       .select('phone_number_id, phone_number, access_token')
       .eq('user_id', userId)
@@ -2032,17 +2123,17 @@ async function startServer() {
     const mediaDataUrl = `data:${finalMimetype};base64,${finalBase64}`;
 
     const saveToDb = async (msgId: string) => {
+      const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
       const now = new Date().toISOString();
-      await supabase.from('wa_messages').insert({
+      await db.from('wa_messages').insert({
         user_id: userId, phone: cleanPhone, message_id: msgId,
         body: caption || '', from_me: true, timestamp: now,
         type: mediaType, status: 'sent',
         media_url: mediaDataUrl,
       });
-      await supabase.from('wa_conversations').upsert({
-        user_id: userId, phone: cleanPhone,
-        last_message: caption || `[${mediaType}]`, last_message_at: now,
-      }, { onConflict: 'user_id,phone' });
+      const convPayload = { user_id: userId, phone: cleanPhone, last_message: caption || `[${mediaType}]`, last_message_at: now };
+      const { data: upd } = await db.from('wa_conversations').update(convPayload).eq('user_id', userId).eq('phone', cleanPhone).select('id');
+      if (!upd || upd.length === 0) { await db.from('wa_conversations').insert(convPayload); }
     };
 
     // ── Baileys (primário) ───────────────────────────────────────────────────
@@ -2160,14 +2251,13 @@ async function startServer() {
   // Salva nome de contato manualmente
   app.patch('/api/inbox/contact-name/:phone', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
     const phone = normalizeBrazilianPhone(req.params.phone.replace(/\D/g, ''));
     const { name } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'Nome inválido' });
     try {
-      await supabase.from('wa_conversations').upsert({
-        user_id: userId, phone, contact_name: name.trim(),
-      }, { onConflict: 'user_id,phone' });
+      const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
+      const { data: upd } = await db.from('wa_conversations').update({ contact_name: name.trim() }).eq('user_id', userId).eq('phone', phone).select('id');
+      if (!upd || upd.length === 0) { await db.from('wa_conversations').insert({ user_id: userId, phone, contact_name: name.trim() }); }
       return res.json({ ok: true });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
@@ -3848,14 +3938,14 @@ async function startServer() {
           sent++;
           const now = new Date().toISOString();
           const msgId = `blast-${Date.now()}-${phone}`;
-          await supabase.from('wa_messages').insert({
+          const db = supabaseAdmin || supabase;
+          await db.from('wa_messages').insert({
             user_id: userId, phone, body: personalizedMsg, from_me: true,
             timestamp: now, type: 'text', status: 'sent', message_id: msgId,
           });
-          await supabase.from('wa_conversations').upsert({
-            user_id: userId, phone, last_message: personalizedMsg, last_message_at: now,
-            updated_at: now,
-          }, { onConflict: 'user_id,phone' });
+          const blastConvPayload = { user_id: userId, phone, last_message: personalizedMsg, last_message_at: now, updated_at: now };
+          const { data: blastUpd } = await db.from('wa_conversations').update(blastConvPayload).eq('user_id', userId).eq('phone', phone).select('id');
+          if (!blastUpd || blastUpd.length === 0) { await db.from('wa_conversations').insert(blastConvPayload); }
         } else {
           failed++;
           errors.push(`${name} (${phone})${failReason ? ': ' + failReason : ''}`);
@@ -7085,17 +7175,13 @@ async function startServer() {
   });
 
   BaileysManager.setChatsSetHandler(async (userId, chats) => {
-    if (!supabaseAdmin) return;
+    if (!supabaseAdmin) { console.warn('[Baileys] setChatsSetHandler: supabaseAdmin não disponível'); return; }
     const waNumber = BaileysManager.getConnectedPhone(userId) || '';
     // Filtra apenas conversas individuais (não grupos)
     const individual = chats.filter((c: any) =>
       typeof c.id === 'string' && c.id.endsWith('@s.whatsapp.net')
     );
-    console.log(`[Baileys] Sincronizando ${individual.length} conversas individuais para ${userId} wa_number=${waNumber} (total recebido: ${chats.length})`);
-    if (individual.length > 0) {
-      const sample = individual[0];
-      console.log(`[Baileys] Exemplo de chat: id=${sample.id} name=${sample.name} conversationTimestamp=${sample.conversationTimestamp} lastMsgTimestamp=${(sample as any).lastMsgTimestamp}`);
-    }
+    console.log(`[Baileys] ChatsSet: ${individual.length} individuais / ${chats.length} total | userId=${userId} | waNumber=${waNumber}`);
     let saved = 0, errors = 0;
     for (const chat of individual) {
       try {
@@ -7109,8 +7195,8 @@ async function startServer() {
           user_id: userId, phone,
           last_message_at: ts,
           unread_count: Number((chat as any).unreadCount) || 0,
+          wa_number: waNumber,
           ...(name ? { contact_name: name } : {}),
-          ...(waNumber ? { wa_number: waNumber } : {}),
         };
         const { data: existingChat } = await supabaseAdmin
           .from('wa_conversations').select('id').eq('user_id', userId).eq('phone', phone).maybeSingle();
@@ -7118,30 +7204,28 @@ async function startServer() {
           ? await supabaseAdmin.from('wa_conversations').update(chatPayload).eq('user_id', userId).eq('phone', phone)
           : await supabaseAdmin.from('wa_conversations').insert(chatPayload);
         if (error) {
-          console.error(`[Baileys] Erro ao salvar conversa ${phone}:`, error.message, error.code);
+          console.error(`[Baileys] ChatsSet erro ${phone}:`, error.message, error.code);
           errors++;
         } else {
           saved++;
         }
       } catch (e: any) {
-        console.error(`[Baileys] Exceção ao salvar conversa:`, e?.message);
+        console.error(`[Baileys] ChatsSet exceção:`, e?.message);
         errors++;
       }
     }
-    console.log(`[Baileys] ✅ ${saved} conversas salvas, ${errors} erros`);
+    console.log(`[Baileys] ChatsSet: ✅ ${saved} salvas, ${errors} erros`);
   });
 
   // ── Baileys: handler de mensagens ────────────────────────────────────────
   BaileysManager.setMessageHandler(async (userId, msg, sock, isHistory = false) => {
-    if (!supabaseAdmin) return;
+    if (!supabaseAdmin) { console.warn('[Baileys] MessageHandler: supabaseAdmin não disponível'); return; }
     const remoteJid = msg.key.remoteJid || '';
-    if (!remoteJid.endsWith('@s.whatsapp.net')) return; // ignora grupos
-
-    // Mensagens em tempo real enviadas por nós já foram salvas no envio
-    if (msg.key.fromMe && !isHistory) return;
+    if (!remoteJid.endsWith('@s.whatsapp.net')) return; // ignora grupos e status
+    // Nota: NÃO ignoramos fromMe em tempo real — pode ser mensagem enviada do celular físico.
+    // O insert em wa_messages usa message_id único, então duplicatas do app são tratadas via erro ignorado.
 
     const waNumber = BaileysManager.getConnectedPhone(userId) || '';
-    if (!waNumber) console.warn(`[Baileys] ⚠️ waNumber vazio para ${userId} — sock.user pode ainda não estar disponível`);
     const phone = normalizeBrazilianPhone(remoteJid.replace('@s.whatsapp.net', ''));
     const msgId = msg.key.id || `baileys-${Date.now()}`;
     const ts = msg.messageTimestamp
@@ -7178,40 +7262,74 @@ async function startServer() {
       const media = await BaileysManager.downloadIncomingMedia(msg, sock);
       if (media) mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype);
     } else {
-      return; // ignora reactions, stickers etc.
+      // ignora reactions, stickers, protocolMessages etc.
+      if (!isHistory) console.log(`[Baileys] Msg ignorada | tipo=${firstKey} | jid=${remoteJid}`);
+      return;
     }
 
-    // Salva mensagem (ignora duplicatas)
+    if (!isHistory) {
+      console.log(`[Baileys] MSG RECEBIDA | phone=${phone} | tipo=${msgType} | fromMe=${msg.key.fromMe} | userId=${userId}`);
+    }
+
+    // Salva mensagem (ignora duplicatas via message_id)
     const { error: msgSaveErr } = await supabaseAdmin.from('wa_messages').insert({
       user_id: userId, phone, wa_number: waNumber, message_id: msgId,
       body: msgBody, from_me: !!msg.key.fromMe, timestamp: ts,
       type: msgType, status: msg.key.fromMe ? 'sent' : 'received',
       ...(mediaDataUrl ? { media_url: mediaDataUrl } : {}),
     });
-    if (msgSaveErr && !msgSaveErr.message.includes('duplicate')) {
-      console.error('[Baileys] Erro ao salvar msg:', msgSaveErr.message);
+    if (msgSaveErr) {
+      if (!msgSaveErr.message.includes('duplicate') && !msgSaveErr.code?.includes('23505')) {
+        console.error('[Baileys] Erro ao salvar mensagem:', msgSaveErr.message, msgSaveErr.code);
+      }
     }
 
-    // Atualiza conversa (manual upsert — evita dependência de constraint específica)
+    // Salva/atualiza conversa — UPDATE primeiro, INSERT se nenhuma linha foi atualizada
     const contactName = msg.pushName || null;
+    const now = new Date().toISOString();
     const convPayload: Record<string, any> = {
-      user_id: userId, phone,
+      user_id: userId, phone, wa_number: waNumber,
       last_message: msgBody || `[${msgType}]`,
       last_message_at: ts,
-      updated_at: new Date().toISOString(),
+      updated_at: now,
       ...(!isHistory ? { unread_count: msg.key.fromMe ? 0 : 1 } : {}),
       ...(contactName ? { contact_name: contactName } : {}),
-      ...(waNumber ? { wa_number: waNumber } : {}),
     };
-    const { data: existingConv } = await supabaseAdmin
-      .from('wa_conversations').select('id').eq('user_id', userId).eq('phone', phone).maybeSingle();
-    const { error: convErr } = existingConv
-      ? await supabaseAdmin.from('wa_conversations').update(convPayload).eq('user_id', userId).eq('phone', phone)
-      : await supabaseAdmin.from('wa_conversations').insert(convPayload);
-    if (convErr) {
-      console.error('[Baileys] Erro ao salvar conversa:', convErr.message);
-    } else {
-      console.log(`[Baileys] ✅ conversa salva | phone=${phone}`);
+
+    try {
+      // UPDATE primeiro — retorna as linhas atualizadas
+      const { data: updated, error: updateErr } = await supabaseAdmin
+        .from('wa_conversations')
+        .update(convPayload)
+        .eq('user_id', userId)
+        .eq('phone', phone)
+        .select('id');
+
+      if (updateErr) {
+        console.error('[Baileys] Erro no UPDATE de conversa:', updateErr.message, updateErr.code);
+      } else if (!updated || updated.length === 0) {
+        // Nenhuma linha existia → INSERT
+        const { error: insertErr } = await supabaseAdmin
+          .from('wa_conversations')
+          .insert(convPayload);
+
+        if (insertErr) {
+          console.error('[Baileys] Erro no INSERT de conversa:', insertErr.message, insertErr.code);
+          // Último recurso: tenta sem wa_number (coluna pode não existir)
+          if (insertErr.message.includes('wa_number') || insertErr.code === '42703') {
+            const { wa_number: _drop, ...payloadSemWaN } = convPayload;
+            const { error: e2 } = await supabaseAdmin.from('wa_conversations').insert(payloadSemWaN);
+            if (e2) console.error('[Baileys] INSERT sem wa_number falhou:', e2.message);
+            else if (!isHistory) console.log(`[Baileys] ✅ Conversa criada (sem wa_number) | phone=${phone}`);
+          }
+        } else {
+          if (!isHistory) console.log(`[Baileys] ✅ Conversa CRIADA | phone=${phone}`);
+        }
+      } else {
+        if (!isHistory) console.log(`[Baileys] ✅ Conversa ATUALIZADA | phone=${phone} | msg="${msgBody.slice(0, 40)}"`);
+      }
+    } catch (convEx: any) {
+      console.error('[Baileys] Exceção ao salvar conversa:', convEx?.message);
     }
 
     // Auto-cria lead apenas para mensagens novas recebidas
@@ -7344,10 +7462,9 @@ function startFollowUpWorker() {
               user_id: task.user_id, phone: task.phone, body: task.message,
               from_me: true, timestamp: sentAt, type: 'text', status: 'sent', message_id: msgId,
             });
-            await supabaseAdmin!.from('wa_conversations').upsert({
-              user_id: task.user_id, phone: task.phone,
-              last_message: task.message, last_message_at: sentAt, updated_at: sentAt,
-            }, { onConflict: 'user_id,phone' });
+            const fuConvPayload = { user_id: task.user_id, phone: task.phone, last_message: task.message, last_message_at: sentAt, updated_at: sentAt };
+            const { data: fuUpd } = await supabaseAdmin!.from('wa_conversations').update(fuConvPayload).eq('user_id', task.user_id).eq('phone', task.phone).select('id');
+            if (!fuUpd || fuUpd.length === 0) { await supabaseAdmin!.from('wa_conversations').insert(fuConvPayload); }
             console.log(`[FollowUp Worker] ✅ ${task.phone} (deal ${task.deal_id}) — etapa ${task.stage_id}`);
           } else {
             console.warn(`[FollowUp Worker] ❌ Falha para ${task.phone} (deal ${task.deal_id})`);
@@ -7362,5 +7479,117 @@ function startFollowUpWorker() {
     }
   }, 60 * 1000);
 }
+
+// ─── Worker: sincroniza mensagens da Evolution API periodicamente ────────────
+// Resolve o problema de webhooks chegando apenas em produção:
+// o worker puxa mensagens diretamente da API REST e persiste no DB.
+async function syncEvolutionMessages() {
+  if (!supabaseAdmin || !EVOLUTION_API_URL || !EVOLUTION_API_KEY) return;
+
+  try {
+    // Busca todos os usuários que têm conversas no DB (para saber quais instâncias sincronizar)
+    const { data: convs } = await supabaseAdmin
+      .from('wa_conversations')
+      .select('user_id, phone')
+      .order('last_message_at', { ascending: false })
+      .limit(200);
+
+    if (!convs || convs.length === 0) return;
+
+    // Agrupa por user_id
+    const byUser = new Map<string, string[]>();
+    for (const c of convs) {
+      const phones = byUser.get(c.user_id) || [];
+      if (!phones.includes(c.phone)) phones.push(c.phone);
+      byUser.set(c.user_id, phones);
+    }
+
+    for (const [userId, phones] of byUser.entries()) {
+      const instanceName = `user_${userId.replace(/-/g, '_')}`;
+
+      // Verifica se instância está conectada na Evolution API
+      let isConnected = false;
+      try {
+        const statusRes = await fetch(`${EVOLUTION_API_URL}/instance/fetchInstances?instanceName=${instanceName}`, {
+          headers: { 'apikey': EVOLUTION_API_KEY },
+        });
+        if (statusRes.ok) {
+          const statusData = await statusRes.json();
+          const inst = Array.isArray(statusData) ? statusData[0] : statusData;
+          isConnected = inst?.instance?.state === 'open' || inst?.state === 'open';
+        }
+      } catch { continue; }
+
+      if (!isConnected) continue;
+
+      // Para cada conversa, busca as últimas mensagens
+      for (const phone of phones.slice(0, 10)) { // max 10 por usuário por ciclo
+        try {
+          const chatId = `${phone}@s.whatsapp.net`;
+          const msgsRes = await fetch(`${EVOLUTION_API_URL}/chat/findMessages/${instanceName}`, {
+            method: 'POST',
+            headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ where: { key: { remoteJid: chatId } }, limit: 20 }),
+          });
+          if (!msgsRes.ok) continue;
+          const msgsData = await msgsRes.json();
+          const messages: any[] = Array.isArray(msgsData?.messages?.records)
+            ? msgsData.messages.records
+            : Array.isArray(msgsData) ? msgsData : [];
+
+          for (const msg of messages) {
+            const msgId: string = msg?.key?.id || msg?.messageId || '';
+            const fromMe: boolean = msg?.key?.fromMe ?? false;
+            const timestamp: number = msg?.messageTimestamp ?? msg?.timestamp ?? 0;
+            const ts = timestamp ? new Date(timestamp * 1000).toISOString() : new Date().toISOString();
+
+            const textContent: string =
+              msg?.message?.conversation ||
+              msg?.message?.extendedTextMessage?.text ||
+              msg?.message?.imageMessage?.caption ||
+              msg?.message?.videoMessage?.caption || '';
+
+            if (!msgId || !textContent) continue;
+
+            // Verifica se mensagem já existe para não duplicar
+            const { data: existing } = await supabaseAdmin
+              .from('wa_messages')
+              .select('id')
+              .eq('user_id', userId)
+              .eq('message_id', msgId)
+              .maybeSingle();
+            if (existing) continue;
+
+            const { error: insErr } = await supabaseAdmin.from('wa_messages').insert({
+              user_id: userId, phone, message_id: msgId,
+              body: textContent, from_me: fromMe,
+              type: 'text', timestamp: ts, status: fromMe ? 'sent' : 'received', wa_number: '',
+            });
+            if (insErr && !insErr.code?.includes('23505')) {
+              console.error(`[EvolutionSync] Erro ao salvar msg ${msgId}:`, insErr.message);
+              continue;
+            }
+
+            // Atualiza conversa com última mensagem
+            if (!fromMe) {
+              const convPayload = { user_id: userId, phone, last_message: textContent, last_message_at: ts, updated_at: new Date().toISOString(), unread_count: 1 };
+              const { data: upd } = await supabaseAdmin.from('wa_conversations').update(convPayload).eq('user_id', userId).eq('phone', phone).select('id');
+              if (!upd || upd.length === 0) { await supabaseAdmin.from('wa_conversations').insert(convPayload); }
+              console.log(`[EvolutionSync] ✅ Nova msg de ${phone} para user ${userId}: "${textContent.slice(0, 50)}"`);
+            }
+          }
+        } catch { /* ignora erros por conversa individual */ }
+      }
+    }
+  } catch (err: any) {
+    console.error('[EvolutionSync] Erro geral:', err.message);
+  }
+}
+
+// Inicia o worker após 10s (para servidor inicializar) e repete a cada 15s
+setTimeout(() => {
+  syncEvolutionMessages();
+  setInterval(syncEvolutionMessages, 15 * 1000);
+}, 10_000);
 
 startServer();
