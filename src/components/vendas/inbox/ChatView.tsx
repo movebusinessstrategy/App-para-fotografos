@@ -175,9 +175,10 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
       const res = await authFetch(`/api/inbox/messages/${cleanPhone}?limit=80`);
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
+        if (Array.isArray(data)) {
           setMessages((prev) => {
             const dbIds = new Set(data.map((m: Message) => m.message_id));
+            // Mantém mensagens otimistas (tmp-) que ainda não chegaram no banco
             const pendingOptimistic = prev.filter(
               (m) => m.message_id.startsWith("tmp-") && !dbIds.has(m.message_id)
             );

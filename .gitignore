@@ -12,6 +12,7 @@ coverage/
 
 # WhatsApp sessions (dados sensíveis)
 baileys_sessions/
+sessions/
 
 # Uploads do editor de vídeo (arquivos grandes)
 server/uploads/
