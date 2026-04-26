@@ -7241,7 +7241,8 @@ async function startServer() {
     // O insert em wa_messages usa message_id único, então duplicatas do app são tratadas via erro ignorado.
 
     const waNumber = BaileysManager.getConnectedPhone(userId) || '';
-    const phone = normalizeBrazilianPhone(remoteJid.replace('@s.whatsapp.net', ''));
+    const rawPhone = remoteJid.replace('@s.whatsapp.net', '');
+    const phone = normalizeBrazilianPhone(rawPhone);
     const msgId = msg.key.id || `baileys-${Date.now()}`;
     const ts = msg.messageTimestamp
       ? new Date(Number(msg.messageTimestamp) * 1000).toISOString()
@@ -7260,22 +7261,30 @@ async function startServer() {
     } else if (firstKey === 'imageMessage') {
       msgType = 'image';
       msgBody = (msgContent as any).imageMessage?.caption || '';
-      const media = await BaileysManager.downloadIncomingMedia(msg, sock);
-      if (media) mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype);
+      if (!isHistory) {
+        const media = await BaileysManager.downloadIncomingMedia(msg, sock);
+        if (media) mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype);
+      }
     } else if (firstKey === 'audioMessage' || firstKey === 'pttMessage') {
       msgType = 'audio';
-      const media = await BaileysManager.downloadIncomingMedia(msg, sock);
-      if (media) mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype);
+      if (!isHistory) {
+        const media = await BaileysManager.downloadIncomingMedia(msg, sock);
+        if (media) mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype);
+      }
     } else if (firstKey === 'videoMessage') {
       msgType = 'video';
       msgBody = (msgContent as any).videoMessage?.caption || '';
-      const media = await BaileysManager.downloadIncomingMedia(msg, sock);
-      if (media) mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype);
+      if (!isHistory) {
+        const media = await BaileysManager.downloadIncomingMedia(msg, sock);
+        if (media) mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype);
+      }
     } else if (firstKey === 'documentMessage') {
       msgType = 'document';
       msgBody = (msgContent as any).documentMessage?.title || (msgContent as any).documentMessage?.fileName || '';
-      const media = await BaileysManager.downloadIncomingMedia(msg, sock);
-      if (media) mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype);
+      if (!isHistory) {
+        const media = await BaileysManager.downloadIncomingMedia(msg, sock);
+        if (media) mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype);
+      }
     } else {
       // ignora reactions, stickers, protocolMessages etc.
       if (!isHistory) console.log(`[Baileys] Msg ignorada | tipo=${firstKey} | jid=${remoteJid}`);
@@ -7312,12 +7321,15 @@ async function startServer() {
     };
 
     try {
-      // UPDATE primeiro — retorna as linhas atualizadas
+      // UPDATE primeiro — aceita phone normalizado (13 dig) OU raw do JID (12 dig sem o '9')
+      const phoneFilter = rawPhone !== phone
+        ? `phone.eq.${phone},phone.eq.${rawPhone}`
+        : `phone.eq.${phone}`;
       const { data: updated, error: updateErr } = await supabaseAdmin
         .from('wa_conversations')
         .update(convPayload)
         .eq('user_id', userId)
-        .eq('phone', phone)
+        .or(phoneFilter)
         .select('id');
 
       if (updateErr) {
