@@ -5,7 +5,7 @@ import { FunilTab } from "./FunilTab";
 import { AnalisesTab } from "./AnalisesTab";
 import { NewDealModal } from "./NewDealModal";
 import { StageCustomizer } from "./StageCustomizer";
-import { InboxView } from "./inbox/InboxView";
+import { ChatLayout } from "../../features/chat/components/ChatLayout";
 import { authFetch } from "../../utils/authFetch";
 import { Deal, PipelineStage, Client } from "../../types";
 
@@ -122,7 +122,7 @@ export function VendasDashboard() {
             </div>
           </div>
         ) : tab === "inbox" ? (
-          <InboxView
+          <ChatLayout
             deals={deals}
             stages={stages}
             initialPhone={initialPhone}
