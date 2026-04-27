@@ -4,30 +4,25 @@ import { X, MessageSquarePlus } from 'lucide-react';
 interface Props {
   open: boolean;
   onClose: () => void;
-  onStart: (phone: string) => void;
+  onStart: (fullPhone: string) => void;
 }
 
-function applyPhoneMask(raw: string): string {
-  const d = raw.replace(/\D/g, '').slice(0, 13);
-  if (d.length <= 2)  return `+${d}`;
-  if (d.length <= 4)  return `+${d.slice(0,2)} (${d.slice(2)}`;
-  if (d.length <= 9)  return `+${d.slice(0,2)} (${d.slice(2,4)}) ${d.slice(4)}`;
-  if (d.length <= 13) return `+${d.slice(0,2)} (${d.slice(2,4)}) ${d.slice(4,9)}-${d.slice(9)}`;
-  return raw;
-}
-
-function extractDigits(masked: string): string {
-  return masked.replace(/\D/g, '');
+function applyLocalMask(raw: string): string {
+  const d = raw.replace(/\D/g, '').slice(0, 11);
+  if (d.length > 7)  return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`;
+  if (d.length > 2)  return `(${d.slice(0,2)}) ${d.slice(2)}`;
+  if (d.length > 0)  return `(${d}`;
+  return '';
 }
 
 export function NewConversationModal({ open, onClose, onStart }: Props) {
-  const [value, setValue] = useState('');
+  const [formatted, setFormatted] = useState('');
   const [error, setError] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
-      setValue('');
+      setFormatted('');
       setError('');
       setTimeout(() => inputRef.current?.focus(), 80);
     }
@@ -36,29 +31,30 @@ export function NewConversationModal({ open, onClose, onStart }: Props) {
   if (!open) return null;
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
-    setValue(applyPhoneMask(e.target.value));
+    setFormatted(applyLocalMask(e.target.value));
     setError('');
   }
 
+  const digits = formatted.replace(/\D/g, '');
+  const isValid = digits.length >= 10 && digits.length <= 11;
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const digits = extractDigits(value);
-    if (digits.length < 10) {
-      setError('Digite um número válido com DDD (mín. 10 dígitos).');
+    if (!isValid) {
+      setError('Digite um número válido com DDD (10 ou 11 dígitos).');
       return;
     }
-    // Normaliza para formato brasileiro se necessário
-    const phone = digits.startsWith('55') ? digits : `55${digits}`;
-    // TODO: chamar startNewConversation(phone) quando implementado no backend
-    console.log('[NewConversation] iniciando conversa com:', phone);
-    onStart(phone);
+    const fullPhone = '55' + digits;
+    // TODO: chamar função real de criação de conversa quando implementada
+    console.log('[NewConversation] iniciando para:', fullPhone);
+    onStart(fullPhone);
     onClose();
   }
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ background: 'rgba(0,0,0,0.5)' }}
+      style={{ background: 'rgba(0,0,0,0.55)' }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
@@ -78,7 +74,7 @@ export function NewConversationModal({ open, onClose, onStart }: Props) {
           </div>
           <button
             onClick={onClose}
-            className="w-7 h-7 rounded-full flex items-center justify-center transition-colors"
+            className="w-7 h-7 rounded-full flex items-center justify-center"
             style={{ color: 'var(--wa-text-secondary)' }}
           >
             <X size={16} />
@@ -89,38 +85,57 @@ export function NewConversationModal({ open, onClose, onStart }: Props) {
         <form onSubmit={handleSubmit} className="p-5 flex flex-col gap-4">
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--wa-text-secondary)' }}>
-              Número de WhatsApp
+              Número WhatsApp (Brasil)
             </label>
-            <input
-              ref={inputRef}
-              type="tel"
-              value={value}
-              onChange={handleChange}
-              placeholder="+55 (43) 99909-3114"
-              className="w-full rounded-xl px-4 py-2.5 text-sm outline-none"
-              style={{
-                background: 'var(--wa-bg-input)',
-                border: `1px solid ${error ? '#ef4444' : 'var(--wa-border)'}`,
-                color: 'var(--wa-text-primary)',
-              }}
-            />
+
+            {/* Input com prefixo +55 fixo */}
+            <div className="flex items-stretch rounded-xl overflow-hidden" style={{ border: `1px solid ${error ? '#ef4444' : 'var(--wa-border)'}` }}>
+              <div
+                className="flex items-center px-3 py-2.5 text-sm font-medium flex-shrink-0 select-none"
+                style={{
+                  background: 'var(--wa-bg-tertiary)',
+                  color: 'var(--wa-text-secondary)',
+                  borderRight: '1px solid var(--wa-border)',
+                }}
+              >
+                🇧🇷 +55
+              </div>
+              <input
+                ref={inputRef}
+                type="tel"
+                value={formatted}
+                onChange={handleChange}
+                placeholder="(43) 99999-9999"
+                maxLength={15}
+                className="flex-1 px-3 py-2.5 text-sm outline-none"
+                style={{
+                  background: 'var(--wa-bg-input)',
+                  color: 'var(--wa-text-primary)',
+                }}
+              />
+            </div>
+
             {error && (
               <p className="mt-1.5 text-xs" style={{ color: '#ef4444' }}>{error}</p>
             )}
+            <p className="mt-1.5 text-xs" style={{ color: 'var(--wa-text-muted)' }}>
+              {digits.length}/11 dígitos
+            </p>
           </div>
 
           <div className="flex gap-2 justify-end">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-xl text-sm font-medium transition-colors"
+              className="px-4 py-2 rounded-xl text-sm font-medium"
               style={{ background: 'var(--wa-bg-hover)', color: 'var(--wa-text-secondary)' }}
             >
               Cancelar
             </button>
             <button
               type="submit"
-              className="px-4 py-2 rounded-xl text-sm font-semibold transition-opacity"
+              disabled={!isValid}
+              className="px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-40"
               style={{ background: 'var(--wa-accent-green)', color: '#fff' }}
             >
               Iniciar conversa

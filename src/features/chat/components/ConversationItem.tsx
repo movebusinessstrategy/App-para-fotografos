@@ -1,7 +1,7 @@
 import React from 'react';
 import { Mic } from 'lucide-react';
 import { Conversation } from '../types';
-import { getDisplayName } from '../utils/displayName';
+import { getContactDisplayName, getContactAvatar } from '../utils/contactHelpers';
 
 interface Props {
   conv: Conversation;
@@ -46,8 +46,9 @@ function parsePreview(msg: string | null): { mic?: boolean; text: string } {
 }
 
 export function ConversationItem({ conv, selected, onClick }: Props) {
-  const name = getDisplayName(conv);
+  const name = getContactDisplayName(conv);
   const color = avatarColor(conv.phone);
+  const avatarUrl = getContactAvatar(conv);
   const preview = parsePreview(conv.last_message);
   const hasUnread = conv.unread_count > 0;
 
@@ -65,10 +66,13 @@ export function ConversationItem({ conv, selected, onClick }: Props) {
     >
       {/* Avatar */}
       <div
-        className="w-12 h-12 rounded-full flex-shrink-0 flex items-center justify-center text-white text-sm font-semibold"
+        className="w-12 h-12 rounded-full flex-shrink-0 flex items-center justify-center text-white text-sm font-semibold overflow-hidden"
         style={{ background: color }}
       >
-        {initials(name)}
+        {avatarUrl
+          ? <img src={avatarUrl} alt={name} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+          : initials(name)
+        }
       </div>
 
       {/* Conteúdo */}

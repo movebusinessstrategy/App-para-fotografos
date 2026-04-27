@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic, Sun, Moon, PenSquare, Search, MoreVertical, Smile, Paperclip } from 'lucide-react';
+import EmojiPicker, { Theme as EmojiTheme } from 'emoji-picker-react';
 import { useTheme } from '../../../contexts/ThemeContext';
-import { getDisplayName, formatPhone } from '../utils/displayName';
+import { getContactDisplayName, getContactAvatar, formatBrazilianPhone } from '../utils/contactHelpers';
 import { useConversations } from '../hooks/useConversations';
 import { useMessages } from '../hooks/useMessages';
 import { useWaStatus } from '../hooks/useWaStatus';
@@ -59,6 +60,8 @@ export function InboxView({ initialPhone }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   const [newConvOpen, setNewConvOpen] = useState(false);
+  const [showEmoji, setShowEmoji] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const prevCountRef = useRef(0);
 
@@ -77,6 +80,14 @@ export function InboxView({ initialPhone }: Props) {
   useEffect(() => {
     if (initialPhone && !selectedPhone) setSelectedPhone(initialPhone);
   }, [initialPhone]);
+
+  // Fecha emoji picker ao clicar fora
+  useEffect(() => {
+    if (!showEmoji) return;
+    const close = () => setShowEmoji(false);
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [showEmoji]);
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
@@ -154,7 +165,10 @@ export function InboxView({ initialPhone }: Props) {
   }
 
   const selectedConv = conversations.find(c => c.phone === selectedPhone);
-  const displayName = selectedConv ? getDisplayName(selectedConv) : (selectedPhone ? formatPhone(selectedPhone) : '');
+  const displayName = selectedConv
+    ? getContactDisplayName(selectedConv)
+    : selectedPhone ? formatBrazilianPhone(selectedPhone) : '';
+  const avatarUrl = selectedConv ? getContactAvatar(selectedConv) : null;
 
   return (
     <div className="flex h-full overflow-hidden" style={{ background: 'var(--wa-bg-secondary)', fontFamily: 'Inter, system-ui, sans-serif' }}>
@@ -308,10 +322,13 @@ export function InboxView({ initialPhone }: Props) {
 
               {/* Avatar mini */}
               <div
-                className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center text-white text-sm font-semibold"
+                className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center text-white text-sm font-semibold overflow-hidden"
                 style={{ background: '#00756A' }}
               >
-                {displayName.charAt(0).toUpperCase()}
+                {avatarUrl
+                  ? <img src={avatarUrl} alt={displayName} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                  : displayName.charAt(0).toUpperCase()
+                }
               </div>
 
               <div className="flex-1 min-w-0">
@@ -319,7 +336,7 @@ export function InboxView({ initialPhone }: Props) {
                   {displayName}
                 </p>
                 <p className="text-[12px] leading-tight truncate" style={{ color: 'var(--wa-text-muted)' }}>
-                  {selectedPhone ? formatPhone(selectedPhone) : ''}
+                  {selectedPhone ? formatBrazilianPhone(selectedPhone) : ''}
                 </p>
               </div>
 
@@ -390,18 +407,53 @@ export function InboxView({ initialPhone }: Props) {
                   className="flex-1"
                 />
               ) : (
-                <form onSubmit={handleSend} className="flex items-end gap-2 flex-1">
-                  {/* FEATURE 7 — emoji e anexo */}
+                <form onSubmit={handleSend} className="flex items-end gap-2 flex-1 relative">
+                  {/* Emoji picker popover */}
+                  {showEmoji && (
+                    <div
+                      className="absolute bottom-12 left-0 z-50"
+                      onMouseDown={e => e.preventDefault()}
+                    >
+                      <EmojiPicker
+                        theme={EmojiTheme.DARK}
+                        onEmojiClick={data => {
+                          setText(prev => prev + data.emoji);
+                          setShowEmoji(false);
+                        }}
+                        height={380}
+                        width={320}
+                      />
+                    </div>
+                  )}
+
+                  {/* Input de arquivo oculto */}
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    hidden
+                    accept="image/*,video/*,application/pdf,.doc,.docx"
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        console.log('[Anexo] arquivo selecionado:', file.name, file.type, file.size);
+                        // TODO: integrar com handleAudioSend / send-media endpoint
+                      }
+                      e.target.value = '';
+                    }}
+                  />
+
                   <button
                     type="button"
+                    onClick={() => setShowEmoji(v => !v)}
                     className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 transition-colors"
-                    style={{ color: 'var(--wa-text-secondary)' }}
+                    style={{ color: showEmoji ? 'var(--wa-accent-green)' : 'var(--wa-text-secondary)' }}
                     title="Emoji"
                   >
                     <Smile size={20} />
                   </button>
                   <button
                     type="button"
+                    onClick={() => fileRef.current?.click()}
                     className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 transition-colors"
                     style={{ color: 'var(--wa-text-secondary)' }}
                     title="Anexar arquivo"
