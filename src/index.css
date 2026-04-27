@@ -234,16 +234,19 @@
 }
 
 /* ===== WhatsApp chat background pattern ===== */
-/* Doodle SVG: balões de fala, corações, estrelas, câmera, nota musical */
+/* Fundo oficial WhatsApp Web — PNGs em public/ */
 .wa-chat-pattern {
-  background-color: var(--wa-bg-primary);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cg fill='%23ffffff' fill-opacity='0.055'%3E%3C!-- balão de fala --%3E%3Crect x='8' y='10' width='28' height='20' rx='5'/%3E%3Cpolygon points='12,30 10,38 18,30'/%3E%3C!-- coração --%3E%3Cpath d='M80 18 C80 14 84 10 88 10 C92 10 96 14 96 18 C96 22 88 30 88 30 C88 30 80 22 80 18Z'/%3E%3C!-- estrela --%3E%3Cpolygon points='140,8 143,17 152,17 145,22 147,31 140,26 133,31 135,22 128,17 137,17'/%3E%3C!-- câmera --%3E%3Crect x='160' y='12' width='30' height='22' rx='4'/%3E%3Ccircle cx='175' cy='23' r='6'/%3E%3Crect x='170' y='9' width='10' height='5' rx='2'/%3E%3C!-- nota musical --%3E%3Crect x='50' y='55' width='5' height='18'/%3E%3Cellipse cx='48' cy='74' rx='6' ry='4'/%3E%3Crect x='55' y='50' width='5' height='14'/%3E%3Cellipse cx='53' cy='65' rx='6' ry='4'/%3E%3C!-- balão de fala 2 --%3E%3Crect x='108' y='52' width='24' height='16' rx='4'/%3E%3Cpolygon points='124,68 126,74 118,68'/%3E%3C!-- coração 2 --%3E%3Cpath d='M168 58 C168 55 171 52 174 52 C177 52 180 55 180 58 C180 61 174 67 174 67 C174 67 168 61 168 58Z'/%3E%3C!-- estrela 2 --%3E%3Cpolygon points='20,100 22,107 29,107 23,111 25,118 20,114 15,118 17,111 11,107 18,107'/%3E%3C!-- balão fala 3 --%3E%3Crect x='58' y='110' width='32' height='22' rx='5'/%3E%3Cpolygon points='62,132 60,140 70,132'/%3E%3C!-- coração 3 --%3E%3Cpath d='M130 108 C130 104 134 100 138 100 C142 100 146 104 146 108 C146 112 138 120 138 120 C138 120 130 112 130 108Z'/%3E%3C!-- câmera 2 --%3E%3Crect x='4' y='150' width='28' height='20' rx='4'/%3E%3Ccircle cx='18' cy='160' r='5'/%3E%3Crect x='10' y='147' width='8' height='5' rx='2'/%3E%3C!-- nota 2 --%3E%3Crect x='100' y='148' width='4' height='16'/%3E%3Cellipse cx='98' cy='165' rx='5' ry='3.5'/%3E%3C!-- estrela 3 --%3E%3Cpolygon points='160,148 162,155 169,155 163,159 165,166 160,162 155,166 157,159 151,155 158,155'/%3E%3C!-- balão fala 4 --%3E%3Crect x='40' y='170' width='22' height='15' rx='4'/%3E%3Cpolygon points='53,185 55,191 47,185'/%3E%3C!-- coração 4 --%3E%3Cpath d='M100 172 C100 169 103 166 106 166 C109 166 112 169 112 172 C112 175 106 181 106 181 C106 181 100 175 100 172Z'/%3E%3C!-- estrela 4 --%3E%3Cpolygon points='150,172 152,179 159,179 153,183 155,190 150,186 145,190 147,183 141,179 148,179'/%3E%3C/g%3E%3C/svg%3E");
-  background-size: 200px 200px;
+  background-color: #0b141a;
+  background-image: url('/wa-bg-dark.png');
+  background-repeat: repeat;
+  background-size: 412px auto;
+  background-attachment: local;
 }
 
 [data-theme="light"] .wa-chat-pattern {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cg fill='%2300A884' fill-opacity='0.12'%3E%3Crect x='8' y='10' width='28' height='20' rx='5'/%3E%3Cpolygon points='12,30 10,38 18,30'/%3E%3Cpath d='M80 18 C80 14 84 10 88 10 C92 10 96 14 96 18 C96 22 88 30 88 30 C88 30 80 22 80 18Z'/%3E%3Cpolygon points='140,8 143,17 152,17 145,22 147,31 140,26 133,31 135,22 128,17 137,17'/%3E%3Crect x='160' y='12' width='30' height='22' rx='4'/%3E%3Ccircle cx='175' cy='23' r='6'/%3E%3Crect x='170' y='9' width='10' height='5' rx='2'/%3E%3Crect x='50' y='55' width='5' height='18'/%3E%3Cellipse cx='48' cy='74' rx='6' ry='4'/%3E%3Crect x='55' y='50' width='5' height='14'/%3E%3Cellipse cx='53' cy='65' rx='6' ry='4'/%3E%3Crect x='108' y='52' width='24' height='16' rx='4'/%3E%3Cpolygon points='124,68 126,74 118,68'/%3E%3Cpath d='M168 58 C168 55 171 52 174 52 C177 52 180 55 180 58 C180 61 174 67 174 67 C174 67 168 61 168 58Z'/%3E%3Cpolygon points='20,100 22,107 29,107 23,111 25,118 20,114 15,118 17,111 11,107 18,107'/%3E%3Crect x='58' y='110' width='32' height='22' rx='5'/%3E%3Cpolygon points='62,132 60,140 70,132'/%3E%3Cpath d='M130 108 C130 104 134 100 138 100 C142 100 146 104 146 108 C146 112 138 120 138 120 C138 120 130 112 130 108Z'/%3E%3Crect x='4' y='150' width='28' height='20' rx='4'/%3E%3Ccircle cx='18' cy='160' r='5'/%3E%3Crect x='10' y='147' width='8' height='5' rx='2'/%3E%3Crect x='100' y='148' width='4' height='16'/%3E%3Cellipse cx='98' cy='165' rx='5' ry='3.5'/%3E%3Cpolygon points='160,148 162,155 169,155 163,159 165,166 160,162 155,166 157,159 151,155 158,155'/%3E%3Crect x='40' y='170' width='22' height='15' rx='4'/%3E%3Cpolygon points='53,185 55,191 47,185'/%3E%3Cpath d='M100 172 C100 169 103 166 106 166 C109 166 112 169 112 172 C112 175 106 181 106 181 C106 181 100 175 100 172Z'/%3E%3Cpolygon points='150,172 152,179 159,179 153,183 155,190 150,186 145,190 147,183 141,179 148,179'/%3E%3C/g%3E%3C/svg%3E");
-  background-size: 200px 200px;
+  background-color: #efeae2;
+  background-image: url('/wa-bg-light.png');
+  background-size: 366px auto;
 }
 
 /* ===== WhatsApp scrollbar ===== */
