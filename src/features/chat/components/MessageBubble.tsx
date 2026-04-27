@@ -1,5 +1,5 @@
 import React from 'react';
-import { Check, CheckCheck } from 'lucide-react';
+import { Check, CheckCheck, Clock, AlertCircle } from 'lucide-react';
 import { Message } from '../types';
 import { AudioMessagePlayer } from './AudioMessagePlayer';
 
@@ -13,14 +13,28 @@ function timeStr(iso: string) {
   return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 }
 
-function StatusIcon({ status, isMe }: { status: string; isMe: boolean }) {
-  if (!isMe) return null;
+function StatusIcon({ msg }: { msg: Message }) {
+  if (!msg.from_me) return null;
+
+  // DEBUG — remove após confirmar os valores reais no DevTools
+  console.log('[MessageBubble] status field:', JSON.stringify({
+    status: msg.status,
+    message_id: msg.message_id?.slice(0, 12),
+  }));
+
+  const s = (msg as any).status ?? (msg as any).ack ?? (msg as any).ackStatus ?? '';
   const muted = 'var(--wa-text-secondary)';
-  if (status === 'read') return <CheckCheck size={14} style={{ color: 'var(--wa-accent-read)' }} />;
-  if (status === 'delivered') return <CheckCheck size={14} style={{ color: muted }} />;
-  if (status === 'sent') return <Check size={14} style={{ color: muted }} />;
-  if (status === 'sending') return <Check size={14} style={{ color: muted, opacity: 0.5 }} />;
-  // fallback para qualquer outro valor (vazio, null, etc.)
+
+  // Numérico (Baileys nativo)
+  if (s === 0 || s === 'pending')  return <Clock size={13} style={{ color: muted, opacity: 0.6 }} />;
+  if (s === 1 || s === 'sent')     return <Check size={14} style={{ color: muted }} />;
+  if (s === 2 || s === 'delivered')return <CheckCheck size={14} style={{ color: muted }} />;
+  if (s === 3 || s === 'read')     return <CheckCheck size={14} style={{ color: 'var(--wa-accent-read)' }} />;
+  if (s === 'failed' || s === 'error') return <AlertCircle size={13} style={{ color: '#ef4444' }} />;
+  if (s === 'sending')             return <Clock size={13} style={{ color: muted, opacity: 0.6 }} />;
+  if (s === 'received')            return null; // mensagem recebida não deve mostrar check
+
+  // fallback — mensagem enviada sem status definido mostra 1 check
   return <Check size={14} style={{ color: muted }} />;
 }
 
@@ -34,14 +48,13 @@ export function MessageBubble({ msg, onImageClick, contactInitial }: Props) {
   return (
     <div className={`flex ${isMe ? 'justify-end' : 'justify-start'} mb-1 animate-msg-enter`}>
       <div
-        className="max-w-[65%] rounded-lg px-3 py-1.5 text-sm relative"
+        className="max-w-[65%] text-sm relative"
         style={{
           background: bubbleBg,
           opacity: isSending ? 0.7 : 1,
-          boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
-          borderRadius: isMe
-            ? '8px 2px 8px 8px'
-            : '2px 8px 8px 8px',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
+          borderRadius: isMe ? '8px 2px 8px 8px' : '2px 8px 8px 8px',
+          padding: '6px 10px 4px',
         }}
       >
         {/* Imagem */}
@@ -77,7 +90,7 @@ export function MessageBubble({ msg, onImageClick, contactInitial }: Props) {
 
         {/* Texto ou legenda */}
         {msg.body && (
-          <p style={{ color: textColor, whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: '1.45' }}>
+          <p style={{ color: textColor, whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: '1.45', marginBottom: 2 }}>
             {msg.body}
           </p>
         )}
@@ -87,12 +100,12 @@ export function MessageBubble({ msg, onImageClick, contactInitial }: Props) {
           <p style={{ color: 'var(--wa-text-muted)', fontStyle: 'italic' }}>[{msg.type}]</p>
         )}
 
-        {/* Rodapé: hora + status */}
-        <div className="flex items-center justify-end gap-1 mt-0.5" style={{ minHeight: 16 }}>
-          <span className="text-[11px] leading-none" style={{ color: 'var(--wa-text-muted)' }}>
+        {/* Rodapé: hora + status — flutua à direita */}
+        <div className="flex items-center justify-end gap-1" style={{ marginTop: 1, minHeight: 15 }}>
+          <span style={{ fontSize: 11, color: 'var(--wa-text-muted)', lineHeight: 1 }}>
             {isSending ? 'Enviando...' : timeStr(msg.timestamp)}
           </span>
-          <StatusIcon status={msg.status} isMe={isMe} />
+          <StatusIcon msg={msg} />
         </div>
       </div>
     </div>
