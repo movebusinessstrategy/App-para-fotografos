@@ -200,6 +200,84 @@
   background: #4b5563;
 }
 
+/* ===== WhatsApp theme CSS vars ===== */
+:root {
+  --wa-bg-primary:    #0B141A;
+  --wa-bg-secondary:  #111B21;
+  --wa-bg-tertiary:   #202C33;
+  --wa-bg-hover:      #2A3942;
+  --wa-bg-input:      #2A3942;
+  --wa-bubble-sent:   #005C4B;
+  --wa-bubble-recv:   #202C33;
+  --wa-text-primary:  #E9EDEF;
+  --wa-text-secondary:#8696A0;
+  --wa-text-muted:    #667781;
+  --wa-accent-green:  #00A884;
+  --wa-accent-read:   #53BDEB;
+  --wa-border:        #2A3942;
+}
+
+[data-theme="light"] {
+  --wa-bg-primary:    #EFEAE2;
+  --wa-bg-secondary:  #FFFFFF;
+  --wa-bg-tertiary:   #F0F2F5;
+  --wa-bg-hover:      #F5F6F6;
+  --wa-bg-input:      #FFFFFF;
+  --wa-bubble-sent:   #D9FDD3;
+  --wa-bubble-recv:   #FFFFFF;
+  --wa-text-primary:  #111B21;
+  --wa-text-secondary:#667781;
+  --wa-text-muted:    #8696A0;
+  --wa-accent-green:  #00A884;
+  --wa-accent-read:   #53BDEB;
+  --wa-border:        #E9EDEF;
+}
+
+/* ===== WhatsApp chat background pattern ===== */
+.wa-chat-pattern {
+  background-color: var(--wa-bg-primary);
+  background-image: url("data:image/svg+xml,%3Csvg width='304' height='120' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd' opacity='0.04'%3E%3Cpath d='M10 10h20v20H10zM50 10h20v20H50zM90 10h20v20H90zM130 10h20v20H130zM170 10h20v20H170zM210 10h20v20H210zM250 10h20v20H250zM290 10h20v20H290z' fill='%23ffffff'/%3E%3Cpath d='M30 30h20v20H30zM70 30h20v20H70zM110 30h20v20H110zM150 30h20v20H150zM190 30h20v20H190zM230 30h20v20H230zM270 30h20v20H270z' fill='%23ffffff'/%3E%3Cpath d='M10 50h20v20H10zM50 50h20v20H50zM90 50h20v20H90zM130 50h20v20H130zM170 50h20v20H170zM210 50h20v20H210zM250 50h20v20H250zM290 50h20v20H290z' fill='%23ffffff'/%3E%3Cpath d='M30 70h20v20H30zM70 70h20v20H70zM110 70h20v20H110zM150 70h20v20H150zM190 70h20v20H190zM230 70h20v20H230zM270 70h20v20H270z' fill='%23ffffff'/%3E%3Cpath d='M10 90h20v20H10zM50 90h20v20H50zM90 90h20v20H90zM130 90h20v20H130zM170 90h20v20H170zM210 90h20v20H210zM250 90h20v20H250zM290 90h20v20H290z' fill='%23ffffff'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+[data-theme="light"] .wa-chat-pattern {
+  background-image: url("data:image/svg+xml,%3Csvg width='304' height='120' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd' opacity='0.06'%3E%3Cpath d='M10 10h20v20H10zM50 10h20v20H50zM90 10h20v20H90zM130 10h20v20H130zM170 10h20v20H170zM210 10h20v20H210zM250 10h20v20H250zM290 10h20v20H290z' fill='%2300A884'/%3E%3Cpath d='M30 30h20v20H30zM70 30h20v20H70zM110 30h20v20H110zM150 30h20v20H150zM190 30h20v20H190zM230 30h20v20H230zM270 30h20v20H270z' fill='%2300A884'/%3E%3Cpath d='M10 50h20v20H10zM50 50h20v20H50zM90 50h20v20H90zM130 50h20v20H130zM170 50h20v20H170zM210 50h20v20H210zM250 50h20v20H250zM290 50h20v20H290z' fill='%2300A884'/%3E%3Cpath d='M30 70h20v20H30zM70 70h20v20H70zM110 70h20v20H110zM150 70h20v20H150zM190 70h20v20H190zM230 70h20v20H230zM270 70h20v20H270z' fill='%2300A884'/%3E%3Cpath d='M10 90h20v20H10zM50 90h20v20H50zM90 90h20v20H90zM130 90h20v20H130zM170 90h20v20H170zM210 90h20v20H210zM250 90h20v20H250zM290 90h20v20H290z' fill='%2300A884'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+/* ===== WhatsApp scrollbar ===== */
+.wa-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #374045 transparent;
+}
+
+.wa-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.wa-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.wa-scrollbar::-webkit-scrollbar-thumb {
+  background: #374045;
+  border-radius: 3px;
+}
+
+.wa-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #4A555C;
+}
+
+[data-theme="light"] .wa-scrollbar {
+  scrollbar-color: #CCCCCC transparent;
+}
+
+[data-theme="light"] .wa-scrollbar::-webkit-scrollbar-thumb {
+  background: #CCCCCC;
+}
+
+[data-theme="light"] .wa-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #AAAAAA;
+}
+
 /* ===== Chat animations ===== */
 @keyframes msg-enter {
   from { opacity: 0; transform: translateY(4px); }
