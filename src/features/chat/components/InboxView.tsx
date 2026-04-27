@@ -61,7 +61,12 @@ export function InboxView({ initialPhone }: Props) {
   const [connectOpen, setConnectOpen] = useState(false);
   const [newConvOpen, setNewConvOpen] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
+  const [mediaPreview, setMediaPreview] = useState<{ file: File; url: string; type: string } | null>(null);
+  const [mediaCaption, setMediaCaption] = useState('');
+  const [sendingMedia, setSendingMedia] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const emojiPickerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const prevCountRef = useRef(0);
 
@@ -81,13 +86,75 @@ export function InboxView({ initialPhone }: Props) {
     if (initialPhone && !selectedPhone) setSelectedPhone(initialPhone);
   }, [initialPhone]);
 
-  // Fecha emoji picker ao clicar fora
+  // Fecha emoji picker ao clicar fora do picker
   useEffect(() => {
     if (!showEmoji) return;
-    const close = () => setShowEmoji(false);
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
+    const handleClickOutside = (e: MouseEvent) => {
+      if (emojiPickerRef.current && !emojiPickerRef.current.contains(e.target as Node)) {
+        setShowEmoji(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showEmoji]);
+
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const type = file.type.startsWith('image/') ? 'image'
+               : file.type.startsWith('video/') ? 'video'
+               : 'document';
+    setMediaPreview({ file, url, type });
+    setMediaCaption('');
+    e.target.value = '';
+  }
+
+  async function sendMediaFile() {
+    if (!mediaPreview || !selectedPhone) return;
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) { alert('Sessão expirada'); return; }
+
+    setSendingMedia(true);
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(mediaPreview.file);
+      });
+
+      const res = await fetch('/api/inbox/send-media', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          phone: selectedPhone.replace(/\D/g, ''),
+          mediaBase64: base64,
+          mimetype: mediaPreview.file.type,
+          filename: mediaPreview.file.name,
+          caption: mediaCaption,
+        }),
+      });
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        let msg = `Erro ${res.status}`;
+        try { msg = JSON.parse(body).error || msg; } catch { if (body) msg = body; }
+        throw new Error(msg);
+      }
+
+      URL.revokeObjectURL(mediaPreview.url);
+      setMediaPreview(null);
+      setMediaCaption('');
+    } catch (err) {
+      alert(`Erro ao enviar arquivo: ${err instanceof Error ? err.message : 'Tente novamente.'}`);
+    } finally {
+      setSendingMedia(false);
+    }
+  }
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
@@ -411,14 +478,30 @@ export function InboxView({ initialPhone }: Props) {
                   {/* Emoji picker popover */}
                   {showEmoji && (
                     <div
+                      ref={emojiPickerRef}
                       className="absolute bottom-12 left-0 z-50"
-                      onMouseDown={e => e.preventDefault()}
+                      onMouseDown={e => e.stopPropagation()}
                     >
                       <EmojiPicker
                         theme={EmojiTheme.DARK}
                         onEmojiClick={data => {
-                          setText(prev => prev + data.emoji);
-                          setShowEmoji(false);
+                          console.log('[EMOJI DEBUG]', { emoji: data.emoji, currentText: text });
+                          const textarea = textareaRef.current;
+                          if (!textarea) {
+                            setText(prev => prev + data.emoji);
+                            return;
+                          }
+                          const start = textarea.selectionStart ?? text.length;
+                          const end   = textarea.selectionEnd   ?? text.length;
+                          const newValue = text.slice(0, start) + data.emoji + text.slice(end);
+                          setText(newValue);
+                          // Reposiciona cursor após o emoji
+                          setTimeout(() => {
+                            textarea.focus();
+                            const newPos = start + data.emoji.length;
+                            textarea.setSelectionRange(newPos, newPos);
+                          }, 0);
+                          // Não fecha — permite escolher vários
                         }}
                         height={380}
                         width={320}
@@ -432,14 +515,7 @@ export function InboxView({ initialPhone }: Props) {
                     type="file"
                     hidden
                     accept="image/*,video/*,application/pdf,.doc,.docx"
-                    onChange={e => {
-                      const file = e.target.files?.[0];
-                      if (file) {
-                        console.log('[Anexo] arquivo selecionado:', file.name, file.type, file.size);
-                        // TODO: integrar com handleAudioSend / send-media endpoint
-                      }
-                      e.target.value = '';
-                    }}
+                    onChange={handleFileSelect}
                   />
 
                   <button
@@ -462,6 +538,7 @@ export function InboxView({ initialPhone }: Props) {
                   </button>
 
                   <textarea
+                    ref={textareaRef}
                     value={text}
                     onChange={e => setText(e.target.value)}
                     onKeyDown={e => {
@@ -517,6 +594,73 @@ export function InboxView({ initialPhone }: Props) {
           onClick={() => setLightbox(null)}
         >
           <img src={lightbox} alt="" className="max-w-[90%] max-h-[85vh] rounded-xl" />
+        </div>
+      )}
+
+      {/* Modal de preview de mídia antes de enviar */}
+      {mediaPreview && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center pb-0"
+          style={{ background: 'rgba(0,0,0,0.75)' }}
+          onClick={e => { if (e.target === e.currentTarget) { URL.revokeObjectURL(mediaPreview.url); setMediaPreview(null); }}}
+        >
+          <div
+            className="w-full max-w-lg rounded-t-2xl overflow-hidden"
+            style={{ background: 'var(--wa-bg-secondary)', border: '1px solid var(--wa-border)' }}
+          >
+            {/* Preview */}
+            <div className="flex items-center justify-center p-4" style={{ background: 'var(--wa-bg-tertiary)', minHeight: 200 }}>
+              {mediaPreview.type === 'image' ? (
+                <img src={mediaPreview.url} alt="preview" className="max-h-64 max-w-full rounded-lg object-contain" />
+              ) : mediaPreview.type === 'video' ? (
+                <video src={mediaPreview.url} controls className="max-h-64 max-w-full rounded-lg" />
+              ) : (
+                <div className="flex flex-col items-center gap-2 py-8">
+                  <Paperclip size={40} style={{ color: 'var(--wa-accent-green)' }} />
+                  <span className="text-sm font-medium" style={{ color: 'var(--wa-text-primary)' }}>{mediaPreview.file.name}</span>
+                  <span className="text-xs" style={{ color: 'var(--wa-text-muted)' }}>
+                    {(mediaPreview.file.size / 1024).toFixed(0)} KB
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Legenda + botões */}
+            <div className="p-4 flex flex-col gap-3">
+              <input
+                type="text"
+                value={mediaCaption}
+                onChange={e => setMediaCaption(e.target.value)}
+                placeholder="Adicionar legenda..."
+                className="w-full rounded-xl px-4 py-2.5 text-sm outline-none"
+                style={{ background: 'var(--wa-bg-input)', border: '1px solid var(--wa-border)', color: 'var(--wa-text-primary)' }}
+                onKeyDown={e => { if (e.key === 'Enter') sendMediaFile(); }}
+                autoFocus
+              />
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => { URL.revokeObjectURL(mediaPreview.url); setMediaPreview(null); }}
+                  className="px-4 py-2 rounded-xl text-sm font-medium"
+                  style={{ background: 'var(--wa-bg-hover)', color: 'var(--wa-text-secondary)' }}
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={sendMediaFile}
+                  disabled={sendingMedia}
+                  className="px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-50 flex items-center gap-2"
+                  style={{ background: 'var(--wa-accent-green)', color: '#fff' }}
+                >
+                  {sendingMedia ? (
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <Send size={15} />
+                  )}
+                  Enviar
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
