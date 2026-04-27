@@ -35,6 +35,14 @@ function avatarColor(phone: string) {
   return COLORS[Math.abs(h) % COLORS.length];
 }
 
+function formatPhone(phone: string): string {
+  const d = phone.replace(/\D/g, '');
+  if (d.startsWith('55') && d.length === 13) return `+55 (${d.slice(2,4)}) ${d.slice(4,9)}-${d.slice(9)}`;
+  if (d.startsWith('55') && d.length === 12) return `+55 (${d.slice(2,4)}) ${d.slice(4,8)}-${d.slice(8)}`;
+  if (d.length >= 10) return `+${d}`;
+  return phone;
+}
+
 function parsePreview(msg: string | null): { mic?: boolean; text: string } {
   if (!msg) return { text: '' };
   if (msg.startsWith('🎤')) return { mic: true, text: msg.slice(1).trim() };
@@ -47,7 +55,7 @@ function parsePreview(msg: string | null): { mic?: boolean; text: string } {
 }
 
 export function ConversationItem({ conv, selected, onClick }: Props) {
-  const name = conv.contact_name || conv.phone;
+  const name = conv.contact_name?.trim() || formatPhone(conv.phone);
   const color = avatarColor(conv.phone);
   const preview = parsePreview(conv.last_message);
   const hasUnread = conv.unread_count > 0;

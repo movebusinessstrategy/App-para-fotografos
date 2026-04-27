@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Play, Pause } from 'lucide-react';
+import { useTheme } from '../../../contexts/ThemeContext';
 
 interface Props {
   src: string;
@@ -28,6 +29,7 @@ function formatTime(s: number): string {
 }
 
 export function AudioMessagePlayer({ src, isMe, contactInitial = '?', duration: durationProp, waveform }: Props) {
+  const { waTheme } = useTheme();
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -60,14 +62,15 @@ export function AudioMessagePlayer({ src, isMe, contactInitial = '?', duration: 
 
   const displayTime = playing || currentTime > 0 ? currentTime : audioDuration;
 
-  // Cores via CSS vars — sem hardcode
-  const playBtnBg    = isMe ? 'rgba(255,255,255,0.2)' : 'var(--wa-accent-green)';
-  const playBtnColor = '#fff';
-  const barPlayed    = isMe ? 'rgba(255,255,255,0.9)' : 'var(--wa-accent-green)';
-  const barUnplayed  = isMe ? 'rgba(255,255,255,0.3)' : 'rgba(0,168,132,0.3)';
+  // Barras: enviado dark → branco; enviado light → verde escuro; recebido → verde acento
+  const isLight = waTheme === 'light';
+  const playBtnBg    = isMe ? (isLight ? 'rgba(0,92,75,0.15)' : 'rgba(255,255,255,0.2)') : 'var(--wa-accent-green)';
+  const playBtnColor = isMe ? (isLight ? '#005C4B' : '#fff') : '#fff';
+  const barPlayed    = isMe ? (isLight ? '#005C4B' : 'rgba(255,255,255,0.9)') : 'var(--wa-accent-green)';
+  const barUnplayed  = isMe ? (isLight ? 'rgba(0,92,75,0.25)' : 'rgba(255,255,255,0.3)') : 'rgba(0,168,132,0.3)';
   const timeColor    = 'var(--wa-text-muted)';
-  const avatarBg     = isMe ? 'rgba(255,255,255,0.15)' : 'var(--wa-bg-hover)';
-  const avatarColor  = isMe ? '#fff' : 'var(--wa-text-secondary)';
+  const avatarBg     = isMe ? (isLight ? 'rgba(0,92,75,0.12)' : 'rgba(255,255,255,0.15)') : 'var(--wa-bg-hover)';
+  const avatarColor  = isMe ? (isLight ? '#005C4B' : '#fff') : 'var(--wa-text-secondary)';
 
   return (
     <div className="flex items-center gap-2" style={{ minWidth: 220, maxWidth: 280 }}>

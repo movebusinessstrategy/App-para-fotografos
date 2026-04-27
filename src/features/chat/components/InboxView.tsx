@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic, Sun, Moon } from 'lucide-react';
+import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic, Sun, Moon, PenSquare, Search, MoreVertical, Smile, Paperclip } from 'lucide-react';
 import { useTheme } from '../../../contexts/ThemeContext';
 import { useConversations } from '../hooks/useConversations';
 import { useMessages } from '../hooks/useMessages';
@@ -16,6 +16,14 @@ interface Props {
   stages: PipelineStage[];
   initialPhone?: string;
   onDealUpdated: () => void;
+}
+
+function formatPhone(phone: string): string {
+  const d = phone.replace(/\D/g, '');
+  if (d.startsWith('55') && d.length === 13) return `+55 (${d.slice(2,4)}) ${d.slice(4,9)}-${d.slice(9)}`;
+  if (d.startsWith('55') && d.length === 12) return `+55 (${d.slice(2,4)}) ${d.slice(4,8)}-${d.slice(8)}`;
+  if (d.length >= 10) return `+${d}`;
+  return phone;
 }
 
 function DateSep({ label }: { label: string }) {
@@ -151,6 +159,7 @@ export function InboxView({ initialPhone }: Props) {
   }
 
   const selectedConv = conversations.find(c => c.phone === selectedPhone);
+  const displayName = selectedConv?.contact_name?.trim() || (selectedPhone ? formatPhone(selectedPhone) : '');
 
   return (
     <div className="flex h-full overflow-hidden" style={{ background: 'var(--wa-bg-secondary)', fontFamily: 'Inter, system-ui, sans-serif' }}>
@@ -212,6 +221,14 @@ export function InboxView({ initialPhone }: Props) {
               title={waTheme === 'dark' ? 'Modo claro' : 'Modo escuro'}
             >
               {waTheme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+            </button>
+
+            <button
+              className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
+              style={{ color: 'var(--wa-text-secondary)' }}
+              title="Nova conversa"
+            >
+              <PenSquare size={16} />
             </button>
           </div>
         </div>
@@ -298,16 +315,34 @@ export function InboxView({ initialPhone }: Props) {
                 className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center text-white text-sm font-semibold"
                 style={{ background: '#00756A' }}
               >
-                {(selectedConv?.contact_name || selectedPhone || '?').charAt(0).toUpperCase()}
+                {displayName.charAt(0).toUpperCase()}
               </div>
 
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold leading-tight truncate" style={{ color: 'var(--wa-text-primary)' }}>
-                  {selectedConv?.contact_name || selectedPhone}
+                  {displayName}
                 </p>
                 <p className="text-[12px] leading-tight truncate" style={{ color: 'var(--wa-text-muted)' }}>
-                  {selectedPhone}
+                  {selectedPhone ? formatPhone(selectedPhone) : ''}
                 </p>
+              </div>
+
+              {/* FEATURE 6 — botões do header */}
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
+                  style={{ color: 'var(--wa-text-secondary)' }}
+                  title="Buscar mensagem"
+                >
+                  <Search size={18} />
+                </button>
+                <button
+                  className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
+                  style={{ color: 'var(--wa-text-secondary)' }}
+                  title="Mais opções"
+                >
+                  <MoreVertical size={18} />
+                </button>
               </div>
             </div>
 
@@ -338,7 +373,7 @@ export function InboxView({ initialPhone }: Props) {
                         key={msg.message_id}
                         msg={msg}
                         onImageClick={setLightbox}
-                        contactInitial={(selectedConv?.contact_name || selectedPhone || '?').charAt(0).toUpperCase()}
+                        contactInitial={displayName.charAt(0).toUpperCase()}
                       />
                     ))}
                   </div>
@@ -360,6 +395,24 @@ export function InboxView({ initialPhone }: Props) {
                 />
               ) : (
                 <form onSubmit={handleSend} className="flex items-end gap-2 flex-1">
+                  {/* FEATURE 7 — emoji e anexo */}
+                  <button
+                    type="button"
+                    className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 transition-colors"
+                    style={{ color: 'var(--wa-text-secondary)' }}
+                    title="Emoji"
+                  >
+                    <Smile size={20} />
+                  </button>
+                  <button
+                    type="button"
+                    className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 transition-colors"
+                    style={{ color: 'var(--wa-text-secondary)' }}
+                    title="Anexar arquivo"
+                  >
+                    <Paperclip size={20} />
+                  </button>
+
                   <textarea
                     value={text}
                     onChange={e => setText(e.target.value)}
