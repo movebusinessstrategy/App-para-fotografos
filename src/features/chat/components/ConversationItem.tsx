@@ -28,7 +28,7 @@ function initials(name: string | null, phone: string): string {
   return phone.slice(-2);
 }
 
-const COLORS = ['#7A8F64','#6E8CA0','#9E8262','#7B6E9E','#5E9E8A','#9E6E82'];
+const COLORS = ['#00756A','#2C5364','#6B4226','#4B3F72','#1B6B4A','#7A3045'];
 function avatarColor(phone: string) {
   let h = 0;
   for (let i = 0; i < phone.length; i++) h = phone.charCodeAt(i) + ((h << 5) - h);
@@ -50,44 +50,64 @@ export function ConversationItem({ conv, selected, onClick }: Props) {
   const name = conv.contact_name || conv.phone;
   const color = avatarColor(conv.phone);
   const preview = parsePreview(conv.last_message);
+  const hasUnread = conv.unread_count > 0;
 
   return (
     <button
       onClick={onClick}
-      className="w-full flex items-center gap-3 px-4 py-3 text-left transition-all"
+      className="w-full flex items-center gap-3 px-3 py-3 text-left transition-colors"
       style={{
-        background: selected ? 'rgba(181,193,157,0.12)' : 'transparent',
-        borderLeft: `2px solid ${selected ? '#B5C19D' : 'transparent'}`,
+        background: selected
+          ? 'var(--wa-bg-hover)'
+          : 'transparent',
+      }}
+      onMouseEnter={e => {
+        if (!selected) (e.currentTarget as HTMLButtonElement).style.background = 'var(--wa-bg-hover)';
+      }}
+      onMouseLeave={e => {
+        if (!selected) (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
       }}
     >
+      {/* Avatar */}
       <div
-        className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center text-white text-sm font-bold"
+        className="w-12 h-12 rounded-full flex-shrink-0 flex items-center justify-center text-white text-sm font-semibold"
         style={{ background: color }}
       >
         {initials(conv.contact_name, conv.phone)}
       </div>
 
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between gap-1">
+      {/* Conteúdo */}
+      <div className="flex-1 min-w-0" style={{ borderBottom: '1px solid var(--wa-border)', paddingBottom: '12px' }}>
+        <div className="flex items-center justify-between gap-2">
           <span
-            className="text-sm font-semibold truncate"
-            style={{ color: selected ? '#B5C19D' : '#ECEAE3' }}
+            className="text-sm font-medium truncate"
+            style={{ color: 'var(--wa-text-primary)' }}
           >
             {name}
           </span>
-          <span className="text-[11px] flex-shrink-0" style={{ color: '#6A6A65' }}>
+          <span
+            className="text-[11px] flex-shrink-0"
+            style={{ color: hasUnread ? 'var(--wa-accent-green)' : 'var(--wa-text-muted)' }}
+          >
             {timeLabel(conv.last_message_at)}
           </span>
         </div>
-        <div className="flex items-center justify-between gap-1 mt-0.5">
-          <span className="flex items-center gap-1 text-xs truncate min-w-0" style={{ color: '#6A6A65' }}>
-            {preview.mic && <Mic size={11} className="flex-shrink-0" style={{ color: '#B5C19D' }} />}
+
+        <div className="flex items-center justify-between gap-2 mt-0.5">
+          <span
+            className="flex items-center gap-1 text-[13px] truncate min-w-0"
+            style={{ color: 'var(--wa-text-secondary)' }}
+          >
+            {preview.mic && (
+              <Mic size={12} className="flex-shrink-0" style={{ color: 'var(--wa-text-secondary)' }} />
+            )}
             <span className="truncate">{preview.text}</span>
           </span>
-          {conv.unread_count > 0 && (
+
+          {hasUnread && (
             <span
-              className="flex-shrink-0 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center"
-              style={{ background: '#B5C19D', color: '#0E0E0C' }}
+              className="flex-shrink-0 min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-semibold flex items-center justify-center"
+              style={{ background: 'var(--wa-accent-green)', color: '#fff' }}
             >
               {conv.unread_count > 99 ? '99+' : conv.unread_count}
             </span>
