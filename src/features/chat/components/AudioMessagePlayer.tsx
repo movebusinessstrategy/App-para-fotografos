@@ -33,7 +33,6 @@ export function AudioMessagePlayer({ src, isMe, contactInitial = '?', duration: 
   const [currentTime, setCurrentTime] = useState(0);
   const [audioDuration, setAudioDuration] = useState(durationProp ?? 0);
 
-  // Usa waveform real (64 valores 0-100) ou gera barras decorativas
   const bars: number[] = waveform && waveform.length === 64
     ? waveform.map(v => v / 100)
     : fakeBars(src.slice(0, 100), 64);
@@ -60,11 +59,18 @@ export function AudioMessagePlayer({ src, isMe, contactInitial = '?', duration: 
   }
 
   const displayTime = playing || currentTime > 0 ? currentTime : audioDuration;
-  const accentColor = isMe ? '#B5C19D' : '#22c55e';
-  const barBg = isMe ? 'rgba(181,193,157,0.3)' : 'rgba(255,255,255,0.18)';
+
+  // Cores via CSS vars — sem hardcode
+  const playBtnBg    = isMe ? 'rgba(255,255,255,0.2)' : 'var(--wa-accent-green)';
+  const playBtnColor = '#fff';
+  const barPlayed    = isMe ? 'rgba(255,255,255,0.9)' : 'var(--wa-accent-green)';
+  const barUnplayed  = isMe ? 'rgba(255,255,255,0.3)' : 'rgba(0,168,132,0.3)';
+  const timeColor    = 'var(--wa-text-muted)';
+  const avatarBg     = isMe ? 'rgba(255,255,255,0.15)' : 'var(--wa-bg-hover)';
+  const avatarColor  = isMe ? '#fff' : 'var(--wa-text-secondary)';
 
   return (
-    <div className="flex items-center gap-2.5" style={{ minWidth: 240, maxWidth: 300 }}>
+    <div className="flex items-center gap-2" style={{ minWidth: 220, maxWidth: 280 }}>
       <audio
         ref={audioRef}
         src={src}
@@ -82,11 +88,11 @@ export function AudioMessagePlayer({ src, isMe, contactInitial = '?', duration: 
         }}
       />
 
-      {/* Avatar (mensagens recebidas) */}
+      {/* Avatar — mensagens recebidas ficam à esquerda */}
       {!isMe && (
         <div
-          className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold uppercase"
-          style={{ background: 'rgba(255,255,255,0.1)', color: '#ECEAE3' }}
+          className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-semibold uppercase"
+          style={{ background: avatarBg, color: avatarColor }}
         >
           {contactInitial}
         </div>
@@ -96,16 +102,16 @@ export function AudioMessagePlayer({ src, isMe, contactInitial = '?', duration: 
       <button
         onClick={togglePlay}
         className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 transition-opacity active:opacity-70"
-        style={{ background: accentColor, color: isMe ? '#0E0E0C' : '#fff' }}
+        style={{ background: playBtnBg, color: playBtnColor }}
       >
         {playing
-          ? <Pause size={14} />
-          : <Play size={14} style={{ transform: 'translateX(1px)' }} />
+          ? <Pause size={15} />
+          : <Play size={15} style={{ transform: 'translateX(1px)' }} />
         }
       </button>
 
       {/* Waveform + timer */}
-      <div className="flex-1 min-w-0 flex flex-col gap-1">
+      <div className="flex-1 min-w-0 flex flex-col gap-0.5">
         <div
           className="flex items-center gap-px h-8 cursor-pointer"
           onClick={handleSeek}
@@ -115,25 +121,25 @@ export function AudioMessagePlayer({ src, isMe, contactInitial = '?', duration: 
               key={i}
               className="flex-1 rounded-full transition-colors duration-75"
               style={{
-                height: `${Math.max(8, Math.round(amp * 100))}%`,
+                height: `${Math.max(10, Math.round(amp * 100))}%`,
                 minHeight: 2,
-                background: i < playedBars ? accentColor : barBg,
+                background: i < playedBars ? barPlayed : barUnplayed,
               }}
             />
           ))}
         </div>
-        <span className="text-[10px] tabular-nums" style={{ color: '#6A6A65' }}>
+        <span className="text-[11px] tabular-nums leading-none" style={{ color: timeColor }}>
           {formatTime(displayTime)}
         </span>
       </div>
 
-      {/* Avatar (mensagens próprias) */}
+      {/* Avatar — mensagens enviadas ficam à direita */}
       {isMe && (
         <div
-          className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold"
-          style={{ background: 'rgba(181,193,157,0.2)', color: '#B5C19D' }}
+          className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-semibold"
+          style={{ background: avatarBg, color: avatarColor }}
         >
-          Eu
+          {contactInitial}
         </div>
       )}
     </div>
