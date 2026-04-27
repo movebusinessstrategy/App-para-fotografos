@@ -468,12 +468,17 @@ export function InboxView({ initialPhone }: Props) {
               </div>
             </div>
 
-            {/* Mensagens — container relativo para absolute inset-0 */}
-            <div className="flex-1 min-h-0 relative wa-chat-pattern">
+            {/* Mensagens — fundo e scroll como irmãos para evitar conflito de position CSS */}
+            <div className="flex-1 min-h-0 relative">
+              {/* Camada de fundo: wa-chat-pattern como irmão do scroll, não pai */}
+              <div className="wa-chat-pattern absolute inset-0" aria-hidden="true" />
+
+              {/* Camada de scroll: z-index inline garante precedência sobre .wa-chat-pattern > * */}
               <div
                 ref={messagesContainerRef}
                 onScroll={handleMessagesScroll}
-                className="absolute inset-0 overflow-y-auto wa-scrollbar"
+                className="wa-scrollbar"
+                style={{ position: 'absolute', inset: 0, overflowY: 'auto', zIndex: 1 }}
               >
                 <div className="flex flex-col min-h-full justify-end px-4 py-2">
                   {loadingMsgs ? (
@@ -515,8 +520,11 @@ export function InboxView({ initialPhone }: Props) {
               {showScrollBtn && (
                 <button
                   onClick={() => scrollToBottom()}
-                  className="absolute bottom-4 right-4 z-10 w-10 h-10 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105"
-                  style={{ background: 'var(--wa-bg-tertiary)', color: 'var(--wa-text-secondary)' }}
+                  className="w-10 h-10 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105"
+                  style={{
+                    position: 'absolute', bottom: 16, right: 16, zIndex: 2,
+                    background: 'var(--wa-bg-tertiary)', color: 'var(--wa-text-secondary)',
+                  }}
                 >
                   <ChevronDown size={20} />
                 </button>
