@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic } from 'lucide-react';
+import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic, Sun, Moon } from 'lucide-react';
+import { useTheme } from '../../../contexts/ThemeContext';
 import { useConversations } from '../hooks/useConversations';
 import { useMessages } from '../hooks/useMessages';
 import { useWaStatus } from '../hooks/useWaStatus';
@@ -42,6 +43,7 @@ function dateLabel(iso: string): string {
 }
 
 export function InboxView({ initialPhone }: Props) {
+  const { waTheme, toggleWaTheme } = useTheme();
   const { conversations, loading: loadingConvs, refresh } = useConversations();
   const { connected } = useWaStatus();
   const [selectedPhone, setSelectedPhone] = useState<string | null>(initialPhone || null);
@@ -210,6 +212,14 @@ export function InboxView({ initialPhone }: Props) {
               title="Atualizar"
             >
               <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
+            </button>
+            <button
+              onClick={toggleWaTheme}
+              className="p-1 rounded transition-colors"
+              style={{ color: '#6A6A65' }}
+              title={waTheme === 'dark' ? 'Modo claro' : 'Modo escuro'}
+            >
+              {waTheme === 'dark' ? <Sun size={12} /> : <Moon size={12} />}
             </button>
           </div>
         </div>
