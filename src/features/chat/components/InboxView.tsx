@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic, Sun, Moon, PenSquare, Search, MoreVertical, Smile, Paperclip } from 'lucide-react';
 import { useTheme } from '../../../contexts/ThemeContext';
+import { getDisplayName, formatPhone } from '../utils/displayName';
 import { useConversations } from '../hooks/useConversations';
 import { useMessages } from '../hooks/useMessages';
 import { useWaStatus } from '../hooks/useWaStatus';
@@ -8,6 +9,7 @@ import { ConversationItem } from './ConversationItem';
 import { MessageBubble } from './MessageBubble';
 import { AudioRecorder } from './AudioRecorder';
 import { ConnectChannelModal } from '../../../components/vendas/ConnectChannelModal';
+import { NewConversationModal } from './NewConversationModal';
 import { supabase } from '../../../integrations/supabase/client';
 import { Deal, PipelineStage } from '../../../types';
 
@@ -16,14 +18,6 @@ interface Props {
   stages: PipelineStage[];
   initialPhone?: string;
   onDealUpdated: () => void;
-}
-
-function formatPhone(phone: string): string {
-  const d = phone.replace(/\D/g, '');
-  if (d.startsWith('55') && d.length === 13) return `+55 (${d.slice(2,4)}) ${d.slice(4,9)}-${d.slice(9)}`;
-  if (d.startsWith('55') && d.length === 12) return `+55 (${d.slice(2,4)}) ${d.slice(4,8)}-${d.slice(8)}`;
-  if (d.length >= 10) return `+${d}`;
-  return phone;
 }
 
 function DateSep({ label }: { label: string }) {
@@ -64,6 +58,7 @@ export function InboxView({ initialPhone }: Props) {
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
+  const [newConvOpen, setNewConvOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const prevCountRef = useRef(0);
 
@@ -159,7 +154,7 @@ export function InboxView({ initialPhone }: Props) {
   }
 
   const selectedConv = conversations.find(c => c.phone === selectedPhone);
-  const displayName = selectedConv?.contact_name?.trim() || (selectedPhone ? formatPhone(selectedPhone) : '');
+  const displayName = selectedConv ? getDisplayName(selectedConv) : (selectedPhone ? formatPhone(selectedPhone) : '');
 
   return (
     <div className="flex h-full overflow-hidden" style={{ background: 'var(--wa-bg-secondary)', fontFamily: 'Inter, system-ui, sans-serif' }}>
@@ -224,6 +219,7 @@ export function InboxView({ initialPhone }: Props) {
             </button>
 
             <button
+              onClick={() => setNewConvOpen(true)}
               className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
               style={{ color: 'var(--wa-text-secondary)' }}
               title="Nova conversa"
@@ -476,6 +472,12 @@ export function InboxView({ initialPhone }: Props) {
         open={connectOpen}
         onClose={() => setConnectOpen(false)}
         onStatusChange={() => {}}
+      />
+
+      <NewConversationModal
+        open={newConvOpen}
+        onClose={() => setNewConvOpen(false)}
+        onStart={phone => setSelectedPhone(phone)}
       />
     </div>
   );

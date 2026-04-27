@@ -1,6 +1,7 @@
 import React from 'react';
 import { Mic } from 'lucide-react';
 import { Conversation } from '../types';
+import { getDisplayName } from '../utils/displayName';
 
 interface Props {
   conv: Conversation;
@@ -20,12 +21,10 @@ function timeLabel(iso: string | null): string {
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
 }
 
-function initials(name: string | null, phone: string): string {
-  if (name) {
-    const p = name.trim().split(/\s+/);
-    return p.length >= 2 ? (p[0][0] + p[1][0]).toUpperCase() : name.slice(0, 2).toUpperCase();
-  }
-  return phone.slice(-2);
+function initials(displayName: string): string {
+  const p = displayName.trim().split(/\s+/);
+  if (p.length >= 2 && p[0][0] && p[1][0]) return (p[0][0] + p[1][0]).toUpperCase();
+  return displayName.slice(0, 2).toUpperCase();
 }
 
 const COLORS = ['#00756A','#2C5364','#6B4226','#4B3F72','#1B6B4A','#7A3045'];
@@ -33,14 +32,6 @@ function avatarColor(phone: string) {
   let h = 0;
   for (let i = 0; i < phone.length; i++) h = phone.charCodeAt(i) + ((h << 5) - h);
   return COLORS[Math.abs(h) % COLORS.length];
-}
-
-function formatPhone(phone: string): string {
-  const d = phone.replace(/\D/g, '');
-  if (d.startsWith('55') && d.length === 13) return `+55 (${d.slice(2,4)}) ${d.slice(4,9)}-${d.slice(9)}`;
-  if (d.startsWith('55') && d.length === 12) return `+55 (${d.slice(2,4)}) ${d.slice(4,8)}-${d.slice(8)}`;
-  if (d.length >= 10) return `+${d}`;
-  return phone;
 }
 
 function parsePreview(msg: string | null): { mic?: boolean; text: string } {
@@ -55,7 +46,7 @@ function parsePreview(msg: string | null): { mic?: boolean; text: string } {
 }
 
 export function ConversationItem({ conv, selected, onClick }: Props) {
-  const name = conv.contact_name?.trim() || formatPhone(conv.phone);
+  const name = getDisplayName(conv);
   const color = avatarColor(conv.phone);
   const preview = parsePreview(conv.last_message);
   const hasUnread = conv.unread_count > 0;
@@ -64,11 +55,7 @@ export function ConversationItem({ conv, selected, onClick }: Props) {
     <button
       onClick={onClick}
       className="w-full flex items-center gap-3 px-3 py-3 text-left transition-colors"
-      style={{
-        background: selected
-          ? 'var(--wa-bg-hover)'
-          : 'transparent',
-      }}
+      style={{ background: selected ? 'var(--wa-bg-hover)' : 'transparent' }}
       onMouseEnter={e => {
         if (!selected) (e.currentTarget as HTMLButtonElement).style.background = 'var(--wa-bg-hover)';
       }}
@@ -81,16 +68,13 @@ export function ConversationItem({ conv, selected, onClick }: Props) {
         className="w-12 h-12 rounded-full flex-shrink-0 flex items-center justify-center text-white text-sm font-semibold"
         style={{ background: color }}
       >
-        {initials(conv.contact_name, conv.phone)}
+        {initials(name)}
       </div>
 
       {/* Conteúdo */}
-      <div className="flex-1 min-w-0" style={{ borderBottom: '1px solid var(--wa-border)', paddingBottom: '12px' }}>
+      <div className="flex-1 min-w-0" style={{ borderBottom: '1px solid var(--wa-border)', paddingBottom: 12 }}>
         <div className="flex items-center justify-between gap-2">
-          <span
-            className="text-sm font-medium truncate"
-            style={{ color: 'var(--wa-text-primary)' }}
-          >
+          <span className="text-sm font-medium truncate" style={{ color: 'var(--wa-text-primary)' }}>
             {name}
           </span>
           <span
@@ -106,9 +90,7 @@ export function ConversationItem({ conv, selected, onClick }: Props) {
             className="flex items-center gap-1 text-[13px] truncate min-w-0"
             style={{ color: 'var(--wa-text-secondary)' }}
           >
-            {preview.mic && (
-              <Mic size={12} className="flex-shrink-0" style={{ color: 'var(--wa-text-secondary)' }} />
-            )}
+            {preview.mic && <Mic size={12} className="flex-shrink-0" style={{ color: 'var(--wa-text-secondary)' }} />}
             <span className="truncate">{preview.text}</span>
           </span>
 
