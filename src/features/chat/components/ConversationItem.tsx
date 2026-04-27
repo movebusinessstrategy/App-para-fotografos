@@ -41,8 +41,22 @@ function parsePreview(msg: string | null): { mic?: boolean; text: string } {
 }
 
 export function ConversationItem({ conv, selected, onClick }: Props) {
-  const { name, avatar, phone } = extractContact(conv);
-  const finalAvatar = useContactProfile(phone, avatar);
+  console.log('[NAME DEBUG]', {
+    phone: conv?.phone,
+    contact_name: conv?.contact_name,
+    push_name: (conv as any)?.push_name,
+    pushName_root: (conv as any)?.pushName,
+    name_root: (conv as any)?.name,
+    contact_obj: (conv as any)?.contact,
+    hasMessages: !!(conv as any)?.messages,
+    messagesCount: ((conv as any)?.messages || []).length,
+    lastMessage: conv?.last_message,
+    fullKeys: Object.keys(conv || {}),
+  });
+  const { name: baseName, avatar: baseAvatar, phone } = extractContact(conv);
+  const { name: resolvedName, avatar: resolvedAvatar } = useContactProfile(phone, baseName, baseAvatar);
+  const name = resolvedName || baseName;
+  const finalAvatar = resolvedAvatar || baseAvatar;
   const color = avatarColor(phone);
   const preview = parsePreview(conv.last_message);
   const hasUnread = conv.unread_count > 0;

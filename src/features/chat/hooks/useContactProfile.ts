@@ -1,37 +1,67 @@
 import { useEffect, useState } from 'react';
-import { fetchProfilePicture } from '../services/evolutionService';
+import { fetchContactInfo } from '../services/evolutionService';
 import { getCachedContact, updateCachedContact } from '../utils/contactCache';
 
+export interface ContactProfile {
+  name: string | null;
+  avatar: string | null;
+}
+
 /**
- * Busca foto de perfil em background se ainda não tiver.
- * Prioridade: prop atual → cache → endpoint.
+ * Busca nome + foto em background via /api/inbox/contact-info/:phone.
+ * Só dispara se ainda não tiver nome real (não numérico) ou foto.
  */
-export function useContactProfile(phone: string, currentAvatar: string | null) {
-  const [avatar, setAvatar] = useState<string | null>(currentAvatar);
+export function useContactProfile(
+  phone: string,
+  currentName: string,
+  currentAvatar: string | null,
+): ContactProfile {
+  const isPhoneOnly = !currentName || /^\+?\d[\d\s\-().]+$/.test(currentName.trim());
+  const needsName = isPhoneOnly;
+  const needsAvatar = !currentAvatar;
+
+  const [profile, setProfile] = useState<ContactProfile>({
+    name: needsName ? null : currentName,
+    avatar: currentAvatar,
+  });
 
   useEffect(() => {
-    if (currentAvatar) {
-      setAvatar(currentAvatar);
-      return;
-    }
-
-    const cached = getCachedContact(phone);
-    if (cached?.avatar) {
-      setAvatar(cached.avatar);
-      return;
-    }
-
     if (!phone) return;
+
+    // Verificar cache primeiro
+    const cached = getCachedContact(phone);
+    const hasCachedName = cached?.name && !/^\+?\d[\d\s\-().]+$/.test(cached.name.trim());
+    const hasCachedAvatar = !!cached?.avatar;
+
+    if (hasCachedName || hasCachedAvatar) {
+      setProfile(prev => ({
+        name: hasCachedName ? cached!.name! : prev.name,
+        avatar: hasCachedAvatar ? cached!.avatar! : prev.avatar,
+      }));
+      if (!needsName && !needsAvatar) return;
+    }
+
+    // Se já tem tudo, não buscar
+    if (!needsName && !needsAvatar) return;
+
     let mounted = true;
 
-    fetchProfilePicture(phone).then((url) => {
-      if (!mounted || !url) return;
-      setAvatar(url);
-      updateCachedContact(phone, { avatar: url });
+    fetchContactInfo(phone).then(({ name, avatar }) => {
+      if (!mounted) return;
+      const updates: Partial<{ name: string; avatar: string }> = {};
+      if (name) updates.name = name;
+      if (avatar) updates.avatar = avatar;
+      if (Object.keys(updates).length > 0) {
+        updateCachedContact(phone, updates);
+        setProfile(prev => ({
+          name: name || prev.name,
+          avatar: avatar || prev.avatar,
+        }));
+      }
     });
 
     return () => { mounted = false; };
-  }, [phone, currentAvatar]);
+  }, [phone]);
 
-  return avatar;
+  return profile;
 }

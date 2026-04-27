@@ -82,7 +82,13 @@ export function InboxView({ initialPhone }: Props) {
   }
 
   function scrollToBottom(behavior: ScrollBehavior = 'smooth') {
-    bottomRef.current?.scrollIntoView({ behavior, block: 'end' });
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    if (behavior === 'instant' as ScrollBehavior) {
+      el.scrollTop = el.scrollHeight;
+    } else {
+      el.scrollTo({ top: el.scrollHeight, behavior });
+    }
   }
 
   useEffect(() => {
@@ -251,10 +257,12 @@ export function InboxView({ initialPhone }: Props) {
   }
 
   const selectedConv = conversations.find(c => c.phone === selectedPhone);
-  const { name: displayName, avatar: rawAvatar, phone: convPhone } = selectedConv
+  const { name: baseName, avatar: baseAvatar, phone: convPhone } = selectedConv
     ? extractContact(selectedConv, messages)
     : { name: selectedPhone ? formatBrazilianPhone(selectedPhone) : '', avatar: null, phone: selectedPhone || '' };
-  const avatarUrl = useContactProfile(convPhone, rawAvatar);
+  const { name: resolvedName, avatar: resolvedAvatar } = useContactProfile(convPhone, baseName, baseAvatar);
+  const displayName = resolvedName || baseName;
+  const avatarUrl = resolvedAvatar || baseAvatar;
 
   // PASSO 6: atualizar cache quando mensagens recebidas chegam com nome
   useEffect(() => {
@@ -465,40 +473,42 @@ export function InboxView({ initialPhone }: Props) {
               <div
                 ref={messagesContainerRef}
                 onScroll={handleMessagesScroll}
-                className="absolute inset-0 overflow-y-auto wa-scrollbar px-4 py-2"
+                className="absolute inset-0 overflow-y-auto wa-scrollbar"
               >
-                {loadingMsgs ? (
-                  <div className="flex flex-col gap-2 pt-4">
-                    {[...Array(5)].map((_, i) => (
-                      <div key={i} className={`flex ${i % 2 === 0 ? 'justify-start' : 'justify-end'}`}>
-                        <div
-                          className="h-10 rounded-2xl animate-pulse"
-                          style={{ width: `${38 + (i * 17) % 28}%`, background: 'var(--wa-bg-tertiary)' }}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                ) : messages.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full gap-3" style={{ color: 'var(--wa-text-muted)' }}>
-                    <MessageCircle size={28} strokeWidth={1.5} />
-                    <p className="text-sm">Nenhuma mensagem ainda</p>
-                  </div>
-                ) : (
-                  groups.map(group => (
-                    <div key={group.label}>
-                      <DateSep label={group.label} />
-                      {group.msgs.map(msg => (
-                        <MessageBubble
-                          key={msg.message_id}
-                          msg={msg}
-                          onImageClick={setLightbox}
-                          contactInitial={getInitials(displayName)}
-                        />
+                <div className="flex flex-col min-h-full justify-end px-4 py-2">
+                  {loadingMsgs ? (
+                    <div className="flex flex-col gap-2 pt-4">
+                      {[...Array(5)].map((_, i) => (
+                        <div key={i} className={`flex ${i % 2 === 0 ? 'justify-start' : 'justify-end'}`}>
+                          <div
+                            className="h-10 rounded-2xl animate-pulse"
+                            style={{ width: `${38 + (i * 17) % 28}%`, background: 'var(--wa-bg-tertiary)' }}
+                          />
+                        </div>
                       ))}
                     </div>
-                  ))
-                )}
-                <div ref={bottomRef} />
+                  ) : messages.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center flex-1 gap-3" style={{ color: 'var(--wa-text-muted)' }}>
+                      <MessageCircle size={28} strokeWidth={1.5} />
+                      <p className="text-sm">Nenhuma mensagem ainda</p>
+                    </div>
+                  ) : (
+                    groups.map(group => (
+                      <div key={group.label}>
+                        <DateSep label={group.label} />
+                        {group.msgs.map(msg => (
+                          <MessageBubble
+                            key={msg.message_id}
+                            msg={msg}
+                            onImageClick={setLightbox}
+                            contactInitial={getInitials(displayName)}
+                          />
+                        ))}
+                      </div>
+                    ))
+                  )}
+                  <div ref={bottomRef} />
+                </div>
               </div>
 
               {/* Botão scroll-to-bottom */}
