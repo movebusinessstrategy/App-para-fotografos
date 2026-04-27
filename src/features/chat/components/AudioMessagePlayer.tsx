@@ -33,11 +33,17 @@ function getIsDark(): boolean {
 }
 
 function getWaveformColors(isMe: boolean) {
+  const isDark = getIsDark();
   if (isMe) {
-    // Balão enviado (verde) — barras brancas, sempre bom contraste
-    return { played: '#ffffff', unplayed: 'rgba(255,255,255,0.4)' };
+    if (isDark) {
+      // Dark: balão verde escuro (#005C4B) → barras brancas têm contraste
+      return { played: '#ffffff', unplayed: 'rgba(255,255,255,0.4)' };
+    } else {
+      // Light: balão verde claro (#D9FDD3) → barras verde escuro para contrastar
+      return { played: '#005C4B', unplayed: 'rgba(0,92,75,0.4)' };
+    }
   }
-  // Balão recebido — verde WhatsApp
+  // Recebido: verde em qualquer tema (fundo branco no light, cinza escuro no dark)
   return { played: '#00a884', unplayed: 'rgba(0,168,132,0.35)' };
 }
 
