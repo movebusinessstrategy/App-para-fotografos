@@ -1,161 +1,78 @@
 import React from 'react';
-import { Check, CheckCheck, Clock, FileText } from 'lucide-react';
 import { Message } from '../types';
-import { Avatar } from './shared/Avatar';
+import { AudioMessagePlayer } from './AudioMessagePlayer';
 
 interface Props {
-  message: Message;
-  contactName: string | null;
-  phone: string;
-  photoUrl: string | null;
+  msg: Message;
   onImageClick?: (url: string) => void;
-  animateIn?: boolean;
+  contactInitial?: string;
 }
 
-function MessageTick({ status }: { status?: string }) {
-  if (!status) return null;
-  const s = status.toLowerCase();
-  if (s === 'sending' || s === 'pending') {
-    return <Clock size={10} className="inline-block ml-1 opacity-50" />;
-  }
-  if (s === 'sent' || s === 'server_ack') {
-    return <Check size={10} className="inline-block ml-1 opacity-60" />;
-  }
-  if (s === 'delivered' || s === 'delivery_ack') {
-    return <CheckCheck size={10} className="inline-block ml-1 opacity-60" />;
-  }
-  if (s === 'read' || s === 'played') {
-    return <CheckCheck size={10} className="inline-block ml-1" style={{ color: '#B5C19D' }} />;
-  }
-  return null;
+function timeStr(iso: string) {
+  return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 }
 
-function formatTime(iso: string) {
-  return new Date(iso).toLocaleTimeString('pt-BR', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-export function MessageBubble({
-  message: msg,
-  contactName,
-  phone,
-  photoUrl,
-  onImageClick,
-  animateIn = false,
-}: Props) {
+export function MessageBubble({ msg, onImageClick, contactInitial }: Props) {
   const isMe = msg.from_me;
+  const isSending = msg.status === 'sending';
 
   return (
-    <div
-      className={`flex mb-1 ${isMe ? 'justify-end' : 'justify-start'} ${
-        animateIn ? 'animate-msg-enter' : ''
-      }`}
-    >
-      {!isMe && (
-        <div className="mr-2 mt-auto mb-0.5 flex-shrink-0">
-          <Avatar phone={phone} name={contactName} photoUrl={photoUrl} size="sm" />
-        </div>
-      )}
-
+    <div className={`flex ${isMe ? 'justify-end' : 'justify-start'} mb-1`}>
       <div
-        className={`max-w-[68%] rounded-2xl text-sm leading-relaxed overflow-hidden shadow-sm ${
-          isMe ? 'rounded-tr-sm' : 'rounded-tl-sm'
-        }`}
-        style={
-          isMe
-            ? {
-                background: 'rgba(181,193,157,0.14)',
-                border: '1px solid rgba(181,193,157,0.20)',
-              }
-            : {
-                background: 'var(--color-chat-panel2)',
-                border: '1px solid rgba(255,255,255,0.06)',
-              }
-        }
+        className="max-w-[70%] rounded-2xl px-3 py-2 text-sm"
+        style={{
+          background: isMe ? '#2D3B26' : '#1F1F1D',
+          opacity: isSending ? 0.6 : 1,
+          border: isMe ? '1px solid rgba(181,193,157,0.15)' : '1px solid rgba(255,255,255,0.06)',
+        }}
       >
         {/* Imagem */}
-        {msg.media_url && msg.type === 'image' && (
-          <button
-            onClick={() => onImageClick?.(msg.media_url!)}
-            className="block w-full cursor-zoom-in"
-          >
-            <img
-              src={msg.media_url}
-              alt="imagem"
-              className="max-w-full max-h-64 object-cover block w-full"
-              style={{ borderRadius: '14px 14px 0 0' }}
-            />
-          </button>
-        )}
-
-        {/* Vídeo */}
-        {msg.media_url && msg.type === 'video' && (
-          <video
+        {msg.type === 'image' && msg.media_url && (
+          <img
             src={msg.media_url}
-            controls
-            className="max-w-full max-h-48 block w-full"
-            style={{ borderRadius: '14px 14px 0 0' }}
+            alt="imagem"
+            className="max-w-full rounded-lg mb-1 cursor-pointer"
+            style={{ maxHeight: 200 }}
+            onClick={() => onImageClick?.(msg.media_url!)}
           />
         )}
 
         {/* Áudio */}
-        {msg.media_url && msg.type === 'audio' && (
-          <div className="px-3 pt-3 pb-1">
-            <audio controls src={msg.media_url} className="w-full h-8" />
+        {msg.type === 'audio' && msg.media_url && (
+          <div className="mb-1">
+            <AudioMessagePlayer
+              src={msg.media_url}
+              isMe={msg.from_me}
+              contactInitial={contactInitial}
+              duration={msg.duration}
+              waveform={msg.waveform}
+            />
           </div>
         )}
 
-        {/* Documento */}
-        {msg.media_url && msg.type === 'document' && (
-          <a
-            href={msg.media_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 px-3 py-2.5 hover:opacity-80 transition-opacity"
-          >
-            <FileText
-              size={18}
-              style={{ color: isMe ? '#B5C19D' : '#9A9A93' }}
-              className="flex-shrink-0"
-            />
-            <span
-              className="text-xs underline truncate max-w-[160px]"
-              style={{ color: isMe ? '#ECEAE3' : '#9A9A93' }}
-            >
-              {msg.body || 'Documento'}
-            </span>
-          </a>
+        {/* Vídeo */}
+        {msg.type === 'video' && msg.media_url && (
+          <video controls className="max-w-full rounded-lg mb-1" style={{ maxHeight: 200 }}>
+            <source src={msg.media_url} />
+          </video>
         )}
 
-        {/* Corpo de texto */}
-        <div className="px-3.5 py-2">
-          {msg.body &&
-            msg.body !== `[${msg.type}]` &&
-            msg.type !== 'document' && (
-              <p
-                style={{
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  color: isMe ? '#ECEAE3' : '#ECEAE3',
-                }}
-              >
-                {msg.body}
-              </p>
-            )}
-          {!msg.body && !msg.media_url && (
-            <p className="italic text-xs opacity-40">[{msg.type || 'mensagem'}]</p>
-          )}
-
-          {/* Hora + tick */}
-          <p
-            className="text-[10px] mt-1 flex items-center justify-end gap-0.5"
-            style={{ color: '#6A6A65' }}
-          >
-            {formatTime(msg.timestamp)}
-            {isMe && <MessageTick status={msg.status} />}
+        {/* Texto ou legenda */}
+        {msg.body && (
+          <p style={{ color: '#ECEAE3', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            {msg.body}
           </p>
+        )}
+
+        {/* Sem texto nem mídia */}
+        {!msg.body && !msg.media_url && msg.type !== 'text' && (
+          <p style={{ color: '#6A6A65', fontStyle: 'italic' }}>[{msg.type}]</p>
+        )}
+
+        <div className="flex justify-end mt-1">
+          <span className="text-[10px]" style={{ color: '#6A6A65' }}>
+            {isSending ? 'Enviando...' : timeStr(msg.timestamp)}
+          </span>
         </div>
       </div>
     </div>

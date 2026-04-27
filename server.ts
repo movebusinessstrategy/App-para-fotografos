@@ -7,7 +7,7 @@ import dotenv from 'dotenv';
 import Papa from 'papaparse';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
-import { Readable, PassThrough } from 'stream';
+import { Readable } from 'stream';
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 import * as BaileysManager from './baileys-manager.js';
@@ -33,22 +33,128 @@ dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Transcodifica áudio webm → ogg (opus) para compatibilidade com Meta API
+// Transcodifica áudio webm → ogg/opus com flags de voice note para WhatsApp
 function transcodeWebmToOgg(inputBase64: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const inputBuffer = Buffer.from(inputBase64, 'base64');
-    const readable = new Readable({ read() { this.push(inputBuffer); this.push(null); } });
-    const passthrough = new PassThrough();
+    const inputStream = new Readable({ read() { this.push(inputBuffer); this.push(null); } });
     const chunks: Buffer[] = [];
-    passthrough.on('data', (chunk) => chunks.push(chunk));
-    passthrough.on('end', () => resolve(Buffer.concat(chunks)));
-    passthrough.on('error', reject);
-    ffmpeg(readable)
+    const command = ffmpeg(inputStream)
       .inputFormat('webm')
       .audioCodec('libopus')
+      .audioBitrate('32k')
+      .audioFrequency(16000)
+      .audioChannels(1)
+      .outputOptions([
+        '-application voip',
+        '-vbr on',
+        '-compression_level 10',
+        '-frame_duration 60',
+        '-page_duration 60000',
+        '-map_metadata -1',
+        '-vn',
+      ])
       .format('ogg')
-      .on('error', reject)
-      .pipe(passthrough);
+      .on('error', (err: any) => {
+        console.error('[Transcode] ffmpeg erro:', err.message);
+        reject(err);
+      })
+      .on('end', () => {
+        const result = Buffer.concat(chunks);
+        console.log('[Transcode] OK', {
+          inputBytes: inputBuffer.length,
+          outputBytes: result.length,
+          codec: 'opus', rate: 16000, channels: 1, application: 'voip',
+        });
+        resolve(result);
+      });
+    const stream = command.pipe();
+    stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+    stream.on('error', reject);
+  });
+}
+
+const WAVEFORM_SAMPLE_RATE = 16000;
+
+function extractWaveformAndDuration(oggBuffer: Buffer): Promise<{ waveform: Buffer; seconds: number }> {
+  return new Promise((resolve) => {
+    try {
+      const chunks: Buffer[] = [];
+      const inputStream = new Readable({ read() { this.push(oggBuffer); this.push(null); } });
+
+      const command = ffmpeg(inputStream)
+        .inputFormat('ogg')
+        .audioFrequency(WAVEFORM_SAMPLE_RATE)
+        .audioChannels(1)
+        .format('s16le')
+        .on('error', (err: any) => {
+          console.error('[Waveform] ffmpeg erro:', err.message);
+          const estimatedSec = Math.max(1, Math.round(oggBuffer.length / 8000));
+          resolve({ waveform: Buffer.alloc(64, 5), seconds: estimatedSec });
+        })
+        .on('end', () => {
+          try {
+            const pcm = Buffer.concat(chunks);
+            const sampleCount = pcm.length / 2;
+            const realSeconds = Math.max(1, Math.round(sampleCount / WAVEFORM_SAMPLE_RATE));
+
+            console.log('[Waveform] Duração calculada do PCM', {
+              pcmBytes: pcm.length, sampleCount, sampleRate: WAVEFORM_SAMPLE_RATE, realSeconds,
+            });
+
+            const bucketSize = Math.floor(sampleCount / 64);
+            if (bucketSize === 0) {
+              console.warn('[Waveform] Áudio muito curto, gerando waveform mínimo');
+              resolve({ waveform: Buffer.alloc(64, 5), seconds: realSeconds });
+              return;
+            }
+
+            const amplitudes: number[] = [];
+            for (let i = 0; i < 64; i++) {
+              let sumSquares = 0;
+              const start = i * bucketSize;
+              const end = Math.min(start + bucketSize, sampleCount);
+              const len = end - start;
+              for (let j = start; j < end; j++) {
+                const sample = pcm.readInt16LE(j * 2);
+                const norm = sample / 32768;
+                sumSquares += norm * norm;
+              }
+              amplitudes.push(Math.sqrt(sumSquares / len));
+            }
+
+            const maxAmp = Math.max(...amplitudes, 0.01);
+            const waveform = Buffer.alloc(64);
+            for (let i = 0; i < 64; i++) {
+              const visual = Math.pow(amplitudes[i] / maxAmp, 0.5);
+              waveform[i] = Math.max(1, Math.min(100, Math.round(visual * 100)));
+            }
+
+            console.log('[Waveform] OK', {
+              seconds: realSeconds,
+              waveformBytes: waveform.length,
+              first10: Array.from(waveform.subarray(0, 10)),
+              max: Math.max(...Array.from(waveform)),
+              min: Math.min(...Array.from(waveform)),
+            });
+
+            resolve({ waveform, seconds: realSeconds });
+          } catch {
+            const estimatedSec = Math.max(1, Math.round(oggBuffer.length / 8000));
+            resolve({ waveform: Buffer.alloc(64, 5), seconds: estimatedSec });
+          }
+        });
+
+      const stream = command.pipe();
+      stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+      stream.on('error', (err: any) => {
+        console.error('[Waveform] stream erro:', err.message);
+        const estimatedSec = Math.max(1, Math.round(oggBuffer.length / 8000));
+        resolve({ waveform: Buffer.alloc(64, 5), seconds: estimatedSec });
+      });
+    } catch {
+      resolve({ waveform: Buffer.alloc(64, 5), seconds: 1 });
+    }
   });
 }
 
@@ -1848,10 +1954,8 @@ async function startServer() {
     const userId = (req as any).userId;
     const db = supabaseAdmin;
     if (!db) {
-      // Fallback sem admin: tenta com supabase user-scoped
       const userDb = (req as any).supabase as SupabaseClient;
       const { data } = await userDb.from('wa_conversations').select('*').eq('user_id', userId).order('last_message_at', { ascending: false }).limit(200);
-      console.log(`[Inbox] /conversations userId=${userId} (sem admin) → ${(data||[]).length} rows`);
       return res.json(data || []);
     }
     try {
@@ -1911,16 +2015,22 @@ async function startServer() {
   app.get('/api/inbox/messages/:phone', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const phone = normalizeBrazilianPhone(req.params.phone.replace(/\D/g, '')); // normaliza + trata 9 BR
+    const phoneRaw = req.params.phone.replace(/\D/g, '');
+    const phone12 = phoneRaw.startsWith('55') ? phoneRaw : '55' + phoneRaw;
+    const phone13 = normalizeBrazilianPhone(phone12); // versão com "9" adicionado
     const limit = Number(req.query.limit) || 60;
     const waNumber = BaileysManager.getConnectedPhone(userId) || '';
     const dbMsg = supabaseAdmin || supabase;
     try {
-      let msgQuery = dbMsg
+      // Busca em ambos os formatos: JID exato (12 dig) e normalizado (13 dig)
+      const phoneCondition = phone12 !== phone13
+        ? `phone.eq.${phone12},phone.eq.${phone13}`
+        : `phone.eq.${phone12}`;
+      const msgQuery = dbMsg
         .from('wa_messages')
         .select('*')
         .eq('user_id', userId)
-        .eq('phone', phone)
+        .or(phoneCondition)
         .order('timestamp', { ascending: true })
         .limit(limit);
 
@@ -1930,7 +2040,7 @@ async function startServer() {
 
       // Merge com cache em memória
       const dbIds = new Set((data || []).map((m: any) => m.message_id));
-      const memMessages = getLiveMessagesByPhone(phone, limit)
+      const memMessages = getLiveMessagesByPhone(phone12, limit)
         .filter((m) => !dbIds.has(m.id))
         .map((m) => ({
           message_id: m.id,
@@ -1944,12 +2054,19 @@ async function startServer() {
             : null,
         }));
 
-      const all = [...(data || []), ...memMessages].sort(
-        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-      );
+      const parseWf = (w: any): number[] | null => {
+        if (!w) return null;
+        if (Array.isArray(w)) return w;
+        if (typeof w === 'string') { try { return JSON.parse(w); } catch { return null; } }
+        if (w instanceof Uint8Array || Buffer.isBuffer(w)) return Array.from(w);
+        return null;
+      };
+      const all = [...(data || []), ...memMessages]
+        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+        .map((m: any) => ({ ...m, waveform: parseWf(m.waveform) }));
       return res.json(all);
     } catch {
-      const msgs = getLiveMessagesByPhone(phone, limit).map((m) => ({
+      const msgs = getLiveMessagesByPhone(phone12, limit).map((m) => ({
         message_id: m.id,
         body: m.text,
         from_me: m.fromMe,
@@ -2013,8 +2130,62 @@ async function startServer() {
       result.conversationsInDB = convs || [];
       result.conversationError = convErr?.message;
       result.messageCount = msgCount;
+
+      // Se passou phone, retorna mensagens dessa conversa
+      const phoneParam = (req.query.phone as string) || '';
+      if (phoneParam && convs && convs.length > 0) {
+        const { data: msgs, error: msgsErr } = await supabaseAdmin
+          .from('wa_messages')
+          .select('message_id, body, from_me, timestamp, type, status')
+          .eq('user_id', userIdParam)
+          .eq('phone', phoneParam)
+          .order('timestamp', { ascending: false })
+          .limit(5);
+        result.sampleMessages = msgs || [];
+        result.sampleMessagesError = msgsErr?.message;
+        result.testedPhone = phoneParam;
+      } else if (convs && convs.length > 0) {
+        // Testa com a primeira conversa
+        const firstPhone = (convs[0] as any).phone;
+        const { data: msgs, error: msgsErr } = await supabaseAdmin
+          .from('wa_messages')
+          .select('message_id, body, from_me, timestamp, type, status')
+          .eq('user_id', userIdParam)
+          .eq('phone', firstPhone)
+          .order('timestamp', { ascending: false })
+          .limit(5);
+        result.sampleMessages = msgs || [];
+        result.sampleMessagesError = msgsErr?.message;
+        result.testedPhone = firstPhone;
+      }
     }
     return res.json(result);
+  });
+
+  // ─── DIAGNÓSTICO: retorna userId do token JWT ─────────────────────────────────
+  app.get('/test-whoami', requireAuth, (req, res) => {
+    const userId = (req as any).userId;
+    const isMember = (req as any).isMember;
+    res.json({ userId, isMember, dbUserId: 'b6608c80-b993-444e-8ba8-ddde5bd18ac0', match: userId === 'b6608c80-b993-444e-8ba8-ddde5bd18ac0' });
+  });
+
+  // ─── DIAGNÓSTICO TEMPORÁRIO: página HTML sem auth ────────────────────────────
+  app.get('/test-inbox', async (_req, res) => {
+    if (!supabaseAdmin) return res.send('<h1>supabaseAdmin não disponível</h1>');
+    const userId = 'b6608c80-b993-444e-8ba8-ddde5bd18ac0';
+    const { data: convs } = await supabaseAdmin.from('wa_conversations').select('phone, contact_name, last_message, last_message_at').eq('user_id', userId).order('last_message_at', { ascending: false }).limit(20);
+    const waStatus = BaileysManager.getStatus(userId);
+    const waPhone = BaileysManager.getConnectedPhone(userId);
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>FotoApp Diagnóstico</title></head><body style="font-family:monospace;background:#111;color:#eee;padding:20px">
+<h2>WhatsApp: <span style="color:${waStatus==='open'?'#4f4':'#f44'}">${waStatus}</span> | Número: ${waPhone||'--'}</h2>
+<h3>${(convs||[]).length} conversas no banco</h3>
+<table border="1" style="border-collapse:collapse;color:#eee">
+<tr><th>Telefone</th><th>Nome</th><th>Última msg</th><th>Quando</th></tr>
+${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_name||'--'}</td><td>${((c as any).last_message||'').slice(0,40)}</td><td>${((c as any).last_message_at||'').slice(0,16)}</td></tr>`).join('')}
+</table>
+<p style="color:#888">Se você ver essa página com conversas, o backend está OK. O problema é no frontend (auth/React).</p>
+</body></html>`;
+    res.send(html);
   });
 
   // Envia mensagem de texto
@@ -2024,33 +2195,53 @@ async function startServer() {
 
     if (!phone || !text) return res.status(400).json({ error: 'phone e text são obrigatórios' });
 
-    const cleanPhone = normalizeBrazilianPhone(phone.replace(/\D/g, ''));
+    // Usa o phone exatamente como armazenado (JID do WhatsApp) — normalizeBrazilianPhone
+    // adiciona "9" e corrompe números que já têm o formato correto
+    const rawDigits = phone.replace(/\D/g, '');
+    // Só adiciona código do país se estiver faltando (número local digitado manualmente)
+    const cleanPhone = rawDigits.startsWith('55') ? rawDigits : '55' + rawDigits;
     const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
+
+    const waNumber = BaileysManager.getConnectedPhone(userId) || '';
+    // Para envio, usa o JID em 12 dígitos (formato nativo do WhatsApp).
+    // Se o phone guardado tiver 13 dígitos (ex: 5543999093114 — resultado da normalização antiga),
+    // remove o "9" extra na posição 4 para recuperar o JID correto (554399093114).
+    const baileysPhone = cleanPhone.length === 13 && cleanPhone.startsWith('55')
+      ? cleanPhone.slice(0, 4) + cleanPhone.slice(5)
+      : cleanPhone;
+    console.log(`[Send] baileysPhone=${baileysPhone} | status=${BaileysManager.getStatus(userId)} | waNumber=${waNumber}`);
 
     const saveToDb = async (msgId: string) => {
       const now = new Date().toISOString();
       const { error: msgErr } = await db.from('wa_messages').insert({
-        user_id: userId, phone: cleanPhone, message_id: msgId,
-        body: text, from_me: true, timestamp: now, type: 'text', status: 'sent', wa_number: '',
+        user_id: userId, phone: baileysPhone, message_id: msgId,
+        body: text, from_me: true, timestamp: now, type: 'text', status: 'sent', wa_number: waNumber,
       });
-      if (msgErr && !msgErr.message.includes('duplicate') && !msgErr.code?.includes('23505')) {
-        console.error('[Send] Erro ao salvar mensagem:', msgErr.message);
+      if (msgErr) {
+        if (!msgErr.message.includes('duplicate') && !msgErr.code?.includes('23505')) {
+          console.error('[Send] Erro ao salvar mensagem no DB:', msgErr.message, '| code:', msgErr.code);
+        }
+      } else {
+        console.log(`[Send] Mensagem salva no DB | msgId=${msgId} | phone=${baileysPhone}`);
       }
-      // UPDATE primeiro, INSERT se não existir
+      // UPDATE primeiro, INSERT se não existir — tenta ambos os formatos (12 e 13 dígitos)
+      const normalized = normalizeBrazilianPhone(baileysPhone);
+      const phoneOr = normalized !== baileysPhone
+        ? `phone.eq.${baileysPhone},phone.eq.${normalized}`
+        : `phone.eq.${baileysPhone}`;
       const { data: upd } = await db.from('wa_conversations')
-        .update({ last_message: text, last_message_at: now, updated_at: now })
-        .eq('user_id', userId).eq('phone', cleanPhone).select('id');
+        .update({ last_message: text, last_message_at: now, updated_at: now, phone: baileysPhone })
+        .eq('user_id', userId).or(phoneOr).select('id');
       if (!upd || upd.length === 0) {
         await db.from('wa_conversations').insert({
-          user_id: userId, phone: cleanPhone, last_message: text, last_message_at: now, updated_at: now, wa_number: '',
+          user_id: userId, phone: baileysPhone, last_message: text, last_message_at: now, updated_at: now, wa_number: waNumber,
         });
       }
     };
-
-    // ── Baileys (primário) ───────────────────────────────────────────────────
     if (BaileysManager.getStatus(userId) === 'open') {
       try {
-        const msgId = await BaileysManager.sendText(userId, cleanPhone, text);
+        const msgId = await BaileysManager.sendText(userId, baileysPhone, text);
+        console.log(`[Send] Baileys enviou | msgId=${msgId}`);
         await saveToDb(msgId);
         return res.json({ success: true, message_id: msgId });
       } catch (err: any) {
@@ -2109,7 +2300,13 @@ async function startServer() {
       return res.status(400).json({ error: 'phone, mediaBase64 e mimetype são obrigatórios' });
     }
 
-    const cleanPhone = normalizeBrazilianPhone(phone.replace(/\D/g, ''));
+    console.log(`[SendMedia] Recebido: phone=${phone} mimetype=${mimetype} size=${mediaBase64?.length ?? 0}`);
+
+    const rawPhone = phone.replace(/\D/g, '');
+    // Baileys usa JID de 12 dígitos — remover o "9" adicionado pela normalização
+    const cleanPhone = rawPhone.length === 13 && rawPhone.startsWith('55')
+      ? rawPhone.slice(0, 4) + rawPhone.slice(5)
+      : rawPhone;
     const instanceName = `user_${userId.replace(/-/g, '_')}`;
 
     const getMediaType = (mime: string): string => {
@@ -2120,45 +2317,81 @@ async function startServer() {
     };
     const mediaType = getMediaType(mimetype);
 
-    // Transcodifica webm → ogg para compatibilidade com Meta API
+    // Transcodifica webm → ogg para compatibilidade com WhatsApp PTT
     let finalBase64 = mediaBase64;
     let finalMimetype = mimetype;
+    let finalFilename = filename || 'media';
+    let audioWaveform: Buffer | undefined;
+    let audioSeconds = 0;
     if (mimetype.startsWith('audio/webm')) {
       try {
         const oggBuffer = await transcodeWebmToOgg(mediaBase64);
         finalBase64 = oggBuffer.toString('base64');
-        finalMimetype = 'audio/ogg';
-        console.log('[SendMedia] Áudio transcodificado: webm → ogg');
+        finalMimetype = 'audio/ogg; codecs=opus';
+        finalFilename = 'audio.ogg';
+        console.log(`[SendMedia] Áudio transcodificado: webm → ogg/opus | bytes=${oggBuffer.length}`);
+        const wfResult = await extractWaveformAndDuration(oggBuffer).catch(() => null);
+        if (wfResult) { audioWaveform = wfResult.waveform; audioSeconds = wfResult.seconds; }
       } catch (err: any) {
         console.warn('[SendMedia] Falha ao transcodar áudio, enviando como webm:', err.message);
       }
     }
 
-    // Monta data URL para armazenar no banco (necessário para exibir no chat)
-    const mediaDataUrl = `data:${finalMimetype};base64,${finalBase64}`;
+    // Armazena o áudio original (webm) para reprodução no browser — Safari não suporta ogg
+    const storageMimetype = mimetype.startsWith('audio/') ? mimetype : finalMimetype;
+    const storageBase64 = mimetype.startsWith('audio/') ? mediaBase64 : finalBase64;
+    const mediaDataUrl = `data:${storageMimetype};base64,${storageBase64}`;
 
     const saveToDb = async (msgId: string) => {
       const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
       const now = new Date().toISOString();
-      await db.from('wa_messages').insert({
+      const fmtDur = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
+      const msgBase = {
         user_id: userId, phone: cleanPhone, message_id: msgId,
         body: caption || '', from_me: true, timestamp: now,
-        type: mediaType, status: 'sent',
-        media_url: mediaDataUrl,
-      });
-      const convPayload = { user_id: userId, phone: cleanPhone, last_message: caption || `[${mediaType}]`, last_message_at: now };
-      const { data: upd } = await db.from('wa_conversations').update(convPayload).eq('user_id', userId).eq('phone', cleanPhone).select('id');
+        type: mediaType, status: 'sent', media_url: mediaDataUrl,
+      };
+      const msgFull = {
+        ...msgBase,
+        ...(audioSeconds > 0 ? { duration: audioSeconds } : {}),
+        ...(audioWaveform ? { waveform: JSON.stringify(Array.from(audioWaveform)) } : {}),
+      };
+      const { error: insertErr } = await db.from('wa_messages').insert(msgFull);
+      if (insertErr) {
+        // colunas duration/waveform podem não existir — tenta sem elas
+        await db.from('wa_messages').insert(msgBase);
+      }
+      const lastMsg = mediaType === 'audio'
+        ? `🎤 Mensagem de voz${audioSeconds > 0 ? ` (${fmtDur(audioSeconds)})` : ''}`
+        : caption || `[${mediaType}]`;
+      const convPayload = { user_id: userId, phone: cleanPhone, last_message: lastMsg, last_message_at: now };
+      const normalizedPhone = normalizeBrazilianPhone(cleanPhone);
+      const phoneOr = normalizedPhone !== cleanPhone
+        ? `phone.eq.${cleanPhone},phone.eq.${normalizedPhone}`
+        : `phone.eq.${cleanPhone}`;
+      const { data: upd } = await db.from('wa_conversations').update(convPayload).eq('user_id', userId).or(phoneOr).select('id');
       if (!upd || upd.length === 0) { await db.from('wa_conversations').insert(convPayload); }
     };
 
     // ── Baileys (primário) ───────────────────────────────────────────────────
-    if (BaileysManager.getStatus(userId) === 'open') {
+    const baileysStatus = BaileysManager.getStatus(userId);
+    console.log(`[SendMedia] Baileys status=${baileysStatus} cleanPhone=${cleanPhone} finalMimetype=${finalMimetype}`);
+    if (baileysStatus === 'open') {
       try {
-        const msgId = await BaileysManager.sendMedia(userId, cleanPhone, finalBase64, finalMimetype, filename || `media.${finalMimetype.split('/')[1]}`, caption || '');
+        if (audioWaveform) {
+          console.log('[SendMedia] Enviado como PTT', {
+            seconds: audioSeconds,
+            waveformIsBuffer: Buffer.isBuffer(audioWaveform),
+            waveformLength: audioWaveform.length,
+            waveformSample: Array.from(audioWaveform.subarray(0, 5)),
+          });
+        }
+        const msgId = await BaileysManager.sendMedia(userId, cleanPhone, finalBase64, finalMimetype, finalFilename, caption || '', audioWaveform, audioSeconds || undefined);
+        console.log(`[SendMedia] ✅ Baileys enviou áudio | msgId=${msgId}`);
         await saveToDb(msgId);
         return res.json({ success: true, message_id: msgId });
       } catch (err: any) {
-        console.warn('[SendMedia] Baileys erro:', err.message);
+        console.error('[SendMedia] ❌ Baileys erro ao enviar áudio:', err.message, err.stack?.split('\n')[1]);
       }
     }
 
@@ -2176,7 +2409,7 @@ async function startServer() {
       const buffer = Buffer.from(finalBase64, 'base64');
       const formData = new FormData();
       formData.append('messaging_product', 'whatsapp');
-      formData.append('file', new Blob([buffer], { type: finalMimetype }), filename || `media.${finalMimetype.split('/')[1]}`);
+      formData.append('file', new Blob([buffer], { type: finalMimetype }), finalFilename);
 
       const uploadRes = await fetch(
         `https://graph.facebook.com/v21.0/${waAccount.phone_number_id}/media`,
@@ -7235,14 +7468,20 @@ async function startServer() {
   // ── Baileys: handler de mensagens ────────────────────────────────────────
   BaileysManager.setMessageHandler(async (userId, msg, sock, isHistory = false) => {
     if (!supabaseAdmin) { console.warn('[Baileys] MessageHandler: supabaseAdmin não disponível'); return; }
-    const remoteJid = msg.key.remoteJid || '';
+    const rawRemoteJid = msg.key.remoteJid || '';
+    // WhatsApp @lid addressing: remoteJid vem como "12345@lid" — usar remoteJidAlt que tem o JID padrão
+    const remoteJid = rawRemoteJid.endsWith('@lid')
+      ? ((msg.key as any).remoteJidAlt || rawRemoteJid)
+      : rawRemoteJid;
     if (!remoteJid.endsWith('@s.whatsapp.net')) return; // ignora grupos e status
     // Nota: NÃO ignoramos fromMe em tempo real — pode ser mensagem enviada do celular físico.
     // O insert em wa_messages usa message_id único, então duplicatas do app são tratadas via erro ignorado.
 
     const waNumber = BaileysManager.getConnectedPhone(userId) || '';
     const rawPhone = remoteJid.replace('@s.whatsapp.net', '');
-    const phone = normalizeBrazilianPhone(rawPhone);
+    // JID do WhatsApp é autoritativo — normalizeBrazilianPhone adiciona "9" extra em números
+    // que já têm 9 (ex: 554399093114 → 5543999093114), corrompendo o destinatário
+    const phone = rawPhone;
     const msgId = msg.key.id || `baileys-${Date.now()}`;
     const ts = msg.messageTimestamp
       ? new Date(Number(msg.messageTimestamp) * 1000).toISOString()
@@ -7311,9 +7550,16 @@ async function startServer() {
     // Salva/atualiza conversa — UPDATE primeiro, INSERT se nenhuma linha foi atualizada
     const contactName = msg.pushName || null;
     const now = new Date().toISOString();
+    const lastMsgPreview = msgType === 'audio'
+      ? '🎤 Mensagem de voz'
+      : msgType === 'image' ? '📷 Foto'
+      : msgType === 'video' ? '🎥 Vídeo'
+      : msgType === 'document' ? '📄 Documento'
+      : msgType === 'sticker' ? '💟 Figurinha'
+      : msgBody || `[${msgType}]`;
     const convPayload: Record<string, any> = {
       user_id: userId, phone, wa_number: waNumber,
-      last_message: msgBody || `[${msgType}]`,
+      last_message: lastMsgPreview,
       last_message_at: ts,
       updated_at: now,
       ...(!isHistory ? { unread_count: msg.key.fromMe ? 0 : 1 } : {}),
@@ -7321,13 +7567,16 @@ async function startServer() {
     };
 
     try {
-      // UPDATE primeiro — aceita phone normalizado (13 dig) OU raw do JID (12 dig sem o '9')
-      const phoneFilter = rawPhone !== phone
-        ? `phone.eq.${phone},phone.eq.${rawPhone}`
-        : `phone.eq.${phone}`;
+      // UPDATE primeiro — tenta os dois formatos: JID exato (12 dig) e versão normalizada (13 dig)
+      // NOTA: não incluir 'phone' nem 'user_id' no update para não conflitar com a unique constraint
+      const normalizedPhone = normalizeBrazilianPhone(rawPhone);
+      const phoneFilter = normalizedPhone !== rawPhone
+        ? `phone.eq.${rawPhone},phone.eq.${normalizedPhone}`
+        : `phone.eq.${rawPhone}`;
+      const { phone: _ph, user_id: _ui, ...updateFields } = convPayload;
       const { data: updated, error: updateErr } = await supabaseAdmin
         .from('wa_conversations')
-        .update(convPayload)
+        .update(updateFields)
         .eq('user_id', userId)
         .or(phoneFilter)
         .select('id');
