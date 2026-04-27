@@ -27,11 +27,36 @@ function formatTime(s: number): string {
   return `${m}:${sec.toString().padStart(2, '0')}`;
 }
 
+function getIsDark(): boolean {
+  const el = document.documentElement;
+  return el.getAttribute('data-theme') !== 'light';
+}
+
+function getWaveformColors(isMe: boolean) {
+  if (isMe) {
+    // Balão enviado (verde) — barras brancas, sempre bom contraste
+    return { played: '#ffffff', unplayed: 'rgba(255,255,255,0.4)' };
+  }
+  // Balão recebido — verde WhatsApp
+  return { played: '#00a884', unplayed: 'rgba(0,168,132,0.35)' };
+}
+
 export function AudioMessagePlayer({ src, isMe, contactInitial = '?', duration: durationProp, waveform }: Props) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [audioDuration, setAudioDuration] = useState(durationProp ?? 0);
+  // Força re-render quando tema mudar
+  const [, forceUpdate] = useState(0);
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => forceUpdate(n => n + 1));
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme', 'class'],
+    });
+    return () => observer.disconnect();
+  }, []);
 
   const bars: number[] = waveform && waveform.length === 64
     ? waveform.map(v => v / 100)
@@ -59,15 +84,14 @@ export function AudioMessagePlayer({ src, isMe, contactInitial = '?', duration: 
   }
 
   const displayTime = playing || currentTime > 0 ? currentTime : audioDuration;
+  const isDark = getIsDark();
+  const { played: barPlayed, unplayed: barUnplayed } = getWaveformColors(isMe);
 
-  // Balão enviado: barras sempre brancas (funciona em dark E light, pois o verde do balão garante contraste)
-  const playBtnBg    = isMe ? 'rgba(255,255,255,0.25)' : 'var(--wa-accent-green)';
-  const playBtnColor = isMe ? '#fff' : '#fff';
-  const barPlayed    = isMe ? '#ffffff' : getComputedStyle(document.documentElement).getPropertyValue('--wa-accent-green').trim() || '#00A884';
-  const barUnplayed  = isMe ? 'rgba(255,255,255,0.35)' : 'rgba(0,168,132,0.3)';
-  const timeColor    = isMe ? 'rgba(255,255,255,0.7)' : 'var(--wa-text-muted)';
-  const avatarBg     = isMe ? 'rgba(255,255,255,0.2)' : 'var(--wa-bg-hover)';
-  const avatarColor  = isMe ? '#fff' : 'var(--wa-text-secondary)';
+  const playBtnBg    = isMe ? 'rgba(255,255,255,0.25)' : '#00a884';
+  const playBtnColor = '#fff';
+  const timeColor    = isMe ? 'rgba(255,255,255,0.75)' : (isDark ? '#8696A0' : '#667781');
+  const avatarBg     = isMe ? 'rgba(255,255,255,0.2)' : (isDark ? '#2A3942' : '#F0F2F5');
+  const avatarColor  = isMe ? '#fff' : (isDark ? '#8696A0' : '#667781');
 
   return (
     <div className="flex items-center gap-2" style={{ minWidth: 220, maxWidth: 280 }}>
@@ -88,7 +112,6 @@ export function AudioMessagePlayer({ src, isMe, contactInitial = '?', duration: 
         }}
       />
 
-      {/* Avatar — mensagens recebidas ficam à esquerda */}
       {!isMe && (
         <div
           className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-semibold uppercase"
@@ -98,7 +121,6 @@ export function AudioMessagePlayer({ src, isMe, contactInitial = '?', duration: 
         </div>
       )}
 
-      {/* Botão play/pause */}
       <button
         onClick={togglePlay}
         className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 transition-opacity active:opacity-70"
@@ -110,20 +132,17 @@ export function AudioMessagePlayer({ src, isMe, contactInitial = '?', duration: 
         }
       </button>
 
-      {/* Waveform + timer */}
       <div className="flex-1 min-w-0 flex flex-col gap-0.5">
-        <div
-          className="flex items-center gap-px h-8 cursor-pointer"
-          onClick={handleSeek}
-        >
+        <div className="flex items-center gap-px h-8 cursor-pointer" onClick={handleSeek}>
           {bars.map((amp, i) => (
             <div
               key={i}
-              className="flex-1 rounded-full transition-colors duration-75"
+              className="flex-1 rounded-full"
               style={{
                 height: `${Math.max(10, Math.round(amp * 100))}%`,
                 minHeight: 2,
                 background: i < playedBars ? barPlayed : barUnplayed,
+                transition: 'background 0.05s',
               }}
             />
           ))}
@@ -133,7 +152,6 @@ export function AudioMessagePlayer({ src, isMe, contactInitial = '?', duration: 
         </span>
       </div>
 
-      {/* Avatar — mensagens enviadas ficam à direita */}
       {isMe && (
         <div
           className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-semibold"

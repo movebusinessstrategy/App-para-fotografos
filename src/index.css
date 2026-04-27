@@ -234,19 +234,41 @@
 }
 
 /* ===== WhatsApp chat background pattern ===== */
-/* Fundo oficial WhatsApp Web — PNGs em public/ */
+/* Fundo oficial WhatsApp Web via ::before para controle de opacidade */
 .wa-chat-pattern {
+  position: relative;
   background-color: #0b141a;
+  overflow: hidden;
+}
+
+.wa-chat-pattern::before {
+  content: '';
+  position: absolute;
+  inset: 0;
   background-image: url('/wa-bg-dark.png');
   background-repeat: repeat;
   background-size: 412px auto;
-  background-attachment: local;
+  pointer-events: none;
+  z-index: 0;
+  /* Dark: doodles muito sutis — quase imperceptíveis */
+  opacity: 0.035;
+  filter: invert(1) brightness(0.5);
+}
+
+.wa-chat-pattern > * {
+  position: relative;
+  z-index: 1;
 }
 
 [data-theme="light"] .wa-chat-pattern {
   background-color: #efeae2;
+}
+
+[data-theme="light"] .wa-chat-pattern::before {
   background-image: url('/wa-bg-light.png');
   background-size: 366px auto;
+  opacity: 0.45;
+  filter: none;
 }
 
 /* ===== WhatsApp scrollbar ===== */
