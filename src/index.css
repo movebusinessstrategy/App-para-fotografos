@@ -39,6 +39,9 @@
 }
 
 @layer base {
+  html, body, #root {
+    height: 100%;
+  }
   body {
     @apply bg-luxury-paper text-luxury-black antialiased;
     @apply dark:bg-luxury-black dark:text-luxury-paper;

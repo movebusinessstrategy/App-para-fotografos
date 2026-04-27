@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic, Sun, Moon, PenSquare, Search, MoreVertical, Smile, Paperclip } from 'lucide-react';
+import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic, Sun, Moon, PenSquare, Search, MoreVertical, Smile, Paperclip, ChevronDown } from 'lucide-react';
 import EmojiPicker, { Theme as EmojiTheme } from 'emoji-picker-react';
 import { useTheme } from '../../../contexts/ThemeContext';
-import { getContactDisplayName, getContactAvatar, formatBrazilianPhone } from '../utils/contactHelpers';
+import { extractContact, formatBrazilianPhone, getInitials } from '../utils/contactHelpers';
+import { useContactProfile } from '../hooks/useContactProfile';
+import { updateCachedContact } from '../utils/contactCache';
 import { useConversations } from '../hooks/useConversations';
 import { useMessages } from '../hooks/useMessages';
 import { useWaStatus } from '../hooks/useWaStatus';
@@ -64,21 +66,38 @@ export function InboxView({ initialPhone }: Props) {
   const [mediaPreview, setMediaPreview] = useState<{ file: File; url: string; type: string } | null>(null);
   const [mediaCaption, setMediaCaption] = useState('');
   const [sendingMedia, setSendingMedia] = useState(false);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const prevCountRef = useRef(0);
 
+  function handleMessagesScroll() {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setShowScrollBtn(distFromBottom > 200);
+  }
+
+  function scrollToBottom(behavior: ScrollBehavior = 'smooth') {
+    bottomRef.current?.scrollIntoView({ behavior, block: 'end' });
+  }
+
   useEffect(() => {
     if (messages.length > prevCountRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      const el = messagesContainerRef.current;
+      const nearBottom = el ? el.scrollHeight - el.scrollTop - el.clientHeight < 150 : true;
+      const lastMsg = messages[messages.length - 1] as any;
+      const isMyMsg = lastMsg?.from_me ?? lastMsg?.fromMe ?? false;
+      if (nearBottom || isMyMsg) scrollToBottom('smooth');
     }
     prevCountRef.current = messages.length;
   }, [messages.length]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior });
+    scrollToBottom('instant' as ScrollBehavior);
     prevCountRef.current = 0;
   }, [selectedPhone]);
 
@@ -232,10 +251,25 @@ export function InboxView({ initialPhone }: Props) {
   }
 
   const selectedConv = conversations.find(c => c.phone === selectedPhone);
-  const displayName = selectedConv
-    ? getContactDisplayName(selectedConv)
-    : selectedPhone ? formatBrazilianPhone(selectedPhone) : '';
-  const avatarUrl = selectedConv ? getContactAvatar(selectedConv) : null;
+  const { name: displayName, avatar: rawAvatar, phone: convPhone } = selectedConv
+    ? extractContact(selectedConv, messages)
+    : { name: selectedPhone ? formatBrazilianPhone(selectedPhone) : '', avatar: null, phone: selectedPhone || '' };
+  const avatarUrl = useContactProfile(convPhone, rawAvatar);
+
+  // PASSO 6: atualizar cache quando mensagens recebidas chegam com nome
+  useEffect(() => {
+    if (!convPhone || !messages.length) return;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i] as any;
+      const fromMe = msg?.from_me ?? msg?.fromMe ?? false;
+      if (fromMe) continue;
+      const pushName = msg?.push_name ?? msg?.pushName ?? msg?.name;
+      if (pushName && typeof pushName === 'string' && pushName.trim() && !/^\d+$/.test(pushName)) {
+        updateCachedContact(convPhone, { name: pushName.trim() });
+        break;
+      }
+    }
+  }, [convPhone, messages]);
 
   return (
     <div className="flex h-full overflow-hidden" style={{ background: 'var(--wa-bg-secondary)', fontFamily: 'Inter, system-ui, sans-serif' }}>
@@ -394,7 +428,7 @@ export function InboxView({ initialPhone }: Props) {
               >
                 {avatarUrl
                   ? <img src={avatarUrl} alt={displayName} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-                  : displayName.charAt(0).toUpperCase()
+                  : getInitials(displayName)
                 }
               </div>
 
@@ -426,40 +460,57 @@ export function InboxView({ initialPhone }: Props) {
               </div>
             </div>
 
-            {/* Mensagens — fundo com padrão */}
-            <div className="flex-1 min-h-0 overflow-y-auto wa-scrollbar wa-chat-pattern px-4 py-2">
-              {loadingMsgs ? (
-                <div className="flex flex-col gap-2 pt-4">
-                  {[...Array(5)].map((_, i) => (
-                    <div key={i} className={`flex ${i % 2 === 0 ? 'justify-start' : 'justify-end'}`}>
-                      <div
-                        className="h-10 rounded-2xl animate-pulse"
-                        style={{ width: `${38 + (i * 17) % 28}%`, background: 'var(--wa-bg-tertiary)' }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              ) : messages.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full gap-3" style={{ color: 'var(--wa-text-muted)' }}>
-                  <MessageCircle size={28} strokeWidth={1.5} />
-                  <p className="text-sm">Nenhuma mensagem ainda</p>
-                </div>
-              ) : (
-                groups.map(group => (
-                  <div key={group.label}>
-                    <DateSep label={group.label} />
-                    {group.msgs.map(msg => (
-                      <MessageBubble
-                        key={msg.message_id}
-                        msg={msg}
-                        onImageClick={setLightbox}
-                        contactInitial={displayName.charAt(0).toUpperCase()}
-                      />
+            {/* Mensagens — container relativo para absolute inset-0 */}
+            <div className="flex-1 min-h-0 relative wa-chat-pattern">
+              <div
+                ref={messagesContainerRef}
+                onScroll={handleMessagesScroll}
+                className="absolute inset-0 overflow-y-auto wa-scrollbar px-4 py-2"
+              >
+                {loadingMsgs ? (
+                  <div className="flex flex-col gap-2 pt-4">
+                    {[...Array(5)].map((_, i) => (
+                      <div key={i} className={`flex ${i % 2 === 0 ? 'justify-start' : 'justify-end'}`}>
+                        <div
+                          className="h-10 rounded-2xl animate-pulse"
+                          style={{ width: `${38 + (i * 17) % 28}%`, background: 'var(--wa-bg-tertiary)' }}
+                        />
+                      </div>
                     ))}
                   </div>
-                ))
+                ) : messages.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-full gap-3" style={{ color: 'var(--wa-text-muted)' }}>
+                    <MessageCircle size={28} strokeWidth={1.5} />
+                    <p className="text-sm">Nenhuma mensagem ainda</p>
+                  </div>
+                ) : (
+                  groups.map(group => (
+                    <div key={group.label}>
+                      <DateSep label={group.label} />
+                      {group.msgs.map(msg => (
+                        <MessageBubble
+                          key={msg.message_id}
+                          msg={msg}
+                          onImageClick={setLightbox}
+                          contactInitial={getInitials(displayName)}
+                        />
+                      ))}
+                    </div>
+                  ))
+                )}
+                <div ref={bottomRef} />
+              </div>
+
+              {/* Botão scroll-to-bottom */}
+              {showScrollBtn && (
+                <button
+                  onClick={() => scrollToBottom()}
+                  className="absolute bottom-4 right-4 z-10 w-10 h-10 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105"
+                  style={{ background: 'var(--wa-bg-tertiary)', color: 'var(--wa-text-secondary)' }}
+                >
+                  <ChevronDown size={20} />
+                </button>
               )}
-              <div ref={bottomRef} />
             </div>
 
             {/* Composer */}
