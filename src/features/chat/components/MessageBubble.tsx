@@ -15,11 +15,13 @@ function timeStr(iso: string) {
 
 function StatusIcon({ status, isMe }: { status: string; isMe: boolean }) {
   if (!isMe) return null;
-  if (status === 'sending') return <Check size={14} style={{ color: 'rgba(255,255,255,0.4)' }} />;
-  if (status === 'sent')    return <Check size={14} style={{ color: 'rgba(255,255,255,0.6)' }} />;
-  if (status === 'delivered') return <CheckCheck size={14} style={{ color: 'rgba(255,255,255,0.6)' }} />;
-  if (status === 'read')    return <CheckCheck size={14} style={{ color: 'var(--wa-accent-read)' }} />;
-  return <Check size={14} style={{ color: 'rgba(255,255,255,0.4)' }} />;
+  const muted = 'var(--wa-text-secondary)';
+  if (status === 'read') return <CheckCheck size={14} style={{ color: 'var(--wa-accent-read)' }} />;
+  if (status === 'delivered') return <CheckCheck size={14} style={{ color: muted }} />;
+  if (status === 'sent') return <Check size={14} style={{ color: muted }} />;
+  if (status === 'sending') return <Check size={14} style={{ color: muted, opacity: 0.5 }} />;
+  // fallback para qualquer outro valor (vazio, null, etc.)
+  return <Check size={14} style={{ color: muted }} />;
 }
 
 export function MessageBubble({ msg, onImageClick, contactInitial }: Props) {
