@@ -69,7 +69,7 @@ export default function AppLayout() {
           onMenuClick={() => setSidebarOpen(true)}
         />
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
           <Suspense
             fallback={
               <div className="p-8 flex items-center justify-center">
@@ -77,9 +77,16 @@ export default function AppLayout() {
               </div>
             }
           >
-            <div className="p-4 md:p-6 lg:p-8">
-              <Outlet context={{ openContactModal }} />
-            </div>
+            {/* Vendas não tem padding — precisa de flex-1 para o chat funcionar */}
+            {location.pathname.startsWith('/vendas') ? (
+              <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+                <Outlet context={{ openContactModal }} />
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
+                <Outlet context={{ openContactModal }} />
+              </div>
+            )}
           </Suspense>
         </div>
       </main>

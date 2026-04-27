@@ -1,29 +1,30 @@
-import { useState, useCallback, useEffect } from 'react';
-import { authFetch } from '../../../utils/authFetch';
-import { WaStatus } from '../types';
+import { useState, useEffect } from 'react';
+import { supabase } from '../../../integrations/supabase/client';
 
 export function useWaStatus() {
-  const [status, setStatus] = useState<WaStatus>('checking');
+  const [connected, setConnected] = useState<boolean | null>(null);
 
-  const check = useCallback(async () => {
+  async function check() {
     try {
-      const res = await authFetch('/api/whatsapp/status');
-      if (res.ok) {
-        const data = await res.json();
-        const connected =
-          data?.whatsapp?.connected === true || data?.connected === true;
-        setStatus(connected ? 'connected' : 'disconnected');
-      }
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+
+      const res = await fetch('/api/whatsapp/status', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setConnected(data?.connected === true || data?.whatsapp?.connected === true);
     } catch {
-      setStatus('disconnected');
+      setConnected(false);
     }
-  }, []);
+  }
 
   useEffect(() => {
     check();
-    const id = setInterval(check, 4000);
+    const id = setInterval(check, 5000);
     return () => clearInterval(id);
-  }, [check]);
+  }, []);
 
-  return { status, check };
+  return { connected, check };
 }

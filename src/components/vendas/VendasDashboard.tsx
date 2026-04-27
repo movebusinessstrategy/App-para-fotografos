@@ -5,7 +5,7 @@ import { FunilTab } from "./FunilTab";
 import { AnalisesTab } from "./AnalisesTab";
 import { NewDealModal } from "./NewDealModal";
 import { StageCustomizer } from "./StageCustomizer";
-import { ChatLayout } from "../../features/chat/components/ChatLayout";
+import { InboxView } from "../../features/chat/components/InboxView";
 import { authFetch } from "../../utils/authFetch";
 import { Deal, PipelineStage, Client } from "../../types";
 
@@ -64,7 +64,7 @@ export function VendasDashboard() {
   ];
 
   return (
-    <div className="flex flex-col h-full bg-gray-50 dark:bg-gray-900">
+    <div className="flex flex-col flex-1 min-h-0 bg-gray-50 dark:bg-gray-900">
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
         <div>
@@ -112,8 +112,8 @@ export function VendasDashboard() {
         ))}
       </div>
 
-      {/* Conteúdo — altura explícita para que InboxView/FunilTab possam usar h-full internamente */}
-      <div className="overflow-hidden" style={{ height: 'calc(100vh - 264px)', minHeight: '380px' }}>
+      {/* Conteúdo — flex-1 para preencher o espaço restante */}
+      <div className="flex-1 min-h-0 overflow-hidden">
         {loading ? (
           <div className="flex items-center justify-center h-full">
             <div className="flex flex-col items-center gap-3 text-gray-400">
@@ -122,7 +122,7 @@ export function VendasDashboard() {
             </div>
           </div>
         ) : tab === "inbox" ? (
-          <ChatLayout
+          <InboxView
             deals={deals}
             stages={stages}
             initialPhone={initialPhone}

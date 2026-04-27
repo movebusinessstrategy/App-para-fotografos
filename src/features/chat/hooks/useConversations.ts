@@ -1,67 +1,49 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
-import { authFetch } from '../../../utils/authFetch';
+import { useState, useEffect, useRef } from 'react';
+import { supabase } from '../../../integrations/supabase/client';
 import { Conversation } from '../types';
 
 export function useConversations() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchConversations = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
-    else setRefreshing(true);
+  async function fetchConversations() {
     try {
-      const res = await authFetch('/api/inbox/conversations');
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          setConversations(
-            (data as Conversation[]).sort(
-              (a, b) =>
-                new Date(b.last_message_at || 0).getTime() -
-                new Date(a.last_message_at || 0).getTime()
-            )
-          );
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+
+      const res = await fetch('/api/inbox/conversations', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!res.ok) return;
+
+      const data = await res.json();
+      if (!Array.isArray(data)) return;
+
+      // Deduplicar por phone — manter a mais recente quando há duplicatas no DB
+      const seen = new Map<string, typeof data[0]>();
+      for (const conv of data) {
+        const existing = seen.get(conv.phone);
+        if (!existing || new Date(conv.last_message_at || 0) > new Date(existing.last_message_at || 0)) {
+          seen.set(conv.phone, conv);
         }
       }
+      const deduped = Array.from(seen.values()).sort((a, b) =>
+        new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime()
+      );
+      setConversations(deduped);
+    } catch {
+      // silencioso
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
-  }, []);
+  }
 
   useEffect(() => {
     fetchConversations();
-    pollRef.current = setInterval(() => fetchConversations(true), 4000);
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [fetchConversations]);
+    intervalRef.current = setInterval(fetchConversations, 10000);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, []);
 
-  const addOrGet = useCallback(
-    (phone: string, name?: string): Conversation => {
-      const clean = phone.replace(/\D/g, '');
-      const existing = conversations.find((c) => c.phone.replace(/\D/g, '') === clean);
-      if (existing) return existing;
-      const newConv: Conversation = {
-        phone,
-        contact_name: name || null,
-        last_message: '',
-        last_message_at: new Date().toISOString(),
-        unread_count: 0,
-      };
-      setConversations((prev) => [newConv, ...prev]);
-      return newConv;
-    },
-    [conversations]
-  );
-
-  return {
-    conversations,
-    loading,
-    refreshing,
-    refresh: () => fetchConversations(true),
-    addOrGet,
-  };
+  return { conversations, loading, refresh: fetchConversations };
 }

@@ -5,6 +5,7 @@ import makeWASocket, {
   makeCacheableSignalKeyStore,
   WAMessage,
   downloadMediaMessage,
+  Browsers,
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import QRCode from 'qrcode';
@@ -12,7 +13,7 @@ import path from 'path';
 import fs from 'fs';
 import pino from 'pino';
 
-const SESSIONS_DIR = path.join(process.cwd(), 'sessions');
+const SESSIONS_DIR = path.join(process.cwd(), 'baileys_sessions');
 const silentLogger = pino({ level: 'silent' });
 
 type Socket = ReturnType<typeof makeWASocket>;
@@ -98,10 +99,16 @@ async function _initSocket(session: Session, sessionDir: string) {
     },
     printQRInTerminal: false,
     logger: silentLogger as any,
-    browser: ['FotoMove CRM', 'Chrome', '120.0.0'],
+    browser: Browsers.macOS('Desktop'),
     generateHighQualityLinkPreview: false,
     syncFullHistory: false,
     mobile: false,
+    markOnlineOnConnect: false,
+    connectTimeoutMs: 60_000,
+    keepAliveIntervalMs: 25_000,
+    retryRequestDelayMs: 2_000,
+    defaultQueryTimeoutMs: 60_000,
+    emitOwnEvents: false,
   });
 
   session.sock = sock;
@@ -109,6 +116,8 @@ async function _initSocket(session: Session, sessionDir: string) {
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+    const _debugCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
+
     // Novo QR disponível
     if (qr) {
       try {
@@ -187,7 +196,8 @@ async function _initSocket(session: Session, sessionDir: string) {
   });
 
   // Mensagens em tempo real
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+  sock.ev.on('messages.upsert', async (upsert) => {
+    const { messages, type } = upsert;
     if (type !== 'notify') return;
     for (const msg of messages) {
       try {
@@ -280,6 +290,8 @@ export async function sendMedia(
   mimetype: string,
   filename: string,
   caption = '',
+  waveform?: Buffer,
+  seconds?: number,
 ): Promise<string> {
   const sock = _requireSocket(userId);
   const buffer = Buffer.from(mediaBase64, 'base64');
@@ -291,7 +303,20 @@ export async function sendMedia(
   } else if (mimetype.startsWith('video/')) {
     result = await sock.sendMessage(jid, { video: buffer, caption, mimetype });
   } else if (mimetype.startsWith('audio/')) {
-    result = await sock.sendMessage(jid, { audio: buffer, mimetype, ptt: true });
+    result = await sock.sendMessage(jid, {
+      audio: buffer,
+      mimetype,
+      ptt: true,
+      ...(waveform ? { waveform: new Uint8Array(waveform) } : {}),
+      ...(seconds ? { seconds } : {}),
+    });
+    const proto = (result as any)?.message?.audioMessage;
+    console.log('[Baileys] PTT proto check', {
+      hasWaveformInProto: !!proto?.waveform,
+      protoWaveformLength: proto?.waveform?.length ?? 0,
+      protoSeconds: proto?.seconds,
+      protoPtt: proto?.ptt,
+    });
   } else {
     result = await sock.sendMessage(jid, { document: buffer, mimetype, fileName: filename, caption });
   }
