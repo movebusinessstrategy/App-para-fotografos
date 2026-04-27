@@ -100,7 +100,6 @@ export function AudioRecorder({ onSend, onCancel, className = '' }: AudioRecorde
 
         startTimeRef.current = Date.now();
         setIsInitializing(false);
-        // startDrawing() é chamado pelo useEffect que observa isInitializing
       } catch (err: any) {
         const msg =
           err.name === 'NotAllowedError'
@@ -127,10 +126,8 @@ export function AudioRecorder({ onSend, onCancel, className = '' }: AudioRecorde
     return () => clearInterval(interval);
   }, [isInitializing, error]);
 
-  // Só inicia o waveform depois do canvas estar montado no DOM (isInitializing=false → re-render → canvas existe)
   useEffect(() => {
     if (isInitializing || error) return;
-    // rAF garante que o browser já calculou o layout e o canvas tem dimensões reais
     const rafId = requestAnimationFrame(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -163,7 +160,6 @@ export function AudioRecorder({ onSend, onCancel, className = '' }: AudioRecorde
       const rms = Math.sqrt(sum / dataArray.length);
       const amplitude = Math.min(rms / 100, 1);
 
-      // Throttle: adiciona nova barra apenas a cada 100ms (como WhatsApp)
       const now = Date.now();
       if (now - lastBarTimeRef.current >= 100) {
         amplitudeHistoryRef.current.push(amplitude);
@@ -178,12 +174,11 @@ export function AudioRecorder({ onSend, onCancel, className = '' }: AudioRecorde
 
       ctx.clearRect(0, 0, w, h);
 
-      const gradient = ctx.createLinearGradient(0, 0, 0, h);
-      gradient.addColorStop(0, '#22c55e');
-      gradient.addColorStop(0.5, '#16a34a');
-      gradient.addColorStop(1, '#22c55e');
+      // Cor via CSS var (lida do elemento raiz)
+      const accentColor = getComputedStyle(document.documentElement)
+        .getPropertyValue('--wa-accent-green').trim() || '#00A884';
 
-      ctx.fillStyle = gradient;
+      ctx.fillStyle = accentColor;
 
       const totalBarSpace = BAR_WIDTH + BAR_GAP;
       const startX = w - amplitudeHistoryRef.current.length * totalBarSpace;
@@ -269,12 +264,15 @@ export function AudioRecorder({ onSend, onCancel, className = '' }: AudioRecorde
 
   if (error) {
     return (
-      <div className={`flex items-center justify-between gap-3 px-4 py-3 rounded-2xl ${className}`} style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)' }}>
-        <span className="text-sm font-medium flex-1" style={{ color: '#ef4444' }}>Erro: {error}</span>
+      <div
+        className={`flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl ${className}`}
+        style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)' }}
+      >
+        <span className="text-sm flex-1" style={{ color: '#ef4444' }}>{error}</span>
         <button
           type="button"
           onClick={onCancel}
-          className="text-xs px-2 py-1 rounded"
+          className="text-xs px-2.5 py-1 rounded-lg"
           style={{ background: 'rgba(239,68,68,0.2)', color: '#ef4444' }}
         >
           Fechar
@@ -285,9 +283,12 @@ export function AudioRecorder({ onSend, onCancel, className = '' }: AudioRecorde
 
   if (isInitializing) {
     return (
-      <div className={`flex items-center gap-3 px-4 py-3 rounded-2xl ${className}`} style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)' }}>
-        <Mic className="w-4 h-4 animate-pulse" style={{ color: '#6A6A65' }} />
-        <span className="text-sm" style={{ color: '#6A6A65' }}>Iniciando microfone...</span>
+      <div
+        className={`flex items-center gap-3 px-4 py-2.5 rounded-xl ${className}`}
+        style={{ background: 'var(--wa-bg-input)', border: '1px solid var(--wa-border)' }}
+      >
+        <Mic className="w-4 h-4 animate-pulse" style={{ color: 'var(--wa-text-muted)' }} />
+        <span className="text-sm" style={{ color: 'var(--wa-text-muted)' }}>Iniciando microfone...</span>
       </div>
     );
   }
@@ -309,11 +310,10 @@ export function AudioRecorder({ onSend, onCancel, className = '' }: AudioRecorde
       onPointerCancel={handlePointerUp}
     >
       <div
-        className="flex items-center gap-3 px-3 py-2 rounded-full"
+        className="flex items-center gap-2 px-2 py-1.5 rounded-xl"
         style={{
-          background: 'rgba(255,255,255,0.07)',
-          border: '1px solid rgba(255,255,255,0.12)',
-          backdropFilter: 'blur(12px)',
+          background: 'var(--wa-bg-input)',
+          border: '1px solid var(--wa-border)',
         }}
       >
         {/* Cancelar */}
@@ -336,8 +336,8 @@ export function AudioRecorder({ onSend, onCancel, className = '' }: AudioRecorde
           </span>
         </div>
 
-        {/* Waveform */}
-        <div className="flex-1 min-w-0 h-10 flex items-center">
+        {/* Waveform canvas */}
+        <div className="flex-1 min-w-0 h-9 flex items-center">
           <canvas
             ref={canvasRef}
             className="w-full h-full"
@@ -348,7 +348,7 @@ export function AudioRecorder({ onSend, onCancel, className = '' }: AudioRecorde
         {/* Duração */}
         <span
           className="flex-shrink-0 text-sm tabular-nums font-medium min-w-[44px] text-center"
-          style={{ color: '#ECEAE3' }}
+          style={{ color: 'var(--wa-text-primary)' }}
         >
           {formatDuration(duration)}
         </span>
@@ -358,8 +358,8 @@ export function AudioRecorder({ onSend, onCancel, className = '' }: AudioRecorde
           type="button"
           onClick={() => stop(true)}
           disabled={isSending || duration < 1}
-          className="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center shadow-md active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          style={{ background: 'linear-gradient(135deg, #22c55e, #16a34a)', color: '#fff' }}
+          className="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+          style={{ background: 'var(--wa-accent-green)', color: '#fff' }}
           aria-label="Enviar áudio"
         >
           {isSending ? (
@@ -372,7 +372,7 @@ export function AudioRecorder({ onSend, onCancel, className = '' }: AudioRecorde
 
       {dragOffset < -20 && (
         <div
-          className="absolute -top-8 left-1/2 -translate-x-1/2 text-xs font-medium whitespace-nowrap"
+          className="absolute -top-7 left-1/2 -translate-x-1/2 text-xs font-medium whitespace-nowrap"
           style={{ color: '#ef4444' }}
         >
           ← Solte para cancelar
