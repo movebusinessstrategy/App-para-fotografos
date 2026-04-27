@@ -20,15 +20,17 @@ interface Props {
 
 function DateSep({ label }: { label: string }) {
   return (
-    <div className="flex items-center gap-3 my-4">
-      <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.06)' }} />
+    <div className="flex items-center gap-3 my-3">
       <span
-        className="text-[11px] px-2.5 py-1 rounded-full"
-        style={{ color: '#6A6A65', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}
+        className="mx-auto text-[11px] px-3 py-1 rounded-lg"
+        style={{
+          color: 'var(--wa-text-secondary)',
+          background: 'var(--wa-bg-tertiary)',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
+        }}
       >
         {label}
       </span>
-      <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.06)' }} />
     </div>
   );
 }
@@ -57,7 +59,6 @@ export function InboxView({ initialPhone }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const prevCountRef = useRef(0);
 
-  // Auto-scroll quando chegam novas mensagens
   useEffect(() => {
     if (messages.length > prevCountRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -65,13 +66,11 @@ export function InboxView({ initialPhone }: Props) {
     prevCountRef.current = messages.length;
   }, [messages.length]);
 
-  // Scroll imediato ao trocar de conversa
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior });
     prevCountRef.current = 0;
   }, [selectedPhone]);
 
-  // Aplica initialPhone quando conversas carregam
   useEffect(() => {
     if (initialPhone && !selectedPhone) setSelectedPhone(initialPhone);
   }, [initialPhone]);
@@ -115,7 +114,6 @@ export function InboxView({ initialPhone }: Props) {
     });
 
     const phone = selectedPhone.replace(/\D/g, '');
-    console.log(`[handleAudioSend] phone=${phone} mimetype=${blob.type} size=${blob.size}`);
 
     const res = await fetch('/api/inbox/send-media', {
       method: 'POST',
@@ -142,7 +140,6 @@ export function InboxView({ initialPhone }: Props) {
     setIsRecording(false);
   }
 
-  // Agrupa mensagens por data
   const groups: { label: string; msgs: typeof messages }[] = [];
   for (const msg of messages) {
     const label = dateLabel(msg.timestamp);
@@ -156,113 +153,106 @@ export function InboxView({ initialPhone }: Props) {
   const selectedConv = conversations.find(c => c.phone === selectedPhone);
 
   return (
-    <div
-      className="flex h-full overflow-hidden"
-      style={{ background: '#0E0E0C', fontFamily: "'Instrument Sans', sans-serif" }}
-    >
+    <div className="flex h-full overflow-hidden" style={{ background: 'var(--wa-bg-secondary)', fontFamily: 'Inter, system-ui, sans-serif' }}>
+
       {/* ── SIDEBAR ── */}
       <div
         className="flex flex-col flex-shrink-0 overflow-hidden"
-        style={{ width: 300, borderRight: '1px solid rgba(255,255,255,0.07)' }}
+        style={{ width: 360, borderRight: '1px solid var(--wa-border)', background: 'var(--wa-bg-secondary)' }}
       >
-        {/* Status WA */}
+        {/* Header do sidebar */}
         <div
-          className="flex items-center justify-between px-4 py-2 flex-shrink-0"
-          style={{ background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}
+          className="flex items-center justify-between px-4 py-3 flex-shrink-0"
+          style={{ background: 'var(--wa-bg-tertiary)', borderBottom: '1px solid var(--wa-border)' }}
         >
-          <div className="flex items-center gap-2">
-            {connected === null ? (
-              <span className="text-[11px]" style={{ color: '#6A6A65' }}>Verificando...</span>
-            ) : connected ? (
-              <>
-                <Wifi size={11} style={{ color: '#B5C19D' }} />
-                <span className="text-[11px]" style={{ color: '#B5C19D' }}>WhatsApp conectado</span>
-              </>
-            ) : (
-              <>
-                <WifiOff size={11} style={{ color: '#fbbf24' }} />
-                <span className="text-[11px]" style={{ color: '#fbbf24' }}>Desconectado</span>
-              </>
-            )}
-          </div>
+          <span className="text-[15px] font-semibold" style={{ color: 'var(--wa-text-primary)' }}>
+            Conversas
+          </span>
+
           <div className="flex items-center gap-1">
-            {!connected && (
+            {/* Status WA */}
+            {connected === null ? null : connected ? (
+              <div className="flex items-center gap-1.5 mr-2">
+                <Wifi size={12} style={{ color: 'var(--wa-accent-green)' }} />
+              </div>
+            ) : (
               <button
                 onClick={() => setConnectOpen(true)}
-                className="px-2 py-1 rounded text-[11px] font-semibold"
-                style={{ background: '#fbbf24', color: '#0E0E0C' }}
+                className="px-2 py-0.5 rounded text-[11px] font-semibold mr-1"
+                style={{ background: '#f59e0b', color: '#000' }}
               >
                 Conectar
               </button>
             )}
+
             {connected && (
               <button
                 onClick={() => setConnectOpen(true)}
-                className="p-1 rounded"
-                style={{ color: '#6A6A65' }}
-                title="Gerenciar"
+                className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
+                style={{ color: 'var(--wa-text-secondary)' }}
+                title="Gerenciar conexão"
               >
-                <Settings size={12} />
+                <Settings size={16} />
               </button>
             )}
+
             <button
               onClick={handleRefresh}
-              className="p-1 rounded"
-              style={{ color: '#6A6A65' }}
-              title="Atualizar"
+              className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
+              style={{ color: 'var(--wa-text-secondary)' }}
+              title="Atualizar conversas"
             >
-              <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
+              <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
             </button>
+
             <button
               onClick={toggleWaTheme}
-              className="p-1 rounded transition-colors"
-              style={{ color: '#6A6A65' }}
+              className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
+              style={{ color: 'var(--wa-text-secondary)' }}
               title={waTheme === 'dark' ? 'Modo claro' : 'Modo escuro'}
             >
-              {waTheme === 'dark' ? <Sun size={12} /> : <Moon size={12} />}
+              {waTheme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
             </button>
           </div>
         </div>
 
-        {/* Título */}
-        <div className="px-4 py-3 flex-shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-          <h2 className="text-sm font-semibold" style={{ color: '#ECEAE3' }}>
-            Conversas
-          </h2>
-          <p className="text-[11px] mt-0.5" style={{ color: '#6A6A65' }}>
+        {/* Contador */}
+        <div
+          className="px-4 py-2 flex-shrink-0"
+          style={{ borderBottom: '1px solid var(--wa-border)' }}
+        >
+          <p className="text-[12px]" style={{ color: 'var(--wa-text-muted)' }}>
             {loadingConvs ? 'Carregando...' : `${conversations.length} conversa${conversations.length !== 1 ? 's' : ''}`}
           </p>
         </div>
 
-        {/* Lista */}
-        <div className="flex-1 overflow-y-auto">
+        {/* Lista de conversas */}
+        <div className="flex-1 overflow-y-auto wa-scrollbar">
           {loadingConvs ? (
-            <div className="flex flex-col gap-0">
-              {[...Array(6)].map((_, i) => (
-                <div key={i} className="flex items-center gap-3 px-4 py-3">
-                  <div className="w-10 h-10 rounded-full animate-pulse" style={{ background: 'rgba(255,255,255,0.06)' }} />
+            <div className="flex flex-col">
+              {[...Array(7)].map((_, i) => (
+                <div key={i} className="flex items-center gap-3 px-3 py-3">
+                  <div className="w-12 h-12 rounded-full animate-pulse flex-shrink-0" style={{ background: 'var(--wa-bg-hover)' }} />
                   <div className="flex-1 space-y-2">
-                    <div className="h-3 rounded animate-pulse" style={{ width: '60%', background: 'rgba(255,255,255,0.06)' }} />
-                    <div className="h-2 rounded animate-pulse" style={{ width: '40%', background: 'rgba(255,255,255,0.04)' }} />
+                    <div className="h-3.5 rounded animate-pulse" style={{ width: '55%', background: 'var(--wa-bg-hover)' }} />
+                    <div className="h-3 rounded animate-pulse" style={{ width: '75%', background: 'var(--wa-bg-tertiary)' }} />
                   </div>
                 </div>
               ))}
             </div>
           ) : conversations.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full gap-3 px-6 text-center py-16">
-              <MessageCircle size={28} style={{ color: '#6A6A65' }} strokeWidth={1.5} />
-              <p className="text-sm" style={{ color: '#6A6A65' }}>Nenhuma conversa ainda</p>
+              <MessageCircle size={32} style={{ color: 'var(--wa-text-muted)' }} strokeWidth={1.5} />
+              <p className="text-sm" style={{ color: 'var(--wa-text-muted)' }}>Nenhuma conversa ainda</p>
             </div>
           ) : (
             conversations.map(conv => (
-              <React.Fragment key={conv.phone}>
-                <ConversationItem
-                  conv={conv}
-                  selected={conv.phone === selectedPhone}
-                  onClick={() => setSelectedPhone(conv.phone)}
-                />
-                <div className="mx-4" style={{ height: 1, background: 'rgba(255,255,255,0.04)' }} />
-              </React.Fragment>
+              <ConversationItem
+                key={conv.phone}
+                conv={conv}
+                selected={conv.phone === selectedPhone}
+                onClick={() => setSelectedPhone(conv.phone)}
+              />
             ))
           )}
         </div>
@@ -271,13 +261,21 @@ export function InboxView({ initialPhone }: Props) {
       {/* ── ÁREA DE CHAT ── */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {!selectedPhone ? (
-          <div className="flex-1 flex flex-col items-center justify-center gap-4" style={{ color: '#6A6A65' }}>
-            <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background: 'rgba(181,193,157,0.08)' }}>
-              <MessageCircle size={26} strokeWidth={1.5} style={{ color: '#B5C19D' }} />
+          /* Estado vazio */
+          <div className="flex-1 flex flex-col items-center justify-center gap-4 wa-chat-pattern">
+            <div
+              className="w-16 h-16 rounded-full flex items-center justify-center"
+              style={{ background: 'var(--wa-bg-tertiary)' }}
+            >
+              <MessageCircle size={28} strokeWidth={1.5} style={{ color: 'var(--wa-text-muted)' }} />
             </div>
             <div className="text-center">
-              <p className="text-base font-semibold" style={{ color: '#ECEAE3' }}>Selecione uma conversa</p>
-              <p className="text-sm mt-1" style={{ color: '#6A6A65' }}>Escolha um contato na lista</p>
+              <p className="text-base font-medium" style={{ color: 'var(--wa-text-primary)' }}>
+                Selecione uma conversa
+              </p>
+              <p className="text-sm mt-1" style={{ color: 'var(--wa-text-muted)' }}>
+                Escolha um contato na lista ao lado
+              </p>
             </div>
           </div>
         ) : (
@@ -285,41 +283,49 @@ export function InboxView({ initialPhone }: Props) {
             {/* Header da conversa */}
             <div
               className="flex items-center gap-3 px-4 py-3 flex-shrink-0"
-              style={{ borderBottom: '1px solid rgba(255,255,255,0.07)', background: 'rgba(255,255,255,0.02)' }}
+              style={{ background: 'var(--wa-bg-tertiary)', borderBottom: '1px solid var(--wa-border)' }}
             >
               <button
                 onClick={() => setSelectedPhone(null)}
-                className="p-1 rounded-lg md:hidden"
-                style={{ color: '#6A6A65' }}
+                className="p-1 rounded-full md:hidden"
+                style={{ color: 'var(--wa-text-secondary)' }}
               >
-                <ArrowLeft size={16} />
+                <ArrowLeft size={20} />
               </button>
-              <div>
-                <p className="text-sm font-semibold" style={{ color: '#ECEAE3' }}>
+
+              {/* Avatar mini */}
+              <div
+                className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center text-white text-sm font-semibold"
+                style={{ background: '#00756A' }}
+              >
+                {(selectedConv?.contact_name || selectedPhone || '?').charAt(0).toUpperCase()}
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold leading-tight truncate" style={{ color: 'var(--wa-text-primary)' }}>
                   {selectedConv?.contact_name || selectedPhone}
                 </p>
-                <p className="text-xs" style={{ color: '#6A6A65' }}>{selectedPhone}</p>
+                <p className="text-[12px] leading-tight truncate" style={{ color: 'var(--wa-text-muted)' }}>
+                  {selectedPhone}
+                </p>
               </div>
             </div>
 
-            {/* Mensagens */}
-            <div
-              className="flex-1 overflow-y-auto px-4 py-3"
-              style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.08) transparent' }}
-            >
+            {/* Mensagens — fundo com padrão */}
+            <div className="flex-1 overflow-y-auto wa-scrollbar wa-chat-pattern px-4 py-2">
               {loadingMsgs ? (
                 <div className="flex flex-col gap-2 pt-4">
                   {[...Array(5)].map((_, i) => (
                     <div key={i} className={`flex ${i % 2 === 0 ? 'justify-start' : 'justify-end'}`}>
                       <div
-                        className="h-9 rounded-2xl animate-pulse"
-                        style={{ width: `${40 + (i * 17) % 30}%`, background: 'rgba(255,255,255,0.06)' }}
+                        className="h-10 rounded-2xl animate-pulse"
+                        style={{ width: `${38 + (i * 17) % 28}%`, background: 'var(--wa-bg-tertiary)' }}
                       />
                     </div>
                   ))}
                 </div>
               ) : messages.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full gap-3" style={{ color: '#6A6A65' }}>
+                <div className="flex flex-col items-center justify-center h-full gap-3" style={{ color: 'var(--wa-text-muted)' }}>
                   <MessageCircle size={28} strokeWidth={1.5} />
                   <p className="text-sm">Nenhuma mensagem ainda</p>
                 </div>
@@ -328,13 +334,12 @@ export function InboxView({ initialPhone }: Props) {
                   <div key={group.label}>
                     <DateSep label={group.label} />
                     {group.msgs.map(msg => (
-                      <React.Fragment key={msg.message_id}>
-                        <MessageBubble
-                          msg={msg}
-                          onImageClick={setLightbox}
-                          contactInitial={(selectedConv?.contact_name || selectedPhone || '?').charAt(0).toUpperCase()}
-                        />
-                      </React.Fragment>
+                      <MessageBubble
+                        key={msg.message_id}
+                        msg={msg}
+                        onImageClick={setLightbox}
+                        contactInitial={(selectedConv?.contact_name || selectedPhone || '?').charAt(0).toUpperCase()}
+                      />
                     ))}
                   </div>
                 ))
@@ -344,8 +349,8 @@ export function InboxView({ initialPhone }: Props) {
 
             {/* Composer */}
             <div
-              className="flex items-end gap-2 px-4 py-3 flex-shrink-0"
-              style={{ borderTop: '1px solid rgba(255,255,255,0.07)', background: 'rgba(255,255,255,0.02)' }}
+              className="flex items-end gap-2 px-3 py-3 flex-shrink-0"
+              style={{ background: 'var(--wa-bg-tertiary)', borderTop: '1px solid var(--wa-border)' }}
             >
               {isRecording ? (
                 <AudioRecorder
@@ -358,36 +363,42 @@ export function InboxView({ initialPhone }: Props) {
                   <textarea
                     value={text}
                     onChange={e => setText(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(e as any); } }}
-                    placeholder="Digite uma mensagem..."
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSend(e as any);
+                      }
+                    }}
+                    placeholder="Digite uma mensagem"
                     rows={1}
-                    className="flex-1 rounded-xl px-3 py-2 text-sm outline-none resize-none"
+                    className="flex-1 rounded-lg px-4 py-2.5 text-sm outline-none resize-none wa-scrollbar"
                     style={{
-                      background: 'rgba(255,255,255,0.06)',
-                      border: '1px solid rgba(255,255,255,0.08)',
-                      color: '#ECEAE3',
+                      background: 'var(--wa-bg-input)',
+                      color: 'var(--wa-text-primary)',
+                      border: 'none',
                       maxHeight: 120,
                       overflowY: 'auto',
+                      lineHeight: '1.5',
                     }}
                   />
                   {text.trim() ? (
                     <button
                       type="submit"
                       disabled={sending}
-                      className="w-9 h-9 rounded-full flex items-center justify-center transition-colors flex-shrink-0 disabled:opacity-40"
-                      style={{ background: '#B5C19D', color: '#0E0E0C' }}
+                      className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 disabled:opacity-40 transition-opacity"
+                      style={{ background: 'var(--wa-accent-green)', color: '#fff' }}
                     >
-                      <Send size={15} />
+                      <Send size={17} />
                     </button>
                   ) : (
                     <button
                       type="button"
                       onClick={() => setIsRecording(true)}
-                      className="w-9 h-9 rounded-full flex items-center justify-center transition-colors flex-shrink-0"
-                      style={{ background: 'rgba(255,255,255,0.06)', color: '#6A6A65' }}
+                      className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 transition-colors"
+                      style={{ background: 'var(--wa-accent-green)', color: '#fff' }}
                       aria-label="Gravar áudio"
                     >
-                      <Mic size={15} />
+                      <Mic size={17} />
                     </button>
                   )}
                 </form>
@@ -401,17 +412,16 @@ export function InboxView({ initialPhone }: Props) {
       {lightbox && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ background: 'rgba(0,0,0,0.85)' }}
+          style={{ background: 'rgba(0,0,0,0.9)' }}
           onClick={() => setLightbox(null)}
         >
           <img src={lightbox} alt="" className="max-w-[90%] max-h-[85vh] rounded-xl" />
         </div>
       )}
 
-      {/* Modal de conexão WhatsApp */}
       <ConnectChannelModal
         open={connectOpen}
-        onClose={() => { setConnectOpen(false); }}
+        onClose={() => setConnectOpen(false)}
         onStatusChange={() => {}}
       />
     </div>
