@@ -93,8 +93,8 @@ export function AudioMessagePlayer({ src, isMe, contactInitial = '?', duration: 
   const isDark = getIsDark();
   const { played: barPlayed, unplayed: barUnplayed } = getWaveformColors(isMe);
 
-  const playBtnBg    = isMe ? 'rgba(255,255,255,0.25)' : '#00a884';
-  const playBtnColor = '#fff';
+  const playBtnBg    = isMe ? (isDark ? 'rgba(255,255,255,0.25)' : 'rgba(0,92,75,0.18)') : '#00a884';
+  const playBtnColor = isMe ? (isDark ? '#fff' : '#005C4B') : '#fff';
   const timeColor    = isMe ? 'rgba(255,255,255,0.75)' : (isDark ? '#8696A0' : '#667781');
   const avatarBg     = isMe ? 'rgba(255,255,255,0.2)' : (isDark ? '#2A3942' : '#F0F2F5');
   const avatarColor  = isMe ? '#fff' : (isDark ? '#8696A0' : '#667781');
