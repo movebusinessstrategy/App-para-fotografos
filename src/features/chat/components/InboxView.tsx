@@ -427,7 +427,7 @@ export function InboxView({ initialPhone }: Props) {
             </div>
 
             {/* Mensagens — fundo com padrão */}
-            <div className="flex-1 overflow-y-auto wa-scrollbar wa-chat-pattern px-4 py-2">
+            <div className="flex-1 min-h-0 overflow-y-auto wa-scrollbar wa-chat-pattern px-4 py-2">
               {loadingMsgs ? (
                 <div className="flex flex-col gap-2 pt-4">
                   {[...Array(5)].map((_, i) => (
