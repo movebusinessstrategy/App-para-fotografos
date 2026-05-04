@@ -433,6 +433,9 @@ async function persistMessageToSupabase(userId: string, message: LiveWhatsAppMes
     const ts = new Date(message.timestamp).toISOString();
     const phone = normalizeBrazilianPhone(message.phone.replace(/\D/g, ''));
     const now = new Date().toISOString();
+    // wa_number = número do WhatsApp conectado (o "estúdio"). Permite filtrar
+    // o Inbox por número quando o usuário troca de WhatsApp.
+    const waNumber = BaileysManager.getConnectedPhone(userId) || '';
 
     // Salva mensagem
     const msgType = message.mediaType || 'text';
@@ -451,7 +454,7 @@ async function persistMessageToSupabase(userId: string, message: LiveWhatsAppMes
       type: msgType,
       timestamp: ts,
       status: 'received',
-      wa_number: '',
+      wa_number: waNumber,
       ...(mediaDataUrl ? { media_url: mediaDataUrl } : {}),
     });
     if (msgErr && !msgErr.message.includes('duplicate') && !msgErr.code?.includes('23505')) {
@@ -464,7 +467,7 @@ async function persistMessageToSupabase(userId: string, message: LiveWhatsAppMes
       last_message: message.text || `[${msgType}]`,
       last_message_at: ts,
       updated_at: now,
-      wa_number: '',
+      wa_number: waNumber,
       ...(!message.fromMe ? { unread_count: 1 } : {}),
       ...(message.name ? { contact_name: message.name } : {}),
     };
@@ -1877,9 +1880,15 @@ async function startServer() {
   app.get('/api/inbox/conversations', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const db = supabaseAdmin;
+    // Filtra pelas conversas do WhatsApp atualmente conectado. Se nenhum número
+    // está conectado, devolve vazio (sem WhatsApp = sem Inbox).
+    const waNumber = BaileysManager.getConnectedPhone(userId) || '';
+    if (!waNumber) {
+      return res.json([]);
+    }
     if (!db) {
       const userDb = (req as any).supabase as SupabaseClient;
-      const { data } = await userDb.from('wa_conversations').select('*').eq('user_id', userId).order('last_message_at', { ascending: false }).limit(200);
+      const { data } = await userDb.from('wa_conversations').select('*').eq('user_id', userId).eq('wa_number', waNumber).order('last_message_at', { ascending: false }).limit(200);
       return res.json(data || []);
     }
     try {
@@ -1887,6 +1896,7 @@ async function startServer() {
         .from('wa_conversations')
         .select('*')
         .eq('user_id', userId)
+        .eq('wa_number', waNumber)
         .order('last_message_at', { ascending: false })
         .limit(200);
 
@@ -1944,9 +1954,13 @@ async function startServer() {
     const phone13 = normalizeBrazilianPhone(phone12); // versão com "9" adicionado
     const limit = Number(req.query.limit) || 60;
     const waNumber = BaileysManager.getConnectedPhone(userId) || '';
+    if (!waNumber) {
+      return res.json([]);
+    }
     const dbMsg = supabaseAdmin || supabase;
     try {
       // Busca em ambos os formatos: JID exato (12 dig) e normalizado (13 dig)
+      // E só do WhatsApp atualmente conectado (filtrar por wa_number).
       const phoneCondition = phone12 !== phone13
         ? `phone.eq.${phone12},phone.eq.${phone13}`
         : `phone.eq.${phone12}`;
@@ -1954,6 +1968,7 @@ async function startServer() {
         .from('wa_messages')
         .select('*')
         .eq('user_id', userId)
+        .eq('wa_number', waNumber)
         .or(phoneCondition)
         .order('timestamp', { ascending: true })
         .limit(limit);
