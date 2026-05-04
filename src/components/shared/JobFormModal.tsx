@@ -5,6 +5,7 @@ import { Plus } from "lucide-react";
 
 import { authFetch } from "../../utils/authFetch";
 import { Job, Client } from "../../types";
+import { SearchableSelect } from "../ui/SearchableSelect";
 
 interface JobFormModalProps {
   clientId?: number;
@@ -87,18 +88,23 @@ export default function JobFormModal({
           {!initialClientId && !job && (
             <div>
               <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Cliente</label>
-              <select
-                value={clientId || ""}
-                onChange={(e) => setClientId(e.target.value ? Number(e.target.value) : undefined)}
-                className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400"
-              >
-                <option value="" className="dark:bg-gray-800">Tarefa (Sem Cliente vinculado)</option>
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id} className="dark:bg-gray-800">
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+              <SearchableSelect
+                value={clientId ? String(clientId) : ""}
+                onChange={(value) => setClientId(value ? Number(value) : undefined)}
+                placeholder="Buscar cliente..."
+                searchPlaceholder="Digite o nome da cliente..."
+                emptyMessage="Nenhuma cliente encontrada"
+                showSearchIcon
+                className="w-full"
+                triggerClassName="rounded-xl px-4 py-2 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400"
+                options={[
+                  { value: "", label: "Tarefa (sem cliente vinculado)" },
+                  ...clients.map((c) => ({
+                    value: String(c.id),
+                    label: c.name || `Cliente #${c.id}`,
+                  })),
+                ]}
+              />
             </div>
           )}
 

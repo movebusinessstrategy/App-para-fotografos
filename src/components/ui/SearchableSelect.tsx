@@ -14,6 +14,10 @@ interface SearchableSelectProps {
   options: Option[];
   placeholder?: string;
   className?: string;
+  triggerClassName?: string;
+  searchPlaceholder?: string;
+  emptyMessage?: string;
+  showSearchIcon?: boolean;
   highlighted?: boolean;
 }
 
@@ -23,6 +27,10 @@ export function SearchableSelect({
   options,
   placeholder = "Selecionar...",
   className,
+  triggerClassName,
+  searchPlaceholder = "Pesquisar...",
+  emptyMessage = "Nenhuma opção",
+  showSearchIcon = false,
   highlighted = false,
 }: SearchableSelectProps) {
   const [open, setOpen] = useState(false);
@@ -107,15 +115,23 @@ export function SearchableSelect({
       <button
         ref={triggerRef}
         type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
         onClick={() => setOpen((prev) => !prev)}
         className={cn(
           "flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-1.5 text-sm transition-colors outline-none",
           highlighted && hasValue
             ? "border-gold-500 bg-gold-50 dark:bg-gold-900/20 text-gold-700 dark:text-gold-300 font-semibold"
-            : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600"
+            : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600",
+          triggerClassName
         )}
       >
-        <span className="truncate">{selected ? selected.label : placeholder}</span>
+        <span className="flex min-w-0 flex-1 items-center gap-2">
+          {showSearchIcon && (
+            <Search size={15} className="flex-shrink-0 text-gray-400 dark:text-gray-500" />
+          )}
+          <span className="truncate">{selected ? selected.label : placeholder}</span>
+        </span>
         <ChevronDown
           size={13}
           className={cn(
@@ -141,11 +157,12 @@ export function SearchableSelect({
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Pesquisar..."
+                placeholder={searchPlaceholder}
                 className="flex-1 bg-transparent text-sm text-gray-700 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500 outline-none"
               />
               {query && (
                 <button
+                  type="button"
                   onClick={() => setQuery("")}
                   className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
                 >
@@ -155,16 +172,18 @@ export function SearchableSelect({
             </div>
 
             {/* Options */}
-            <div className="max-h-52 overflow-y-auto py-1">
+            <div className="max-h-52 overflow-y-auto py-1" role="listbox">
               {filtered.length === 0 ? (
                 <p className="px-3 py-3 text-center text-xs text-gray-400">
-                  Nenhuma opção
+                  {emptyMessage}
                 </p>
               ) : (
                 filtered.map((opt) => (
                   <button
                     key={opt.value}
                     type="button"
+                    role="option"
+                    aria-selected={opt.value === value}
                     onClick={() => handleSelect(opt)}
                     className={cn(
                       "flex w-full items-center justify-between px-3 py-2 text-sm transition-colors text-left",
