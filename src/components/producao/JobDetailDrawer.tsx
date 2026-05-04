@@ -2,14 +2,33 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   X, User, Phone, Mail, Instagram, MapPin, Calendar,
   CheckSquare, Square, Trash2, Plus, Image, Clock,
-  ChevronRight, Tag, FileText, LogOut,
+  ChevronRight, Tag, FileText, LogOut, Camera,
   DollarSign, Package, Layers, Briefcase, Search, CreditCard
 } from "lucide-react";
 import { SearchableSelect } from "../ui/SearchableSelect";
 import { ContractGenerator } from "../contracts/ContractGenerator";
 import { authFetch } from "../../utils/authFetch";
 import { parseDate } from "../../utils/date";
+import { cn } from "../../utils/cn";
 import { JobWithProduction } from "./ProductionBoard";
+
+function ContractStatusPill({ status, signers }: { status: 'draft' | 'pending_signature' | 'signed' | 'cancelled'; signers?: Array<{ status: string }> }) {
+  const map = {
+    draft: { label: 'Rascunho', cls: 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300' },
+    pending_signature: { label: 'Aguardando', cls: 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400' },
+    signed: { label: 'Assinado', cls: 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400' },
+    cancelled: { label: 'Cancelado', cls: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400' },
+  } as const;
+  const it = map[status];
+  const signed = (signers || []).filter(s => s.status === 'signed').length;
+  const total = (signers || []).length;
+  return (
+    <span className={cn('ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold', it.cls)}>
+      {it.label}
+      {status === 'pending_signature' && total > 0 && ` ${signed}/${total}`}
+    </span>
+  );
+}
 
 const LABEL_COLORS = ['#6366f1','#ec4899','#f59e0b','#10b981','#0ea5e9','#f43f5e','#8b5cf6','#22c55e'];
 function getLabelColor(label: string) {
@@ -113,7 +132,71 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [labels, setLabels] = useState<string[]>([]);
   const [newLabel, setNewLabel] = useState("");
-  const [showContract, setShowContract] = useState(false);
+  const [contractId, setContractId] = useState<number | null>(null);
+  const [creatingContract, setCreatingContract] = useState(false);
+  const [jobContract, setJobContract] = useState<{ id: number; status: 'draft' | 'pending_signature' | 'signed' | 'cancelled'; signers?: Array<{ status: string }> } | null>(null);
+
+  // Load existing contract for this job (if any) so we can show status + reuse instead of duplicating.
+  useEffect(() => {
+    if (!job) {
+      setJobContract(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authFetch(`/api/contracts?job_id=${job.id}`);
+        if (!res.ok) return;
+        const list = await res.json();
+        if (cancelled) return;
+        // Pick the most recent non-cancelled contract for this job
+        const active = (list || []).find((c: any) => c.status !== 'cancelled') || null;
+        setJobContract(active);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [job?.id, contractId]);
+
+  const handleOpenContract = async () => {
+    if (!job) return;
+    if (jobContract) {
+      // Reuse existing contract
+      setContractId(jobContract.id);
+      return;
+    }
+    if (!job.client_id) {
+      alert("Este trabalho não tem um cliente vinculado.");
+      return;
+    }
+    setCreatingContract(true);
+    try {
+      const res = await authFetch("/api/contracts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_id: job.client_id,
+          job_id: job.id,
+          status: "draft",
+          contract_data: {
+            serviceType: job.job_type || "",
+            serviceDate: job.job_date || "",
+            serviceTime: job.job_time || "",
+            serviceValue: (job.amount || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 }),
+            clientName: job.client_name || "",
+          },
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert("Erro ao criar contrato: " + (err.error || res.statusText));
+        return;
+      }
+      const created = await res.json();
+      setContractId(created.id);
+    } finally {
+      setCreatingContract(false);
+    }
+  };
 
   // ── Financeiro ──
   const [dealItems, setDealItems] = useState<CatalogItem[]>([]);
@@ -408,12 +491,19 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
           </div>
           <div className="flex items-center gap-1">
             <button
-              onClick={() => setShowContract(true)}
-              className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-gold-600 dark:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-500/10 transition-colors"
-              title="Gerar contrato"
+              onClick={handleOpenContract}
+              disabled={creatingContract}
+              className={cn(
+                "flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors disabled:opacity-60",
+                jobContract
+                  ? "text-gold-600 dark:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-500/10"
+                  : "text-gold-600 dark:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-500/10"
+              )}
+              title={jobContract ? 'Ver contrato existente' : 'Gerar contrato'}
             >
               <FileText size={14} />
-              Gerar contrato
+              {jobContract ? 'Ver contrato' : 'Gerar contrato'}
+              {jobContract && <ContractStatusPill status={jobContract.status} signers={jobContract.signers} />}
             </button>
             {onRemoveFromProduction && (
               <button
@@ -650,18 +740,36 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                 )}
               </section>
 
-              {/* Move stage */}
+              {/* Move stage / Send to production */}
               <section>
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
-                  Mover etapa
+                  {job.production_stage ? 'Mover etapa' : 'Produção'}
                 </h3>
-                <SearchableSelect
-                  value={job.production_stage || ""}
-                  onChange={v => onStageChange(job.id, v)}
-                  options={stages.map(s => ({ value: s.id, label: s.name }))}
-                  placeholder="Selecionar etapa..."
-                  className="w-full"
-                />
+                {job.production_stage ? (
+                  <SearchableSelect
+                    value={job.production_stage}
+                    onChange={v => onStageChange(job.id, v)}
+                    options={stages.map(s => ({ value: s.id, label: s.name }))}
+                    placeholder="Selecionar etapa..."
+                    className="w-full"
+                  />
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-lg">
+                      <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
+                      <span className="text-xs text-gray-500 dark:text-gray-400">Não está em produção</span>
+                    </div>
+                    {stages.length > 0 && (
+                      <button
+                        onClick={() => onStageChange(job.id, stages[0].id)}
+                        className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-gold-500/15 hover:bg-gold-500/25 text-gold-700 dark:text-gold-300 text-sm font-semibold rounded-lg transition-colors"
+                      >
+                        <Camera size={14} />
+                        Enviar para produção
+                      </button>
+                    )}
+                  </div>
+                )}
               </section>
             </div>
           )}
@@ -1043,11 +1151,10 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
       </div>
 
       {/* Contract generator — full-screen, above drawer */}
-      {showContract && (
+      {contractId !== null && (
         <ContractGenerator
-          job={job}
-          client={client}
-          onClose={() => setShowContract(false)}
+          contractId={contractId}
+          onClose={() => setContractId(null)}
         />
       )}
 

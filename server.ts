@@ -486,53 +486,9 @@ async function persistMessageToSupabase(userId: string, message: LiveWhatsAppMes
       console.log(`[persistMessage] ✅ Conversa ATUALIZADA | phone=${phone}`);
     }
 
-    // Auto-criar lead no pipeline quando mensagem chega de fora
-    if (!message.fromMe && supabaseAdmin) {
-      const phoneNorm = normalizeBrazilianPhone(message.phone);
-      const phoneShort = phoneNorm.startsWith('55') ? phoneNorm.slice(2) : phoneNorm;
-
-      const { data: existingDeals } = await supabaseAdmin
-        .from('deals')
-        .select('id')
-        .eq('user_id', userId)
-        .or(`contact_phone.eq.${phoneNorm},contact_phone.eq.${phoneShort}`)
-        .limit(1);
-
-      if (!existingDeals || existingDeals.length === 0) {
-        const { data: stages } = await supabaseAdmin
-          .from('deal_stages')
-          .select('id, name, position')
-          .eq('user_id', userId)
-          .not('id', 'like', 'prod-%')
-          .eq('is_final', false)
-          .order('position', { ascending: true })
-          .limit(1);
-
-        if (stages && stages.length > 0) {
-          const firstStage = stages[0];
-          const nowIso = new Date().toISOString();
-          const contactName = message.name || null;
-          await supabaseAdmin.from('deals').insert({
-            user_id: userId,
-            title: contactName || phoneNorm,
-            contact_name: contactName,
-            contact_phone: phoneNorm,
-            stage: firstStage.id,
-            value: 0,
-            created_at: nowIso,
-            updated_at: nowIso,
-            current_stage_entered_at: nowIso,
-            stage_history: JSON.stringify([{
-              stage_id: firstStage.id,
-              stage_name: firstStage.name,
-              entered_at: nowIso,
-              left_at: null,
-            }]),
-          });
-          console.log(`[Pipeline] Lead auto-criado: "${contactName || phoneNorm}" na etapa "${firstStage.name}"`);
-        }
-      }
-    }
+    // Auto-criação de lead no pipeline foi desativada por escolha do usuário.
+    // Conversas continuam aparecendo no Inbox; o lead só vira deal quando o usuário
+    // adiciona manualmente via "Adicionar ao funil" na conversa.
   } catch (err) {
     // Falha silenciosa — cache em memória ainda funciona
   }
@@ -1756,57 +1712,25 @@ async function startServer() {
         }
         console.log(`[Webhook Meta] ✅ ${normalizedType} salvo — user ${waAccount.user_id}, phone ${cleanFrom}`);
 
-        // Auto-criar lead no pipeline (Meta)
+        // Enriquece o nome de um deal já existente (criado manualmente) com o nome
+        // que veio no payload do WhatsApp. Não cria novos deals — adição é manual.
         const metaUserId = waAccount.user_id;
-        const phoneShortMeta = cleanFrom.startsWith('55') ? cleanFrom.slice(2) : cleanFrom;
-        const { data: existingDealsMeta } = await supabaseAdmin
-          .from('deals')
-          .select('id')
-          .eq('user_id', metaUserId)
-          .or(`contact_phone.eq.${cleanFrom},contact_phone.eq.${phoneShortMeta}`)
-          .limit(1);
-
-        // Se lead já existe mas sem nome, atualiza com o nome recebido
-        if (contactName && existingDealsMeta && existingDealsMeta.length > 0) {
-          const existingDeal = existingDealsMeta[0] as any;
-          await supabaseAdmin.from('deals')
-            .update({ contact_name: contactName, title: contactName })
-            .eq('id', existingDeal.id)
+        if (contactName) {
+          const phoneShortMeta = cleanFrom.startsWith('55') ? cleanFrom.slice(2) : cleanFrom;
+          const { data: existingDealsMeta } = await supabaseAdmin
+            .from('deals')
+            .select('id')
             .eq('user_id', metaUserId)
-            .is('contact_name', null);
-        }
-
-        if (!existingDealsMeta || existingDealsMeta.length === 0) {
-          const { data: stagesMeta } = await supabaseAdmin
-            .from('deal_stages')
-            .select('id, name, position')
-            .eq('user_id', metaUserId)
-            .not('id', 'like', 'prod-%')
-            .eq('is_final', false)
-            .order('position', { ascending: true })
+            .or(`contact_phone.eq.${cleanFrom},contact_phone.eq.${phoneShortMeta}`)
             .limit(1);
 
-          if (stagesMeta && stagesMeta.length > 0) {
-            const firstStageMeta = stagesMeta[0];
-            const nowMeta = new Date().toISOString();
-            await supabaseAdmin.from('deals').insert({
-              user_id: metaUserId,
-              title: contactName || cleanFrom,
-              contact_name: contactName,
-              contact_phone: cleanFrom,
-              stage: firstStageMeta.id,
-              value: 0,
-              created_at: nowMeta,
-              updated_at: nowMeta,
-              current_stage_entered_at: nowMeta,
-              stage_history: JSON.stringify([{
-                stage_id: firstStageMeta.id,
-                stage_name: firstStageMeta.name,
-                entered_at: nowMeta,
-                left_at: null,
-              }]),
-            });
-            console.log(`[Pipeline] Lead auto-criado via Meta: ${cleanFrom} na etapa "${firstStageMeta.name}"`);
+          if (existingDealsMeta && existingDealsMeta.length > 0) {
+            const existingDeal = existingDealsMeta[0] as any;
+            await supabaseAdmin.from('deals')
+              .update({ contact_name: contactName, title: contactName })
+              .eq('id', existingDeal.id)
+              .eq('user_id', metaUserId)
+              .is('contact_name', null);
           }
         }
         return;
@@ -2865,7 +2789,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const jobsFormatted = (jobs || []).map((j: any) => ({
       ...j,
       client_name: (j.clients as any)?.name || null,
-      production_stage: j.production_stage || 'prod-emp-1',
+      // production_stage só é definido quando o usuário envia explicitamente
+      // pra produção. Trabalhos com null não aparecem no kanban.
+      production_stage: j.production_stage || null,
       amount_paid: amountPaidByJob.get(j.id) || 0,
     }));
 
@@ -2895,20 +2821,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       user_id: userId,
     };
 
-    // Try inserting with production columns (requires migration)
-    let { data, error } = await supabase.from('jobs').insert({
-      ...baseJobPayload,
-      production_stage: 'prod-emp-1',
-      production_stage_entered_at: new Date().toISOString(),
-    }).select().single();
-
-    // Fallback: if production columns don't exist yet, insert without them
-    if (error && (error.code === '42703' || error.message?.includes('column') || error.message?.includes('production_stage'))) {
-      console.warn('[POST /api/jobs] Production columns missing, inserting without them. Run SQL migration!');
-      const fallback = await supabase.from('jobs').insert(baseJobPayload).select().single();
-      data = fallback.data;
-      error = fallback.error;
-    }
+    // Trabalho novo entra fora da produção. O usuário envia explicitamente
+    // pra produção via botão "Enviar para produção" no detalhe do trabalho.
+    let { data, error } = await supabase.from('jobs').insert(baseJobPayload).select().single();
 
     if (error) {
       console.error('[POST /api/jobs] Supabase error:', error.message);
@@ -5109,8 +5024,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         payment_status: job.payment_status || 'pending',
         status: job.status || 'scheduled',
         notes: job.notes || '',
-        production_stage: 'prod-emp-1',
-        production_stage_entered_at: new Date().toISOString(),
+        // Não entra em produção automaticamente — usuário envia depois (após contrato).
         user_id: userId,
       } as any;
       const { data: newJob, error } = await supabase.from('jobs').insert(jobPayload).select().single();
@@ -7338,6 +7252,654 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (error) return res.status(500).json({ error: error.message });
 
     res.json(data);
+  });
+
+  // ============ CONTRACTS / STUDIO SETTINGS ============
+
+  // GET studio settings (returns null if user has none yet)
+  app.get('/api/studio-settings', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase
+      .from('studio_settings')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    // Never leak the API key in plaintext on read; expose only a presence flag.
+    if (data) {
+      const { autentique_api_key, ...safe } = data as any;
+      return res.json({ ...safe, autentique_api_key_set: !!autentique_api_key });
+    }
+    res.json(null);
+  });
+
+  // PUT studio settings (upsert)
+  app.put('/api/studio-settings', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const body = req.body || {};
+    const payload: any = {
+      user_id: userId,
+      studio_name: body.studio_name ?? null,
+      studio_cnpj: body.studio_cnpj ?? null,
+      studio_address: body.studio_address ?? null,
+      studio_responsible: body.studio_responsible ?? null,
+      studio_responsible_cpf: body.studio_responsible_cpf ?? null,
+      studio_city: body.studio_city ?? null,
+      down_payment_percent: body.down_payment_percent ?? 30,
+      installments: body.installments ?? 6,
+      extra_photo_price: body.extra_photo_price ?? '35,00',
+      delivery_days_selection: body.delivery_days_selection ?? 2,
+      selection_deadline_days: body.selection_deadline_days ?? 5,
+      delivery_days: body.delivery_days ?? 30,
+      signing_city: body.signing_city ?? null,
+      autentique_sandbox: !!body.autentique_sandbox,
+      updated_at: new Date().toISOString(),
+    };
+    // Only persist the API key if explicitly provided in this request.
+    if (typeof body.autentique_api_key === 'string' && body.autentique_api_key.length > 0) {
+      payload.autentique_api_key = body.autentique_api_key;
+    }
+    const { error } = await supabase.from('studio_settings').upsert(payload, { onConflict: 'user_id' });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+  });
+
+  // List contracts. Optional filters: ?status=, ?job_id=
+  app.get('/api/contracts', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const status = (req.query.status as string) || null;
+    const jobId = req.query.job_id ? Number(req.query.job_id) : null;
+    let q = supabase
+      .from('contracts')
+      .select('id, user_id, client_id, job_id, status, signers, autentique_id, signed_at, created_at, updated_at, contract_data')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+    if (status) q = q.eq('status', status);
+    if (jobId) q = q.eq('job_id', jobId);
+    const { data: contracts, error } = await q;
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Hydrate client name for the list view (light read)
+    const clientIds = Array.from(new Set((contracts || []).map((c: any) => c.client_id).filter(Boolean)));
+    const nameById = new Map<number, string>();
+    if (clientIds.length > 0) {
+      const { data: clients } = await supabase
+        .from('clients')
+        .select('id, name')
+        .in('id', clientIds);
+      (clients || []).forEach((c: any) => nameById.set(c.id, c.name));
+    }
+    res.json((contracts || []).map((c: any) => ({ ...c, client_name: nameById.get(c.client_id) || null })));
+  });
+
+  // Get single contract
+  app.get('/api/contracts/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase
+      .from('contracts')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'not found' });
+    res.json(data);
+  });
+
+  // Create contract (called by "Enviar p/ contratos" on a Job card)
+  app.post('/api/contracts', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const body = req.body || {};
+    if (!body.client_id) return res.status(400).json({ error: 'client_id required' });
+    const payload = {
+      user_id: userId,
+      client_id: body.client_id,
+      job_id: body.job_id ?? null,
+      status: body.status || 'draft',
+      contract_data: body.contract_data || {},
+      signers: body.signers || [],
+    };
+    const { data, error } = await supabase
+      .from('contracts')
+      .insert(payload)
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  // Update contract (form edits, status changes, signer updates)
+  app.put('/api/contracts/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const body = req.body || {};
+    const update: any = { updated_at: new Date().toISOString() };
+    if (body.contract_data !== undefined) update.contract_data = body.contract_data;
+    if (body.signers !== undefined) update.signers = body.signers;
+    if (body.status !== undefined) update.status = body.status;
+    if (body.job_id !== undefined) update.job_id = body.job_id;
+    if (body.signed_at !== undefined) update.signed_at = body.signed_at;
+    if (body.signed_pdf_url !== undefined) update.signed_pdf_url = body.signed_pdf_url;
+    if (body.autentique_id !== undefined) update.autentique_id = body.autentique_id;
+    const { data, error } = await supabase
+      .from('contracts')
+      .update(update)
+      .eq('user_id', userId)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.delete('/api/contracts/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { error } = await supabase
+      .from('contracts')
+      .delete()
+      .eq('user_id', userId)
+      .eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+  });
+
+  // ── Autentique: send for signature ─────────────────────────────────────────
+  // Creates a document via Autentique GraphQL API using the tenant's API key.
+  // Requires: contract has at least 1 signer with email.
+  app.post('/api/contracts/:id/autentique-send', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    const [{ data: contract }, { data: settings }] = await Promise.all([
+      supabase.from('contracts').select('*').eq('user_id', userId).eq('id', req.params.id).maybeSingle(),
+      supabase.from('studio_settings').select('autentique_api_key, autentique_sandbox').eq('user_id', userId).maybeSingle(),
+    ]);
+    if (!contract) return res.status(404).json({ error: 'contract not found' });
+    if (!settings?.autentique_api_key) return res.status(400).json({ error: 'Autentique API key not configured' });
+
+    const signers: any[] = contract.signers || [];
+    if (!signers.length || !signers.every((s: any) => s.email)) {
+      return res.status(400).json({ error: 'Todos os signatários precisam ter e-mail antes de enviar para a Autentique.' });
+    }
+
+    const html = String(req.body?.html || '');
+    if (!html) return res.status(400).json({ error: 'html (rendered contract) required' });
+
+    const endpoint = settings.autentique_sandbox
+      ? 'https://api.autentique.com.br/v2/graphql?sandbox=true'
+      : 'https://api.autentique.com.br/v2/graphql';
+
+    // Autentique expects multipart/form-data for createDocument with a file.
+    // We send the rendered HTML as a .html attachment; Autentique converts it.
+    const operations = {
+      query: `
+        mutation CreateDocumentMutation($document: DocumentInput!, $signers: [SignerInput!]!, $file: Upload!) {
+          createDocument(document: $document, signers: $signers, file: $file) {
+            id
+            name
+            signatures { public_id name email signed { created_at } }
+          }
+        }
+      `,
+      variables: {
+        document: { name: `Contrato - ${contract.contract_data?.clientName || 'Cliente'}` },
+        signers: signers.map((s: any) => ({ email: s.email, action: 'SIGN', name: s.name || undefined })),
+        file: null,
+      },
+    };
+    const map = { '0': ['variables.file'] };
+
+    const form = new FormData();
+    form.append('operations', JSON.stringify(operations));
+    form.append('map', JSON.stringify(map));
+    form.append('0', new Blob([html], { type: 'text/html' }), 'contrato.html');
+
+    let json: any;
+    try {
+      const r = await fetch(endpoint, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${settings.autentique_api_key}` },
+        body: form as any,
+      });
+      json = await r.json();
+    } catch (err: any) {
+      return res.status(502).json({ error: 'Autentique request failed: ' + err.message });
+    }
+
+    if (json.errors?.length) {
+      return res.status(400).json({ error: json.errors[0]?.message || 'Autentique error', detail: json.errors });
+    }
+    const doc = json.data?.createDocument;
+    if (!doc?.id) return res.status(502).json({ error: 'Autentique did not return a document id' });
+
+    // Update contract: status + autentique_id + per-signer public_id
+    const newSigners = signers.map((s: any) => {
+      const match = (doc.signatures || []).find((sg: any) => sg.email === s.email);
+      return { ...s, status: 'pending', autentique_public_id: match?.public_id || null };
+    });
+    await supabase
+      .from('contracts')
+      .update({
+        autentique_id: doc.id,
+        status: 'pending_signature',
+        signers: newSigners,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', userId)
+      .eq('id', req.params.id);
+
+    res.json({ ok: true, autentique_id: doc.id });
+  });
+
+  // Pull latest signature status from Autentique for a given contract.
+  app.post('/api/contracts/:id/autentique-refresh', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    const [{ data: contract }, { data: settings }] = await Promise.all([
+      supabase.from('contracts').select('*').eq('user_id', userId).eq('id', req.params.id).maybeSingle(),
+      supabase.from('studio_settings').select('autentique_api_key, autentique_sandbox').eq('user_id', userId).maybeSingle(),
+    ]);
+    if (!contract) return res.status(404).json({ error: 'contract not found' });
+    if (!contract.autentique_id) return res.status(400).json({ error: 'contract not sent to Autentique yet' });
+    if (!settings?.autentique_api_key) return res.status(400).json({ error: 'Autentique API key not configured' });
+
+    const endpoint = settings.autentique_sandbox
+      ? 'https://api.autentique.com.br/v2/graphql?sandbox=true'
+      : 'https://api.autentique.com.br/v2/graphql';
+
+    const query = `query Q($id: UUID!) {
+      document(id: $id) {
+        id name files { signed }
+        signatures { public_id name email signed { created_at } }
+      }
+    }`;
+
+    let json: any;
+    try {
+      const r = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${settings.autentique_api_key}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ query, variables: { id: contract.autentique_id } }),
+      });
+      json = await r.json();
+    } catch (err: any) {
+      return res.status(502).json({ error: 'Autentique request failed: ' + err.message });
+    }
+
+    // Debug log: helps diagnose "client signed but app didn't update"
+    console.log('[autentique-refresh] contract', contract.id, 'autentique_id', contract.autentique_id);
+    console.log('[autentique-refresh] response:', JSON.stringify(json, null, 2));
+
+    if (json.errors?.length) return res.status(400).json({ error: json.errors[0]?.message, detail: json.errors });
+    const doc = json.data?.document;
+    if (!doc) return res.status(404).json({ error: 'document not found at Autentique' });
+
+    const sigs = doc.signatures || [];
+    const norm = (s: string) => (s || '').trim().toLowerCase();
+    const updatedSigners = (contract.signers || []).map((s: any) => {
+      const match = sigs.find((sg: any) =>
+        (sg.public_id && sg.public_id === s.autentique_public_id) ||
+        (sg.email && s.email && norm(sg.email) === norm(s.email))
+      );
+      const signed = !!match?.signed?.created_at;
+      return {
+        ...s,
+        status: signed ? 'signed' : 'pending',
+        signed_at: signed ? match.signed.created_at : null,
+        autentique_public_id: match?.public_id || s.autentique_public_id || null,
+      };
+    });
+    const allSigned = updatedSigners.length > 0 && updatedSigners.every((s: any) => s.status === 'signed');
+
+    console.log('[autentique-refresh] computed signers:', JSON.stringify(updatedSigners, null, 2));
+    console.log('[autentique-refresh] all_signed:', allSigned);
+
+    const { data: updateResult, error: updateError } = await supabase
+      .from('contracts')
+      .update({
+        signers: updatedSigners,
+        status: allSigned ? 'signed' : 'pending_signature',
+        signed_at: allSigned ? new Date().toISOString() : null,
+        signed_pdf_url: doc.files?.signed || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', userId)
+      .eq('id', req.params.id)
+      .select();
+
+    if (updateError) {
+      console.error('[autentique-refresh] DB UPDATE ERROR:', updateError);
+      return res.status(500).json({ error: 'DB update failed: ' + updateError.message });
+    }
+    console.log('[autentique-refresh] rows updated:', updateResult?.length || 0);
+    if ((updateResult?.length || 0) === 0) {
+      console.warn('[autentique-refresh] WARNING: 0 rows updated — possibly RLS or wrong id/user_id');
+    }
+
+    res.json({ ok: true, all_signed: allSigned, signers: updatedSigners, signed_pdf_url: doc.files?.signed || null });
+  });
+
+  // ============ DASHBOARD ANALYTICS ============
+  const parseHistory = (raw: any): any[] => {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw;
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch { return []; }
+  };
+
+  // Single endpoint that consolidates business-logic metrics across vendas,
+  // produção, oportunidades internas e financeiro. Designed for the Dashboard
+  // panorama view — heavy aggregation kept server-side so the client stays light.
+  app.get('/api/dashboard/analytics', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+
+    const now = new Date();
+    const todayStr = now.toISOString().slice(0, 10);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 10);
+    const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0).toISOString().slice(0, 10);
+    const next7DaysEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const last30Start = new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const futureLimit = new Date(now.getFullYear(), now.getMonth() + 3, 0).toISOString().slice(0, 10);
+
+    try {
+      const [
+        jobsRes,
+        dealsRes,
+        dealStagesRes,
+        prodStagesRes,
+        prodProcessesRes,
+        contractsRes,
+        opportunitiesRes,
+        clientsRes,
+      ] = await Promise.all([
+        supabase.from('jobs').select('*, clients(name)').eq('user_id', userId),
+        supabase.from('deals').select('*').eq('user_id', userId),
+        supabase.from('deal_stages').select('*').eq('user_id', userId).not('id', 'like', 'prod-%').order('position'),
+        supabase.from('deal_stages').select('*').eq('user_id', userId).like('id', 'prod-%').order('position'),
+        supabase.from('production_processes').select('*').eq('user_id', userId).order('position'),
+        supabase.from('contracts').select('id, job_id, status').eq('user_id', userId),
+        supabase.from('opportunities').select('*, clients(name)').eq('user_id', userId).not('status', 'in', '("converted","dismissed")'),
+        supabase.from('clients').select('id, name').eq('user_id', userId),
+      ]);
+
+      const jobs = (jobsRes.data || []).map((j: any) => ({ ...j, client_name: (j.clients as any)?.name || null }));
+      const deals = dealsRes.data || [];
+      const dealStages = dealStagesRes.data || [];
+      const prodStages = prodStagesRes.data || [];
+      const prodProcesses = prodProcessesRes.data || [];
+      const contracts = contractsRes.data || [];
+      const opportunities = opportunitiesRes.data || [];
+      const clientNameById = new Map<number, string>();
+      (clientsRes.data || []).forEach((c: any) => clientNameById.set(c.id, c.name));
+
+      // Aggregated payments per job (for accurate revenue)
+      const jobIds = jobs.map((j: any) => j.id);
+      const amountPaidByJob = new Map<number, number>();
+      const paymentsByDate = new Map<string, number>();
+      if (jobIds.length > 0) {
+        const { data: pmts } = await adminClient
+          .from('job_payments')
+          .select('job_id, amount, payment_date')
+          .in('job_id', jobIds);
+        (pmts || []).forEach((p: any) => {
+          amountPaidByJob.set(p.job_id, (amountPaidByJob.get(p.job_id) || 0) + (p.amount || 0));
+          if (p.payment_date) {
+            paymentsByDate.set(p.payment_date, (paymentsByDate.get(p.payment_date) || 0) + (p.amount || 0));
+          }
+        });
+      }
+
+      // ── JOBS metrics ───────────────────────────────────────────────────────
+      const jobsThisMonth = jobs.filter((j: any) => j.job_date >= monthStart && j.job_date <= monthEnd);
+      const completedThisMonth = jobsThisMonth.filter((j: any) => j.status === 'completed' || (j.job_date < todayStr && j.status !== 'cancelled'));
+      const scheduledThisMonth = jobsThisMonth.filter((j: any) => j.job_date >= todayStr && j.status === 'scheduled');
+      const todayJobs = jobs.filter((j: any) => j.job_date === todayStr && j.status !== 'cancelled');
+      const next7Jobs = jobs
+        .filter((j: any) => j.job_date >= todayStr && j.job_date <= next7DaysEnd && j.status !== 'cancelled')
+        .sort((a: any, b: any) => (a.job_date || '').localeCompare(b.job_date || ''));
+
+      // Late jobs: production_stage_entered_at + expected_hours has passed
+      const stageHoursById = new Map<string, number>();
+      prodStages.forEach((s: any) => stageHoursById.set(s.id, Number(s.expected_hours || 0)));
+      const isLate = (j: any) => {
+        if (!j.production_stage || !j.production_stage_entered_at) return false;
+        const expected = stageHoursById.get(j.production_stage) || 0;
+        if (expected <= 0) return false;
+        const elapsedMs = Date.now() - new Date(j.production_stage_entered_at).getTime();
+        return elapsedMs / 3_600_000 >= expected;
+      };
+      const lateJobs = jobs.filter(isLate);
+
+      // Awaiting contract: jobs without a signed contract (any non-signed status counts)
+      const contractByJob = new Map<number, string>();
+      contracts.forEach((c: any) => {
+        if (c.job_id) contractByJob.set(c.job_id, c.status);
+      });
+      const awaitingContract = jobs.filter((j: any) => {
+        if (j.status === 'cancelled') return false;
+        const status = contractByJob.get(j.id);
+        return !status || status === 'draft' || status === 'pending_signature';
+      });
+      const awaitingContractFutureOnly = awaitingContract.filter((j: any) => j.job_date >= todayStr);
+
+      // Awaiting selection: stage names containing "seleção" or "selection"
+      const selectionStageIds = new Set(
+        prodStages
+          .filter((s: any) => /sele[çc][aã]o|selection/i.test(s.name || ''))
+          .map((s: any) => s.id),
+      );
+      const awaitingSelection = jobs.filter((j: any) =>
+        j.production_stage && selectionStageIds.has(j.production_stage),
+      );
+
+      // ── PRODUCTION board (counts per process > stage) ──────────────────────
+      const stageById = new Map<string, any>();
+      prodStages.forEach((s: any) => stageById.set(s.id, s));
+      const productionByProcess = prodProcesses.map((proc: any) => {
+        const stages = prodStages
+          .filter((s: any) => s.process_id === proc.id)
+          .map((stage: any) => {
+            const stageJobs = jobs.filter((j: any) => j.production_stage === stage.id && j.status !== 'cancelled');
+            return {
+              id: stage.id,
+              name: stage.name,
+              color: stage.color || '#94a3b8',
+              count: stageJobs.length,
+              late_count: stageJobs.filter(isLate).length,
+              expected_hours: Number(stage.expected_hours || 0),
+            };
+          });
+        return {
+          id: proc.id,
+          name: proc.name,
+          color: proc.color || '#94a3b8',
+          is_special: !!proc.is_special,
+          stages,
+          total_jobs: stages.reduce((acc: number, s: any) => acc + s.count, 0),
+        };
+      });
+
+      // ── SALES funnel (deals by stage) ──────────────────────────────────────
+      const dealsByStage = dealStages.map((stage: any) => {
+        const stageDeals = deals.filter((d: any) => d.stage === stage.id);
+        return {
+          id: stage.id,
+          name: stage.name,
+          color: stage.color || '#E5E7EB',
+          position: Number(stage.position || 0),
+          is_final: !!stage.is_final,
+          is_won: !!stage.is_won,
+          count: stageDeals.length,
+          total_value: stageDeals.reduce((acc: number, d: any) => acc + (Number(d.value) || 0), 0),
+        };
+      });
+
+      const activeDeals = deals.filter((d: any) => {
+        const s = dealStages.find((x: any) => x.id === d.stage);
+        return !s?.is_final;
+      });
+
+      // Conversion: for each non-final stage, % of deals that *passed through* it
+      // and are now in a later (or won) stage. Uses stage_history JSON when available.
+      const stageOrder = new Map<string, number>();
+      dealStages.forEach((s: any) => stageOrder.set(s.id, Number(s.position || 0)));
+      const wonStageIds = new Set(dealStages.filter((s: any) => s.is_won).map((s: any) => s.id));
+
+      const conversionByStage = dealStages
+        .filter((s: any) => !s.is_final)
+        .map((stage: any) => {
+          const stagePos = Number(stage.position || 0);
+          // Deals that ever entered this stage (via history if present, else current+later)
+          let entered = 0;
+          let advanced = 0;
+          let lost = 0;
+          deals.forEach((d: any) => {
+            const history = parseHistory(d.stage_history);
+            const passedThrough = history.some((h: any) => h.stage_id === stage.id) ||
+              d.stage === stage.id ||
+              (stageOrder.get(d.stage) ?? -1) > stagePos ||
+              wonStageIds.has(d.stage);
+            if (!passedThrough) return;
+            entered++;
+            const currentPos = stageOrder.get(d.stage) ?? -1;
+            const isWon = wonStageIds.has(d.stage);
+            const isLost = !!dealStages.find((x: any) => x.id === d.stage && x.is_final && !x.is_won);
+            if (isLost && !history.some((h: any) => (stageOrder.get(h.stage_id) ?? -1) > stagePos)) lost++;
+            if (currentPos > stagePos || isWon) advanced++;
+          });
+          const rate = entered > 0 ? Math.round((advanced / entered) * 100) : null;
+          return { stage_id: stage.id, stage_name: stage.name, entered, advanced, lost, conversion_rate: rate };
+        });
+
+      // Hot deals (top 5 by value among active, prefer hot temperature)
+      const hotDeals = activeDeals
+        .map((d: any) => ({
+          id: d.id,
+          title: d.title || 'Negócio',
+          client_name: d.client_id ? clientNameById.get(d.client_id) || null : null,
+          value: Number(d.value) || 0,
+          stage_id: d.stage,
+          stage_name: dealStages.find((s: any) => s.id === d.stage)?.name || '',
+          temperature: d.temperature || 'cold',
+          stage_entered_at: d.current_stage_entered_at || d.stage_entered_at || d.updated_at,
+        }))
+        .sort((a: any, b: any) => {
+          const tempOrder = { hot: 0, warm: 1, cold: 2 } as any;
+          const t = (tempOrder[a.temperature] ?? 3) - (tempOrder[b.temperature] ?? 3);
+          if (t !== 0) return t;
+          return b.value - a.value;
+        })
+        .slice(0, 5);
+
+      // ── OPPORTUNITIES (internal) ───────────────────────────────────────────
+      const oppList = opportunities.map((o: any) => ({
+        id: o.id,
+        client_id: o.client_id,
+        client_name: (o.clients as any)?.name || null,
+        title: o.title,
+        suggested_date: o.suggested_date,
+        priority: getPriority(o.suggested_date),
+      }));
+      const opportunitiesData = {
+        total: oppList.length,
+        // getPriority -> 'urgent' (passou data) | 'active' (próximos dias) | 'future' (>15 dias)
+        urgent: oppList.filter((o: any) => o.priority === 'urgent').length,
+        active: oppList.filter((o: any) => o.priority === 'active').length,
+        future: oppList.filter((o: any) => o.priority === 'future').length,
+        list: oppList.slice(0, 8),
+      };
+
+      // ── FINANCE ────────────────────────────────────────────────────────────
+      const revenueThisMonth = jobsThisMonth
+        .filter((j: any) => j.status !== 'cancelled')
+        .reduce((acc: number, j: any) => acc + (amountPaidByJob.get(j.id) || 0), 0);
+      const revenueLastMonth = jobs
+        .filter((j: any) => j.job_date >= lastMonthStart && j.job_date <= lastMonthEnd && j.status !== 'cancelled')
+        .reduce((acc: number, j: any) => acc + (amountPaidByJob.get(j.id) || 0), 0);
+      const futureRevenue = jobs
+        .filter((j: any) => j.job_date >= todayStr && j.job_date <= futureLimit && j.status !== 'cancelled')
+        .reduce((acc: number, j: any) => {
+          const total = Number(j.amount) || 0;
+          const paid = amountPaidByJob.get(j.id) || 0;
+          return acc + Math.max(total - paid, 0);
+        }, 0);
+
+      const dailyRevenue: Array<{ date: string; total: number }> = [];
+      for (let i = 29; i >= 0; i--) {
+        const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        dailyRevenue.push({ date: d, total: paymentsByDate.get(d) || 0 });
+      }
+
+      // ── ATTENTION counter (top KPI) ────────────────────────────────────────
+      const attention =
+        lateJobs.length +
+        awaitingContractFutureOnly.length +
+        awaitingSelection.length;
+
+      const trim = (j: any) => ({
+        id: j.id,
+        client_name: j.client_name,
+        job_type: j.job_type,
+        job_date: j.job_date,
+        job_time: j.job_time,
+        amount: j.amount,
+        production_stage: j.production_stage,
+      });
+
+      res.json({
+        attention,
+        jobs: {
+          today: { count: todayJobs.length, list: todayJobs.map(trim) },
+          next7Days: { count: next7Jobs.length, list: next7Jobs.slice(0, 6).map(trim) },
+          thisMonth: {
+            total: jobsThisMonth.length,
+            completed: completedThisMonth.length,
+            scheduled: scheduledThisMonth.length,
+            cancelled: jobsThisMonth.filter((j: any) => j.status === 'cancelled').length,
+          },
+          late: { count: lateJobs.length, list: lateJobs.slice(0, 5).map(trim) },
+          awaitingContract: {
+            count: awaitingContractFutureOnly.length,
+            list: awaitingContractFutureOnly.slice(0, 5).map(trim),
+          },
+          awaitingSelection: { count: awaitingSelection.length, list: awaitingSelection.slice(0, 5).map(trim) },
+        },
+        sales: {
+          activeCount: activeDeals.length,
+          activeValue: activeDeals.reduce((acc: number, d: any) => acc + (Number(d.value) || 0), 0),
+          byStage: dealsByStage,
+          conversion: conversionByStage,
+          hotDeals,
+        },
+        production: { processes: productionByProcess },
+        opportunities: opportunitiesData,
+        finance: {
+          revenueThisMonth,
+          revenueLastMonth,
+          futureRevenue,
+          dailyRevenue,
+        },
+      });
+    } catch (err: any) {
+      console.error('[dashboard/analytics] error:', err);
+      res.status(500).json({ error: err?.message || 'Falha ao calcular analytics' });
+    }
   });
 
   // ============ VITE / STATIC FILES ============
