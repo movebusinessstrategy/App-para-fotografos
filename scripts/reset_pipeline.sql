@@ -1,10 +1,9 @@
 -- ============================================================
--- RESET TOTAL — limpa Vendas + Produção + Clientes + dados derivados
+-- RESET TOTAL — limpa Vendas + Produção + Clientes + WhatsApp
 -- Execute no Supabase SQL Editor (Dashboard > SQL Editor)
 -- ⚠️ DESTRUTIVO. Sem volta. Use apenas pra começar do zero.
 -- Não toca em: studio_settings (config empresa + chave Autentique),
---               deal_stages (etapas do funil), production_processes,
---               wa_conversations, wa_messages
+--               deal_stages (etapas do funil), production_processes
 -- ============================================================
 
 -- 1) UUID do user (se não for o seu, troque):
@@ -17,6 +16,8 @@ DECLARE
   opps_count INT;
   clients_count INT;
   contracts_count INT;
+  wa_convs_count INT;
+  wa_msgs_count INT;
 BEGIN
   IF target_user = '00000000-0000-0000-0000-000000000000' THEN
     RAISE EXCEPTION 'Você precisa trocar o target_user pelo seu UUID antes de rodar.';
@@ -29,10 +30,12 @@ BEGIN
   SELECT count(*) INTO deals_count     FROM deals          WHERE user_id::text = target_user;
   SELECT count(*) INTO opps_count      FROM opportunities  WHERE user_id::text = target_user;
   SELECT count(*) INTO contracts_count FROM contracts      WHERE user_id::text = target_user;
-  SELECT count(*) INTO clients_count   FROM clients        WHERE user_id::text = target_user;
+  SELECT count(*) INTO clients_count   FROM clients          WHERE user_id::text = target_user;
+  SELECT count(*) INTO wa_convs_count  FROM wa_conversations WHERE user_id::text = target_user;
+  SELECT count(*) INTO wa_msgs_count   FROM wa_messages      WHERE user_id::text = target_user;
 
-  RAISE NOTICE 'Antes: % clientes, % jobs, % deals, % contratos, % oportunidades',
-    clients_count, jobs_count, deals_count, contracts_count, opps_count;
+  RAISE NOTICE 'Antes: % clientes, % jobs, % deals, % contratos, % oportunidades, % conversas WA, % mensagens WA',
+    clients_count, jobs_count, deals_count, contracts_count, opps_count, wa_convs_count, wa_msgs_count;
 
   -- ── PRODUÇÃO ────────────────────────────────────────────────────────────
   DELETE FROM job_payments
@@ -57,8 +60,12 @@ BEGIN
   -- ── CLIENTES ────────────────────────────────────────────────────────────
   DELETE FROM clients WHERE user_id::text = target_user;
 
-  RAISE NOTICE '✅ Reset concluído. Apagados: % clientes, % jobs, % deals, % contratos, % oportunidades',
-    clients_count, jobs_count, deals_count, contracts_count, opps_count;
+  -- ── WHATSAPP (mensagens + conversas do número de teste) ────────────────
+  DELETE FROM wa_messages      WHERE user_id::text = target_user;
+  DELETE FROM wa_conversations WHERE user_id::text = target_user;
+
+  RAISE NOTICE '✅ Reset concluído. Apagados: % clientes, % jobs, % deals, % contratos, % oportunidades, % conversas WA, % mensagens WA',
+    clients_count, jobs_count, deals_count, contracts_count, opps_count, wa_convs_count, wa_msgs_count;
 END $$;
 
 -- ============================================================
@@ -69,7 +76,12 @@ END $$;
 --   • Aba Lista de Trabalhos     → vazia
 --   • Contratos                  → vazio
 --   • Oportunidades internas     → vazio
+--   • Inbox do WhatsApp          → vazio
 --
 -- Pra subir os clientes novos:
 --   /clients → ícone de upload no header → escolhe o CSV
+--
+-- Pra conectar o WhatsApp novo:
+--   /vendas → status do WhatsApp (canto direito) → desconectar atual,
+--              parear o novo número via QR code
 -- ============================================================
