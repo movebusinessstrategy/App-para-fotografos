@@ -1,59 +1,111 @@
-import React, { useEffect, useState } from "react";
-import { FileText, Plus, Search, X } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { FileText, Plus, Search, X, ChevronRight, Briefcase, FilePlus2, Settings as SettingsIcon, FileCheck2, FileClock, Save, Loader2, Eye, Trash2, AlertCircle, CheckCheck, RefreshCw } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { authFetch } from "../utils/authFetch";
 import { parseDate } from "../utils/date";
 import { ContractGenerator } from "../components/contracts/ContractGenerator";
-import { JobWithProduction } from "../components/producao/ProductionBoard";
-import { Client } from "../types";
+import { ConfirmModal } from "../components/ui/ConfirmModal";
+import { Client, Job } from "../types";
+import { cn } from "../utils/cn";
+
+type ToastKind = 'success' | 'error' | 'info';
+interface ToastState { kind: ToastKind; message: string }
+
+type ClientWithJobs = Client & { jobs?: Job[] };
+
+interface ContractListItem {
+  id: number;
+  client_id: number;
+  client_name: string | null;
+  job_id: number | null;
+  status: 'draft' | 'pending_signature' | 'signed' | 'cancelled';
+  signers: Array<{ status: 'pending' | 'signed' }>;
+  autentique_id: string | null;
+  signed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  contract_data?: { serviceType?: string; serviceDate?: string };
+}
+
+type Tab = 'pending' | 'signed' | 'settings';
 
 export default function ContractsPage() {
-  const [jobs, setJobs] = useState<JobWithProduction[]>([]);
-  const [clients, setClients] = useState<Client[]>([]);
+  const [tab, setTab] = useState<Tab>('pending');
+  const [contracts, setContracts] = useState<ContractListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const [generatingJob, setGeneratingJob] = useState<JobWithProduction | null>(null);
-  const [generatingClient, setGeneratingClient] = useState<any>(null);
 
-  useEffect(() => {
-    Promise.all([
-      authFetch("/api/jobs").then(r => r.json()),
-      authFetch("/api/clients").then(r => r.json()),
-    ]).then(([jobsData, clientsData]) => {
-      setJobs(jobsData);
-      setClients(clientsData);
-    }).catch(console.error).finally(() => setLoading(false));
-  }, []);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [openContractId, setOpenContractId] = useState<number | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<ContractListItem | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
 
-  const filtered = jobs.filter(j => {
-    const q = searchQuery.toLowerCase();
-    return !q || (j.client_name || '').toLowerCase().includes(q) || (j.job_name || '').toLowerCase().includes(q) || (j.job_type || '').toLowerCase().includes(q);
-  });
-
-  const [loadingContract, setLoadingContract] = useState(false);
-
-  const handleGenerate = async (job: JobWithProduction) => {
-    setLoadingContract(true);
-    let clientData = null;
-    if (job.client_id) {
-      try {
-        const res = await authFetch(`/api/clients/${job.client_id}`);
-        if (res.ok) clientData = await res.json();
-      } catch {}
-    }
-    setGeneratingClient(clientData);
-    setGeneratingJob(job); // abre DEPOIS que o cliente já chegou
-    setLoadingContract(false);
+  const showToast = (kind: ToastKind, message: string) => {
+    setToast({ kind, message });
+    setTimeout(() => setToast(null), 4000);
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-600" />
-      </div>
-    );
-  }
+  const reload = async () => {
+    setLoading(true);
+    try {
+      const res = await authFetch('/api/contracts');
+      if (res.ok) setContracts(await res.json());
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { reload(); }, []);
+
+  const doDelete = async (c: ContractListItem) => {
+    const res = await authFetch(`/api/contracts/${c.id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showToast('error', 'Erro ao excluir: ' + (err.error || res.statusText));
+      return;
+    }
+    showToast('success', 'Contrato excluído.');
+    reload();
+  };
+
+  const [refreshingAll, setRefreshingAll] = useState(false);
+  const refreshPending = async () => {
+    const eligible = contracts.filter(c => c.status === 'pending_signature' && c.autentique_id);
+    if (eligible.length === 0) {
+      showToast('info', 'Nenhum contrato aguardando assinatura.');
+      return;
+    }
+    setRefreshingAll(true);
+    let signedNow = 0; let errors = 0;
+    for (const c of eligible) {
+      try {
+        const r = await authFetch(`/api/contracts/${c.id}/autentique-refresh`, { method: 'POST' });
+        if (!r.ok) { errors++; continue; }
+        const data = await r.json();
+        if (data.all_signed) signedNow++;
+      } catch { errors++; }
+    }
+    setRefreshingAll(false);
+    await reload();
+    if (errors > 0) {
+      showToast('error', `${errors} contrato(s) com erro ao consultar Autentique. Veja o console do servidor.`);
+    } else if (signedNow > 0) {
+      showToast('success', `${signedNow} contrato(s) finalizado(s) e movido(s) para Assinados.`);
+    } else {
+      showToast('info', 'Status sincronizado. Nenhuma mudança.');
+    }
+  };
+
+  const pending = contracts.filter(c => c.status === 'draft' || c.status === 'pending_signature');
+  const signed = contracts.filter(c => c.status === 'signed');
+
+  const visible = useMemo(() => {
+    const list = tab === 'pending' ? pending : tab === 'signed' ? signed : [];
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter(c => (c.client_name || '').toLowerCase().includes(q));
+  }, [tab, contracts, searchQuery]);
 
   return (
     <>
@@ -62,92 +114,691 @@ export default function ContractsPage() {
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-2xl font-bold text-gray-800 dark:text-white">Contratos</h3>
-            <p className="text-gray-500 dark:text-gray-400 text-sm">Gere contratos automáticos a partir dos seus trabalhos.</p>
+            <p className="text-gray-500 dark:text-gray-400 text-sm">
+              Crie, envie e arquive contratos com integração Autentique.
+            </p>
           </div>
-        </div>
-
-        {/* Search */}
-        <div className="relative max-w-sm">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-          <input
-            type="text"
-            placeholder="Buscar trabalho ou cliente..."
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-8 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 placeholder-gray-400 focus:border-gold-400 outline-none transition-colors"
-          />
-          {searchQuery && (
-            <button onClick={() => setSearchQuery("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-              <X size={13} />
-            </button>
+          {tab !== 'settings' && (
+            <div className="flex items-center gap-2">
+              {tab === 'pending' && (
+                <button
+                  onClick={refreshPending}
+                  disabled={refreshingAll}
+                  title="Consultar Autentique e atualizar status de todos os contratos pendentes"
+                  className="inline-flex items-center gap-2 px-3 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 text-sm font-semibold rounded-xl transition-colors disabled:opacity-60"
+                >
+                  {refreshingAll ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                  Atualizar status
+                </button>
+              )}
+              <button
+                onClick={() => setPickerOpen(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
+              >
+                <Plus size={14} />
+                Novo contrato
+              </button>
+            </div>
           )}
         </div>
 
-        {/* Jobs table */}
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm overflow-hidden">
-          <table className="w-full text-left">
-            <thead className="bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">
-              <tr>
-                <th className="px-6 py-3 font-semibold">Cliente</th>
-                <th className="px-6 py-3 font-semibold">Tipo de ensaio</th>
-                <th className="px-6 py-3 font-semibold">Data</th>
-                <th className="px-6 py-3 font-semibold">Valor</th>
-                <th className="px-6 py-3 font-semibold text-right">Ação</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-              {filtered.map(job => {
-                const jobDate = job.job_date ? parseDate(job.job_date) : null;
-                return (
-                  <tr key={job.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
-                    <td className="px-6 py-4">
-                      <p className="font-medium text-gray-900 dark:text-white text-sm">
-                        {job.client_name || job.job_name || "Trabalho"}
-                      </p>
-                    </td>
-                    <td className="px-6 py-4 text-gray-600 dark:text-gray-300 text-sm">{job.job_type || "—"}</td>
-                    <td className="px-6 py-4 text-gray-500 dark:text-gray-400 text-sm">
-                      {jobDate ? format(jobDate, "dd/MM/yyyy", { locale: ptBR }) : "—"}
-                    </td>
-                    <td className="px-6 py-4 font-semibold text-gray-900 dark:text-white text-sm">
-                      R$ {(job.amount ?? 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <button
-                        onClick={() => handleGenerate(job)}
-                        disabled={loadingContract}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gold-600 hover:bg-gold-700 disabled:opacity-60 text-white text-xs font-semibold rounded-lg transition-colors shadow-sm"
-                      >
-                        {loadingContract ? (
-                          <div className="h-3 w-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                        ) : (
-                          <FileText size={13} />
-                        )}
-                        Gerar contrato
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-              {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-sm text-gray-400 dark:text-gray-500">
-                    Nenhum trabalho encontrado.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+        {/* Tabs */}
+        <div className="flex items-center gap-1 border-b border-gray-200 dark:border-gray-800">
+          <TabButton
+            active={tab === 'pending'}
+            onClick={() => setTab('pending')}
+            icon={<FileClock size={14} />}
+            label="A assinar"
+            count={pending.length}
+          />
+          <TabButton
+            active={tab === 'signed'}
+            onClick={() => setTab('signed')}
+            icon={<FileCheck2 size={14} />}
+            label="Assinados"
+            count={signed.length}
+          />
+          <TabButton
+            active={tab === 'settings'}
+            onClick={() => setTab('settings')}
+            icon={<SettingsIcon size={14} />}
+            label="Configurações"
+          />
         </div>
+
+        {/* Search (only on list tabs) */}
+        {tab !== 'settings' && (
+          <div className="relative max-w-sm">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Buscar por cliente..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-8 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 placeholder-gray-400 focus:border-gold-400 outline-none transition-colors"
+            />
+            {searchQuery && (
+              <button onClick={() => setSearchQuery("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                <X size={13} />
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Body */}
+        {tab === 'settings' ? (
+          <SettingsForm onNotify={showToast} />
+        ) : loading ? (
+          <div className="flex items-center justify-center h-64">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-600" />
+          </div>
+        ) : (
+          <ContractsList
+            contracts={visible}
+            tab={tab}
+            onOpen={(id) => setOpenContractId(id)}
+            onAskDelete={(c) => setConfirmDelete(c)}
+          />
+        )}
       </div>
 
-      {generatingJob && (
-        <ContractGenerator
-          job={generatingJob}
-          client={generatingClient}
-          onClose={() => { setGeneratingJob(null); setGeneratingClient(null); }}
+      {pickerOpen && (
+        <NewContractPicker
+          onClose={() => setPickerOpen(false)}
+          onCreated={(id) => {
+            setPickerOpen(false);
+            setOpenContractId(id);
+            reload();
+          }}
+          onError={(msg) => showToast('error', msg)}
         />
       )}
+
+      {openContractId !== null && (
+        <ContractGenerator
+          contractId={openContractId}
+          onClose={() => { setOpenContractId(null); reload(); }}
+          onSaved={() => reload()}
+          onDeleted={() => { setOpenContractId(null); reload(); }}
+        />
+      )}
+
+      <ConfirmModal
+        open={!!confirmDelete}
+        title="Excluir contrato"
+        message={confirmDelete
+          ? `Excluir o contrato de ${confirmDelete.client_name || 'cliente sem nome'}? Esta ação não pode ser desfeita.`
+          : ''}
+        confirmText="Excluir"
+        variant="danger"
+        onConfirm={() => {
+          if (confirmDelete) doDelete(confirmDelete);
+          setConfirmDelete(null);
+        }}
+        onCancel={() => setConfirmDelete(null)}
+      />
+
+      <Toast toast={toast} onClose={() => setToast(null)} />
     </>
+  );
+}
+
+// ─── Toast component ──────────────────────────────────────────────────────────
+
+function Toast({ toast, onClose }: { toast: ToastState | null; onClose: () => void }) {
+  if (!toast) return null;
+  return (
+    <div className="fixed top-5 right-5 z-[110] animate-in slide-in-from-top-2 fade-in duration-200">
+      <div className={cn(
+        'flex items-center gap-2.5 px-4 py-3 rounded-xl shadow-2xl backdrop-blur border max-w-md',
+        toast.kind === 'success' && 'bg-emerald-50/95 dark:bg-emerald-900/80 border-emerald-200 dark:border-emerald-700 text-emerald-800 dark:text-emerald-100',
+        toast.kind === 'error' && 'bg-red-50/95 dark:bg-red-900/80 border-red-200 dark:border-red-700 text-red-800 dark:text-red-100',
+        toast.kind === 'info' && 'bg-gray-50/95 dark:bg-gray-800/95 border-gray-200 dark:border-gray-700 text-gray-800 dark:text-gray-100',
+      )}>
+        {toast.kind === 'success' && <CheckCheck size={16} className="flex-shrink-0" />}
+        {toast.kind === 'error' && <AlertCircle size={16} className="flex-shrink-0" />}
+        <span className="text-sm font-medium">{toast.message}</span>
+        <button onClick={onClose} className="ml-2 opacity-60 hover:opacity-100">
+          <X size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Tab button ───────────────────────────────────────────────────────────────
+
+function TabButton({ active, onClick, icon, label, count }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string; count?: number }) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        'inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors -mb-px',
+        active
+          ? 'border-gold-500 text-gold-700 dark:text-gold-400'
+          : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+      )}
+    >
+      {icon}
+      {label}
+      {typeof count === 'number' && (
+        <span className={cn(
+          'inline-block px-1.5 py-0.5 rounded-full text-[10px] font-bold',
+          active ? 'bg-gold-100 dark:bg-gold-900/40 text-gold-700 dark:text-gold-300' : 'bg-gray-100 dark:bg-gray-800 text-gray-500'
+        )}>
+          {count}
+        </span>
+      )}
+    </button>
+  );
+}
+
+// ─── Contracts list ────────────────────────────────────────────────────────────
+
+function ContractsList({ contracts, tab, onOpen, onAskDelete }: { contracts: ContractListItem[]; tab: 'pending' | 'signed'; onOpen: (id: number) => void; onAskDelete: (c: ContractListItem) => void }) {
+  return (
+    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm overflow-hidden">
+      <table className="w-full text-left">
+        <thead className="bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">
+          <tr>
+            <th className="px-6 py-3 font-semibold">Cliente</th>
+            <th className="px-6 py-3 font-semibold">Tipo / Data</th>
+            <th className="px-6 py-3 font-semibold">Signatários</th>
+            <th className="px-6 py-3 font-semibold">{tab === 'signed' ? 'Assinado em' : 'Status'}</th>
+            <th className="px-6 py-3 font-semibold text-right">Ação</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+          {contracts.map(c => {
+            const signedCount = (c.signers || []).filter(s => s.status === 'signed').length;
+            const total = (c.signers || []).length;
+            return (
+              <tr key={c.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
+                <td className="px-6 py-4">
+                  <p className="font-medium text-gray-900 dark:text-white text-sm">{c.client_name || 'Sem cliente'}</p>
+                  <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">
+                    Criado em {format(new Date(c.created_at), "dd/MM/yyyy", { locale: ptBR })}
+                  </p>
+                </td>
+                <td className="px-6 py-4 text-gray-600 dark:text-gray-300 text-sm">
+                  {c.contract_data?.serviceType || '—'}
+                  {c.contract_data?.serviceDate && (
+                    <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">{c.contract_data.serviceDate}</p>
+                  )}
+                </td>
+                <td className="px-6 py-4 text-gray-500 dark:text-gray-400 text-sm">
+                  {total > 0 ? `${signedCount} de ${total}` : '—'}
+                </td>
+                <td className="px-6 py-4">
+                  {tab === 'signed' ? (
+                    <span className="text-sm text-gray-600 dark:text-gray-300">
+                      {c.signed_at ? format(new Date(c.signed_at), "dd/MM/yyyy", { locale: ptBR }) : '—'}
+                    </span>
+                  ) : (
+                    <ListStatusBadge status={c.status} />
+                  )}
+                </td>
+                <td className="px-6 py-4 text-right">
+                  <div className="inline-flex items-center gap-1.5">
+                    <button
+                      onClick={() => onOpen(c.id)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 text-xs font-semibold rounded-lg transition-colors"
+                    >
+                      <Eye size={12} />
+                      {tab === 'signed' ? 'Visualizar' : 'Abrir'}
+                    </button>
+                    <button
+                      onClick={() => onAskDelete(c)}
+                      title="Excluir contrato"
+                      className="inline-flex items-center justify-center p-1.5 text-gray-400 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-500 dark:hover:text-red-400 rounded-lg transition-colors"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+          {contracts.length === 0 && (
+            <tr>
+              <td colSpan={5} className="px-6 py-12 text-center text-sm text-gray-400 dark:text-gray-500">
+                {tab === 'signed' ? 'Nenhum contrato assinado ainda.' : 'Nenhum contrato pendente. Crie um novo ou envie um trabalho da Produção.'}
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ListStatusBadge({ status }: { status: ContractListItem['status'] }) {
+  const map = {
+    draft: { label: 'Rascunho', cls: 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300' },
+    pending_signature: { label: 'Aguardando', cls: 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400' },
+    signed: { label: 'Assinado', cls: 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400' },
+    cancelled: { label: 'Cancelado', cls: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400' },
+  } as const;
+  const it = map[status];
+  return <span className={cn('inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold', it.cls)}>{it.label}</span>;
+}
+
+// ─── New contract: client picker ──────────────────────────────────────────────
+
+function NewContractPicker({ onClose, onCreated, onError }: { onClose: () => void; onCreated: (id: number) => void; onError: (msg: string) => void }) {
+  const [clients, setClients] = useState<ClientWithJobs[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [step, setStep] = useState<'client' | 'job'>('client');
+  const [selectedClient, setSelectedClient] = useState<ClientWithJobs | null>(null);
+
+  useEffect(() => {
+    authFetch('/api/clients')
+      .then(r => r.json())
+      .then(setClients)
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, []);
+
+  const filtered = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return clients;
+    return clients.filter(c =>
+      (c.name || '').toLowerCase().includes(q) ||
+      (c.phone || '').toLowerCase().includes(q) ||
+      (c.email || '').toLowerCase().includes(q)
+    );
+  }, [clients, searchQuery]);
+
+  const createWith = async (client: ClientWithJobs, job: Job | null) => {
+    setCreating(true);
+    try {
+      const res = await authFetch('/api/contracts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_id: client.id,
+          job_id: job?.id ?? null,
+          status: 'draft',
+          contract_data: job ? {
+            serviceType: job.job_type || '',
+            serviceDate: job.job_date || '',
+            serviceTime: job.job_time || '',
+            serviceValue: (job.amount || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 }),
+            clientName: client.name || '',
+          } : { clientName: client.name || '' },
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        onError('Erro ao criar contrato: ' + (err.error || res.statusText));
+        return;
+      }
+      const created = await res.json();
+      onCreated(created.id);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const onPickClient = (client: ClientWithJobs) => {
+    if (client.jobs && client.jobs.length > 0) {
+      setSelectedClient(client);
+      setStep('job');
+    } else {
+      createWith(client, null);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-lg bg-white dark:bg-gray-900 rounded-2xl shadow-2xl overflow-hidden"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800">
+          <div>
+            <h3 className="text-base font-bold text-gray-900 dark:text-white">
+              {step === 'client' ? 'Escolha o cliente' : 'Vincular a um trabalho?'}
+            </h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+              {step === 'client' ? 'Quem é o contratante?' : selectedClient?.name}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="p-5 max-h-[60vh] overflow-y-auto">
+          {step === 'client' ? (
+            <>
+              <div className="relative mb-3">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="Buscar cliente..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 focus:border-gold-400 outline-none"
+                />
+              </div>
+              {loading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 size={18} className="animate-spin text-gray-400" />
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  {filtered.map(c => (
+                    <button
+                      key={c.id}
+                      onClick={() => onPickClient(c)}
+                      disabled={creating}
+                      className="w-full flex items-center justify-between gap-3 px-3 py-2.5 border border-gray-200 dark:border-gray-700 hover:border-gold-400 hover:bg-gold-50/50 dark:hover:bg-gold-500/10 rounded-xl text-left disabled:opacity-60 transition-all"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium text-gray-900 dark:text-white text-sm truncate">{c.name || 'Sem nome'}</p>
+                        <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+                          {c.phone || c.email || '—'}
+                          {c.jobs && c.jobs.length > 0 && (
+                            <span className="ml-2 inline-flex items-center gap-1 text-gray-400">
+                              <Briefcase size={9} /> {c.jobs.length}
+                            </span>
+                          )}
+                        </p>
+                      </div>
+                      <ChevronRight size={14} className="text-gray-400 flex-shrink-0" />
+                    </button>
+                  ))}
+                  {filtered.length === 0 && (
+                    <p className="text-center text-sm text-gray-400 py-6">Nenhum cliente encontrado.</p>
+                  )}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                Vincular um trabalho preenche o contrato automaticamente. Você ainda pode editar tudo depois.
+              </p>
+              <div className="space-y-1.5">
+                {(selectedClient?.jobs || []).map(job => {
+                  const date = job.job_date ? parseDate(job.job_date) : null;
+                  return (
+                    <button
+                      key={job.id}
+                      onClick={() => createWith(selectedClient!, job)}
+                      disabled={creating}
+                      className="w-full flex items-center justify-between gap-3 px-3 py-2.5 border border-gray-200 dark:border-gray-700 hover:border-gold-400 hover:bg-gold-50/50 dark:hover:bg-gold-500/10 rounded-xl text-left disabled:opacity-60 transition-all"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium text-gray-900 dark:text-white text-sm truncate">{job.job_type || job.job_name || 'Trabalho'}</p>
+                        <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+                          {date ? format(date, 'dd/MM/yyyy', { locale: ptBR }) : 'Sem data'} · R$ {(job.amount ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </p>
+                      </div>
+                      <ChevronRight size={14} className="text-gray-400 flex-shrink-0" />
+                    </button>
+                  );
+                })}
+
+                <button
+                  onClick={() => createWith(selectedClient!, null)}
+                  disabled={creating}
+                  className="w-full flex items-center justify-between gap-3 px-3 py-2.5 border border-dashed border-gray-300 dark:border-gray-600 hover:border-gold-400 hover:bg-gold-50/50 dark:hover:bg-gold-500/10 rounded-xl text-left disabled:opacity-60 transition-all"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                    <FilePlus2 size={14} className="text-gray-400 flex-shrink-0" />
+                    <div>
+                      <p className="font-medium text-gray-700 dark:text-gray-200 text-sm">Sem trabalho vinculado</p>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">Preencher serviço e valores manualmente</p>
+                    </div>
+                  </div>
+                  <ChevronRight size={14} className="text-gray-400 flex-shrink-0" />
+                </button>
+              </div>
+              {creating && (
+                <div className="flex items-center justify-center py-3">
+                  <Loader2 size={16} className="animate-spin text-gray-400" />
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Settings form ────────────────────────────────────────────────────────────
+
+interface StudioSettingsForm {
+  studio_name: string;
+  studio_cnpj: string;
+  studio_address: string;
+  studio_responsible: string;
+  studio_responsible_cpf: string;
+  studio_city: string;
+  down_payment_percent: number;
+  installments: number;
+  extra_photo_price: string;
+  delivery_days_selection: number;
+  selection_deadline_days: number;
+  delivery_days: number;
+  signing_city: string;
+  autentique_api_key: string;
+  autentique_sandbox: boolean;
+  autentique_api_key_set?: boolean;
+}
+
+const EMPTY_SETTINGS: StudioSettingsForm = {
+  studio_name: '', studio_cnpj: '', studio_address: '',
+  studio_responsible: '', studio_responsible_cpf: '', studio_city: '',
+  down_payment_percent: 30, installments: 6, extra_photo_price: '35,00',
+  delivery_days_selection: 2, selection_deadline_days: 5, delivery_days: 30,
+  signing_city: '', autentique_api_key: '', autentique_sandbox: false,
+};
+
+function SettingsForm({ onNotify }: { onNotify: (kind: ToastKind, message: string) => void }) {
+  const [data, setData] = useState<StudioSettingsForm>(EMPTY_SETTINGS);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<Date | null>(null);
+
+  useEffect(() => {
+    authFetch('/api/studio-settings')
+      .then(r => r.ok ? r.json() : null)
+      .then((d) => {
+        if (d) {
+          setData({
+            ...EMPTY_SETTINGS,
+            ...d,
+            autentique_api_key: '', // never pre-fill — user re-enters if changing
+          });
+        }
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, []);
+
+  const set = <K extends keyof StudioSettingsForm>(key: K, value: StudioSettingsForm[K]) =>
+    setData(prev => ({ ...prev, [key]: value }));
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const payload: any = { ...data };
+      if (!payload.autentique_api_key) delete payload.autentique_api_key; // don't overwrite existing
+      const res = await authFetch('/api/studio-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        onNotify('error', 'Erro ao salvar: ' + (err.error || res.statusText));
+        return;
+      }
+      setSavedAt(new Date());
+      onNotify('success', 'Configurações salvas.');
+      // Reload to refresh autentique_api_key_set flag
+      const r2 = await authFetch('/api/studio-settings');
+      if (r2.ok) {
+        const d = await r2.json();
+        setData(prev => ({ ...prev, autentique_api_key: '', autentique_api_key_set: d?.autentique_api_key_set }));
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 size={18} className="animate-spin text-gray-400" />
+      </div>
+    );
+  }
+
+  const inputCls = "w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:border-gold-400 outline-none transition-colors";
+  const labelCls = "block text-xs font-semibold text-gray-600 dark:text-gray-300 mb-1.5";
+
+  return (
+    <div className="max-w-3xl space-y-6">
+      {/* Company section */}
+      <section className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
+        <h4 className="text-base font-bold text-gray-800 dark:text-white mb-1">Dados da empresa</h4>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+          Esses dados aparecem como <strong>CONTRATADA</strong> em todos os contratos.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2">
+            <label className={labelCls}>Nome do estúdio / razão social</label>
+            <input className={inputCls} value={data.studio_name} onChange={e => set('studio_name', e.target.value)} placeholder="Stúdio Pitori Ltda" />
+          </div>
+          <div>
+            <label className={labelCls}>CNPJ</label>
+            <input className={inputCls} value={data.studio_cnpj} onChange={e => set('studio_cnpj', e.target.value)} placeholder="00.000.000/0001-00" />
+          </div>
+          <div>
+            <label className={labelCls}>Cidade do foro</label>
+            <input className={inputCls} value={data.studio_city} onChange={e => { set('studio_city', e.target.value); set('signing_city', e.target.value); }} placeholder="Cambé/PR" />
+          </div>
+          <div className="col-span-2">
+            <label className={labelCls}>Endereço completo</label>
+            <input className={inputCls} value={data.studio_address} onChange={e => set('studio_address', e.target.value)} placeholder="Rua Exemplo, 123, Centro, Cambé/PR, CEP 00000-000" />
+          </div>
+          <div>
+            <label className={labelCls}>Nome do responsável</label>
+            <input className={inputCls} value={data.studio_responsible} onChange={e => set('studio_responsible', e.target.value)} />
+          </div>
+          <div>
+            <label className={labelCls}>CPF do responsável</label>
+            <input className={inputCls} value={data.studio_responsible_cpf} onChange={e => set('studio_responsible_cpf', e.target.value)} placeholder="000.000.000-00" />
+          </div>
+        </div>
+      </section>
+
+      {/* Default values */}
+      <section className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
+        <h4 className="text-base font-bold text-gray-800 dark:text-white mb-1">Padrões dos contratos</h4>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+          Valores que aparecem pré-preenchidos. Você pode editar caso a caso.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={labelCls}>Sinal padrão (%)</label>
+            <input type="number" className={inputCls} value={data.down_payment_percent} onChange={e => set('down_payment_percent', Number(e.target.value))} />
+          </div>
+          <div>
+            <label className={labelCls}>Parcelamento máximo</label>
+            <input type="number" className={inputCls} value={data.installments} onChange={e => set('installments', Number(e.target.value))} />
+          </div>
+          <div>
+            <label className={labelCls}>Preço foto extra (R$)</label>
+            <input className={inputCls} value={data.extra_photo_price} onChange={e => set('extra_photo_price', e.target.value)} placeholder="35,00" />
+          </div>
+          <div>
+            <label className={labelCls}>Envio para seleção (dias úteis)</label>
+            <input type="number" className={inputCls} value={data.delivery_days_selection} onChange={e => set('delivery_days_selection', Number(e.target.value))} />
+          </div>
+          <div>
+            <label className={labelCls}>Prazo seleção do cliente (dias)</label>
+            <input type="number" className={inputCls} value={data.selection_deadline_days} onChange={e => set('selection_deadline_days', Number(e.target.value))} />
+          </div>
+          <div>
+            <label className={labelCls}>Entrega final (dias úteis)</label>
+            <input type="number" className={inputCls} value={data.delivery_days} onChange={e => set('delivery_days', Number(e.target.value))} />
+          </div>
+        </div>
+      </section>
+
+      {/* Autentique */}
+      <section className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h4 className="text-base font-bold text-gray-800 dark:text-white mb-1">Integração Autentique</h4>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Conecte sua conta Autentique para enviar contratos para assinatura digital.
+              Crie uma chave em{' '}
+              <a href="https://app.autentique.com.br/api" target="_blank" rel="noopener noreferrer" className="text-gold-600 hover:text-gold-700 font-semibold">
+                app.autentique.com.br/api
+              </a>.
+            </p>
+          </div>
+          {data.autentique_api_key_set && (
+            <span className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 rounded-full text-[10px] font-bold flex-shrink-0">
+              <FileCheck2 size={10} /> Conectado
+            </span>
+          )}
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className={labelCls}>
+              {data.autentique_api_key_set ? 'Substituir chave (deixe em branco para manter)' : 'Chave da API Autentique'}
+            </label>
+            <input
+              type="password"
+              className={inputCls}
+              value={data.autentique_api_key}
+              onChange={e => set('autentique_api_key', e.target.value)}
+              placeholder={data.autentique_api_key_set ? '••••••••••••' : 'eyJ...'}
+              autoComplete="off"
+            />
+            <p className="text-[10px] text-gray-400 mt-1">A chave é armazenada com segurança e nunca exibida após salvar.</p>
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={data.autentique_sandbox}
+              onChange={e => set('autentique_sandbox', e.target.checked)}
+              className="rounded border-gray-300 text-gold-600 focus:ring-gold-500"
+            />
+            <span className="text-sm text-gray-700 dark:text-gray-200">Usar modo sandbox (testes — não envia e-mails reais)</span>
+          </label>
+        </div>
+      </section>
+
+      {/* Save */}
+      <div className="flex items-center justify-end gap-3">
+        {savedAt && (
+          <span className="text-xs text-emerald-600 dark:text-emerald-400">
+            Salvo às {format(savedAt, 'HH:mm')}
+          </span>
+        )}
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="inline-flex items-center gap-2 px-5 py-2.5 bg-gold-600 hover:bg-gold-700 disabled:opacity-60 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
+        >
+          {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+          Salvar configurações
+        </button>
+      </div>
+    </div>
   );
 }

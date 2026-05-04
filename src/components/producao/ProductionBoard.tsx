@@ -544,7 +544,15 @@ export function ProductionBoard({ jobs, processes, stages, teamMembers, onChange
   const handleDrop = (e: React.DragEvent, stageId: string) => {
     e.preventDefault();
     setDragOverStage(null);
-    if (dragJobId.current !== null) { onChangeStage(dragJobId.current, stageId); dragJobId.current = null; }
+    if (dragJobId.current !== null) {
+      const job = jobs.find(j => j.id === dragJobId.current);
+      // Skip the call if dropping on the same stage — otherwise the backend
+      // resets production_stage_entered_at and the "atrasado/atenção" flag is lost.
+      if (job && job.production_stage !== stageId) {
+        onChangeStage(dragJobId.current, stageId);
+      }
+      dragJobId.current = null;
+    }
   };
 
   const handleNameSave = async (stageId: string, name: string) => {

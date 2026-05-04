@@ -1,645 +1,119 @@
 import React, { useEffect, useState } from "react";
-import { useOutletContext } from "react-router-dom";
-import { format } from "date-fns";
+import { useNavigate, useOutletContext } from "react-router-dom";
+import { format, parseISO } from "date-fns";
+import { ptBR } from "date-fns/locale";
 import {
-  Area,
-  AreaChart,
-  Line,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
+  Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import {
-  AlertCircle,
-  ArrowDownRight,
-  ArrowUpRight,
-  Calendar as CalendarIcon,
-  CheckCircle2,
-  DollarSign,
-  Eye,
-  EyeOff,
-  MessageSquare,
-  Sparkles,
-  Trello,
-  Users,
-  X,
+  ArrowRight, Calendar as CalendarIcon, Camera, DollarSign,
+  Eye, EyeOff, FileClock, FileText, Sparkles, Target, TrendingUp, X,
 } from "lucide-react";
 
 import { LayoutOutletContext } from "../components/layout/AppLayout";
 import { authFetch } from "../utils/authFetch";
 import { cn } from "../utils/cn";
-import { parseDate } from "../utils/date";
-import { Client, DashboardStats, Job, Opportunity } from "../types";
+import { Client, Opportunity } from "../types";
 
-function StatCard({ 
-  title, 
-  value, 
-  icon, 
-  trend, 
-  trendUp, 
-  hidden 
-}: { 
-  title: string; 
-  value: string | number; 
-  icon: React.ReactNode; 
-  trend: string; 
-  trendUp: boolean;
-  hidden?: boolean;
-}) {
-  return (
-    <div className="bg-white dark:bg-gray-900 p-6 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
-      <div className="flex items-center justify-between mb-4">
-        <div className="w-12 h-12 bg-gray-50 dark:bg-gray-800 rounded-xl flex items-center justify-center">{icon}</div>
-        {trend ? (
-          <div
-            className={cn(
-              "flex items-center gap-1 text-xs font-bold px-2 py-1 rounded-lg",
-              trendUp 
-                ? "bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400" 
-                : "bg-red-50 dark:bg-red-500/20 text-red-600 dark:text-red-400"
-            )}
-          >
-            {trendUp ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-            {trend}
-          </div>
-        ) : null}
-      </div>
-      <p className="text-gray-500 dark:text-gray-400 text-sm font-medium">{title}</p>
-      <h4 className="text-2xl font-bold mt-1 text-gray-900 dark:text-white">
-        {hidden ? "R$ •••••" : value}
-      </h4>
-    </div>
-  );
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface JobLite {
+  id: number;
+  client_name: string | null;
+  job_type: string;
+  job_date: string;
+  job_time?: string;
+  amount: number;
+  production_stage?: string | null;
 }
 
-function Dashboard({
-  stats,
-  jobs,
-  clients,
-  opportunities,
-  onContactOpp,
-  onDismissOpp,
-}: {
-  stats: DashboardStats | null;
-  jobs: Job[];
-  clients: Client[];
-  opportunities: Opportunity[];
-  onContactOpp: (opp: Opportunity, client: Client | null) => void;
-  onDismissOpp: (oppId: number) => void;
-}) {
-  const [revenueRange, setRevenueRange] = useState<"7" | "30" | "60" | "90" | "180" | "365" | "custom">("30");
-  const [hideValues, setHideValues] = useState(() => {
-    const saved = localStorage.getItem("dashboard_hide_values");
-    return saved === "true";
-  });
-  const [confirmDiscardId, setConfirmDiscardId] = useState<number | null>(null);
-
-  const today = new Date();
-  const defaultEnd = format(today, "yyyy-MM-dd");
-  const defaultStart30 = format(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 29), "yyyy-MM-dd");
-
-  const [customStartDate, setCustomStartDate] = useState<string>(defaultStart30);
-  const [customEndDate, setCustomEndDate] = useState<string>(defaultEnd);
-
-  const toggleHideValues = () => {
-    const newValue = !hideValues;
-    setHideValues(newValue);
-    localStorage.setItem("dashboard_hide_values", String(newValue));
+interface Analytics {
+  attention: number;
+  jobs: {
+    today: { count: number; list: JobLite[] };
+    next7Days: { count: number; list: JobLite[] };
+    thisMonth: { total: number; completed: number; scheduled: number; cancelled: number };
+    late: { count: number; list: JobLite[] };
+    awaitingContract: { count: number; list: JobLite[] };
+    awaitingSelection: { count: number; list: JobLite[] };
   };
-
-  if (!stats) return null;
-
-  const getPriorityColor = (priority: string) => {
-    switch (priority) {
-      case "urgent":
-        return "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/20 border-red-100 dark:border-red-500/30";
-      case "active":
-        return "text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/20 border-amber-100 dark:border-amber-500/30";
-      default:
-        return "text-gold-600 dark:text-gold-400 bg-gold-50 dark:bg-gold-500/20 border-gold-100 dark:border-gold-500/30";
-    }
+  sales: {
+    activeCount: number;
+    activeValue: number;
+    byStage: Array<{ id: string; name: string; color: string; count: number; total_value: number; position: number; is_final: boolean; is_won: boolean }>;
+    conversion: Array<{ stage_id: string; stage_name: string; entered: number; advanced: number; lost: number; conversion_rate: number | null }>;
+    hotDeals: Array<{ id: number; title: string; client_name: string | null; value: number; stage_name: string; temperature: 'hot' | 'warm' | 'cold' }>;
   };
-
-  const revenueMap = new Map((stats.dailyRevenue || []).map((item) => [item.date, Number(item.total || 0)]));
-
-  let startDate = new Date();
-  let endDate = new Date();
-
-  if (revenueRange === "custom") {
-    const parsedStart = parseDate(customStartDate);
-    const parsedEnd = parseDate(customEndDate);
-
-    startDate = parsedStart || new Date();
-    endDate = parsedEnd || new Date();
-  } else {
-    const rangeDays = Number(revenueRange);
-    endDate = new Date();
-    startDate = new Date();
-    startDate.setDate(endDate.getDate() - (rangeDays - 1));
-  }
-
-  startDate.setHours(0, 0, 0, 0);
-  endDate.setHours(0, 0, 0, 0);
-
-  if (startDate > endDate) {
-    const temp = startDate;
-    startDate = endDate;
-    endDate = temp;
-  }
-
-  const diffTime = endDate.getTime() - startDate.getTime();
-  const rangeDays = Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1;
-
-  const chartData = Array.from({ length: rangeDays }, (_, index) => {
-    const currentDate = new Date(startDate);
-    currentDate.setDate(startDate.getDate() + index);
-
-    const yyyy = currentDate.getFullYear();
-    const mm = String(currentDate.getMonth() + 1).padStart(2, "0");
-    const dd = String(currentDate.getDate()).padStart(2, "0");
-    const isoDate = `${yyyy}-${mm}-${dd}`;
-
-    return {
-      date: isoDate,
-      label: `${dd}/${mm}`,
-      total: revenueMap.get(isoDate) || 0,
-    };
-  });
-
-  const revenueSelectedPeriod = chartData.reduce((sum, item) => sum + item.total, 0);
-
-  const scheduledJobs = jobs.filter((job) => {
-    if (!job.job_date) return false;
-    const date = parseDate(job.job_date);
-    if (!date) return false;
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    return date >= todayStart && job.status !== "cancelled";
-  });
-
-  const futureRevenue30 = scheduledJobs
-    .filter((job) => {
-      const date = parseDate(job.job_date);
-      if (!date) return false;
-      const limit = new Date();
-      limit.setDate(limit.getDate() + 30);
-      return date <= limit;
-    })
-    .reduce((sum, job) => sum + Number(job.amount || 0), 0);
-
-  const futureRevenue90 = scheduledJobs
-    .filter((job) => {
-      const date = parseDate(job.job_date);
-      if (!date) return false;
-      const limit = new Date();
-      limit.setDate(limit.getDate() + 90);
-      return date <= limit;
-    })
-    .reduce((sum, job) => sum + Number(job.amount || 0), 0);
-
-  const futureRevenueByMonthMap = new Map<string, number>();
-
-  scheduledJobs.forEach((job) => {
-    const date = parseDate(job.job_date);
-    if (!date) return;
-
-    const yyyy = date.getFullYear();
-    const mm = String(date.getMonth() + 1).padStart(2, "0");
-    const key = `${yyyy}-${mm}`;
-
-    futureRevenueByMonthMap.set(key, (futureRevenueByMonthMap.get(key) || 0) + Number(job.amount || 0));
-  });
-
-  const futureRevenueByMonth = Array.from(futureRevenueByMonthMap.entries())
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .slice(0, 6)
-    .map(([month, total]) => ({
-      month,
-      label: `${month.slice(5, 7)}/${month.slice(0, 4)}`,
-      total,
-    }));
-
-  const formatValue = (value: number) => {
-    if (hideValues) return "R$ •••••";
-    return `R$ ${value.toLocaleString("pt-BR")}`;
+  production: {
+    processes: Array<{
+      id: string; name: string; color: string; is_special: boolean; total_jobs: number;
+      stages: Array<{ id: string; name: string; color: string; count: number; late_count: number; expected_hours: number }>;
+    }>;
   };
-
-  return (
-    <div className="space-y-8">
-      {/* Header com botão de esconder valores */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-800 dark:text-white">Dashboard</h2>
-          <p className="text-gray-500 dark:text-gray-400 mt-1">Visão geral do seu negócio</p>
-        </div>
-        <button
-          onClick={toggleHideValues}
-          className={cn(
-            "flex items-center gap-2 px-4 py-2 rounded-xl font-semibold transition-all",
-            hideValues
-              ? "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700"
-              : "bg-gold-50 dark:bg-gold-500/20 text-gold-600 dark:text-gold-400 hover:bg-gold-100 dark:hover:bg-gold-500/30"
-          )}
-          title={hideValues ? "Mostrar valores" : "Esconder valores"}
-        >
-          {hideValues ? <EyeOff size={18} /> : <Eye size={18} />}
-          {hideValues ? "Mostrar valores" : "Esconder valores"}
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
-        <StatCard title="Leads Ativos" value={stats.activeLeads} icon={<Trello className="text-blue-600 dark:text-blue-400" />} trend="" trendUp />
-        <StatCard title="Vendas no Mês" value={stats.totalJobsMonth} icon={<CheckCircle2 className="text-emerald-600 dark:text-emerald-400" />} trend="" trendUp />
-        <StatCard title="Clientes do Mês" value={stats.totalClientsMonth} icon={<Users className="text-violet-600 dark:text-violet-400" />} trend="" trendUp />
-        <StatCard
-          title={revenueRange === "custom" ? "Faturamento no Período" : `Faturamento ${rangeDays} dias`}
-          value={formatValue(revenueSelectedPeriod)}
-          icon={<DollarSign className="text-amber-600 dark:text-amber-400" />}
-          trend=""
-          trendUp
-          hidden={hideValues}
-        />
-        <StatCard
-          title="Futuro 30 dias"
-          value={formatValue(futureRevenue30)}
-          icon={<CalendarIcon className="text-green-600 dark:text-green-400" />}
-          trend=""
-          trendUp
-          hidden={hideValues}
-        />
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Gráfico de faturamento - mantém o gradiente colorido */}
-        <div className="lg:col-span-2 rounded-[28px] p-6 md:p-8 shadow-lg overflow-hidden relative bg-gradient-to-br from-gold-600 via-blue-600 to-violet-600">
-          <div className="absolute inset-0 opacity-20 pointer-events-none">
-            <div className="absolute -top-10 -right-10 w-56 h-56 rounded-full bg-white/20 blur-2xl" />
-            <div className="absolute bottom-0 left-0 w-72 h-72 rounded-full bg-cyan-300/20 blur-3xl" />
-          </div>
-
-          <div className="relative z-10">
-            <div className="flex items-center justify-between gap-4 flex-wrap mb-6">
-              <div>
-                <p className="text-white/80 text-sm font-medium">Faturamento</p>
-                <h3 className="text-white text-4xl md:text-5xl font-bold tracking-tight">
-                  {hideValues ? "R$ •••••" : `R$ ${revenueSelectedPeriod.toLocaleString("pt-BR")}`}
-                </h3>
-                <p className="text-white/80 text-sm mt-2">
-                  {format(startDate, "dd/MM/yyyy")} até {format(endDate, "dd/MM/yyyy")}
-                </p>
-              </div>
-
-              <div className="flex items-center gap-3 flex-wrap">
-                <select
-                  value={revenueRange}
-                  onChange={(e) => setRevenueRange(e.target.value as any)}
-                  className="text-sm bg-white/15 text-white rounded-xl px-3 py-2 outline-none border border-white/20 backdrop-blur-md"
-                >
-                  <option value="7" className="text-black">
-                    Últimos 7 dias
-                  </option>
-                  <option value="30" className="text-black">
-                    Mensal (30 dias)
-                  </option>
-                  <option value="60" className="text-black">
-                    60 dias
-                  </option>
-                  <option value="90" className="text-black">
-                    Trimestral (90 dias)
-                  </option>
-                  <option value="180" className="text-black">
-                    Semestral (180 dias)
-                  </option>
-                  <option value="365" className="text-black">
-                    Anual (365 dias)
-                  </option>
-                  <option value="custom" className="text-black">
-                    Período personalizado
-                  </option>
-                </select>
-
-                {revenueRange === "custom" && (
-                  <>
-                    <input
-                      type="date"
-                      value={customStartDate}
-                      onChange={(e) => setCustomStartDate(e.target.value)}
-                      className="text-sm bg-white/15 text-white rounded-xl px-3 py-2 outline-none border border-white/20 backdrop-blur-md [color-scheme:dark]"
-                    />
-                    <span className="text-white/70 text-sm">até</span>
-                    <input
-                      type="date"
-                      value={customEndDate}
-                      onChange={(e) => setCustomEndDate(e.target.value)}
-                      className="text-sm bg-white/15 text-white rounded-xl px-3 py-2 outline-none border border-white/20 backdrop-blur-md [color-scheme:dark]"
-                    />
-                  </>
-                )}
-              </div>
-            </div>
-
-            <div className="h-72 md:h-80">
-              {hideValues ? (
-                <div className="h-full flex items-center justify-center">
-                  <div className="text-center text-white/60">
-                    <EyeOff size={48} className="mx-auto mb-4 opacity-50" />
-                    <p className="text-lg font-medium">Valores ocultos</p>
-                    <p className="text-sm">Clique em "Mostrar valores" para visualizar o gráfico</p>
-                  </div>
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height={320}>
-                  <AreaChart data={chartData}>
-                    <defs>
-                      <linearGradient id="revenueFill" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="rgba(255,255,255,0.45)" />
-                        <stop offset="100%" stopColor="rgba(255,255,255,0.05)" />
-                      </linearGradient>
-                    </defs>
-
-                    <XAxis
-                      dataKey="label"
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{ fontSize: 12, fill: "rgba(255,255,255,0.75)" }}
-                      interval={Math.max(0, Math.floor(chartData.length / 8))}
-                    />
-                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "rgba(255,255,255,0.65)" }} />
-                    <Tooltip
-                      formatter={(value: any) => [`R$ ${Number(value || 0).toLocaleString("pt-BR")}`, "Faturamento"]}
-                      labelFormatter={(label: any, payload: any) => {
-                        const item = payload?.[0]?.payload;
-                        return item?.date ? `Data: ${item.date}` : label;
-                      }}
-                      contentStyle={{
-                        borderRadius: "16px",
-                        border: "1px solid rgba(255,255,255,0.15)",
-                        background: "rgba(15, 23, 42, 0.88)",
-                        color: "#fff",
-                        boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
-                        backdropFilter: "blur(10px)",
-                      }}
-                      labelStyle={{ color: "#cbd5e1" }}
-                    />
-                    <Area type="monotone" dataKey="total" stroke="rgba(255,255,255,0)" fill="url(#revenueFill)" />
-                    <Line
-                      type="monotone"
-                      dataKey="total"
-                      stroke="#FFFFFF"
-                      strokeWidth={4}
-                      dot={false}
-                      activeDot={{ r: 6, fill: "#FFFFFF", stroke: "rgba(255,255,255,0.35)", strokeWidth: 8 }}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Card de Oportunidades */}
-        <div className="bg-white dark:bg-gray-900 p-6 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm flex flex-col">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="font-bold text-gray-800 dark:text-white flex items-center gap-2">
-              <Sparkles className="text-amber-500 dark:text-amber-400" size={18} />
-              Próximas Oportunidades
-            </h3>
-            <span className="bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400 text-[10px] font-bold px-2 py-0.5 rounded-full">{opportunities.length}</span>
-          </div>
-          <div className="flex-1 space-y-4 overflow-y-auto max-h-[350px] pr-2 custom-scrollbar">
-            {opportunities.map((opp) => (
-              <div
-                key={opp.id}
-                className={cn(
-                  "p-3 rounded-xl border transition-colors relative group",
-                  opp.priority === "urgent"
-                    ? "bg-red-50/50 dark:bg-red-500/10 border-red-100 dark:border-red-500/30 hover:border-red-200 dark:hover:border-red-500/50"
-                    : opp.priority === "active"
-                      ? "bg-amber-50/50 dark:bg-amber-500/10 border-amber-100 dark:border-amber-500/30 hover:border-amber-200 dark:hover:border-amber-500/50"
-                      : "bg-gray-50 dark:bg-gray-800 border-gray-100 dark:border-gray-700 hover:border-gold-200 dark:hover:border-gold-500/50"
-                )}
-              >
-                {/* Modal de confirmação inline */}
-                {confirmDiscardId === opp.id ? (
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
-                      <AlertCircle size={16} />
-                      <p className="text-xs font-medium">Descartar esta oportunidade?</p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => setConfirmDiscardId(null)}
-                        className="flex-1 py-1.5 text-xs font-bold text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-all border border-gray-200 dark:border-gray-600"
-                      >
-                        Cancelar
-                      </button>
-                      <button
-                        onClick={() => {
-                          onDismissOpp(opp.id);
-                          setConfirmDiscardId(null);
-                        }}
-                        className="flex-1 py-1.5 text-xs font-bold bg-red-500 text-white rounded-lg hover:bg-red-600 transition-all flex items-center justify-center gap-1"
-                      >
-                        <X size={12} />
-                        Confirmar
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    {/* Botão de descartar */}
-                    <button
-                      onClick={() => setConfirmDiscardId(opp.id)}
-                      className="absolute top-2 right-2 p-1 text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/20 rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                      title="Descartar oportunidade"
-                    >
-                      <X size={14} />
-                    </button>
-
-                    <div className="flex items-center justify-between mb-1 pr-6">
-                      <span className="font-bold text-sm text-gray-900 dark:text-white">{opp.client_name}</span>
-                      <span
-                        className={cn(
-                          "text-[10px] font-bold px-2 py-0.5 rounded-full uppercase",
-                          getPriorityColor(opp.priority || "future")
-                        )}
-                      >
-                        {opp.type}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
-                        <CalendarIcon size={12} />
-                        {opp.priority === "urgent" ? "Atrasado: " : "Sugerido: "}
-                        {format(new Date(opp.suggested_date), "dd/MM/yyyy")}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {opp.priority === "urgent" && <AlertCircle size={12} className="text-red-500 dark:text-red-400 animate-pulse" />}
-                        {opp.priority === "active" && <Sparkles size={12} className="text-amber-500 dark:text-amber-400" />}
-                        <button
-                          onClick={() => {
-                            const client = clients.find((c) => c.id === opp.client_id) || null;
-                            onContactOpp(opp, client);
-                          }}
-                          className="flex items-center gap-1.5 px-3 py-1 bg-gold-600 dark:bg-gold-500 text-white text-[10px] font-bold rounded-lg hover:bg-gold-700 dark:hover:bg-gold-600 transition-all shadow-sm"
-                        >
-                          <MessageSquare size={12} />
-                          Contatar
-                        </button>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-            ))}
-            {opportunities.length === 0 && <div className="text-center py-12 text-gray-400 dark:text-gray-500 italic text-sm">Nenhuma oportunidade detectada no momento.</div>}
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Tabela de Trabalhos Recentes */}
-        <div className="lg:col-span-2 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
-          <div className="p-6 border-b border-gray-50 dark:border-gray-800 flex items-center justify-between">
-            <h3 className="font-bold text-gray-800 dark:text-white">Trabalhos Recentes</h3>
-            <button className="text-sm text-gold-600 dark:text-gold-400 font-medium hover:underline">Ver todos</button>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead className="bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">
-                <tr>
-                  <th className="px-6 py-4 font-medium">Cliente</th>
-                  <th className="px-6 py-4 font-medium">Tipo</th>
-                  <th className="px-6 py-4 font-medium">Data</th>
-                  <th className="px-6 py-4 font-medium">Valor</th>
-                  <th className="px-6 py-4 font-medium">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50 dark:divide-gray-800">
-                {jobs.slice(0, 5).map((job) => (
-                  <tr key={job.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
-                    <td className="px-6 py-4 font-medium text-gray-900 dark:text-white">{job.client_name || job.job_name || "Tarefa"}</td>
-                    <td className="px-6 py-4 text-gray-600 dark:text-gray-300">{job.job_type}</td>
-                    <td className="px-6 py-4 text-gray-500 dark:text-gray-400">
-                      {job.job_date && !isNaN(new Date(job.job_date).getTime())
-                        ? format(new Date(job.job_date), "dd/MM/yyyy")
-                        : "-"}
-                    </td>
-                    <td className="px-6 py-4 font-semibold text-gray-900 dark:text-white">
-                      {hideValues ? "R$ •••••" : `R$ ${(job.amount ?? 0).toLocaleString("pt-BR")}`}
-                    </td>
-                    <td className="px-6 py-4">
-                      <span
-                        className={cn(
-                          "px-2 py-1 rounded-full text-[10px] font-bold uppercase",
-                          job.payment_status === "paid" 
-                            ? "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400" 
-                            : "bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400"
-                        )}
-                      >
-                        {job.payment_status === "paid" ? "Pago" : "Pendente"}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Card de Faturamento Futuro */}
-        <div className="bg-white dark:bg-gray-900 p-6 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
-          <h3 className="font-bold text-gray-800 dark:text-white mb-2">Faturamento Futuro</h3>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">Baseado nos ensaios já agendados.</p>
-
-          <div className="grid grid-cols-1 gap-3 mb-6">
-            <div className="p-4 rounded-xl bg-green-50 dark:bg-green-500/10 border border-green-100 dark:border-green-500/30">
-              <div className="text-xs font-bold uppercase text-green-700 dark:text-green-400 mb-1">Próximos 30 dias</div>
-              <div className="text-2xl font-bold text-green-800 dark:text-green-300">
-                {hideValues ? "R$ •••••" : `R$ ${futureRevenue30.toLocaleString("pt-BR")}`}
-              </div>
-            </div>
-
-            <div className="p-4 rounded-xl bg-blue-50 dark:bg-blue-500/10 border border-blue-100 dark:border-blue-500/30">
-              <div className="text-xs font-bold uppercase text-blue-700 dark:text-blue-400 mb-1">Próximos 90 dias</div>
-              <div className="text-2xl font-bold text-blue-800 dark:text-blue-300">
-                {hideValues ? "R$ •••••" : `R$ ${futureRevenue90.toLocaleString("pt-BR")}`}
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            {futureRevenueByMonth.length > 0 ? (
-              futureRevenueByMonth.map((item) => (
-                <div key={item.month} className="flex items-center justify-between text-sm border-b border-gray-50 dark:border-gray-800 pb-2">
-                  <span className="text-gray-600 dark:text-gray-400 font-medium">{item.label}</span>
-                  <span className="font-bold text-gray-900 dark:text-white">
-                    {hideValues ? "R$ •••••" : `R$ ${item.total.toLocaleString("pt-BR")}`}
-                  </span>
-                </div>
-              ))
-            ) : (
-              <div className="text-sm text-gray-400 dark:text-gray-500 italic">Nenhum faturamento futuro encontrado.</div>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+  opportunities: {
+    total: number; urgent: number; active: number; future: number;
+    list: Array<{ id: number; client_id: number; client_name: string | null; type: string; suggested_date: string; priority: 'urgent' | 'active' | 'future' }>;
+  };
+  finance: {
+    revenueThisMonth: number;
+    revenueLastMonth: number;
+    futureRevenue: number;
+    dailyRevenue: Array<{ date: string; total: number }>;
+  };
 }
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+const formatBRL = (value: number, hide: boolean) =>
+  hide ? "R$ •••••" : `R$ ${(value || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const formatBRLShort = (value: number, hide: boolean) => {
+  if (hide) return "R$ •••";
+  if (value >= 1000) return `R$ ${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k`;
+  return `R$ ${(value || 0).toLocaleString("pt-BR", { maximumFractionDigits: 0 })}`;
+};
+
+// ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
+  const navigate = useNavigate();
   const { openContactModal } = useOutletContext<LayoutOutletContext>();
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [clients, setClients] = useState<Client[]>([]);
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
+  const [hideValues, setHideValues] = useState(() => localStorage.getItem("dashboard_hide_values") === "true");
 
-    const fetchDashboard = async () => {
+  const toggleHideValues = () => {
+    setHideValues(prev => {
+      const next = !prev;
+      localStorage.setItem("dashboard_hide_values", String(next));
+      return next;
+    });
+  };
+
+  const fetchAll = async () => {
     setLoading(true);
     try {
-      const [statsRes, clientsRes, jobsRes, oppsRes] = await Promise.all([
-        authFetch("/api/stats"),
-        authFetch("/api/clients"),
-        authFetch("/api/jobs"),
+      const [aRes, oRes, cRes] = await Promise.all([
+        authFetch("/api/dashboard/analytics"),
         authFetch("/api/opportunities"),
+        authFetch("/api/clients"),
       ]);
-
-      // Verifica se as respostas são OK antes de processar
-      if (statsRes.ok) {
-        setStats(await statsRes.json());
-      }
-      
-      if (clientsRes.ok) {
-        const clientsData = await clientsRes.json();
-        setClients(Array.isArray(clientsData) ? clientsData : []);
-      }
-      
-      if (jobsRes.ok) {
-        const jobsData = await jobsRes.json();
-        setJobs(Array.isArray(jobsData) ? jobsData : []);
-      }
-      
-      if (oppsRes.ok) {
-        const oppsData = await oppsRes.json();
-        setOpportunities(Array.isArray(oppsData) ? oppsData : []);
-      }
-    } catch (error) {
-      console.error("Erro ao buscar dados do dashboard:", error);
+      if (aRes.ok) setAnalytics(await aRes.json());
+      if (oRes.ok) setOpportunities(await oRes.json());
+      if (cRes.ok) setClients(await cRes.json());
+    } catch (err) {
+      console.error(err);
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchDashboard();
-  }, []);
+  useEffect(() => { fetchAll(); }, []);
 
-  const removeOpportunityLocally = (oppId: number) => {
-    setOpportunities(prev => prev.filter(opp => opp.id !== oppId));
-  };
+  const removeOpportunityLocally = (oppId: number) =>
+    setOpportunities(prev => prev.filter(o => o.id !== oppId));
 
   const handleDismissOpp = async (oppId: number) => {
     try {
@@ -649,36 +123,514 @@ export default function DashboardPage() {
         body: JSON.stringify({ status: "dismissed" }),
       });
       removeOpportunityLocally(oppId);
-    } catch (error) {
-      console.error("Erro ao descartar oportunidade:", error);
+    } catch (err) {
+      console.error(err);
     }
   };
 
-  const handleContactOpp = (opp: Opportunity, client: Client | null) => {
+  const handleContactOpp = (opp: Opportunity) => {
+    const client = clients.find(c => c.id === opp.client_id) || null;
     openContactModal({
       opportunity: opp,
       client,
-      onUpdate: fetchDashboard,
+      onUpdate: fetchAll,
       onDiscardSuccess: removeOpportunityLocally,
     });
   };
 
-  if (loading) {
+  if (loading || !analytics) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-600 dark:border-gold-400" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-500" />
       </div>
     );
   }
 
+  const a = analytics;
+  const monthDelta = a.finance.revenueLastMonth > 0
+    ? Math.round(((a.finance.revenueThisMonth - a.finance.revenueLastMonth) / a.finance.revenueLastMonth) * 100)
+    : null;
+
   return (
-    <Dashboard
-      stats={stats}
-      jobs={jobs}
-      clients={clients}
-      opportunities={opportunities}
-      onContactOpp={handleContactOpp}
-      onDismissOpp={handleDismissOpp}
-    />
+    <div className="space-y-3">
+      {/* Header */}
+      <div className="flex items-end justify-between gap-4">
+        <h1 className="text-xl font-bold tracking-tight text-gray-900 dark:text-white">
+          Visão geral
+        </h1>
+        <button
+          onClick={toggleHideValues}
+          className="p-1.5 rounded-full text-gray-400 hover:text-gold-500 hover:bg-gold-500/10 transition-colors"
+          title={hideValues ? "Mostrar valores" : "Esconder valores"}
+        >
+          {hideValues ? <EyeOff size={16} /> : <Eye size={16} />}
+        </button>
+      </div>
+
+      {/* Top: 4 KPIs + Funnel side-by-side */}
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-3">
+        {/* Left column: KPIs grid + Linha do tempo */}
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+            <Card>
+              <CardHeader icon={<DollarSign size={16} />} title="Faturamento do mês" />
+              <CardValue value={formatBRL(a.finance.revenueThisMonth, hideValues)} />
+              {monthDelta !== null && (
+                <CardHint tone={monthDelta >= 0 ? 'pos' : 'neg'}>
+                  {monthDelta >= 0 ? '↑' : '↓'} {Math.abs(monthDelta)}% vs mês passado
+                </CardHint>
+              )}
+            </Card>
+
+            <Card>
+              <CardHeader icon={<Camera size={16} />} title="Ensaios este mês" />
+              <CardValue value={String(a.jobs.thisMonth.total)} />
+              <CardHint>{a.jobs.thisMonth.completed} feitos · {a.jobs.thisMonth.scheduled} agendados</CardHint>
+            </Card>
+
+            <Card onClick={() => navigate("/vendas")}>
+              <CardHeader icon={<Target size={16} />} title="Funil ativo" />
+              <CardValue value={String(a.sales.activeCount)} />
+              <CardHint>{formatBRLShort(a.sales.activeValue, hideValues)} em pipeline</CardHint>
+            </Card>
+
+            <Card>
+              <CardHeader icon={<TrendingUp size={16} />} title="A receber" />
+              <CardValue value={formatBRL(a.finance.futureRevenue, hideValues)} />
+              <CardHint>Próximos 3 meses</CardHint>
+            </Card>
+
+            <Card>
+              <CardHeader icon={<FileClock size={16} />} title="Pendências" />
+              <CardValue value={String(a.attention)} />
+              <CardHint>Atrasados + contratos + seleção</CardHint>
+            </Card>
+
+            <Card onClick={() => navigate("/calendar")}>
+              <CardHeader icon={<CalendarIcon size={16} />} title="Hoje" />
+              <CardValue value={String(a.jobs.today.count)} />
+              <CardHint>{a.jobs.today.count === 0 ? 'Sem ensaios hoje' : a.jobs.today.count === 1 ? 'ensaio agendado' : 'ensaios agendados'}</CardHint>
+            </Card>
+          </div>
+
+          {/* Linha do tempo (gráfico) */}
+          <Card>
+            <div className="flex items-center justify-between mb-3">
+              <CardHeader icon={<TrendingUp size={16} />} title="Linha do tempo" inline />
+              <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500">Últimos 30 dias</span>
+            </div>
+            <div className="-mx-2">
+              <ResponsiveContainer width="100%" height={140} minWidth={0}>
+                <AreaChart data={a.finance.dailyRevenue}>
+                  <defs>
+                    <linearGradient id="revGold" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#F1C665" stopOpacity={0.5} />
+                      <stop offset="100%" stopColor="#F1C665" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fill: '#6b7280', fontSize: 10 }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(d) => format(parseISO(String(d)), 'dd/MM')}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis
+                    tick={{ fill: '#6b7280', fontSize: 10 }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(v) => hideValues ? '•••' : `R$ ${Number(v) >= 1000 ? `${(Number(v) / 1000).toFixed(0)}k` : Number(v).toFixed(0)}`}
+                    width={50}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      background: 'rgba(20, 20, 20, 0.95)',
+                      border: '1px solid rgba(241, 198, 101, 0.3)',
+                      borderRadius: 12,
+                      color: '#fff',
+                      fontSize: 12,
+                    }}
+                    formatter={(v: any) => hideValues ? ['•••', 'Receita'] : [`R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, 'Receita']}
+                    labelFormatter={(d) => format(parseISO(String(d)), "dd 'de' MMMM", { locale: ptBR })}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="total"
+                    stroke="#F1C665"
+                    strokeWidth={2}
+                    fill="url(#revGold)"
+                    activeDot={{ r: 4, fill: '#F1C665', stroke: '#fff', strokeWidth: 2 }}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+        </div>
+
+        {/* Right column: Funnel */}
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <CardHeader icon={<Target size={16} />} title="Funil de vendas" inline />
+            <button
+              onClick={() => navigate("/vendas")}
+              className="text-[10px] uppercase tracking-wider text-gold-500 hover:text-gold-400 inline-flex items-center gap-1"
+            >
+              Detalhes <ArrowRight size={10} />
+            </button>
+          </div>
+          <SalesFunnel
+            byStage={a.sales.byStage}
+            conversion={a.sales.conversion}
+            hideValues={hideValues}
+          />
+        </Card>
+      </div>
+
+      {/* Pendências (3 cards minimalistas) */}
+      {(a.jobs.late.count > 0 || a.jobs.awaitingContract.count > 0 || a.jobs.awaitingSelection.count > 0) && (
+        <Section title="Pendências">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <PendingCard
+              tone="red"
+              title="Atrasados"
+              count={a.jobs.late.count}
+              list={a.jobs.late.list}
+              onOpen={() => navigate("/jobs")}
+            />
+            <PendingCard
+              tone="amber"
+              title="Aguardando contrato"
+              count={a.jobs.awaitingContract.count}
+              list={a.jobs.awaitingContract.list}
+              onOpen={() => navigate("/contratos")}
+            />
+            <PendingCard
+              tone="blue"
+              title="Aguardando seleção"
+              count={a.jobs.awaitingSelection.count}
+              list={a.jobs.awaitingSelection.list}
+              onOpen={() => navigate("/jobs")}
+            />
+          </div>
+        </Section>
+      )}
+
+      {/* Hoje + Oportunidades lado a lado */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        {a.jobs.today.count > 0 && (
+          <Card>
+            <div className="flex items-center justify-between mb-3">
+              <CardHeader icon={<CalendarIcon size={16} />} title="Hoje" inline />
+              <button
+                onClick={() => navigate("/calendar")}
+                className="text-[10px] uppercase tracking-wider text-gold-500 hover:text-gold-400 inline-flex items-center gap-1"
+              >
+                Agenda <ArrowRight size={10} />
+              </button>
+            </div>
+            <div className="space-y-2">
+              {a.jobs.today.list.slice(0, 5).map(j => (
+                <div key={j.id} className="flex items-center justify-between gap-3 py-2 border-b border-gray-100 dark:border-gray-800/60 last:border-0">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{j.client_name || 'Sem cliente'}</p>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
+                      {j.job_type}{j.job_time && ` · ${j.job_time}`}
+                    </p>
+                  </div>
+                  <span className="text-xs font-bold text-gold-500 tabular-nums flex-shrink-0">
+                    {formatBRLShort(j.amount, hideValues)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+
+        <Card>
+          <div className="flex items-center justify-between mb-3">
+            <CardHeader icon={<Sparkles size={16} />} title="Oportunidades internas" inline />
+            <span className="text-[10px] font-bold text-gold-500 bg-gold-500/15 dark:bg-gold-500/20 px-2 py-0.5 rounded-full">
+              {a.opportunities.total}
+            </span>
+          </div>
+          <InternalOpportunities
+            opportunities={opportunities}
+            summary={a.opportunities}
+            onContact={handleContactOpp}
+            onDismiss={handleDismissOpp}
+          />
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ─── Card primitives ─────────────────────────────────────────────────────────
+
+function Card({ children, onClick }: { children: React.ReactNode; onClick?: () => void }) {
+  const Comp: any = onClick ? 'button' : 'div';
+  return (
+    <Comp
+      onClick={onClick}
+      className={cn(
+        "relative overflow-hidden bg-white dark:bg-[#161616] border border-gray-200 dark:border-gray-800/80 rounded-2xl p-4 text-left transition-all w-full",
+        onClick && "hover:border-gold-300 dark:hover:border-gold-500/50 cursor-pointer"
+      )}
+    >
+      {/* Subtle gold corner accent (Apple-meets-spy theme) */}
+      <span className="absolute top-0 left-0 h-px w-16 bg-gradient-to-r from-gold-500 to-transparent" aria-hidden />
+      <span className="absolute top-0 left-0 w-px h-16 bg-gradient-to-b from-gold-500 to-transparent" aria-hidden />
+      <div className="relative">{children}</div>
+    </Comp>
+  );
+}
+
+function CardHeader({ icon, title, inline }: { icon: React.ReactNode; title: string; inline?: boolean }) {
+  return (
+    <div className={cn("flex items-center gap-2", !inline && "mb-2")}>
+      <span className="w-7 h-7 rounded-lg bg-gold-500/10 dark:bg-gold-500/15 ring-1 ring-gold-500/30 flex items-center justify-center text-gold-600 dark:text-gold-400 flex-shrink-0">
+        {icon}
+      </span>
+      <p className="text-xs font-bold text-gold-700 dark:text-gold-400 tracking-tight truncate">{title}</p>
+    </div>
+  );
+}
+
+function CardValue({ value }: { value: string }) {
+  return <p className="text-2xl font-bold text-gray-900 dark:text-white tabular-nums tracking-tight truncate">{value}</p>;
+}
+
+function CardHint({ children, tone }: { children: React.ReactNode; tone?: 'pos' | 'neg' }) {
+  return (
+    <p className={cn(
+      "text-[11px] mt-1 truncate",
+      tone === 'pos' && 'text-emerald-500 dark:text-emerald-400',
+      tone === 'neg' && 'text-red-500 dark:text-red-400',
+      !tone && 'text-gray-500 dark:text-gray-400',
+    )}>
+      {children}
+    </p>
+  );
+}
+
+// ─── Section wrapper ─────────────────────────────────────────────────────────
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section>
+      <h2 className="text-xs font-bold uppercase tracking-wider text-gold-600 dark:text-gold-400 mb-3 ml-1">
+        {title}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+// ─── Pending card ────────────────────────────────────────────────────────────
+
+function PendingCard({
+  tone, title, count, list, onOpen,
+}: {
+  tone: 'red' | 'amber' | 'blue';
+  title: string;
+  count: number;
+  list: JobLite[];
+  onOpen: () => void;
+}) {
+  const dotCls = {
+    red: 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]',
+    amber: 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)]',
+    blue: 'bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.6)]',
+  }[tone];
+
+  return (
+    <button
+      onClick={onOpen}
+      className="relative overflow-hidden bg-white dark:bg-[#161616] border border-gray-200 dark:border-gray-800/80 rounded-2xl p-4 text-left transition-all hover:border-gold-300 dark:hover:border-gold-500/50 group w-full"
+    >
+      <span className="absolute top-0 left-0 h-px w-16 bg-gradient-to-r from-gold-500 to-transparent" aria-hidden />
+      <span className="absolute top-0 left-0 w-px h-16 bg-gradient-to-b from-gold-500 to-transparent" aria-hidden />
+      <div className="relative">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-semibold text-gray-600 dark:text-gray-300 flex items-center gap-2">
+            <span className={cn("w-1.5 h-1.5 rounded-full", dotCls)} />
+            {title}
+          </span>
+          <ArrowRight size={12} className="text-gray-300 dark:text-gray-700 group-hover:text-gold-500 transition-colors" />
+        </div>
+        <div className="flex items-baseline gap-3">
+          <p className="text-2xl font-bold text-gray-900 dark:text-white tabular-nums">{count}</p>
+          {list.length > 0 && (
+            <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate min-w-0">
+              {list[0].client_name || 'Sem cliente'}{count > 1 && ` · +${count - 1}`}
+            </p>
+          )}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+// ─── Sales funnel ────────────────────────────────────────────────────────────
+
+function SalesFunnel({
+  byStage, conversion, hideValues,
+}: {
+  byStage: Analytics['sales']['byStage'];
+  conversion: Analytics['sales']['conversion'];
+  hideValues: boolean;
+}) {
+  const stages = byStage.filter(s => !s.is_final).sort((a, b) => a.position - b.position);
+  const wonStages = byStage.filter(s => s.is_won);
+  const wonCount = wonStages.reduce((acc, s) => acc + s.count, 0);
+  const wonValue = wonStages.reduce((acc, s) => acc + s.total_value, 0);
+
+  if (stages.length === 0) {
+    return (
+      <p className="text-sm text-gray-500 dark:text-gray-400 italic py-8 text-center">
+        Sem etapas configuradas no funil.
+      </p>
+    );
+  }
+
+  const max = Math.max(1, ...stages.map(s => s.count), wonCount);
+
+  return (
+    <div className="space-y-3">
+      {stages.map(s => {
+        const conv = conversion.find(c => c.stage_id === s.id);
+        const widthPct = (s.count / max) * 100;
+        return (
+          <div key={s.id}>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[11px] font-medium text-gray-600 dark:text-gray-300 truncate">{s.name}</span>
+              <div className="flex items-center gap-2 flex-shrink-0 tabular-nums">
+                <span className="text-xs font-bold text-gray-900 dark:text-white">{s.count}</span>
+                <span className="text-[10px] text-gray-500 dark:text-gray-400">{formatBRLShort(s.total_value, hideValues)}</span>
+                {conv && conv.conversion_rate !== null && conv.entered > 0 && (
+                  <span className={cn(
+                    "text-[10px] font-bold w-9 text-right",
+                    conv.conversion_rate < 40 ? "text-red-500" :
+                    conv.conversion_rate < 70 ? "text-amber-500" : "text-emerald-500"
+                  )}>
+                    {conv.conversion_rate}%
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="h-2 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-gold-400 to-gold-500 transition-all"
+                style={{ width: `${Math.max(widthPct, s.count > 0 ? 4 : 0)}%` }}
+              />
+            </div>
+          </div>
+        );
+      })}
+
+      {wonCount > 0 && (
+        <div className="pt-2 border-t border-gray-200 dark:border-gray-800">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">Fechados</span>
+            <div className="flex items-center gap-2 flex-shrink-0 tabular-nums">
+              <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400">{wonCount}</span>
+              <span className="text-[10px] text-emerald-600 dark:text-emerald-500">{formatBRLShort(wonValue, hideValues)}</span>
+            </div>
+          </div>
+          <div className="h-2 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-500"
+              style={{ width: `${Math.max((wonCount / max) * 100, 4)}%` }}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Internal opportunities (with scroll) ────────────────────────────────────
+
+function InternalOpportunities({
+  opportunities, summary, onContact, onDismiss,
+}: {
+  opportunities: Opportunity[];
+  summary: Analytics['opportunities'];
+  onContact: (o: Opportunity) => void;
+  onDismiss: (id: number) => void;
+}) {
+  return (
+    <div className="flex flex-col" style={{ maxHeight: 280 }}>
+      {summary.total > 0 && (
+        <div className="grid grid-cols-3 gap-2 mb-2 flex-shrink-0">
+          <Stat label="Urgentes" value={summary.urgent} tone="red" />
+          <Stat label="Em breve" value={summary.active} tone="amber" />
+          <Stat label="Futuras" value={summary.future} tone="gray" />
+        </div>
+      )}
+      <div className="flex-1 overflow-y-auto -mx-1 px-1">
+        {opportunities.length === 0 ? (
+          <div className="text-center py-8">
+            <p className="text-sm text-gray-500 dark:text-gray-400">Nenhuma oportunidade ativa.</p>
+          </div>
+        ) : (
+          <ul className="space-y-1">
+            {opportunities.map(opp => {
+              const date = opp.suggested_date ? parseISO(opp.suggested_date) : null;
+              const dotColor =
+                opp.priority === 'urgent' ? 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.5)]' :
+                opp.priority === 'active' ? 'bg-amber-500 shadow-[0_0_6px_rgba(245,158,11,0.5)]' :
+                'bg-gray-400 dark:bg-gray-600';
+              return (
+                <li
+                  key={opp.id}
+                  className="group flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-gold-500/5 dark:hover:bg-gold-500/10 transition-colors"
+                >
+                  <span className={cn("w-1.5 h-1.5 rounded-full flex-shrink-0", dotColor)} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                      {opp.client_name || 'Cliente'}
+                    </p>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
+                      {opp.type}{date && ` · ${format(date, 'dd/MM', { locale: ptBR })}`}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                    <button
+                      onClick={() => onContact(opp)}
+                      className="px-2.5 py-1 text-[11px] font-medium text-gold-700 dark:text-gold-300 bg-gold-500/15 hover:bg-gold-500/25 rounded-full transition-colors"
+                    >
+                      Contatar
+                    </button>
+                    <button
+                      onClick={() => onDismiss(opp.id)}
+                      className="p-1 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 rounded-full transition-colors"
+                      title="Descartar"
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value, tone }: { label: string; value: number; tone: 'red' | 'amber' | 'gray' }) {
+  const valueCls = {
+    red: 'text-red-500',
+    amber: 'text-amber-500',
+    gray: 'text-gray-700 dark:text-gray-300',
+  }[tone];
+  return (
+    <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-800 rounded-xl px-3 py-2 text-center">
+      <p className="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">{label}</p>
+      <p className={cn("text-lg font-bold tabular-nums", valueCls)}>{value}</p>
+    </div>
   );
 }

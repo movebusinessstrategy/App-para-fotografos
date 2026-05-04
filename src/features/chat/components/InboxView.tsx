@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic, Sun, Moon, PenSquare, Search, MoreVertical, Smile, Paperclip, ChevronDown } from 'lucide-react';
+import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic, Sun, Moon, PenSquare, Search, MoreVertical, Smile, Paperclip, ChevronDown, UserPlus, Loader2, CheckCircle2 } from 'lucide-react';
+import { authFetch } from '../../../utils/authFetch';
 import EmojiPicker, { Theme as EmojiTheme } from 'emoji-picker-react';
 import { useTheme } from '../../../contexts/ThemeContext';
 import { extractContact, formatBrazilianPhone, getInitials } from '../utils/contactHelpers';
@@ -49,7 +50,7 @@ function dateLabel(iso: string): string {
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
 }
 
-export function InboxView({ initialPhone }: Props) {
+export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props) {
   const { waTheme, toggleWaTheme } = useTheme();
   const { conversations, loading: loadingConvs, refresh } = useConversations();
   const { connected } = useWaStatus();
@@ -451,6 +452,13 @@ export function InboxView({ initialPhone }: Props) {
 
               {/* FEATURE 6 — botões do header */}
               <div className="flex items-center gap-1 flex-shrink-0">
+                <FunnelStatusButton
+                  phone={selectedPhone || ''}
+                  contactName={displayName}
+                  deals={deals}
+                  stages={stages}
+                  onAdded={onDealUpdated}
+                />
                 <button
                   className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
                   style={{ color: 'var(--wa-text-secondary)' }}
@@ -745,5 +753,100 @@ export function InboxView({ initialPhone }: Props) {
         onStart={phone => setSelectedPhone(phone)}
       />
     </div>
+  );
+}
+
+// ─── Funnel status button (header da conversa) ──────────────────────────────
+// Mostra badge com etapa atual se a conversa já tem deal, ou botão de adicionar
+// ao funil de vendas se ainda não tem.
+
+function FunnelStatusButton({
+  phone, contactName, deals, stages, onAdded,
+}: {
+  phone: string;
+  contactName: string;
+  deals: Deal[];
+  stages: PipelineStage[];
+  onAdded: () => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [justAdded, setJustAdded] = useState(false);
+
+  if (!phone) return null;
+
+  // Match contact_phone com várias normalizações (com/sem 55, só dígitos)
+  const onlyDigits = (s: string) => (s || '').replace(/\D/g, '');
+  const target = onlyDigits(phone);
+  const targetShort = target.startsWith('55') ? target.slice(2) : target;
+  const existingDeal = deals.find(d => {
+    const dp = onlyDigits(d.contact_phone || '');
+    if (!dp) return false;
+    const dpShort = dp.startsWith('55') ? dp.slice(2) : dp;
+    return dp === target || dpShort === targetShort || dp === targetShort || dpShort === target;
+  });
+
+  if (existingDeal) {
+    const stage = stages.find(s => s.id === existingDeal.stage);
+    const stageName = stage?.name || 'No funil';
+    const stageColor = stage?.color || '#10b981';
+    return (
+      <div
+        title={`No funil: ${stageName}`}
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold"
+        style={{
+          background: `${stageColor}20`,
+          color: stageColor,
+          border: `1px solid ${stageColor}40`,
+        }}
+      >
+        <CheckCircle2 size={11} />
+        <span className="max-w-[120px] truncate">{stageName}</span>
+      </div>
+    );
+  }
+
+  const handleAdd = async () => {
+    if (adding) return;
+    setAdding(true);
+    try {
+      const res = await authFetch('/api/deals/quick', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: contactName || phone,
+          phone: target,
+          source: 'WhatsApp',
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert('Erro ao adicionar ao funil: ' + (err.error || res.statusText));
+        return;
+      }
+      setJustAdded(true);
+      onAdded();
+      setTimeout(() => setJustAdded(false), 2000);
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleAdd}
+      disabled={adding}
+      title="Adicionar este contato ao funil de vendas"
+      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[11px] font-semibold transition-colors disabled:opacity-60"
+      style={{
+        background: justAdded ? 'rgba(16, 185, 129, 0.15)' : 'var(--wa-bg-secondary, rgba(255,255,255,0.08))',
+        color: justAdded ? '#10b981' : 'var(--wa-text-secondary)',
+        border: justAdded ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid var(--wa-border, rgba(255,255,255,0.1))',
+      }}
+    >
+      {adding ? <Loader2 size={11} className="animate-spin" /> :
+       justAdded ? <CheckCircle2 size={11} /> :
+       <UserPlus size={11} />}
+      {justAdded ? 'Adicionado!' : 'Adicionar ao funil'}
+    </button>
   );
 }
