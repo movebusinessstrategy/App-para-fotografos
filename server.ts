@@ -3162,10 +3162,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Recalcula o total real a partir dos itens (auto-corrige payment_status desatualizado)
     const dealItemsTotal = dealItems.reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
     const jobItemsTotal = jobItems.reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
-    // Deal jobs: total = deal_items + job_items (job.amount is always recomputed)
+    // Deal jobs: total = deal_items (se houver) ou deal.value (fallback) + job_items
     // Non-deal jobs: total = job.amount (base manual) + job_items (extras), never overwrite job.amount
+    const dealBase = dealItems.length > 0 ? dealItemsTotal : (deal?.value || job.amount || 0);
     const realTotal = deal?.id
-      ? dealItemsTotal + jobItemsTotal
+      ? dealBase + jobItemsTotal
       : job.amount + jobItemsTotal;
     const correctStatus = totalPago <= 0 ? 'pending' : (realTotal > 0 && totalPago >= realTotal) ? 'paid' : 'partial';
 
@@ -3268,18 +3269,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!job) return { newAmount: 0, payment_status: 'pending' };
 
     // Busca deal vinculado
-    const { data: deal } = await supabase.from('deals').select('id').eq('converted_job_id', jobId).eq('user_id', userId).maybeSingle();
+    const { data: deal } = await supabase.from('deals').select('id, value').eq('converted_job_id', jobId).eq('user_id', userId).maybeSingle();
 
     const { data: jItems } = await adminClient.from('job_items').select('catalog_value, quantidade').eq('job_id', jobId);
     const jobItemsTotal = (jItems || []).reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
 
     let realTotal: number;
     if (deal?.id) {
-      // Job convertido de deal: base = soma dos deal_items (confiável, nunca corrompida)
+      // Job convertido de deal: base = soma dos deal_items (se houver) ou deal.value como fallback.
+      // Sem fallback, vendas sem itens detalhados zeravam o job.amount.
       const { data: dItems } = await adminClient.from('deal_items').select('catalog_value, quantidade').eq('deal_id', deal.id);
-      const dealTotal = (dItems || []).reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
-      realTotal = dealTotal + jobItemsTotal;
-      // Atualiza job.amount para refletir o total real (deal_items + job_items)
+      const items = dItems || [];
+      const dealTotal = items.reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
+      const dealBase = items.length > 0 ? dealTotal : (deal.value || job.amount || 0);
+      realTotal = dealBase + jobItemsTotal;
+      // Atualiza job.amount para refletir o total real
       await supabase.from('jobs').update({ amount: realTotal }).eq('id', jobId).eq('user_id', userId);
     } else {
       // Job direto: base = job.amount original (imutável). Não sobrescrevemos job.amount.
