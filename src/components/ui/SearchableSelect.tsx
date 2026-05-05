@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, Search, X } from "lucide-react";
 import { cn } from "../../utils/cn";
+import { normalizeText } from "../../utils/normalizeText";
 
 interface Option {
   value: string;
@@ -43,7 +44,7 @@ export function SearchableSelect({
 
   const selected = options.find((o) => o.value === value);
   const filtered = query.trim()
-    ? options.filter((o) => o.label.toLowerCase().includes(query.toLowerCase()))
+    ? options.filter((o) => normalizeText(o.label).includes(normalizeText(query)))
     : options;
 
   // Recalculate dropdown position whenever it opens or window scrolls/resizes

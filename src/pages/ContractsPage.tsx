@@ -10,6 +10,7 @@ import { ConfirmModal } from "../components/ui/ConfirmModal";
 import { Client, ContractTemplate, Job } from "../types";
 import { cn } from "../utils/cn";
 import { parseBRL, formatBRL, SUNDAY_SURCHARGE } from "../utils/contractTemplate";
+import { normalizeText } from "../utils/normalizeText";
 
 type ToastKind = 'success' | 'error' | 'info';
 interface ToastState { kind: ToastKind; message: string }
@@ -104,9 +105,9 @@ export default function ContractsPage() {
 
   const visible = useMemo(() => {
     const list = tab === 'pending' ? pending : tab === 'signed' ? signed : [];
-    const q = searchQuery.trim().toLowerCase();
+    const q = normalizeText(searchQuery);
     if (!q) return list;
-    return list.filter(c => (c.client_name || '').toLowerCase().includes(q));
+    return list.filter(c => normalizeText(c.client_name || '').includes(q));
   }, [tab, contracts, searchQuery]);
 
   return (
@@ -433,12 +434,12 @@ function NewContractPicker({ onClose, onCreated, onError }: { onClose: () => voi
   }, [templates]);
 
   const filteredClients = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
+    const q = normalizeText(searchQuery);
     if (!q) return clients;
     return clients.filter(c =>
-      (c.name || '').toLowerCase().includes(q) ||
-      (c.phone || '').toLowerCase().includes(q) ||
-      (c.email || '').toLowerCase().includes(q)
+      normalizeText(c.name || '').includes(q) ||
+      normalizeText(c.phone || '').includes(q) ||
+      normalizeText(c.email || '').includes(q)
     );
   }, [clients, searchQuery]);
 

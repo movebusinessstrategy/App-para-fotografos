@@ -5,6 +5,7 @@ import { ptBR } from 'date-fns/locale';
 import { Job, ProductionProcess, ProductionStageV2 } from '../../types';
 import { cn } from '../../utils/cn';
 import { parseDate } from '../../utils/date';
+import { normalizeText } from '../../utils/normalizeText';
 
 const SKIP = '__skip__';
 
@@ -42,12 +43,12 @@ export function ImportToProductionModal({
   );
 
   const filtered = useMemo(() => {
-    const q = search.toLowerCase().trim();
+    const q = normalizeText(search);
     if (!q) return jobs;
     return jobs.filter(j =>
-      (j.client_name || '').toLowerCase().includes(q) ||
-      (j.job_name || '').toLowerCase().includes(q) ||
-      (j.job_type || '').toLowerCase().includes(q)
+      normalizeText(j.client_name || '').includes(q) ||
+      normalizeText(j.job_name || '').includes(q) ||
+      normalizeText(j.job_type || '').includes(q)
     );
   }, [jobs, search]);
 
