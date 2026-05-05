@@ -1,13 +1,15 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { FileText, Plus, Search, X, ChevronRight, Briefcase, FilePlus2, Settings as SettingsIcon, FileCheck2, FileClock, Save, Loader2, Eye, Trash2, AlertCircle, CheckCheck, RefreshCw } from "lucide-react";
+import { FileText, Plus, Search, X, ChevronRight, ChevronLeft, Briefcase, FilePlus2, Settings as SettingsIcon, FileCheck2, FileClock, FileCog, Save, Loader2, Eye, Trash2, AlertCircle, CheckCheck, RefreshCw, Check } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { authFetch } from "../utils/authFetch";
 import { parseDate } from "../utils/date";
 import { ContractGenerator } from "../components/contracts/ContractGenerator";
+import { TemplatesManager } from "../components/contracts/TemplatesManager";
 import { ConfirmModal } from "../components/ui/ConfirmModal";
-import { Client, Job } from "../types";
+import { Client, ContractTemplate, Job } from "../types";
 import { cn } from "../utils/cn";
+import { parseBRL, formatBRL, SUNDAY_SURCHARGE } from "../utils/contractTemplate";
 
 type ToastKind = 'success' | 'error' | 'info';
 interface ToastState { kind: ToastKind; message: string }
@@ -28,7 +30,7 @@ interface ContractListItem {
   contract_data?: { serviceType?: string; serviceDate?: string };
 }
 
-type Tab = 'pending' | 'signed' | 'settings';
+type Tab = 'pending' | 'signed' | 'templates' | 'settings';
 
 export default function ContractsPage() {
   const [tab, setTab] = useState<Tab>('pending');
@@ -118,7 +120,7 @@ export default function ContractsPage() {
               Crie, envie e arquive contratos com integração Autentique.
             </p>
           </div>
-          {tab !== 'settings' && (
+          {tab !== 'settings' && tab !== 'templates' && (
             <div className="flex items-center gap-2">
               {tab === 'pending' && (
                 <button
@@ -159,6 +161,12 @@ export default function ContractsPage() {
             count={signed.length}
           />
           <TabButton
+            active={tab === 'templates'}
+            onClick={() => setTab('templates')}
+            icon={<FileCog size={14} />}
+            label="Modelos"
+          />
+          <TabButton
             active={tab === 'settings'}
             onClick={() => setTab('settings')}
             icon={<SettingsIcon size={14} />}
@@ -167,7 +175,7 @@ export default function ContractsPage() {
         </div>
 
         {/* Search (only on list tabs) */}
-        {tab !== 'settings' && (
+        {tab !== 'settings' && tab !== 'templates' && (
           <div className="relative max-w-sm">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             <input
@@ -188,6 +196,8 @@ export default function ContractsPage() {
         {/* Body */}
         {tab === 'settings' ? (
           <SettingsForm onNotify={showToast} />
+        ) : tab === 'templates' ? (
+          <TemplatesManager onNotify={showToast} />
         ) : loading ? (
           <div className="flex items-center justify-center h-64">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-600" />
@@ -195,7 +205,7 @@ export default function ContractsPage() {
         ) : (
           <ContractsList
             contracts={visible}
-            tab={tab}
+            tab={tab as 'pending' | 'signed'}
             onOpen={(id) => setOpenContractId(id)}
             onAskDelete={(c) => setConfirmDelete(c)}
           />
@@ -383,25 +393,46 @@ function ListStatusBadge({ status }: { status: ContractListItem['status'] }) {
   return <span className={cn('inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold', it.cls)}>{it.label}</span>;
 }
 
-// ─── New contract: client picker ──────────────────────────────────────────────
+// ─── New contract: template + client picker ───────────────────────────────────
+
+type PickerStep = 'template' | 'client' | 'job';
 
 function NewContractPicker({ onClose, onCreated, onError }: { onClose: () => void; onCreated: (id: number) => void; onError: (msg: string) => void }) {
   const [clients, setClients] = useState<ClientWithJobs[]>([]);
+  const [templates, setTemplates] = useState<ContractTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [step, setStep] = useState<'client' | 'job'>('client');
+  const [step, setStep] = useState<PickerStep>('template');
   const [selectedClient, setSelectedClient] = useState<ClientWithJobs | null>(null);
+  const [selectedTemplate, setSelectedTemplate] = useState<ContractTemplate | null>(null);
+  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const [sundaySession, setSundaySession] = useState(false);
 
   useEffect(() => {
-    authFetch('/api/clients')
-      .then(r => r.json())
-      .then(setClients)
-      .catch(console.error)
+    Promise.all([
+      authFetch('/api/clients').then(r => r.ok ? r.json() : []),
+      authFetch('/api/contract-templates').then(r => r.ok ? r.json() : []),
+    ]).then(([cs, ts]) => {
+      setClients(Array.isArray(cs) ? cs : []);
+      setTemplates(Array.isArray(ts) ? ts : []);
+    }).catch(console.error)
       .finally(() => setLoading(false));
   }, []);
 
-  const filtered = useMemo(() => {
+  const categories = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const t of templates) {
+      if (!seen.has(t.category)) {
+        seen.add(t.category);
+        out.push(t.category);
+      }
+    }
+    return out.sort();
+  }, [templates]);
+
+  const filteredClients = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return clients;
     return clients.filter(c =>
@@ -411,24 +442,73 @@ function NewContractPicker({ onClose, onCreated, onError }: { onClose: () => voi
     );
   }, [clients, searchQuery]);
 
-  const createWith = async (client: ClientWithJobs, job: Job | null) => {
+  const filteredTemplates = useMemo(() => {
+    if (!activeCategory) return [];
+    return templates
+      .filter(t => t.category === activeCategory)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [templates, activeCategory]);
+
+  const buildContractData = (client: ClientWithJobs | null, job: Job | null, template: ContractTemplate | null) => {
+    const cd: any = {};
+
+    if (client) {
+      cd.clientName = client.name || '';
+      cd.clientCPF = (client as any).cpf || '';
+      cd.clientPhone = (client as any).phone || '';
+      cd.clientEmail = (client as any).email || '';
+      cd.clientCEP = (client as any).cep || '';
+      const addr = (client as any).address || '';
+      const city = (client as any).city || '';
+      const state = (client as any).state || '';
+      cd.clientAddress = [addr, [city, state].filter(Boolean).join('/')].filter(Boolean).join(' - ');
+    }
+
+    if (job) {
+      cd.serviceType = job.job_type || '';
+      cd.serviceDate = job.job_date || '';
+      cd.serviceTime = job.job_time || '';
+    }
+
+    // Template defaults: valor + prazo + nome do tipo de serviço
+    if (template) {
+      const defs = template.default_data || {};
+      if (template.name && !cd.serviceType) {
+        cd.serviceType = template.name;
+      }
+      let baseValue = 0;
+      if (defs.valor_total) {
+        baseValue = parseBRL(defs.valor_total as string);
+      } else if (job?.amount) {
+        baseValue = job.amount;
+      }
+      if (sundaySession) baseValue += SUNDAY_SURCHARGE;
+      if (baseValue > 0) cd.serviceValue = formatBRL(baseValue);
+      if (defs.valor_extenso && !sundaySession) cd.serviceValueWords = String(defs.valor_extenso);
+      if (defs.prazo_entrega_dias) cd.deliveryDays = Number(defs.prazo_entrega_dias);
+    } else if (job?.amount) {
+      cd.serviceValue = formatBRL(job.amount);
+    }
+
+    cd.imageAuthorization = 'autoriza';
+    return cd;
+  };
+
+  const createContract = async (client: ClientWithJobs, job: Job | null) => {
     setCreating(true);
     try {
+      const payload: any = {
+        client_id: client.id,
+        job_id: job?.id ?? null,
+        status: 'draft',
+        contract_data: buildContractData(client, job, selectedTemplate),
+      };
+      if (selectedTemplate) payload.template_id = selectedTemplate.id;
+
       const res = await authFetch('/api/contracts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_id: client.id,
-          job_id: job?.id ?? null,
-          status: 'draft',
-          contract_data: job ? {
-            serviceType: job.job_type || '',
-            serviceDate: job.job_date || '',
-            serviceTime: job.job_time || '',
-            serviceValue: (job.amount || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 }),
-            clientName: client.name || '',
-          } : { clientName: client.name || '' },
-        }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -447,9 +527,16 @@ function NewContractPicker({ onClose, onCreated, onError }: { onClose: () => voi
       setSelectedClient(client);
       setStep('job');
     } else {
-      createWith(client, null);
+      createContract(client, null);
     }
   };
+
+  const stepTitle = step === 'template'
+    ? (activeCategory ? `${activeCategory}` : 'Escolha o tipo de contrato')
+    : step === 'client' ? 'Escolha o cliente' : 'Vincular a um trabalho?';
+  const stepHint = step === 'template'
+    ? (activeCategory ? 'Qual modelo usar?' : 'Cada modelo tem cláusulas e valor padrão próprios')
+    : step === 'client' ? `Modelo: ${selectedTemplate?.name || 'sem modelo'}` : selectedClient?.name || '';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
@@ -458,24 +545,139 @@ function NewContractPicker({ onClose, onCreated, onError }: { onClose: () => voi
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800">
-          <div>
-            <h3 className="text-base font-bold text-gray-900 dark:text-white">
-              {step === 'client' ? 'Escolha o cliente' : 'Vincular a um trabalho?'}
-            </h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              {step === 'client' ? 'Quem é o contratante?' : selectedClient?.name}
-            </p>
+          <div className="flex items-center gap-2 min-w-0">
+            {step !== 'template' && (
+              <button
+                onClick={() => {
+                  if (step === 'job') { setStep('client'); setSelectedClient(null); }
+                  else if (step === 'client') { setStep('template'); }
+                }}
+                className="p-1 rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                title="Voltar"
+              >
+                <ChevronLeft size={16} />
+              </button>
+            )}
+            {step === 'template' && activeCategory && (
+              <button
+                onClick={() => setActiveCategory(null)}
+                className="p-1 rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                title="Voltar"
+              >
+                <ChevronLeft size={16} />
+              </button>
+            )}
+            <div className="min-w-0">
+              <h3 className="text-base font-bold text-gray-900 dark:text-white truncate">{stepTitle}</h3>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">{stepHint}</p>
+            </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+            className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex-shrink-0"
           >
             <X size={16} />
           </button>
         </div>
 
         <div className="p-5 max-h-[60vh] overflow-y-auto">
-          {step === 'client' ? (
+          {step === 'template' && (
+            loading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 size={18} className="animate-spin text-gray-400" />
+              </div>
+            ) : templates.length === 0 ? (
+              <div className="text-center py-8 px-4">
+                <p className="text-sm text-gray-700 dark:text-gray-200 font-semibold mb-1">Nenhum modelo cadastrado</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+                  Importe os 24 modelos do estúdio em Contratos → Modelos primeiro.
+                </p>
+                <button
+                  onClick={() => { setSelectedTemplate(null); setStep('client'); }}
+                  className="text-xs text-gold-600 hover:text-gold-700 font-semibold"
+                >
+                  Continuar sem modelo →
+                </button>
+              </div>
+            ) : !activeCategory ? (
+              <div className="space-y-1.5">
+                {categories.map(cat => {
+                  const count = templates.filter(t => t.category === cat).length;
+                  return (
+                    <button
+                      key={cat}
+                      onClick={() => setActiveCategory(cat)}
+                      className="w-full flex items-center justify-between gap-3 px-3 py-2.5 border border-gray-200 dark:border-gray-700 hover:border-gold-400 hover:bg-gold-50/50 dark:hover:bg-gold-500/10 rounded-xl text-left transition-all"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-7 h-7 rounded-lg bg-gold-50 dark:bg-gold-500/10 flex items-center justify-center">
+                          <FileText size={13} className="text-gold-600 dark:text-gold-400" />
+                        </div>
+                        <span className="font-medium text-gray-900 dark:text-white text-sm">{cat}</span>
+                      </div>
+                      <span className="text-[11px] text-gray-400">{count} {count === 1 ? 'modelo' : 'modelos'} <ChevronRight size={11} className="inline ml-1" /></span>
+                    </button>
+                  );
+                })}
+                <button
+                  onClick={() => { setSelectedTemplate(null); setStep('client'); }}
+                  className="w-full flex items-center justify-between gap-3 px-3 py-2.5 border border-dashed border-gray-300 dark:border-gray-600 hover:border-gold-400 rounded-xl text-left transition-all mt-3"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <FilePlus2 size={14} className="text-gray-400" />
+                    <div>
+                      <p className="font-medium text-gray-700 dark:text-gray-200 text-sm">Sem modelo</p>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">Usar contrato em branco (legado)</p>
+                    </div>
+                  </div>
+                  <ChevronRight size={14} className="text-gray-400" />
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-1.5">
+                  {filteredTemplates.map(t => {
+                    const valor = (t.default_data?.valor_total as string) || '';
+                    const prazo = t.default_data?.prazo_entrega_dias;
+                    return (
+                      <button
+                        key={t.id}
+                        onClick={() => { setSelectedTemplate(t); setStep('client'); }}
+                        className="w-full flex items-center justify-between gap-3 px-3 py-2.5 border border-gray-200 dark:border-gray-700 hover:border-gold-400 hover:bg-gold-50/50 dark:hover:bg-gold-500/10 rounded-xl text-left transition-all"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium text-gray-900 dark:text-white text-sm truncate">{t.name}</p>
+                          {(valor || prazo) && (
+                            <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+                              {valor && <>R$ {valor}</>}
+                              {valor && prazo ? ' · ' : ''}
+                              {prazo ? `entrega em ${prazo}d` : ''}
+                            </p>
+                          )}
+                        </div>
+                        <ChevronRight size={14} className="text-gray-400 flex-shrink-0" />
+                      </button>
+                    );
+                  })}
+                </div>
+                {/* Domingo checkbox */}
+                <label className="mt-4 flex items-center gap-2 px-3 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={sundaySession}
+                    onChange={e => setSundaySession(e.target.checked)}
+                    className="rounded border-gray-300"
+                  />
+                  <div className="flex-1">
+                    <p className="text-sm text-gray-800 dark:text-gray-200 font-medium">Sessão no domingo</p>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400">Acrescenta R$ {SUNDAY_SURCHARGE.toFixed(2).replace('.', ',')} ao valor do modelo</p>
+                  </div>
+                </label>
+              </>
+            )
+          )}
+
+          {step === 'client' && (
             <>
               <div className="relative mb-3">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
@@ -487,40 +689,36 @@ function NewContractPicker({ onClose, onCreated, onError }: { onClose: () => voi
                   className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 focus:border-gold-400 outline-none"
                 />
               </div>
-              {loading ? (
-                <div className="flex items-center justify-center py-8">
-                  <Loader2 size={18} className="animate-spin text-gray-400" />
-                </div>
-              ) : (
-                <div className="space-y-1.5">
-                  {filtered.map(c => (
-                    <button
-                      key={c.id}
-                      onClick={() => onPickClient(c)}
-                      disabled={creating}
-                      className="w-full flex items-center justify-between gap-3 px-3 py-2.5 border border-gray-200 dark:border-gray-700 hover:border-gold-400 hover:bg-gold-50/50 dark:hover:bg-gold-500/10 rounded-xl text-left disabled:opacity-60 transition-all"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <p className="font-medium text-gray-900 dark:text-white text-sm truncate">{c.name || 'Sem nome'}</p>
-                        <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
-                          {c.phone || c.email || '—'}
-                          {c.jobs && c.jobs.length > 0 && (
-                            <span className="ml-2 inline-flex items-center gap-1 text-gray-400">
-                              <Briefcase size={9} /> {c.jobs.length}
-                            </span>
-                          )}
-                        </p>
-                      </div>
-                      <ChevronRight size={14} className="text-gray-400 flex-shrink-0" />
-                    </button>
-                  ))}
-                  {filtered.length === 0 && (
-                    <p className="text-center text-sm text-gray-400 py-6">Nenhum cliente encontrado.</p>
-                  )}
-                </div>
-              )}
+              <div className="space-y-1.5">
+                {filteredClients.map(c => (
+                  <button
+                    key={c.id}
+                    onClick={() => onPickClient(c)}
+                    disabled={creating}
+                    className="w-full flex items-center justify-between gap-3 px-3 py-2.5 border border-gray-200 dark:border-gray-700 hover:border-gold-400 hover:bg-gold-50/50 dark:hover:bg-gold-500/10 rounded-xl text-left disabled:opacity-60 transition-all"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-gray-900 dark:text-white text-sm truncate">{c.name || 'Sem nome'}</p>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+                        {c.phone || c.email || '—'}
+                        {c.jobs && c.jobs.length > 0 && (
+                          <span className="ml-2 inline-flex items-center gap-1 text-gray-400">
+                            <Briefcase size={9} /> {c.jobs.length}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                    <ChevronRight size={14} className="text-gray-400 flex-shrink-0" />
+                  </button>
+                ))}
+                {filteredClients.length === 0 && (
+                  <p className="text-center text-sm text-gray-400 py-6">Nenhum cliente encontrado.</p>
+                )}
+              </div>
             </>
-          ) : (
+          )}
+
+          {step === 'job' && (
             <>
               <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
                 Vincular um trabalho preenche o contrato automaticamente. Você ainda pode editar tudo depois.
@@ -531,7 +729,7 @@ function NewContractPicker({ onClose, onCreated, onError }: { onClose: () => voi
                   return (
                     <button
                       key={job.id}
-                      onClick={() => createWith(selectedClient!, job)}
+                      onClick={() => createContract(selectedClient!, job)}
                       disabled={creating}
                       className="w-full flex items-center justify-between gap-3 px-3 py-2.5 border border-gray-200 dark:border-gray-700 hover:border-gold-400 hover:bg-gold-50/50 dark:hover:bg-gold-500/10 rounded-xl text-left disabled:opacity-60 transition-all"
                     >
@@ -547,7 +745,7 @@ function NewContractPicker({ onClose, onCreated, onError }: { onClose: () => voi
                 })}
 
                 <button
-                  onClick={() => createWith(selectedClient!, null)}
+                  onClick={() => createContract(selectedClient!, null)}
                   disabled={creating}
                   className="w-full flex items-center justify-between gap-3 px-3 py-2.5 border border-dashed border-gray-300 dark:border-gray-600 hover:border-gold-400 hover:bg-gold-50/50 dark:hover:bg-gold-500/10 rounded-xl text-left disabled:opacity-60 transition-all"
                 >
