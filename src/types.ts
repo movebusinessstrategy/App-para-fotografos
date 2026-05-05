@@ -426,3 +426,18 @@ export interface Combo {
   created_at: string;
   updated_at?: string;
 }
+
+export interface ContractTemplate {
+  id: number;
+  user_id: string;
+  name: string;
+  category: string;
+  body: string;
+  default_data: Record<string, string | number>;
+  is_default: boolean;
+  is_legacy: boolean;
+  archived: boolean;
+  created_at: string;
+  updated_at?: string;
+}
+

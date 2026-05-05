@@ -7,9 +7,12 @@ import {
 } from "lucide-react";
 import { SearchableSelect } from "../ui/SearchableSelect";
 import { ContractGenerator } from "../contracts/ContractGenerator";
+import { TemplatePickerModal } from "../contracts/TemplatePickerModal";
 import { authFetch } from "../../utils/authFetch";
 import { parseDate } from "../../utils/date";
 import { cn } from "../../utils/cn";
+import { ContractTemplate } from "../../types";
+import { buildContractDataFromTemplate } from "../../utils/contractTemplate";
 import { JobWithProduction } from "./ProductionBoard";
 
 function ContractStatusPill({ status, signers }: { status: 'draft' | 'pending_signature' | 'signed' | 'cancelled'; signers?: Array<{ status: string }> }) {
@@ -134,6 +137,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
   const [newLabel, setNewLabel] = useState("");
   const [contractId, setContractId] = useState<number | null>(null);
   const [creatingContract, setCreatingContract] = useState(false);
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [jobContract, setJobContract] = useState<{ id: number; status: 'draft' | 'pending_signature' | 'signed' | 'cancelled'; signers?: Array<{ status: string }> } | null>(null);
 
   // Load existing contract for this job (if any) so we can show status + reuse instead of duplicating.
@@ -157,7 +161,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
     return () => { cancelled = true; };
   }, [job?.id, contractId]);
 
-  const handleOpenContract = async () => {
+  const handleOpenContract = () => {
     if (!job) return;
     if (jobContract) {
       // Reuse existing contract
@@ -168,23 +172,37 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
       alert("Este trabalho não tem um cliente vinculado.");
       return;
     }
+    setTemplatePickerOpen(true);
+  };
+
+  const createContractWithTemplate = async (template: ContractTemplate | null, sundaySession: boolean) => {
+    if (!job?.client_id) return;
     setCreatingContract(true);
+    setTemplatePickerOpen(false);
     try {
+      // Busca o cliente completo pra preencher endereço/CPF/etc
+      const clientRes = await authFetch(`/api/clients/${job.client_id}`);
+      const client = clientRes.ok ? await clientRes.json() : null;
+
+      const jobAsRow: any = {
+        ...job,
+        amount: job.amount,
+      };
+
+      const contract_data = buildContractDataFromTemplate(client, jobAsRow, template, { sundaySession });
+
+      const payload: any = {
+        client_id: job.client_id,
+        job_id: job.id,
+        status: "draft",
+        contract_data,
+      };
+      if (template) payload.template_id = template.id;
+
       const res = await authFetch("/api/contracts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          client_id: job.client_id,
-          job_id: job.id,
-          status: "draft",
-          contract_data: {
-            serviceType: job.job_type || "",
-            serviceDate: job.job_date || "",
-            serviceTime: job.job_time || "",
-            serviceValue: (job.amount || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 }),
-            clientName: job.client_name || "",
-          },
-        }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -1155,6 +1173,15 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
         <ContractGenerator
           contractId={contractId}
           onClose={() => setContractId(null)}
+        />
+      )}
+
+      {/* Template picker — antes de criar o contrato */}
+      {templatePickerOpen && (
+        <TemplatePickerModal
+          subtitle={`Cliente: ${job?.client_name || 'sem nome'}`}
+          onClose={() => setTemplatePickerOpen(false)}
+          onPick={({ template, sundaySession }) => createContractWithTemplate(template, sundaySession)}
         />
       )}
 

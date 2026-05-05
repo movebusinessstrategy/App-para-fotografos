@@ -7329,7 +7329,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const jobId = req.query.job_id ? Number(req.query.job_id) : null;
     let q = supabase
       .from('contracts')
-      .select('id, user_id, client_id, job_id, status, signers, autentique_id, signed_at, created_at, updated_at, contract_data')
+      .select('id, user_id, client_id, job_id, template_id, status, signers, autentique_id, signed_at, created_at, updated_at, contract_data')
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
     if (status) q = q.eq('status', status);
@@ -7371,7 +7371,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const supabase = (req as any).supabase as SupabaseClient;
     const body = req.body || {};
     if (!body.client_id) return res.status(400).json({ error: 'client_id required' });
-    const payload = {
+    const payload: any = {
       user_id: userId,
       client_id: body.client_id,
       job_id: body.job_id ?? null,
@@ -7379,6 +7379,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       contract_data: body.contract_data || {},
       signers: body.signers || [],
     };
+    if (body.template_id !== undefined) payload.template_id = body.template_id;
     const { data, error } = await supabase
       .from('contracts')
       .insert(payload)
@@ -7398,6 +7399,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (body.signers !== undefined) update.signers = body.signers;
     if (body.status !== undefined) update.status = body.status;
     if (body.job_id !== undefined) update.job_id = body.job_id;
+    if (body.template_id !== undefined) update.template_id = body.template_id;
     if (body.signed_at !== undefined) update.signed_at = body.signed_at;
     if (body.signed_pdf_url !== undefined) update.signed_pdf_url = body.signed_pdf_url;
     if (body.autentique_id !== undefined) update.autentique_id = body.autentique_id;
@@ -7422,6 +7424,138 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('id', req.params.id);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ ok: true });
+  });
+
+  // ── Contract Templates (modelos de contrato) ──────────────────────────────
+  app.get('/api/contract-templates', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase
+      .from('contract_templates')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('archived', false)
+      .order('category', { ascending: true })
+      .order('name', { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  });
+
+  app.get('/api/contract-templates/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase
+      .from('contract_templates')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'not found' });
+    res.json(data);
+  });
+
+  app.post('/api/contract-templates', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const body = req.body || {};
+    if (!body.name || !body.body || !body.category) {
+      return res.status(400).json({ error: 'name, category and body are required' });
+    }
+    const payload = {
+      user_id: userId,
+      name: String(body.name).trim(),
+      category: String(body.category).trim(),
+      body: String(body.body),
+      default_data: body.default_data || {},
+      is_default: !!body.is_default,
+      is_legacy: !!body.is_legacy,
+    };
+    const { data, error } = await supabase
+      .from('contract_templates')
+      .insert(payload)
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.put('/api/contract-templates/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const body = req.body || {};
+    const update: any = { updated_at: new Date().toISOString() };
+    if (body.name !== undefined) update.name = String(body.name).trim();
+    if (body.category !== undefined) update.category = String(body.category).trim();
+    if (body.body !== undefined) update.body = String(body.body);
+    if (body.default_data !== undefined) update.default_data = body.default_data;
+    if (body.is_default !== undefined) update.is_default = !!body.is_default;
+    if (body.archived !== undefined) update.archived = !!body.archived;
+    const { data, error } = await supabase
+      .from('contract_templates')
+      .update(update)
+      .eq('user_id', userId)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.delete('/api/contract-templates/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { error } = await supabase
+      .from('contract_templates')
+      .delete()
+      .eq('user_id', userId)
+      .eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+  });
+
+  // Bulk seed: importa N modelos de uma vez. Pula nomes já existentes
+  // (mesma categoria + mesmo nome no user) — idempotente.
+  app.post('/api/contract-templates/seed', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const items: any[] = Array.isArray(req.body?.templates) ? req.body.templates : [];
+    if (items.length === 0) return res.status(400).json({ error: 'templates array required' });
+
+    const { data: existing } = await supabase
+      .from('contract_templates')
+      .select('name, category')
+      .eq('user_id', userId);
+    const existingKeys = new Set(
+      (existing || []).map((t: any) => `${t.category}::${t.name}`)
+    );
+
+    const toInsert = items
+      .filter(it => it && it.name && it.category && it.body)
+      .filter(it => !existingKeys.has(`${it.category}::${it.name}`))
+      .map(it => ({
+        user_id: userId,
+        name: String(it.name).trim(),
+        category: String(it.category).trim(),
+        body: String(it.body),
+        default_data: it.default_data || {},
+        is_default: !!it.is_default,
+        is_legacy: !!it.is_legacy,
+      }));
+
+    if (toInsert.length === 0) {
+      return res.json({ inserted: 0, skipped: items.length });
+    }
+
+    const { data, error } = await supabase
+      .from('contract_templates')
+      .insert(toInsert)
+      .select();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({
+      inserted: (data || []).length,
+      skipped: items.length - (data || []).length,
+    });
   });
 
   // ── Autentique: send for signature ─────────────────────────────────────────

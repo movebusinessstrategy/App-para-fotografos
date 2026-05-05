@@ -5,6 +5,8 @@ import { ptBR } from 'date-fns/locale';
 import { parseDate } from '../../utils/date';
 import { authFetch } from '../../utils/authFetch';
 import { cn } from '../../utils/cn';
+import { substituteVariables } from '../../utils/contractTemplate';
+import { ContractTemplate } from '../../types';
 import { ConfirmModal } from '../ui/ConfirmModal';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -43,6 +45,8 @@ export interface ContractData {
   // Signing
   signingCity: string;
   signingDate: string;
+  // Direito de imagem (cláusula 12)
+  imageAuthorization: 'autoriza' | 'NÃO autoriza';
 }
 
 export interface Signer {
@@ -59,6 +63,7 @@ interface Contract {
   id: number;
   client_id: number;
   job_id: number | null;
+  template_id: number | null;
   status: 'draft' | 'pending_signature' | 'signed' | 'cancelled';
   contract_data: Partial<ContractData>;
   signers: Signer[];
@@ -102,6 +107,7 @@ const EMPTY_FORM: ContractData = {
   downPaymentPercent: 30, installments: 6, extraPhotoPrice: '35,00',
   deliveryDaysSelection: 2, selectionDeadlineDays: 5, deliveryDays: 30,
   signingCity: '', signingDate: format(new Date(), "dd 'de' MMMM 'de' yyyy", { locale: ptBR }),
+  imageAuthorization: 'autoriza',
 };
 
 function buildInitialForm(contract: Contract, client: any, studio: StudioSettings | null): ContractData {
@@ -321,6 +327,140 @@ function ContractDocument({ d }: { d: ContractData }) {
   );
 }
 
+// ─── Template-driven Document (renderiza body do modelo com variáveis) ──────
+
+function buildTemplateVariables(d: ContractData): Record<string, string | undefined> {
+  const yearMatch = d.signingDate?.match(/(\d{4})/);
+  const enderecoParts = [d.clientAddress, d.clientCEP ? `CEP: ${d.clientCEP}` : ''].filter(Boolean);
+  return {
+    cliente_nome: d.clientName || undefined,
+    cliente_cpf: d.clientCPF || undefined,
+    cliente_endereco: enderecoParts.length > 0 ? enderecoParts.join(', ') : undefined,
+    cliente_telefone: d.clientPhone || undefined,
+    cliente_email: d.clientEmail || undefined,
+    servico_data: d.serviceDate || undefined,
+    servico_hora: d.serviceTime || undefined,
+    servico_endereco: d.sessionLocation || undefined,
+    valor_total: d.serviceValue || undefined,
+    valor_extenso: d.serviceValueWords || undefined,
+    // SEMPRE preenchido: 'NÃO' ou '' (vazio = "A CONTRATANTE  autoriza")
+    autorizacao_imagem: d.imageAuthorization === 'NÃO autoriza' ? 'NÃO' : '',
+    ano: yearMatch ? yearMatch[1] : String(new Date().getFullYear()),
+  };
+}
+
+function TemplateContractDocument({ d, body }: { d: ContractData; body: string }) {
+  const rendered = useMemo(() => {
+    return substituteVariables(body, buildTemplateVariables(d));
+  }, [body, d]);
+
+  // Layout ABNT: A4, Times New Roman 12pt, espaçamento 1.5,
+  // margens 3cm esq/topo, 2cm dir/rodapé, justificado, recuo 1.25cm
+  const page: React.CSSProperties = {
+    fontFamily: '"Times New Roman", Times, serif',
+    fontSize: '12pt',
+    lineHeight: 1.5,
+    color: '#000',
+    background: '#fff',
+    width: '21cm',
+    minHeight: '29.7cm',
+    margin: '0 auto',
+    padding: '3cm 2cm 2cm 3cm',
+    boxSizing: 'border-box',
+  };
+
+  const titleStyle: React.CSSProperties = {
+    fontSize: '14pt',
+    fontWeight: 'bold',
+    textAlign: 'center',
+    textTransform: 'uppercase',
+    margin: '0 0 1.5em 0',
+    letterSpacing: '0.5px',
+  };
+  const clauseHeaderStyle: React.CSSProperties = {
+    fontSize: '12pt',
+    fontWeight: 'bold',
+    textTransform: 'uppercase',
+    margin: '1.2em 0 0.6em 0',
+    textAlign: 'left',
+  };
+  const pStyle: React.CSSProperties = {
+    margin: '0 0 0.6em 0',
+    textAlign: 'justify',
+    textIndent: '1.25cm',
+  };
+  const pNoIndentStyle: React.CSSProperties = {
+    margin: '0 0 0.6em 0',
+    textAlign: 'justify',
+  };
+
+  const lines = rendered.split('\n');
+  const elements: React.ReactNode[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // Pula linhas vazias
+    if (!trimmed) { i++; continue; }
+
+    // Título principal (Instrumento Particular...)
+    if (/^INSTRUMENTO PARTICULAR/i.test(trimmed)) {
+      elements.push(<h1 key={i} style={titleStyle}>{trimmed}</h1>);
+      i++; continue;
+    }
+
+    // Cabeçalho de cláusula: "CLÁUSULA Xª - DO OBJETO:"
+    if (/^CLÁUSULA\s+\d+/i.test(trimmed)) {
+      elements.push(<h2 key={i} style={clauseHeaderStyle}>{trimmed.replace(/:$/, '')}</h2>);
+      i++; continue;
+    }
+
+    // Linha de assinatura (vários underscores)
+    if (/_{5,}/.test(line)) {
+      // Renderiza linha de assinatura + linha de nomes (se houver)
+      const sigLine = line;
+      const nameLine = lines[i + 1]?.trim() || '';
+      // Se a próxima linha não é underscore mas tem dois nomes (Giovana ... ClienteX)
+      if (nameLine && !/_{5,}/.test(nameLine) && !/^CLÁUSULA/i.test(nameLine)) {
+        elements.push(
+          <div key={i} style={{ marginTop: '2.5em', textAlign: 'center', whiteSpace: 'pre-wrap', fontFamily: '"Times New Roman", serif' }}>
+            <div>{sigLine}</div>
+            <div style={{ fontWeight: 'bold' }}>{nameLine}</div>
+          </div>
+        );
+        i += 2; continue;
+      }
+      elements.push(<div key={i} style={{ marginTop: '2.5em', textAlign: 'center' }}>{sigLine}</div>);
+      i++; continue;
+    }
+
+    // "Parágrafo Primeiro: ...", "Parágrafo Segundo: ...", etc
+    const paragMatch = trimmed.match(/^(Parágrafo\s+\w+:?)\s*(.*)$/);
+    if (paragMatch) {
+      elements.push(
+        <p key={i} style={pStyle}>
+          <strong>{paragMatch[1]}</strong> {paragMatch[2]}
+        </p>
+      );
+      i++; continue;
+    }
+
+    // "Cambé, _____ de YYYY" — linha da cidade de assinatura, sem indent
+    if (/^[A-ZÁÉÍÓÚ][a-záéíóúâêôãõç]+,\s+_{5,}\s+de/i.test(trimmed)) {
+      elements.push(<p key={i} style={{ ...pNoIndentStyle, marginTop: '2em' }}>{trimmed}</p>);
+      i++; continue;
+    }
+
+    // Parágrafo normal
+    elements.push(<p key={i} style={pStyle}>{trimmed}</p>);
+    i++;
+  }
+
+  return <div style={page}>{elements}</div>;
+}
+
 function numWord(n: number): string {
   const words: Record<number, string> = {
     1: 'um', 2: 'dois', 3: 'três', 4: 'quatro', 5: 'cinco',
@@ -374,6 +514,7 @@ export function ContractGenerator({ contractId, onClose, onSaved, onDeleted }: C
 
   const [form, setForm] = useState<ContractData>(EMPTY_FORM);
   const [signers, setSigners] = useState<Signer[]>([]);
+  const [template, setTemplate] = useState<ContractTemplate | null>(null);
 
   // Initial load
   useEffect(() => {
@@ -385,17 +526,22 @@ export function ContractGenerator({ contractId, onClose, onSaved, onDeleted }: C
         if (!cRes.ok) throw new Error('Contrato não encontrado');
         const c: Contract = await cRes.json();
 
-        const [clientRes, studioRes] = await Promise.all([
+        const [clientRes, studioRes, templateRes] = await Promise.all([
           authFetch(`/api/clients/${c.client_id}`),
           authFetch('/api/studio-settings'),
+          c.template_id
+            ? authFetch(`/api/contract-templates/${c.template_id}`).catch(() => null)
+            : Promise.resolve(null),
         ]);
         const client = clientRes.ok ? await clientRes.json() : null;
         const s: StudioSettings | null = studioRes.ok ? await studioRes.json() : null;
+        const tpl: ContractTemplate | null = templateRes && templateRes.ok ? await templateRes.json() : null;
 
         if (cancelled) return;
         const initial = buildInitialForm(c, client, s);
         setContract(c);
         setStudio(s);
+        setTemplate(tpl);
         setForm(initial);
         setSigners(buildDefaultSigners(initial, c.signers));
         setStudioOpen(!s?.studio_name);
@@ -477,10 +623,11 @@ export function ContractGenerator({ contractId, onClose, onSaved, onDeleted }: C
   <meta charset="UTF-8">
   <title>Contrato - ${form.clientName}</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #fff; }
-    @page { margin: 1.5cm; size: A4; }
-    @media print { body { -webkit-print-color-adjust: exact; } }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: #fff; }
+    /* As margens são definidas pela própria div do contrato (padding 3-2-2-3 no ABNT). */
+    @page { margin: 0; size: A4; }
+    @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
   </style>
 </head>
 <body>${html}</body>
@@ -641,6 +788,11 @@ export function ContractGenerator({ contractId, onClose, onSaved, onDeleted }: C
             </h2>
             <p className="text-xs text-gray-500 dark:text-gray-400">
               {form.clientName || 'Cliente'} · {form.serviceDate || '—'}
+              {template && (
+                <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-gold-50 dark:bg-gold-500/10 text-gold-700 dark:text-gold-400 font-semibold text-[10px]">
+                  <FileText size={9} /> {template.name}
+                </span>
+              )}
             </p>
           </div>
           <StatusBadge status={contract?.status || 'draft'} />
@@ -843,6 +995,22 @@ export function ContractGenerator({ contractId, onClose, onSaved, onDeleted }: C
               </div>
             </div>
 
+            {/* Direito de imagem (cláusula 12) */}
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-3">Direito de imagem</p>
+              <Field label="A CONTRATANTE…">
+                <select
+                  className={inputCls}
+                  value={form.imageAuthorization}
+                  onChange={e => set('imageAuthorization', e.target.value as 'autoriza' | 'NÃO autoriza')}
+                  disabled={isSigned}
+                >
+                  <option value="autoriza">…autoriza o uso das imagens</option>
+                  <option value="NÃO autoriza">…NÃO autoriza o uso das imagens</option>
+                </select>
+              </Field>
+            </div>
+
             {/* Signing */}
             <div>
               <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-3">Assinatura</p>
@@ -865,7 +1033,11 @@ export function ContractGenerator({ contractId, onClose, onSaved, onDeleted }: C
           </div>
           <div className="bg-white shadow-lg rounded-lg overflow-hidden">
             <div ref={contractRef}>
-              <ContractDocument d={form} />
+              {template ? (
+                <TemplateContractDocument d={form} body={template.body} />
+              ) : (
+                <ContractDocument d={form} />
+              )}
             </div>
           </div>
         </div>
