@@ -1,15 +1,16 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { BarChart3, LayoutGrid, Plus, MessageSquare, Settings } from "lucide-react";
+import { BarChart3, LayoutGrid, Plus, MessageSquare, Settings, History } from "lucide-react";
 import { FunilTab } from "./FunilTab";
 import { AnalisesTab } from "./AnalisesTab";
+import { HistoricoTab } from "./HistoricoTab";
 import { NewDealModal } from "./NewDealModal";
 import { StageCustomizer } from "./StageCustomizer";
 import { InboxView } from "../../features/chat/components/InboxView";
 import { authFetch } from "../../utils/authFetch";
 import { Deal, PipelineStage, Client } from "../../types";
 
-type Tab = "inbox" | "kanban" | "analises";
+type Tab = "inbox" | "kanban" | "historico" | "analises";
 
 export function VendasDashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -60,6 +61,7 @@ export function VendasDashboard() {
   const TABS = [
     { id: "inbox" as Tab, label: "Inbox", icon: MessageSquare },
     { id: "kanban" as Tab, label: "Kanban", icon: LayoutGrid },
+    { id: "historico" as Tab, label: "Histórico", icon: History },
     { id: "analises" as Tab, label: "Análises", icon: BarChart3 },
   ];
 
@@ -134,6 +136,12 @@ export function VendasDashboard() {
             stages={stages}
             clients={clients}
             onUpdate={fetchData}
+          />
+        ) : tab === "historico" ? (
+          <HistoricoTab
+            deals={deals}
+            stages={stages}
+            clients={clients}
           />
         ) : (
           <div className="h-full overflow-y-auto p-6">
