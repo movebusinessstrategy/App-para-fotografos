@@ -1,7 +1,8 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { X } from "lucide-react";
 import { PipelineStage, Client, DealPriority } from "../../types";
 import { authFetch } from "../../utils/authFetch";
+import { SearchableSelect } from "../ui/SearchableSelect";
 
 interface NewDealModalProps {
   open: boolean;
@@ -22,6 +23,11 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
     notes: "",
   });
   const [loading, setLoading] = useState(false);
+
+  const clientOptions = useMemo(() => [
+    { value: "", label: "Sem cliente" },
+    ...clients.map((c) => ({ value: String(c.id), label: c.name || "Sem nome" })),
+  ], [clients]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -87,16 +93,16 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Cliente
             </label>
-            <select
+            <SearchableSelect
               value={form.client_id}
-              onChange={(e) => setForm({ ...form, client_id: e.target.value })}
-              className="w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white outline-none focus:border-gray-400 dark:focus:border-gray-600 focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-600"
-            >
-              <option value="">Selecionar cliente (opcional)</option>
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
+              onChange={(v) => setForm({ ...form, client_id: v })}
+              showSearchIcon
+              placeholder="Selecionar cliente (opcional)"
+              searchPlaceholder="Buscar cliente..."
+              emptyMessage="Nenhum cliente encontrado"
+              triggerClassName="py-2"
+              options={clientOptions}
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-4">

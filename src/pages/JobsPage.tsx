@@ -14,6 +14,7 @@ import { ImportToProductionModal } from "../components/producao/ImportToProducti
 import { authFetch } from "../utils/authFetch";
 import { cn } from "../utils/cn";
 import { parseDate } from "../utils/date";
+import { normalizeText } from "../utils/normalizeText";
 import { Client, Job, ProductionProcess, ProductionStageV2, TeamMember } from "../types";
 
 const LABEL_COLORS = ['#6366f1','#ec4899','#f59e0b','#10b981','#0ea5e9','#f43f5e','#8b5cf6','#22c55e'];
@@ -82,8 +83,10 @@ export default function JobsPage() {
 
   const filteredJobs = useMemo(() => jobs.filter(job => {
     const matchesType = filters.type === "all" || job.job_type === filters.type;
-    const q = searchQuery.toLowerCase().trim();
-    const matchesSearch = !q || (job.client_name || '').toLowerCase().includes(q) || (job.job_name || '').toLowerCase().includes(q);
+    const q = normalizeText(searchQuery);
+    const matchesSearch = !q
+      || normalizeText(job.client_name || '').includes(q)
+      || normalizeText(job.job_name || '').includes(q);
     return matchesType && matchesSearch;
   }), [jobs, filters, searchQuery]);
 
