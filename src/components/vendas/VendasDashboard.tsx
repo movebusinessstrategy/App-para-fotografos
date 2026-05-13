@@ -14,7 +14,7 @@ type Tab = "inbox" | "kanban" | "historico" | "analises";
 
 export function VendasDashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialTab = (searchParams.get("tab") as Tab) || "inbox";
+  const initialTab = (searchParams.get("tab") as Tab) || "kanban";
   const initialPhone = searchParams.get("phone") || "";
 
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -59,10 +59,10 @@ export function VendasDashboard() {
   });
 
   const TABS = [
-    { id: "inbox" as Tab, label: "Inbox", icon: MessageSquare },
     { id: "kanban" as Tab, label: "Kanban", icon: LayoutGrid },
     { id: "historico" as Tab, label: "Histórico", icon: History },
     { id: "analises" as Tab, label: "Análises", icon: BarChart3 },
+    { id: "inbox" as Tab, label: "Inbox", icon: MessageSquare },
   ];
 
   return (
