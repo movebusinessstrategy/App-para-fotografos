@@ -59,6 +59,7 @@
     "autoprefixer": "^10.4.21",
     "kill-port": "^2.0.1",
     "patch-package": "^8.0.1",
+    "rollup-plugin-visualizer": "^7.0.1",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
