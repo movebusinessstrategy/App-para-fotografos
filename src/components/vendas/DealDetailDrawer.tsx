@@ -8,8 +8,21 @@ import {
 import { ConfirmModal } from "../ui/ConfirmModal";
 import { Deal, Client, PipelineStage, DealActivity, StageHistoryEntry, Produto, Servico, Combo, DealItem, PipelineLabel } from "../../types";
 import { authFetch } from "../../utils/authFetch";
+import { parseDate } from "../../utils/date";
 import { DealConversionModal } from "../pipeline/DealConversionModal";
 import { ChatView } from "./inbox/ChatView";
+
+// Wrapper seguro: retorna o texto formatado, ou null se a data não for parseável.
+function safeFormat(value: string | null | undefined, pattern: string): string | null {
+  if (!value || !String(value).trim()) return null;
+  const d = parseDate(value);
+  if (!d || isNaN(d.getTime())) {
+    const fallback = new Date(value);
+    if (isNaN(fallback.getTime())) return null;
+    return format(fallback, pattern);
+  }
+  return format(d, pattern);
+}
 
 // ─── Tier badge ───────────────────────────────────────────────────────────────
 const TIER_CONFIG: Record<string, { label: string; cls: string }> = {
@@ -891,9 +904,10 @@ export function DealDetailDrawer({
                   </div>
                 ) : (
                   <p className="text-sm font-semibold text-gray-900 dark:text-white">
-                    {deal.expected_close_date
-                      ? format(new Date(deal.expected_close_date + "T12:00:00"), "dd/MM/yyyy")
-                      : <span className="text-gray-400 font-normal">—</span>}
+                    {(() => {
+                      const formatted = safeFormat(deal.expected_close_date, "dd/MM/yyyy");
+                      return formatted || <span className="text-gray-400 font-normal">—</span>;
+                    })()}
                   </p>
                 )}
               </div>
@@ -1377,7 +1391,7 @@ export function DealDetailDrawer({
                       <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 mb-1">
                         <span className="font-medium uppercase">{act.type}</span>
                         <span>•</span>
-                        <span>{format(new Date(act.created_at), "dd/MM/yyyy HH:mm")}</span>
+                        <span>{safeFormat(act.created_at, "dd/MM/yyyy HH:mm") || "—"}</span>
                       </div>
                       <p className="text-sm text-gray-700 dark:text-gray-300">{act.description}</p>
                     </div>
