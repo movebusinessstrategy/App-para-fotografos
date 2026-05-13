@@ -1,5 +1,6 @@
 import { Suspense, lazy } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { Analytics } from "@vercel/analytics/react";
 
 import AppLayout from "./components/layout/AppLayout";
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -75,6 +76,7 @@ export default function App() {
           </Suspense>
         </AuthProvider>
       </ThemeProvider> {/* 👈 Fecha aqui */}
+      <Analytics />
     </BrowserRouter>
   );
 }
