@@ -1,14 +1,28 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { BarChart3, LayoutGrid, Plus, MessageSquare, Settings, History } from "lucide-react";
 import { FunilTab } from "./FunilTab";
-import { AnalisesTab } from "./AnalisesTab";
-import { HistoricoTab } from "./HistoricoTab";
 import { NewDealModal } from "./NewDealModal";
 import { StageCustomizer } from "./StageCustomizer";
-import { InboxView } from "../../features/chat/components/InboxView";
 import { authFetch } from "../../utils/authFetch";
 import { Deal, PipelineStage, Client } from "../../types";
+
+// Lazy: cada tab vira um chunk próprio, baixado só quando o usuário clicar.
+// FunilTab fica eager porque é a tab default (Kanban) — render instantâneo.
+const AnalisesTab = lazy(() => import("./AnalisesTab").then(m => ({ default: m.AnalisesTab })));
+const HistoricoTab = lazy(() => import("./HistoricoTab").then(m => ({ default: m.HistoricoTab })));
+const InboxView = lazy(() => import("../../features/chat/components/InboxView").then(m => ({ default: m.InboxView })));
+
+function TabFallback() {
+  return (
+    <div className="flex items-center justify-center h-full">
+      <div className="flex flex-col items-center gap-3 text-gray-400">
+        <div className="w-8 h-8 border-2 border-gray-200 border-t-gold-500 rounded-full animate-spin" />
+        <span className="text-sm">Carregando...</span>
+      </div>
+    </div>
+  );
+}
 
 type Tab = "inbox" | "kanban" | "historico" | "analises";
 
@@ -123,13 +137,6 @@ export function VendasDashboard() {
               <span className="text-sm">Carregando...</span>
             </div>
           </div>
-        ) : tab === "inbox" ? (
-          <InboxView
-            deals={deals}
-            stages={stages}
-            initialPhone={initialPhone}
-            onDealUpdated={() => fetchData({ silent: true })}
-          />
         ) : tab === "kanban" ? (
           <FunilTab
             deals={deals}
@@ -137,16 +144,27 @@ export function VendasDashboard() {
             clients={clients}
             onUpdate={fetchData}
           />
-        ) : tab === "historico" ? (
-          <HistoricoTab
-            deals={deals}
-            stages={stages}
-            clients={clients}
-          />
         ) : (
-          <div className="h-full overflow-y-auto p-6">
-            <AnalisesTab deals={deals} stages={stages} />
-          </div>
+          <Suspense fallback={<TabFallback />}>
+            {tab === "inbox" ? (
+              <InboxView
+                deals={deals}
+                stages={stages}
+                initialPhone={initialPhone}
+                onDealUpdated={() => fetchData({ silent: true })}
+              />
+            ) : tab === "historico" ? (
+              <HistoricoTab
+                deals={deals}
+                stages={stages}
+                clients={clients}
+              />
+            ) : (
+              <div className="h-full overflow-y-auto p-6">
+                <AnalisesTab deals={deals} stages={stages} />
+              </div>
+            )}
+          </Suspense>
         )}
       </div>
 
