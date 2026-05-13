@@ -1,10 +1,10 @@
-import React, { Suspense, lazy, useCallback, useEffect, useState } from "react";
+import React, { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { BarChart3, LayoutGrid, Plus, MessageSquare, Settings, History } from "lucide-react";
 import { FunilTab } from "./FunilTab";
 import { NewDealModal } from "./NewDealModal";
 import { StageCustomizer } from "./StageCustomizer";
-import { authFetch } from "../../utils/authFetch";
+import { useApi, refreshApi } from "../../utils/useApi";
 import { Deal, PipelineStage, Client } from "../../types";
 
 // Lazy: cada tab vira um chunk próprio, baixado só quando o usuário clicar.
@@ -32,32 +32,24 @@ export function VendasDashboard() {
   const initialPhone = searchParams.get("phone") || "";
 
   const [tab, setTab] = useState<Tab>(initialTab);
-  const [deals, setDeals] = useState<Deal[]>([]);
-  const [stages, setStages] = useState<PipelineStage[]>([]);
-  const [clients, setClients] = useState<Client[]>([]);
-  const [loading, setLoading] = useState(true);
   const [newDealOpen, setNewDealOpen] = useState(false);
   const [customizerOpen, setCustomizerOpen] = useState(false);
 
-  const fetchData = useCallback(async (options?: { silent?: boolean }) => {
-    if (!options?.silent) setLoading(true);
-    try {
-      const [dealsRes, stagesRes, clientsRes] = await Promise.all([
-        authFetch("/api/deals").then((r) => (r.ok ? r.json() : [])),
-        authFetch("/api/pipeline/stages").then((r) => (r.ok ? r.json() : [])),
-        authFetch("/api/clients").then((r) => (r.ok ? r.json() : [])),
-      ]);
-      setDeals(Array.isArray(dealsRes) ? dealsRes : []);
-      setStages(Array.isArray(stagesRes) ? stagesRes : []);
-      setClients(Array.isArray(clientsRes) ? clientsRes : []);
-    } catch {
-      // silencia erros de rede
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const { data: dealsData, isLoading: dealsLoading, mutate: mutateDeals } = useApi<Deal[]>("/api/deals");
+  const { data: stagesData } = useApi<PipelineStage[]>("/api/pipeline/stages");
+  const { data: clientsData } = useApi<Client[]>("/api/clients");
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const deals = useMemo(() => Array.isArray(dealsData) ? dealsData : [], [dealsData]);
+  const stages = useMemo(() => Array.isArray(stagesData) ? stagesData : [], [stagesData]);
+  const clients = useMemo(() => Array.isArray(clientsData) ? clientsData : [], [clientsData]);
+  const loading = dealsLoading && !dealsData;
+
+  // Substitui o antigo fetchData() — revalida tudo
+  const fetchData = (_options?: { silent?: boolean }) => {
+    mutateDeals();
+    refreshApi("/api/pipeline/stages");
+    refreshApi("/api/clients");
+  };
 
   // Reage à mudança nos params da URL (ex: clique no botão WA de um DealCard)
   useEffect(() => {
