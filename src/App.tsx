@@ -1,6 +1,7 @@
 import { Suspense, lazy } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Analytics } from "@vercel/analytics/react";
+import { SWRConfig } from "swr";
 
 import AppLayout from "./components/layout/AppLayout";
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -28,6 +29,18 @@ const CatalogoPage = lazy(() => import("./pages/CatalogoPage"));
 export default function App() {
   return (
     <BrowserRouter>
+      <SWRConfig
+        value={{
+          // Não refaz a mesma request em 30s — chave do ganho ao navegar entre páginas
+          dedupingInterval: 30_000,
+          // Sem revalidar ao trocar de aba (chato e desnecessário)
+          revalidateOnFocus: false,
+          // Mas revalida ao recuperar conexão
+          revalidateOnReconnect: true,
+          // 1 retry se falhar
+          errorRetryCount: 1,
+        }}
+      >
       <ThemeProvider> {/* 👈 Envolve tudo */}
         <AuthProvider>
           <Suspense
@@ -76,6 +89,7 @@ export default function App() {
           </Suspense>
         </AuthProvider>
       </ThemeProvider> {/* 👈 Fecha aqui */}
+      </SWRConfig>
       <Analytics />
     </BrowserRouter>
   );
