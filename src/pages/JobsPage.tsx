@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { ArrowDownToLine, BarChart2, Camera, Edit2, LayoutGrid, List, Plus, Search, Settings, Tag, Trash2, X } from "lucide-react";
@@ -12,6 +12,7 @@ import { ProductionCustomizer } from "../components/producao/ProductionCustomize
 import { JobDetailDrawer } from "../components/producao/JobDetailDrawer";
 import { ImportToProductionModal } from "../components/producao/ImportToProductionModal";
 import { authFetch } from "../utils/authFetch";
+import { useApi, refreshApi } from "../utils/useApi";
 import { cn } from "../utils/cn";
 import { parseDate } from "../utils/date";
 import { normalizeText } from "../utils/normalizeText";
@@ -25,12 +26,24 @@ function getLabelColor(label: string) {
 }
 
 export default function JobsPage() {
-  const [jobs, setJobs] = useState<JobWithProduction[]>([]);
-  const [clients, setClients] = useState<Client[]>([]);
-  const [processes, setProcesses] = useState<ProductionProcess[]>([]);
-  const [stages, setStages] = useState<ProductionStageV2[]>([]);
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
-  const [loading, setLoading] = useState(true);
+  // SWR: dados ficam em cache, navegar entre páginas e voltar = instantâneo.
+  const { data: jobsData, isLoading: jobsLoading, mutate: mutateJobs } =
+    useApi<JobWithProduction[]>("/api/jobs");
+  const { data: clientsData } = useApi<Client[]>("/api/clients");
+  const { data: processesData } = useApi<ProductionProcess[]>("/api/production/processes");
+  const { data: stagesData, mutate: mutateStages } =
+    useApi<ProductionStageV2[]>("/api/production/stages-v2");
+  const { data: membersData } = useApi<TeamMember[]>("/api/team-members");
+
+  const jobs = useMemo(() => Array.isArray(jobsData) ? jobsData : [], [jobsData]);
+  const clients = useMemo(() => Array.isArray(clientsData) ? clientsData : [], [clientsData]);
+  const processes = useMemo(() => Array.isArray(processesData) ? processesData : [], [processesData]);
+  const stages = useMemo(() => Array.isArray(stagesData) ? stagesData : [], [stagesData]);
+  const teamMembers = useMemo(() => Array.isArray(membersData) ? membersData : [], [membersData]);
+
+  // Mostra spinner só no primeiro load (sem dado em cache ainda)
+  const loading = jobsLoading && !jobsData;
+
   const [activeTab, setActiveTab] = useState<"funil" | "lista" | "gerencia">("funil");
   const [customizerOpen, setCustomizerOpen] = useState(false);
   const [showModal, setShowModal] = useState(false);
@@ -47,39 +60,14 @@ export default function JobsPage() {
     variant?: "danger" | "warning";
   }>({ open: false, onConfirm: () => {}, title: "", message: "" });
 
-  const fetchData = async (options?: { silent?: boolean }) => {
-    if (!options?.silent) setLoading(true);
-    try {
-      const [jobsRes, clientsRes, processesRes, stagesRes, membersRes] = await Promise.all([
-        authFetch("/api/jobs"),
-        authFetch("/api/clients"),
-        authFetch("/api/production/processes").catch(() => null),
-        authFetch("/api/production/stages-v2").catch(() => null),
-        authFetch("/api/team-members").catch(() => null),
-      ]);
-
-      const jobsData = await jobsRes.json();
-      const clientsData = await clientsRes.json();
-      setJobs(Array.isArray(jobsData) ? jobsData : []);
-      setClients(Array.isArray(clientsData) ? clientsData : []);
-
-      if (processesRes?.ok) {
-        try { setProcesses(await processesRes.json()); } catch (_) {}
-      }
-      if (stagesRes?.ok) {
-        try { setStages(await stagesRes.json()); } catch (_) {}
-      }
-      if (membersRes?.ok) {
-        try { setTeamMembers(await membersRes.json()); } catch (_) {}
-      }
-    } catch (err) {
-      console.error("Erro ao carregar produção:", err);
-    } finally {
-      setLoading(false);
-    }
+  // Substitui o antigo fetchData() — revalida tudo de uma vez.
+  const refreshAll = () => {
+    mutateJobs();
+    refreshApi("/api/clients");
+    refreshApi("/api/production/processes");
+    mutateStages();
+    refreshApi("/api/team-members");
   };
-
-  useEffect(() => { fetchData(); }, []);
 
   const filteredJobs = useMemo(() => jobs.filter(job => {
     const matchesType = filters.type === "all" || job.job_type === filters.type;
@@ -104,7 +92,11 @@ export default function JobsPage() {
   };
 
   const handleAssigneeChange = async (jobId: number, assigneeId: string | null) => {
-    setJobs(prev => prev.map(j => j.id === jobId ? { ...j, assignee_id: assigneeId } : j));
+    // Optimistic update via SWR mutate
+    mutateJobs(
+      prev => (prev || []).map(j => j.id === jobId ? { ...j, assignee_id: assigneeId } : j),
+      { revalidate: false }
+    );
     try {
       await authFetch(`/api/jobs/${jobId}/assignee`, {
         method: "PATCH",
@@ -113,14 +105,18 @@ export default function JobsPage() {
       });
     } catch (err) {
       console.error("Erro ao atribuir responsável:", err);
+      mutateJobs(); // rollback via re-fetch em caso de erro
     }
   };
 
   const handleStageChange = async (jobId: number, stageId: string) => {
-    setJobs(prev => prev.map(j => j.id === jobId
-      ? { ...j, production_stage: stageId, production_stage_entered_at: new Date().toISOString() }
-      : j
-    ));
+    mutateJobs(
+      prev => (prev || []).map(j => j.id === jobId
+        ? { ...j, production_stage: stageId, production_stage_entered_at: new Date().toISOString() }
+        : j
+      ),
+      { revalidate: false }
+    );
     try {
       await authFetch(`/api/jobs/${jobId}`, {
         method: "PUT",
@@ -129,14 +125,18 @@ export default function JobsPage() {
       });
     } catch (err) {
       console.error("Erro ao mover etapa:", err);
+      mutateJobs();
     }
   };
 
   const handleRemoveFromProduction = async (jobId: number) => {
-    setJobs(prev => prev.map(j => j.id === jobId
-      ? { ...j, production_stage: null, production_stage_entered_at: null }
-      : j
-    ));
+    mutateJobs(
+      prev => (prev || []).map(j => j.id === jobId
+        ? { ...j, production_stage: null, production_stage_entered_at: null }
+        : j
+      ),
+      { revalidate: false }
+    );
     try {
       await authFetch(`/api/jobs/${jobId}`, {
         method: "PUT",
@@ -145,6 +145,7 @@ export default function JobsPage() {
       });
     } catch (err) {
       console.error("Erro ao remover da produção:", err);
+      mutateJobs();
     }
   };
 
@@ -156,7 +157,7 @@ export default function JobsPage() {
       variant: "danger",
       onConfirm: async () => {
         await authFetch(`/api/jobs/${id}`, { method: "DELETE" });
-        fetchData();
+        mutateJobs();
       },
     });
   };
@@ -330,7 +331,7 @@ export default function JobsPage() {
               teamMembers={teamMembers}
               onChangeStage={handleStageChange}
               onJobClick={job => setSelectedJob(job)}
-              onStagesUpdate={setStages}
+              onStagesUpdate={(newStages) => mutateStages(newStages, { revalidate: false })}
               onAssigneeChange={handleAssigneeChange}
               onRemoveFromProduction={handleRemoveFromProduction}
             />
@@ -342,7 +343,7 @@ export default function JobsPage() {
                 Depois, execute o SQL no Supabase para criar as tabelas necessárias.
               </p>
               <button
-                onClick={fetchData}
+                onClick={refreshAll}
                 className="mt-2 px-4 py-2 bg-gold-600 text-white text-sm rounded-xl hover:bg-gold-700 transition-colors"
               >
                 Tentar novamente
@@ -472,7 +473,7 @@ export default function JobsPage() {
           clients={clients}
           job={editingJob}
           onClose={() => { setShowModal(false); setEditingJob(null); }}
-          onSave={() => { setShowModal(false); setEditingJob(null); fetchData(); }}
+          onSave={() => { setShowModal(false); setEditingJob(null); mutateJobs(); }}
         />
       )}
 
@@ -486,14 +487,20 @@ export default function JobsPage() {
           setSelectedJob(prev => prev ? { ...prev, production_stage: stageId, production_stage_entered_at: new Date().toISOString() } : null);
         }}
         onLabelsChange={(jobId, labels) => {
-          setJobs(prev => prev.map(j => j.id === jobId ? { ...j, labels } : j));
+          mutateJobs(
+            prev => (prev || []).map(j => j.id === jobId ? { ...j, labels } : j),
+            { revalidate: false }
+          );
         }}
         onRemoveFromProduction={(jobId) => {
           handleRemoveFromProduction(jobId);
           setSelectedJob(null);
         }}
         onJobUpdate={(jobId, patch) => {
-          setJobs(prev => prev.map(j => j.id === jobId ? { ...j, ...patch } : j));
+          mutateJobs(
+            prev => (prev || []).map(j => j.id === jobId ? { ...j, ...patch } : j),
+            { revalidate: false }
+          );
           setSelectedJob(prev => prev && prev.id === jobId ? { ...prev, ...patch } : prev);
         }}
       />
@@ -513,7 +520,7 @@ export default function JobsPage() {
         processes={processes}
         stages={stages}
         onClose={() => setCustomizerOpen(false)}
-        onUpdated={() => fetchData({ silent: true })}
+        onUpdated={() => refreshAll()}
       />
 
       {importModalOpen && (
@@ -522,7 +529,7 @@ export default function JobsPage() {
           processes={processes}
           stages={stages}
           onClose={() => setImportModalOpen(false)}
-          onImported={() => fetchData({ silent: true })}
+          onImported={() => mutateJobs()}
           onAssign={handleAssignStage}
         />
       )}
