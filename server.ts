@@ -5017,10 +5017,25 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     let clientId = (existingClientId as number | null) || (deal.client_id as number | null);
 
     if (createClient) {
+      const c = client || {};
+      // "Como conheceu" não tem coluna própria — concatena nas notas
+      const notes = [
+        c.notes || '',
+        c.how_found ? `Como conheceu: ${c.how_found}` : '',
+      ].filter(Boolean).join('\n').trim();
+
       const clientPayload = {
-        name: client?.name || deal.title,
-        phone: client?.phone || deal.contact_phone || null,
-        email: client?.email || deal.contact_email || null,
+        name: c.name || deal.title,
+        phone: c.phone || deal.contact_phone || null,
+        email: c.email || deal.contact_email || null,
+        cpf: c.document || null,
+        birth_date: c.birth_date || null,
+        address: c.address || null,
+        city: c.city || null,
+        state: c.state || null,
+        cep: c.zip_code || null,
+        instagram: c.instagram || deal.contact_instagram || null,
+        notes: notes || null,
         status: 'active',
         user_id: userId,
       } as any;
