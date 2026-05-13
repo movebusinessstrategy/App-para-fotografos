@@ -3,6 +3,7 @@ import { FileText, Plus, Search, X, ChevronRight, ChevronLeft, Briefcase, FilePl
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { authFetch } from "../utils/authFetch";
+import { useApi } from "../utils/useApi";
 import { parseDate } from "../utils/date";
 import { ContractGenerator } from "../components/contracts/ContractGenerator";
 import { TemplatesManager } from "../components/contracts/TemplatesManager";
@@ -35,8 +36,10 @@ type Tab = 'pending' | 'signed' | 'templates' | 'settings';
 
 export default function ContractsPage() {
   const [tab, setTab] = useState<Tab>('pending');
-  const [contracts, setContracts] = useState<ContractListItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data: contractsData, isLoading: contractsLoading, mutate: mutateContracts } =
+    useApi<ContractListItem[]>("/api/contracts");
+  const contracts = useMemo(() => Array.isArray(contractsData) ? contractsData : [], [contractsData]);
+  const loading = contractsLoading && !contractsData;
   const [searchQuery, setSearchQuery] = useState("");
 
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -49,17 +52,7 @@ export default function ContractsPage() {
     setTimeout(() => setToast(null), 4000);
   };
 
-  const reload = async () => {
-    setLoading(true);
-    try {
-      const res = await authFetch('/api/contracts');
-      if (res.ok) setContracts(await res.json());
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { reload(); }, []);
+  const reload = () => mutateContracts();
 
   const doDelete = async (c: ContractListItem) => {
     const res = await authFetch(`/api/contracts/${c.id}`, { method: 'DELETE' });
