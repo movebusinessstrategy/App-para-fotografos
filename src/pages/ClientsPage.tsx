@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useOutletContext } from "react-router-dom";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -30,6 +30,7 @@ import JobFormModal from "../components/shared/JobFormModal";
 import ConfirmModal from "../components/shared/ConfirmModal";
 import { LayoutOutletContext } from "../components/layout/AppLayout";
 import { authFetch } from "../utils/authFetch";
+import { useApi } from "../utils/useApi";
 import { cn } from "../utils/cn";
 import { parseDate } from "../utils/date";
 import { cleanPhone, parseCSV, parseDateBR, parseValueBR } from "../utils/csvParser";
@@ -164,24 +165,11 @@ function FilterDropdown({ label, value, options, onChange, icon, activeColor = "
 // ============================================
 export default function ClientsPage() {
   const { openContactModal } = useOutletContext<LayoutOutletContext>();
-  const [clients, setClients] = useState<Client[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data: clientsData, isLoading: clientsLoading, mutate: mutateClients } = useApi<Client[]>("/api/clients");
+  const clients = useMemo(() => Array.isArray(clientsData) ? clientsData : [], [clientsData]);
+  const loading = clientsLoading && !clientsData;
 
-  const fetchClients = async () => {
-    setLoading(true);
-    try {
-      const res = await authFetch('/api/clients');
-      setClients(await res.json());
-    } catch (error) {
-      console.error('Erro ao carregar clientes:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchClients();
-  }, []);
+  const fetchClients = () => mutateClients();
 
   const handleContactOpp = (opp: Opportunity, client: Client | null) => {
     openContactModal({ opportunity: opp, client, onUpdate: fetchClients });

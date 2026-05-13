@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Plus, Search, X, Trash2, Package, Tag, Layers } from "lucide-react";
 import { PipelineStage, Client, DealPriority } from "../../types";
 import { authFetch } from "../../utils/authFetch";
+import { useApi } from "../../utils/useApi";
 import { SearchableSelect } from "../ui/SearchableSelect";
 import { cn } from "../../utils/cn";
 import { normalizeText } from "../../utils/normalizeText";
@@ -55,20 +56,17 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
   const [items, setItems] = useState<PendingItem[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // Catálogos
-  const [produtos, setProdutos] = useState<any[]>([]);
-  const [servicos, setServicos] = useState<any[]>([]);
-  const [combos, setCombos] = useState<any[]>([]);
+  // Catálogos via SWR — cache compartilhado entre componentes
+  const { data: produtosData } = useApi<any[]>(open ? "/api/produtos" : null);
+  const { data: servicosData } = useApi<any[]>(open ? "/api/servicos" : null);
+  const { data: combosData } = useApi<any[]>(open ? "/api/combos" : null);
+  const produtos = useMemo(() => Array.isArray(produtosData) ? produtosData : [], [produtosData]);
+  const servicos = useMemo(() => Array.isArray(servicosData) ? servicosData : [], [servicosData]);
+  const combos = useMemo(() => Array.isArray(combosData) ? combosData : [], [combosData]);
+
   const [showAdder, setShowAdder] = useState(false);
   const [adderType, setAdderType] = useState<CatalogType>("combo");
   const [adderSearch, setAdderSearch] = useState("");
-
-  useEffect(() => {
-    if (!open) return;
-    authFetch("/api/produtos").then(r => r.json()).then(d => setProdutos(Array.isArray(d) ? d : [])).catch(() => {});
-    authFetch("/api/servicos").then(r => r.json()).then(d => setServicos(Array.isArray(d) ? d : [])).catch(() => {});
-    authFetch("/api/combos").then(r => r.json()).then(d => setCombos(Array.isArray(d) ? d : [])).catch(() => {});
-  }, [open]);
 
   const clientOptions = useMemo(() => [
     { value: "", label: "Sem cliente" },

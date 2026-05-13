@@ -9,6 +9,7 @@ import { SearchableSelect } from "../ui/SearchableSelect";
 import { ContractGenerator } from "../contracts/ContractGenerator";
 import { TemplatePickerModal } from "../contracts/TemplatePickerModal";
 import { authFetch } from "../../utils/authFetch";
+import { useApi } from "../../utils/useApi";
 import { parseDate } from "../../utils/date";
 import { cn } from "../../utils/cn";
 import { ContractTemplate } from "../../types";
@@ -231,9 +232,13 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
   const [jobItemSearch, setJobItemSearch] = useState('');
   const [jobItemOpen, setJobItemOpen] = useState(false);
   const [jobItemQty, setJobItemQty] = useState(1);
-  const [catalogProdutos, setCatalogProdutos] = useState<any[]>([]);
-  const [catalogServicos, setCatalogServicos] = useState<any[]>([]);
-  const [catalogCombos, setCatalogCombos] = useState<any[]>([]);
+  // Catálogos via SWR — cache compartilhado entre JobDetailDrawer, DealDetailDrawer e NewDealModal
+  const { data: catalogProdutosData } = useApi<any[]>("/api/produtos");
+  const { data: catalogServicosData } = useApi<any[]>("/api/servicos");
+  const { data: catalogCombosData } = useApi<any[]>("/api/combos");
+  const catalogProdutos = catalogProdutosData || [];
+  const catalogServicos = catalogServicosData || [];
+  const catalogCombos = catalogCombosData || [];
   const jobItemRef = useRef<HTMLDivElement>(null);
 
   const loadFinanceiro = async (jobId: number) => {
@@ -258,12 +263,6 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
     } catch { }
     finally { setLoadingFin(false); }
   };
-
-  useEffect(() => {
-    authFetch('/api/produtos').then(r => r.json()).then(d => setCatalogProdutos(Array.isArray(d) ? d : [])).catch(() => {});
-    authFetch('/api/servicos').then(r => r.json()).then(d => setCatalogServicos(Array.isArray(d) ? d : [])).catch(() => {});
-    authFetch('/api/combos').then(r => r.json()).then(d => setCatalogCombos(Array.isArray(d) ? d : [])).catch(() => {});
-  }, []);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
