@@ -23,6 +23,7 @@
     "@tailwindcss/vite": "^4.1.14",
     "@types/cors": "^2.8.19",
     "@types/fluent-ffmpeg": "^2.1.28",
+    "@vercel/analytics": "^2.0.1",
     "@vitejs/plugin-react": "^5.0.4",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "audio-decode": "^2.2.3",
