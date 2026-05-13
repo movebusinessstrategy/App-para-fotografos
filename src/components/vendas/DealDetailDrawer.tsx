@@ -8,6 +8,7 @@ import {
 import { ConfirmModal } from "../ui/ConfirmModal";
 import { Deal, Client, PipelineStage, DealActivity, StageHistoryEntry, Produto, Servico, Combo, DealItem, PipelineLabel } from "../../types";
 import { authFetch } from "../../utils/authFetch";
+import { useApi } from "../../utils/useApi";
 import { parseDate } from "../../utils/date";
 import { DealConversionModal } from "../pipeline/DealConversionModal";
 import { ChatView } from "./inbox/ChatView";
@@ -241,9 +242,13 @@ export function DealDetailDrawer({
   const [catalogSearch, setCatalogSearch] = useState('');
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [catalogSaving, setCatalogSaving] = useState(false);
-  const [catalogProdutos, setCatalogProdutos] = useState<Produto[]>([]);
-  const [catalogServicos, setCatalogServicos] = useState<Servico[]>([]);
-  const [catalogCombos, setCatalogCombos] = useState<Combo[]>([]);
+  // Catálogos via SWR — cache compartilhado com JobDetailDrawer e NewDealModal
+  const { data: catalogProdutosData } = useApi<Produto[]>("/api/produtos");
+  const { data: catalogServicosData } = useApi<Servico[]>("/api/servicos");
+  const { data: catalogCombosData } = useApi<Combo[]>("/api/combos");
+  const catalogProdutos = catalogProdutosData || [];
+  const catalogServicos = catalogServicosData || [];
+  const catalogCombos = catalogCombosData || [];
   // Lista local de itens (reflete deal.items, atualizada otimisticamente)
   const [localItems, setLocalItems] = useState<DealItem[]>([]);
   const [showAddItem, setShowAddItem] = useState(false);
@@ -256,9 +261,6 @@ export function DealDetailDrawer({
   }, [deal?.id, deal?.items]);
 
   useEffect(() => {
-    authFetch('/api/produtos').then(r => r.json()).then(d => setCatalogProdutos(Array.isArray(d) ? d : [])).catch(() => {});
-    authFetch('/api/servicos').then(r => r.json()).then(d => setCatalogServicos(Array.isArray(d) ? d : [])).catch(() => {});
-    authFetch('/api/combos').then(r => r.json()).then(d => setCatalogCombos(Array.isArray(d) ? d : [])).catch(() => {});
     authFetch('/api/pipeline/labels').then(r => r.json()).then(d => setAvailableLabels(Array.isArray(d) ? d : [])).catch(() => {});
   }, []);
 
