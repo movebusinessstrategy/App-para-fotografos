@@ -7158,6 +7158,256 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ success: true });
   });
 
+  // ============ WHATSAPP MESSAGE TEMPLATES ============
+  // Gerencia templates de mensagem do WhatsApp via Graph API (nível WABA).
+  // O Meta é a fonte da verdade; a tabela whatsapp_message_templates é cache.
+
+  // Conta o número de variáveis {{N}} distintas no corpo
+  const countTemplateVars = (body: string): number => {
+    const matches = body.match(/\{\{(\d+)\}\}/g) || [];
+    const nums = matches.map(m => Number(m.replace(/\D/g, '')));
+    return nums.length ? Math.max(...nums) : 0;
+  };
+
+  // GET — lista os templates do usuário (do cache local)
+  app.get('/api/meta/whatsapp/templates', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase
+      .from('whatsapp_message_templates')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  });
+
+  // POST — cria um template no Meta e salva no cache como PENDING
+  app.post('/api/meta/whatsapp/templates', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const body = req.body || {};
+
+    const name = String(body.name || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
+    const category = String(body.category || 'UTILITY').toUpperCase();
+    const language = String(body.language || 'pt_BR');
+    const bodyText = String(body.body_text || '').trim();
+    const exampleValues: string[] = Array.isArray(body.example_values) ? body.example_values.map(String) : [];
+
+    if (!name || !bodyText) {
+      return res.status(400).json({ error: 'name e body_text são obrigatórios' });
+    }
+    const varCount = countTemplateVars(bodyText);
+    if (varCount > exampleValues.length) {
+      return res.status(400).json({ error: `O corpo usa ${varCount} variável(is), mas só ${exampleValues.length} exemplo(s) foram informados.` });
+    }
+
+    const { data: acc } = await supabase
+      .from('whatsapp_business_accounts')
+      .select('waba_id, access_token')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!acc?.waba_id || !acc?.access_token) {
+      return res.status(400).json({ error: 'Conta WhatsApp não conectada' });
+    }
+
+    // Monta o componente BODY com exemplos (Meta exige exemplo p/ cada variável)
+    const components: any[] = [{ type: 'BODY', text: bodyText }];
+    if (varCount > 0) {
+      components[0].example = { body_text: [exampleValues.slice(0, varCount)] };
+    }
+
+    try {
+      const metaRes = await fetch(
+        `https://graph.facebook.com/v21.0/${acc.waba_id}/message_templates`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${acc.access_token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, category, language, components }),
+        }
+      );
+      const metaData = await metaRes.json();
+      if (!metaRes.ok || metaData.error) {
+        return res.status(400).json({ error: metaData?.error?.message || 'Erro ao criar template no Meta' });
+      }
+
+      const { data: saved, error } = await supabase
+        .from('whatsapp_message_templates')
+        .insert({
+          user_id: userId,
+          meta_template_id: metaData.id || null,
+          name,
+          category,
+          language,
+          body_text: bodyText,
+          example_values: exampleValues,
+          status: (metaData.status || 'PENDING').toUpperCase(),
+        })
+        .select()
+        .single();
+      if (error) return res.status(500).json({ error: error.message });
+      res.json(saved);
+    } catch (err: any) {
+      console.error('[Meta] criar template error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /sync — consulta o Meta e atualiza status (PENDING → APPROVED/REJECTED)
+  app.post('/api/meta/whatsapp/templates/sync', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    const { data: acc } = await supabase
+      .from('whatsapp_business_accounts')
+      .select('waba_id, access_token')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!acc?.waba_id || !acc?.access_token) {
+      return res.status(400).json({ error: 'Conta WhatsApp não conectada' });
+    }
+
+    try {
+      const metaRes = await fetch(
+        `https://graph.facebook.com/v21.0/${acc.waba_id}/message_templates?fields=id,name,status,category,language,components,rejected_reason&limit=200&access_token=${acc.access_token}`
+      );
+      const metaData = await metaRes.json();
+      if (!metaRes.ok || metaData.error) {
+        return res.status(400).json({ error: metaData?.error?.message || 'Erro ao consultar templates no Meta' });
+      }
+
+      const metaTemplates: any[] = metaData.data || [];
+      let updated = 0;
+      for (const t of metaTemplates) {
+        const bodyComp = (t.components || []).find((c: any) => c.type === 'BODY');
+        const { error } = await supabase
+          .from('whatsapp_message_templates')
+          .update({
+            meta_template_id: t.id,
+            status: (t.status || 'PENDING').toUpperCase(),
+            category: (t.category || 'UTILITY').toUpperCase(),
+            rejection_reason: t.rejected_reason || null,
+            body_text: bodyComp?.text || undefined,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('user_id', userId)
+          .eq('name', t.name);
+        if (!error) updated++;
+      }
+      res.json({ synced: metaTemplates.length, updated });
+    } catch (err: any) {
+      console.error('[Meta] sync templates error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // DELETE — remove o template no Meta e no cache local
+  app.delete('/api/meta/whatsapp/templates/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    const { data: tpl } = await supabase
+      .from('whatsapp_message_templates')
+      .select('id, name')
+      .eq('user_id', userId)
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (!tpl) return res.status(404).json({ error: 'Template não encontrado' });
+
+    const { data: acc } = await supabase
+      .from('whatsapp_business_accounts')
+      .select('waba_id, access_token')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    // Tenta deletar no Meta (não bloqueia se falhar — pode já não existir lá)
+    if (acc?.waba_id && acc?.access_token) {
+      try {
+        await fetch(
+          `https://graph.facebook.com/v21.0/${acc.waba_id}/message_templates?name=${encodeURIComponent(tpl.name)}&access_token=${acc.access_token}`,
+          { method: 'DELETE' }
+        );
+      } catch (err) {
+        console.error('[Meta] deletar template no Meta falhou (segue):', err);
+      }
+    }
+
+    const { error } = await supabase
+      .from('whatsapp_message_templates')
+      .delete()
+      .eq('user_id', userId)
+      .eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  // POST /:id/send-test — envia o template pra um número de teste
+  app.post('/api/meta/whatsapp/templates/:id/send-test', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const toRaw = String(req.body?.to || '').replace(/\D/g, '');
+    const params: string[] = Array.isArray(req.body?.parameters) ? req.body.parameters.map(String) : [];
+
+    if (!toRaw) return res.status(400).json({ error: 'Número de destino é obrigatório' });
+
+    const { data: tpl } = await supabase
+      .from('whatsapp_message_templates')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (!tpl) return res.status(404).json({ error: 'Template não encontrado' });
+    if (tpl.status !== 'APPROVED') {
+      return res.status(400).json({ error: 'Só é possível enviar templates aprovados pelo Meta.' });
+    }
+
+    const { data: acc } = await supabase
+      .from('whatsapp_business_accounts')
+      .select('phone_number_id, access_token')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!acc?.phone_number_id || !acc?.access_token) {
+      return res.status(400).json({ error: 'Conta WhatsApp não conectada' });
+    }
+
+    const varCount = countTemplateVars(tpl.body_text);
+    const components: any[] = [];
+    if (varCount > 0) {
+      components.push({
+        type: 'body',
+        parameters: params.slice(0, varCount).map(p => ({ type: 'text', text: p })),
+      });
+    }
+
+    try {
+      const metaRes = await fetch(
+        `https://graph.facebook.com/v21.0/${acc.phone_number_id}/messages`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${acc.access_token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messaging_product: 'whatsapp',
+            to: toRaw,
+            type: 'template',
+            template: {
+              name: tpl.name,
+              language: { code: tpl.language },
+              ...(components.length ? { components } : {}),
+            },
+          }),
+        }
+      );
+      const metaData = await metaRes.json();
+      if (!metaRes.ok || metaData.error) {
+        return res.status(400).json({ error: metaData?.error?.message || 'Erro ao enviar template' });
+      }
+      res.json({ success: true, message_id: metaData.messages?.[0]?.id || null });
+    } catch (err: any) {
+      console.error('[Meta] send-test template error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ============ WHATSAPP MESSAGING ============
   const WA_WEBHOOK_VERIFY_TOKEN = process.env.WA_WEBHOOK_VERIFY_TOKEN || 'fotomove_webhook_2026';
 
