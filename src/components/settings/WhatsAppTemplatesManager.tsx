@@ -1,7 +1,7 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
   MessageSquareText, Plus, Trash2, RefreshCw, Send, Loader2, X,
-  CheckCircle2, Clock, AlertCircle, Info,
+  CheckCircle2, Clock, AlertCircle, Info, Sparkles,
 } from "lucide-react";
 import { authFetch } from "../../utils/authFetch";
 import { useApi } from "../../utils/useApi";
@@ -23,6 +23,48 @@ function countVars(body: string): number {
   const nums = matches.map((m) => Number(m.replace(/\D/g, "")));
   return nums.length ? Math.max(...nums) : 0;
 }
+
+// Sugestões de variáveis. O Meta só aceita {{1}}, {{2}}… (posicional),
+// então o botão insere o próximo número e usa o label como exemplo default.
+const VAR_SUGGESTIONS: Array<{ label: string; example: string }> = [
+  { label: "Nome do cliente", example: "Maria" },
+  { label: "Data do ensaio", example: "15/06/2026" },
+  { label: "Horário", example: "14h00" },
+  { label: "Local", example: "Estúdio Pitori" },
+  { label: "Valor", example: "R$ 1.290,00" },
+  { label: "Link", example: "https://g.page/r/..." },
+];
+
+// Templates prontos comuns de fotografia — a usuária escolhe e ajusta.
+const SEED_TEMPLATES: Array<{
+  title: string;
+  name: string;
+  category: WhatsAppTemplateCategory;
+  body_text: string;
+  example_values: string[];
+}> = [
+  {
+    title: "Lembrete de ensaio",
+    name: "lembrete_ensaio",
+    category: "UTILITY",
+    body_text: "Olá {{1}}! Passando para lembrar do seu ensaio no dia {{2}} às {{3}}. Qualquer dúvida, é só chamar aqui. 📸",
+    example_values: ["Maria", "15/06/2026", "14h00"],
+  },
+  {
+    title: "Fotos prontas para retirada",
+    name: "fotos_prontas",
+    category: "UTILITY",
+    body_text: "Oi {{1}}! Suas fotos já estão prontas para retirada no estúdio. Quando puder, combine um horário com a gente! 😊",
+    example_values: ["Maria"],
+  },
+  {
+    title: "Pedido de avaliação",
+    name: "pedido_avaliacao",
+    category: "MARKETING",
+    body_text: "{{1}}, foi um prazer registrar esse momento com você! Se puder, deixe sua avaliação para a gente aqui: {{2}}. Significa muito! 💛",
+    example_values: ["Maria", "https://g.page/r/..."],
+  },
+];
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, { label: string; cls: string; icon: React.ReactNode }> = {
@@ -221,6 +263,7 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
   const [bodyText, setBodyText] = useState("");
   const [exampleValues, setExampleValues] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
 
   const varCount = countVars(bodyText);
 
@@ -232,6 +275,43 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
       next[idx] = value;
       return next.slice(0, varCount);
     });
+  };
+
+  // Insere a próxima variável {{N}} na posição do cursor e pré-preenche
+  // o exemplo dela com o valor sugerido daquele rótulo.
+  const insertVariable = (suggestion: { label: string; example: string }) => {
+    const nextNum = varCount + 1;
+    const token = `{{${nextNum}}}`;
+    const ta = bodyRef.current;
+    let newBody: string;
+    if (ta) {
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      newBody = bodyText.slice(0, start) + token + bodyText.slice(end);
+      requestAnimationFrame(() => {
+        ta.focus();
+        const pos = start + token.length;
+        ta.setSelectionRange(pos, pos);
+      });
+    } else {
+      newBody = bodyText + token;
+    }
+    setBodyText(newBody);
+    // Pré-preenche o exemplo da nova variável
+    setExampleValues((prev) => {
+      const next = [...prev];
+      while (next.length < nextNum) next.push("");
+      next[nextNum - 1] = suggestion.example;
+      return next;
+    });
+  };
+
+  // Aplica um template pronto no formulário
+  const applySeed = (seed: typeof SEED_TEMPLATES[number]) => {
+    setName(seed.name);
+    setCategory(seed.category);
+    setBodyText(seed.body_text);
+    setExampleValues([...seed.example_values]);
   };
 
   const handleSubmit = async () => {
@@ -282,6 +362,27 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
         </div>
 
         <div className="p-5 space-y-4 overflow-y-auto">
+          {/* Modelos prontos */}
+          <div>
+            <label className="block text-xs font-bold uppercase text-gray-400 mb-1.5 flex items-center gap-1">
+              <Sparkles size={12} className="text-emerald-500" />
+              Começar de um modelo pronto
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {SEED_TEMPLATES.map((seed) => (
+                <button
+                  key={seed.name}
+                  type="button"
+                  onClick={() => applySeed(seed)}
+                  className="px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:border-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-400 transition-colors"
+                >
+                  {seed.title}
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-gray-400 mt-1">Preenche o formulário — você ajusta antes de enviar.</p>
+          </div>
+
           <div>
             <label className="block text-xs font-bold uppercase text-gray-400 mb-1">Nome</label>
             <input
@@ -309,14 +410,30 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
           <div>
             <label className="block text-xs font-bold uppercase text-gray-400 mb-1">Corpo da mensagem</label>
             <textarea
+              ref={bodyRef}
               value={bodyText}
               onChange={(e) => setBodyText(e.target.value)}
               rows={4}
               placeholder={"Olá {{1}}! Passando para lembrar do seu ensaio no dia {{2}}."}
               className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 outline-none focus:border-emerald-400 resize-none font-mono"
             />
-            <p className="text-[11px] text-gray-400 mt-1">
-              Use <code>{"{{1}}"}</code>, <code>{"{{2}}"}</code>… para partes que mudam (nome, data, etc).
+            {/* Botões de inserir variável */}
+            <div className="flex flex-wrap items-center gap-1.5 mt-2">
+              <span className="text-[10px] font-bold uppercase text-gray-400 mr-0.5">Inserir:</span>
+              {VAR_SUGGESTIONS.map((v) => (
+                <button
+                  key={v.label}
+                  type="button"
+                  onClick={() => insertVariable(v)}
+                  className="px-2 py-0.5 text-[11px] rounded-md bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border border-emerald-100 dark:border-emerald-900/40 hover:border-emerald-400 transition-colors"
+                >
+                  + {v.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-gray-400 mt-1.5">
+              Cada botão insere uma variável (<code>{"{{1}}"}</code>, <code>{"{{2}}"}</code>…) na posição do cursor.
+              O Meta usa números; os rótulos acima são só pra te guiar.
             </p>
           </div>
 
