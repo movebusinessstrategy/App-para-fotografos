@@ -444,6 +444,14 @@ export interface ContractTemplate {
 
 export type WhatsAppTemplateStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 export type WhatsAppTemplateCategory = 'UTILITY' | 'MARKETING' | 'AUTHENTICATION';
+export type WhatsAppButtonType = 'QUICK_REPLY' | 'URL' | 'PHONE_NUMBER';
+
+export interface WhatsAppTemplateButton {
+  type: WhatsAppButtonType;
+  text: string;
+  url?: string;            // só p/ URL
+  phone_number?: string;   // só p/ PHONE_NUMBER
+}
 
 export interface WhatsAppMessageTemplate {
   id: number;
@@ -454,6 +462,9 @@ export interface WhatsAppMessageTemplate {
   language: string;
   body_text: string;
   example_values: string[];
+  header_text: string | null;
+  footer_text: string | null;
+  buttons: WhatsAppTemplateButton[];
   status: WhatsAppTemplateStatus;
   rejection_reason: string | null;
   created_at: string;
