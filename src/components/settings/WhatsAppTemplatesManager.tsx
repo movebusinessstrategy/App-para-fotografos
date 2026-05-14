@@ -24,6 +24,15 @@ function countVars(body: string): number {
   return nums.length ? Math.max(...nums) : 0;
 }
 
+// Substitui {{N}} pelos valores de exemplo — pra pré-visualização.
+// Se o exemplo estiver vazio, mantém o {{N}} visível.
+function renderPreview(body: string, examples: string[]): string {
+  return body.replace(/\{\{(\d+)\}\}/g, (match, n) => {
+    const v = examples[Number(n) - 1];
+    return v && v.trim() ? v : match;
+  });
+}
+
 // Sugestões de variáveis. O Meta só aceita {{1}}, {{2}}… (posicional),
 // então o botão insere o próximo número e usa o label como exemplo default.
 const VAR_SUGGESTIONS: Array<{ label: string; example: string }> = [
@@ -458,6 +467,28 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* Pré-visualização — como a mensagem chega pro cliente */}
+          {bodyText.trim() && (
+            <div>
+              <label className="block text-xs font-bold uppercase text-gray-400 mb-1.5">
+                Pré-visualização
+              </label>
+              <div className="rounded-xl p-3" style={{ background: "#e5ddd5" }}>
+                <div className="bg-[#dcf8c6] rounded-lg rounded-tl-none px-3 py-2 max-w-[85%] shadow-sm">
+                  <p className="text-[13px] leading-relaxed text-gray-800 whitespace-pre-wrap">
+                    {renderPreview(bodyText, exampleValues)}
+                  </p>
+                  <span className="block text-[10px] text-gray-500 text-right mt-1">
+                    {new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                </div>
+              </div>
+              <p className="text-[11px] text-gray-400 mt-1">
+                As variáveis aparecem com os exemplos preenchidos acima.
+              </p>
             </div>
           )}
         </div>
