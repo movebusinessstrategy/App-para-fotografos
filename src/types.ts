@@ -441,3 +441,21 @@ export interface ContractTemplate {
   updated_at?: string;
 }
 
+export type WhatsAppTemplateStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+export type WhatsAppTemplateCategory = 'UTILITY' | 'MARKETING' | 'AUTHENTICATION';
+
+export interface WhatsAppMessageTemplate {
+  id: number;
+  user_id: string;
+  meta_template_id: string | null;
+  name: string;
+  category: WhatsAppTemplateCategory;
+  language: string;
+  body_text: string;
+  example_values: string[];
+  status: WhatsAppTemplateStatus;
+  rejection_reason: string | null;
+  created_at: string;
+  updated_at?: string;
+}
+
