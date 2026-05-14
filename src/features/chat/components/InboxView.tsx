@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic, Sun, Moon, PenSquare, Search, MoreVertical, Smile, Paperclip, ChevronDown, UserPlus, Loader2, CheckCircle2 } from 'lucide-react';
+import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic, Sun, Moon, PenSquare, Search, MoreVertical, Smile, Paperclip, ChevronDown, UserPlus, Loader2, CheckCircle2, FileText, X } from 'lucide-react';
 import { authFetch } from '../../../utils/authFetch';
 import EmojiPicker, { Theme as EmojiTheme } from 'emoji-picker-react';
 import { useTheme } from '../../../contexts/ThemeContext';
@@ -14,6 +14,7 @@ import { MessageBubble } from './MessageBubble';
 import { AudioRecorder } from './AudioRecorder';
 import { ConnectChannelModal } from '../../../components/vendas/ConnectChannelModal';
 import { NewConversationModal } from './NewConversationModal';
+import { WhatsAppTemplatesManager } from '../../../components/settings/WhatsAppTemplatesManager';
 import { supabase } from '../../../integrations/supabase/client';
 import { Deal, PipelineStage } from '../../../types';
 
@@ -63,6 +64,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
   const [refreshing, setRefreshing] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   const [newConvOpen, setNewConvOpen] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
   const [mediaPreview, setMediaPreview] = useState<{ file: File; url: string; type: string } | null>(null);
   const [mediaCaption, setMediaCaption] = useState('');
@@ -310,6 +312,17 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
                 style={{ background: '#f59e0b', color: '#000' }}
               >
                 Conectar
+              </button>
+            )}
+
+            {connected && (
+              <button
+                onClick={() => setTemplatesOpen(true)}
+                className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
+                style={{ color: 'var(--wa-text-secondary)' }}
+                title="Templates de mensagem"
+              >
+                <FileText size={16} />
               </button>
             )}
 
@@ -752,6 +765,29 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
         onClose={() => setNewConvOpen(false)}
         onStart={phone => setSelectedPhone(phone)}
       />
+
+      {/* Gerenciador de templates — aberto como modal pelo header do Inbox */}
+      {templatesOpen && (
+        <div className="fixed inset-0 z-[70] flex items-start justify-center bg-black/50 p-4 overflow-y-auto">
+          <div className="w-full max-w-3xl my-8" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-end mb-2">
+              <button
+                onClick={() => setTemplatesOpen(false)}
+                className="w-9 h-9 rounded-full bg-white dark:bg-gray-800 shadow-lg flex items-center justify-center text-gray-500 hover:text-gray-700 dark:hover:text-gray-200"
+                title="Fechar"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <WhatsAppTemplatesManager
+              onNotify={(kind, message) => {
+                if (kind === "error") alert("Erro: " + message);
+                else alert(message);
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
