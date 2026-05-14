@@ -3,6 +3,7 @@ import { motion } from "motion/react";
 import { AlertCircle, Calendar, CheckCircle2, Edit2, MessageCircle, Phone, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 import { ConfirmModal } from "../components/ui/ConfirmModal";
+import { WhatsAppTemplatesManager } from "../components/settings/WhatsAppTemplatesManager";
 import { authFetch } from "../utils/authFetch";
 import { cn } from "../utils/cn";
 import { OpportunityRule } from "../types";
@@ -418,6 +419,16 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
           )}
         </div>
       </div>
+
+      {/* WhatsApp Message Templates — só quando conectado */}
+      {waConnected && (
+        <WhatsAppTemplatesManager
+          onNotify={(kind, message) => {
+            if (kind === "error") alert("Erro: " + message);
+            else alert(message);
+          }}
+        />
+      )}
 
       <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm dark:shadow-lg dark:shadow-black/10 overflow-hidden">
         <table className="w-full text-left">
