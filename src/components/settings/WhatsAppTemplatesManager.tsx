@@ -420,7 +420,7 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <div
-        className="w-full max-w-lg bg-white dark:bg-gray-900 rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
+        className="w-full max-w-5xl bg-white dark:bg-gray-900 rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800">
@@ -430,7 +430,10 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
           </button>
         </div>
 
-        <div className="p-5 space-y-4 overflow-y-auto">
+        {/* Duas colunas: formulário à esquerda, prévia fixa à direita */}
+        <div className="flex flex-1 overflow-hidden">
+          {/* Coluna esquerda — formulário */}
+          <div className="flex-1 p-5 space-y-4 overflow-y-auto">
           {/* Modelos prontos */}
           <div>
             <label className="block text-xs font-bold uppercase text-gray-400 mb-1.5 flex items-center gap-1">
@@ -630,48 +633,56 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
             </p>
           </div>
 
-          {/* Pré-visualização — como a mensagem chega pro cliente */}
-          {bodyText.trim() && (
-            <div>
-              <label className="block text-xs font-bold uppercase text-gray-400 mb-1.5">
-                Pré-visualização
-              </label>
-              <div className="rounded-xl p-3" style={{ background: "#e5ddd5" }}>
-                <div className="max-w-[85%]">
-                  <div className="bg-[#dcf8c6] rounded-lg rounded-tl-none px-3 py-2 shadow-sm">
-                    {headerText.trim() && (
-                      <p className="text-[13px] font-bold text-gray-900 mb-1">{headerText}</p>
-                    )}
-                    <p className="text-[13px] leading-relaxed text-gray-800 whitespace-pre-wrap">
-                      {renderPreview(bodyText, exampleValues)}
-                    </p>
-                    {footerText.trim() && (
-                      <p className="text-[11px] text-gray-500 mt-1">{footerText}</p>
-                    )}
-                    <span className="block text-[10px] text-gray-500 text-right mt-1">
-                      {new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
-                    </span>
-                  </div>
-                  {/* Botões — chips abaixo do balão, estilo WhatsApp */}
-                  {buttons.length > 0 && (
-                    <div className="mt-1 space-y-0.5">
-                      {buttons.map((b, i) => (
-                        <div
-                          key={i}
-                          className="bg-white rounded-lg px-3 py-1.5 text-center text-[13px] text-[#1da5e0] font-medium shadow-sm"
-                        >
-                          {b.text || "(sem texto)"}
-                        </div>
-                      ))}
+          </div>
+
+          {/* Coluna direita — prévia fixa ao lado */}
+          <div className="w-[40%] flex-shrink-0 border-l border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/40 p-5 overflow-y-auto">
+            <label className="block text-xs font-bold uppercase text-gray-400 mb-2">
+              Pré-visualização
+            </label>
+            {bodyText.trim() ? (
+              <>
+                <div className="rounded-xl p-3" style={{ background: "#e5ddd5" }}>
+                  <div className="max-w-[90%]">
+                    <div className="bg-[#dcf8c6] rounded-lg rounded-tl-none px-3 py-2 shadow-sm">
+                      {headerText.trim() && (
+                        <p className="text-[13px] font-bold text-gray-900 mb-1">{headerText}</p>
+                      )}
+                      <p className="text-[13px] leading-relaxed text-gray-800 whitespace-pre-wrap">
+                        {renderPreview(bodyText, exampleValues)}
+                      </p>
+                      {footerText.trim() && (
+                        <p className="text-[11px] text-gray-500 mt-1">{footerText}</p>
+                      )}
+                      <span className="block text-[10px] text-gray-500 text-right mt-1">
+                        {new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+                      </span>
                     </div>
-                  )}
+                    {/* Botões — chips abaixo do balão, estilo WhatsApp */}
+                    {buttons.length > 0 && (
+                      <div className="mt-1 space-y-0.5">
+                        {buttons.map((b, i) => (
+                          <div
+                            key={i}
+                            className="bg-white rounded-lg px-3 py-1.5 text-center text-[13px] text-[#1da5e0] font-medium shadow-sm"
+                          >
+                            {b.text || "(sem texto)"}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
+                <p className="text-[11px] text-gray-400 mt-2">
+                  As variáveis aparecem com os exemplos preenchidos.
+                </p>
+              </>
+            ) : (
+              <div className="flex items-center justify-center h-40 text-xs text-gray-400 text-center px-4">
+                Preencha o corpo da mensagem<br />para ver como ela vai chegar pro cliente.
               </div>
-              <p className="text-[11px] text-gray-400 mt-1">
-                As variáveis aparecem com os exemplos preenchidos acima.
-              </p>
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-gray-100 dark:border-gray-800">
