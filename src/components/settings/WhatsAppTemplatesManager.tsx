@@ -6,7 +6,7 @@ import {
 import { authFetch } from "../../utils/authFetch";
 import { useApi } from "../../utils/useApi";
 import { cn } from "../../utils/cn";
-import { WhatsAppMessageTemplate, WhatsAppTemplateCategory } from "../../types";
+import { WhatsAppMessageTemplate, WhatsAppTemplateCategory, WhatsAppTemplateButton, WhatsAppButtonType } from "../../types";
 import { ConfirmModal } from "../ui/ConfirmModal";
 
 type Notify = (kind: "success" | "error" | "info", message: string) => void;
@@ -51,7 +51,23 @@ const SEED_TEMPLATES: Array<{
   category: WhatsAppTemplateCategory;
   body_text: string;
   example_values: string[];
+  header_text?: string;
+  footer_text?: string;
+  buttons?: WhatsAppTemplateButton[];
 }> = [
+  {
+    title: "Confirmação de agendamento",
+    name: "confirmacao_agendamento",
+    category: "UTILITY",
+    header_text: "Confirmação de Agendamento",
+    body_text: "Olá {{1}}! Seu ensaio está agendado para {{2}} às {{3}}. Podemos confirmar?",
+    footer_text: "Studio Pitori",
+    example_values: ["Maria", "15/06/2026", "14h00"],
+    buttons: [
+      { type: "QUICK_REPLY", text: "Sim, confirmo" },
+      { type: "QUICK_REPLY", text: "Preciso remarcar" },
+    ],
+  },
   {
     title: "Lembrete de ensaio",
     name: "lembrete_ensaio",
@@ -70,8 +86,11 @@ const SEED_TEMPLATES: Array<{
     title: "Pedido de avaliação",
     name: "pedido_avaliacao",
     category: "MARKETING",
-    body_text: "{{1}}, foi um prazer registrar esse momento com você! Se puder, deixe sua avaliação para a gente aqui: {{2}}. Significa muito! 💛",
-    example_values: ["Maria", "https://g.page/r/..."],
+    body_text: "{{1}}, foi um prazer registrar esse momento com você! Se puder, deixe sua avaliação para a gente. Significa muito! 💛",
+    example_values: ["Maria"],
+    buttons: [
+      { type: "URL", text: "Avaliar no Google", url: "https://g.page/r/..." },
+    ],
   },
 ];
 
@@ -201,7 +220,22 @@ export function WhatsAppTemplatesManager({ onNotify }: Props) {
                   <span className="text-[10px] text-gray-400 uppercase">{tpl.category}</span>
                   <span className="text-[10px] text-gray-400">{tpl.language}</span>
                 </div>
+                {tpl.header_text && (
+                  <p className="text-xs font-bold text-gray-700 dark:text-gray-200">{tpl.header_text}</p>
+                )}
                 <p className="text-xs text-gray-600 dark:text-gray-300 whitespace-pre-wrap">{tpl.body_text}</p>
+                {tpl.footer_text && (
+                  <p className="text-[11px] text-gray-400 mt-0.5">{tpl.footer_text}</p>
+                )}
+                {Array.isArray(tpl.buttons) && tpl.buttons.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    {tpl.buttons.map((b, i) => (
+                      <span key={i} className="px-1.5 py-0.5 rounded text-[10px] bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
+                        {b.text}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {tpl.status === "REJECTED" && tpl.rejection_reason && (
                   <p className="text-[11px] text-rose-600 dark:text-rose-400 mt-1">
                     Motivo: {tpl.rejection_reason}
@@ -271,8 +305,22 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
   const [category, setCategory] = useState<WhatsAppTemplateCategory>("UTILITY");
   const [bodyText, setBodyText] = useState("");
   const [exampleValues, setExampleValues] = useState<string[]>([]);
+  const [headerText, setHeaderText] = useState("");
+  const [footerText, setFooterText] = useState("");
+  const [buttons, setButtons] = useState<WhatsAppTemplateButton[]>([]);
   const [saving, setSaving] = useState(false);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
+
+  const addButton = (type: WhatsAppButtonType) => {
+    if (buttons.length >= 10) return;
+    setButtons((prev) => [...prev, { type, text: "" }]);
+  };
+  const updateButton = (idx: number, patch: Partial<WhatsAppTemplateButton>) => {
+    setButtons((prev) => prev.map((b, i) => (i === idx ? { ...b, ...patch } : b)));
+  };
+  const removeButton = (idx: number) => {
+    setButtons((prev) => prev.filter((_, i) => i !== idx));
+  };
 
   const varCount = countVars(bodyText);
 
@@ -321,6 +369,9 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
     setCategory(seed.category);
     setBodyText(seed.body_text);
     setExampleValues([...seed.example_values]);
+    setHeaderText(seed.header_text || "");
+    setFooterText(seed.footer_text || "");
+    setButtons(seed.buttons ? seed.buttons.map((b) => ({ ...b })) : []);
   };
 
   const handleSubmit = async () => {
@@ -331,6 +382,12 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
         onNotify("error", `Preencha o exemplo da variável {{${i + 1}}}.`);
         return;
       }
+    }
+    // Valida botões preenchidos
+    for (const b of buttons) {
+      if (!b.text.trim()) { onNotify("error", "Preencha o texto de todos os botões."); return; }
+      if (b.type === "URL" && !b.url?.trim()) { onNotify("error", `Informe a URL do botão "${b.text}".`); return; }
+      if (b.type === "PHONE_NUMBER" && !b.phone_number?.trim()) { onNotify("error", `Informe o telefone do botão "${b.text}".`); return; }
     }
     setSaving(true);
     try {
@@ -343,6 +400,9 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
           language: "pt_BR",
           body_text: bodyText,
           example_values: exampleValues.slice(0, varCount),
+          header_text: headerText.trim() || null,
+          footer_text: footerText.trim() || null,
+          buttons,
         }),
       });
       const json = await res.json();
@@ -417,6 +477,19 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
           </div>
 
           <div>
+            <label className="block text-xs font-bold uppercase text-gray-400 mb-1">
+              Cabeçalho <span className="text-gray-300 normal-case font-normal">· opcional</span>
+            </label>
+            <input
+              value={headerText}
+              onChange={(e) => setHeaderText(e.target.value.slice(0, 60))}
+              placeholder="Ex: Confirmação de Agendamento"
+              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 outline-none focus:border-emerald-400"
+            />
+            <p className="text-[11px] text-gray-400 mt-1">{headerText.length}/60 · linha curta de destaque no topo.</p>
+          </div>
+
+          <div>
             <label className="block text-xs font-bold uppercase text-gray-400 mb-1">Corpo da mensagem</label>
             <textarea
               ref={bodyRef}
@@ -470,6 +543,93 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
             </div>
           )}
 
+          {/* Rodapé */}
+          <div>
+            <label className="block text-xs font-bold uppercase text-gray-400 mb-1">
+              Rodapé <span className="text-gray-300 normal-case font-normal">· opcional</span>
+            </label>
+            <input
+              value={footerText}
+              onChange={(e) => setFooterText(e.target.value.slice(0, 60))}
+              placeholder="Ex: Studio Pitori · Cambé/PR"
+              className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 outline-none focus:border-emerald-400"
+            />
+            <p className="text-[11px] text-gray-400 mt-1">{footerText.length}/60 · linha pequena e discreta embaixo.</p>
+          </div>
+
+          {/* Botões */}
+          <div>
+            <label className="block text-xs font-bold uppercase text-gray-400 mb-1.5">
+              Botões <span className="text-gray-300 normal-case font-normal">· opcional · até 10</span>
+            </label>
+            {buttons.length > 0 && (
+              <div className="space-y-2 mb-2">
+                {buttons.map((b, i) => (
+                  <div key={i} className="flex items-start gap-2 p-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/40">
+                    <div className="flex-1 space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={b.type}
+                          onChange={(e) => updateButton(i, { type: e.target.value as WhatsAppButtonType })}
+                          className="text-xs border border-gray-200 dark:border-gray-700 rounded-md px-1.5 py-1 bg-white dark:bg-gray-800"
+                        >
+                          <option value="QUICK_REPLY">Resposta rápida</option>
+                          <option value="URL">Link (site)</option>
+                          <option value="PHONE_NUMBER">Telefone</option>
+                        </select>
+                        <input
+                          value={b.text}
+                          onChange={(e) => updateButton(i, { text: e.target.value.slice(0, 25) })}
+                          placeholder="Texto do botão"
+                          className="flex-1 text-xs px-2 py-1 border border-gray-200 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 outline-none focus:border-emerald-400"
+                        />
+                      </div>
+                      {b.type === "URL" && (
+                        <input
+                          value={b.url || ""}
+                          onChange={(e) => updateButton(i, { url: e.target.value })}
+                          placeholder="https://..."
+                          className="w-full text-xs px-2 py-1 border border-gray-200 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 outline-none focus:border-emerald-400"
+                        />
+                      )}
+                      {b.type === "PHONE_NUMBER" && (
+                        <input
+                          value={b.phone_number || ""}
+                          onChange={(e) => updateButton(i, { phone_number: e.target.value })}
+                          placeholder="+5543999999999"
+                          className="w-full text-xs px-2 py-1 border border-gray-200 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 outline-none focus:border-emerald-400"
+                        />
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeButton(i)}
+                      className="p-1 text-gray-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded transition-colors"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {buttons.length < 10 && (
+              <div className="flex flex-wrap gap-1.5">
+                <button type="button" onClick={() => addButton("QUICK_REPLY")} className="px-2 py-1 text-[11px] rounded-md border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-emerald-400 transition-colors">
+                  + Resposta rápida
+                </button>
+                <button type="button" onClick={() => addButton("URL")} className="px-2 py-1 text-[11px] rounded-md border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-emerald-400 transition-colors">
+                  + Link
+                </button>
+                <button type="button" onClick={() => addButton("PHONE_NUMBER")} className="px-2 py-1 text-[11px] rounded-md border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-emerald-400 transition-colors">
+                  + Telefone
+                </button>
+              </div>
+            )}
+            <p className="text-[11px] text-gray-400 mt-1.5">
+              "Resposta rápida" = o cliente toca e a palavra volta como mensagem (ex: Sim / Não).
+            </p>
+          </div>
+
           {/* Pré-visualização — como a mensagem chega pro cliente */}
           {bodyText.trim() && (
             <div>
@@ -477,13 +637,34 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
                 Pré-visualização
               </label>
               <div className="rounded-xl p-3" style={{ background: "#e5ddd5" }}>
-                <div className="bg-[#dcf8c6] rounded-lg rounded-tl-none px-3 py-2 max-w-[85%] shadow-sm">
-                  <p className="text-[13px] leading-relaxed text-gray-800 whitespace-pre-wrap">
-                    {renderPreview(bodyText, exampleValues)}
-                  </p>
-                  <span className="block text-[10px] text-gray-500 text-right mt-1">
-                    {new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
-                  </span>
+                <div className="max-w-[85%]">
+                  <div className="bg-[#dcf8c6] rounded-lg rounded-tl-none px-3 py-2 shadow-sm">
+                    {headerText.trim() && (
+                      <p className="text-[13px] font-bold text-gray-900 mb-1">{headerText}</p>
+                    )}
+                    <p className="text-[13px] leading-relaxed text-gray-800 whitespace-pre-wrap">
+                      {renderPreview(bodyText, exampleValues)}
+                    </p>
+                    {footerText.trim() && (
+                      <p className="text-[11px] text-gray-500 mt-1">{footerText}</p>
+                    )}
+                    <span className="block text-[10px] text-gray-500 text-right mt-1">
+                      {new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  </div>
+                  {/* Botões — chips abaixo do balão, estilo WhatsApp */}
+                  {buttons.length > 0 && (
+                    <div className="mt-1 space-y-0.5">
+                      {buttons.map((b, i) => (
+                        <div
+                          key={i}
+                          className="bg-white rounded-lg px-3 py-1.5 text-center text-[13px] text-[#1da5e0] font-medium shadow-sm"
+                        >
+                          {b.text || "(sem texto)"}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
               <p className="text-[11px] text-gray-400 mt-1">

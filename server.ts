@@ -7197,6 +7197,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const language = String(body.language || 'pt_BR');
     const bodyText = String(body.body_text || '').trim();
     const exampleValues: string[] = Array.isArray(body.example_values) ? body.example_values.map(String) : [];
+    const headerText = String(body.header_text || '').trim();
+    const footerText = String(body.footer_text || '').trim();
+    // buttons: [{ type, text, url?, phone_number? }] — todos estáticos
+    const rawButtons: any[] = Array.isArray(body.buttons) ? body.buttons : [];
 
     if (!name || !bodyText) {
       return res.status(400).json({ error: 'name e body_text são obrigatórios' });
@@ -7205,6 +7209,20 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (varCount > exampleValues.length) {
       return res.status(400).json({ error: `O corpo usa ${varCount} variável(is), mas só ${exampleValues.length} exemplo(s) foram informados.` });
     }
+
+    // Sanitiza botões
+    const buttons = rawButtons
+      .filter(b => b && b.type && String(b.text || '').trim())
+      .slice(0, 10)
+      .map(b => {
+        const t = String(b.type).toUpperCase();
+        const out: any = { type: t, text: String(b.text).trim().slice(0, 25) };
+        if (t === 'URL') out.url = String(b.url || '').trim();
+        if (t === 'PHONE_NUMBER') out.phone_number = String(b.phone_number || '').trim();
+        return out;
+      })
+      .filter(b => b.type !== 'URL' || b.url)
+      .filter(b => b.type !== 'PHONE_NUMBER' || b.phone_number);
 
     const { data: acc } = await supabase
       .from('whatsapp_business_accounts')
@@ -7215,10 +7233,28 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       return res.status(400).json({ error: 'Conta WhatsApp não conectada' });
     }
 
-    // Monta o componente BODY com exemplos (Meta exige exemplo p/ cada variável)
-    const components: any[] = [{ type: 'BODY', text: bodyText }];
+    // Monta os componentes na ordem que o Meta espera: HEADER, BODY, FOOTER, BUTTONS
+    const components: any[] = [];
+    if (headerText) {
+      components.push({ type: 'HEADER', format: 'TEXT', text: headerText });
+    }
+    const bodyComponent: any = { type: 'BODY', text: bodyText };
     if (varCount > 0) {
-      components[0].example = { body_text: [exampleValues.slice(0, varCount)] };
+      bodyComponent.example = { body_text: [exampleValues.slice(0, varCount)] };
+    }
+    components.push(bodyComponent);
+    if (footerText) {
+      components.push({ type: 'FOOTER', text: footerText });
+    }
+    if (buttons.length > 0) {
+      components.push({
+        type: 'BUTTONS',
+        buttons: buttons.map(b => {
+          if (b.type === 'URL') return { type: 'URL', text: b.text, url: b.url };
+          if (b.type === 'PHONE_NUMBER') return { type: 'PHONE_NUMBER', text: b.text, phone_number: b.phone_number };
+          return { type: 'QUICK_REPLY', text: b.text };
+        }),
+      });
     }
 
     try {
@@ -7245,6 +7281,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           language,
           body_text: bodyText,
           example_values: exampleValues,
+          header_text: headerText || null,
+          footer_text: footerText || null,
+          buttons,
           status: (metaData.status || 'PENDING').toUpperCase(),
         })
         .select()
@@ -7283,7 +7322,17 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const metaTemplates: any[] = metaData.data || [];
       let updated = 0;
       for (const t of metaTemplates) {
-        const bodyComp = (t.components || []).find((c: any) => c.type === 'BODY');
+        const comps = t.components || [];
+        const bodyComp = comps.find((c: any) => c.type === 'BODY');
+        const headerComp = comps.find((c: any) => c.type === 'HEADER');
+        const footerComp = comps.find((c: any) => c.type === 'FOOTER');
+        const buttonsComp = comps.find((c: any) => c.type === 'BUTTONS');
+        const buttons = (buttonsComp?.buttons || []).map((b: any) => {
+          const out: any = { type: String(b.type || '').toUpperCase(), text: b.text || '' };
+          if (out.type === 'URL') out.url = b.url || '';
+          if (out.type === 'PHONE_NUMBER') out.phone_number = b.phone_number || '';
+          return out;
+        });
         const { error } = await supabase
           .from('whatsapp_message_templates')
           .update({
@@ -7292,6 +7341,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
             category: (t.category || 'UTILITY').toUpperCase(),
             rejection_reason: t.rejected_reason || null,
             body_text: bodyComp?.text || undefined,
+            header_text: headerComp?.format === 'TEXT' ? (headerComp.text || null) : null,
+            footer_text: footerComp?.text || null,
+            buttons,
             updated_at: new Date().toISOString(),
           })
           .eq('user_id', userId)
