@@ -3964,7 +3964,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const { id } = req.params;
-    const { name, color, auto_follow_up_enabled, follow_up_delay_hours } = req.body;
+    const { name, color, auto_follow_up_enabled, follow_up_delay_hours, follow_up_template_id } = req.body;
 
     const stages = await ensurePipelineStages(supabase, userId);
     const stage = stages.find((s) => s.id === id) || DEFAULT_STAGES.find((s) => s.id === id);
@@ -3977,6 +3977,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     };
     if (auto_follow_up_enabled !== undefined) updatePayload.auto_follow_up_enabled = auto_follow_up_enabled;
     if (follow_up_delay_hours !== undefined) updatePayload.follow_up_delay_hours = Number(follow_up_delay_hours);
+    if (follow_up_template_id !== undefined) {
+      updatePayload.follow_up_template_id = follow_up_template_id === null ? null : Number(follow_up_template_id);
+    }
 
     const { error } = await supabase
       .from('deal_stages')
@@ -4889,6 +4892,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         await supabaseAdmin.from('scheduled_followups').insert({
           user_id: userId, deal_id: dealId, phone,
           message: personalizedMsg, stage_id: updates.stage,
+          contact_name: name,
           scheduled_at: scheduledAt.toISOString(),
         });
         console.log(`[FollowUp] Agendado para ${phone} às ${scheduledAt.toISOString()} (etapa: ${updates.stage})`);
@@ -8634,6 +8638,53 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     .catch(() => {});
 }
 
+// ─── Helpers de janela 24h e templates do WhatsApp ──────────────────────────
+
+// Retorna true se o contato mandou mensagem nas últimas 24h (janela de
+// atendimento do WhatsApp, onde texto livre é permitido).
+async function isWithin24hWindow(db: SupabaseClient, userId: string, phone: string): Promise<boolean> {
+  try {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data } = await db
+      .from('wa_messages')
+      .select('timestamp')
+      .eq('user_id', userId)
+      .eq('phone', phone)
+      .eq('from_me', false)
+      .gte('timestamp', cutoff)
+      .order('timestamp', { ascending: false })
+      .limit(1);
+    return !!(data && data.length > 0);
+  } catch {
+    return false; // na dúvida, trata como fora da janela (mais seguro)
+  }
+}
+
+// Conta variáveis {{N}} no corpo do template
+function countTemplateVarsServer(body: string): number {
+  const matches = (body || '').match(/\{\{(\d+)\}\}/g) || [];
+  const nums = matches.map(m => Number(m.replace(/\D/g, '')));
+  return nums.length ? Math.max(...nums) : 0;
+}
+
+// Monta o objeto `template` da Graph API a partir de uma linha de
+// whatsapp_message_templates + os valores das variáveis.
+function buildTemplateMessagePayload(tpl: any, params: string[]): any {
+  const varCount = countTemplateVarsServer(tpl.body_text);
+  const components: any[] = [];
+  if (varCount > 0) {
+    components.push({
+      type: 'body',
+      parameters: params.slice(0, varCount).map(p => ({ type: 'text', text: String(p ?? '') })),
+    });
+  }
+  return {
+    name: tpl.name,
+    language: { code: tpl.language || 'pt_BR' },
+    ...(components.length ? { components } : {}),
+  };
+}
+
 // ─── Worker de follow-ups automáticos ────────────────────────────────────────
 function startFollowUpWorker() {
   if (!supabaseAdmin) {
@@ -8681,7 +8732,7 @@ function startFollowUpWorker() {
             sent = evoRes.ok;
           }
 
-          // 2ª: Meta API
+          // 2ª: Meta API — com detecção da janela de 24h
           if (!sent) {
             const { data: waAccount } = await supabaseAdmin!
               .from('whatsapp_business_accounts')
@@ -8690,19 +8741,63 @@ function startFollowUpWorker() {
               .maybeSingle();
 
             if (waAccount?.phone_number_id && waAccount?.access_token) {
+              const within24h = await isWithin24hWindow(supabaseAdmin!, task.user_id, task.phone);
+              let messageBody: any;
+
+              if (within24h) {
+                // Dentro da janela: texto livre (comportamento de sempre)
+                messageBody = { messaging_product: 'whatsapp', to: task.phone, type: 'text', text: { body: task.message } };
+              } else {
+                // Fora da janela: o Meta exige template aprovado.
+                // Busca o template configurado na etapa do funil.
+                const { data: stage } = await supabaseAdmin!
+                  .from('deal_stages')
+                  .select('follow_up_template_id')
+                  .eq('id', task.stage_id)
+                  .eq('user_id', task.user_id)
+                  .maybeSingle();
+
+                let tpl: any = null;
+                if (stage?.follow_up_template_id) {
+                  const { data: t } = await supabaseAdmin!
+                    .from('whatsapp_message_templates')
+                    .select('*')
+                    .eq('id', stage.follow_up_template_id)
+                    .eq('user_id', task.user_id)
+                    .maybeSingle();
+                  if (t && t.status === 'APPROVED') tpl = t;
+                }
+
+                if (!tpl) {
+                  // Sem template aprovado configurado — não dá pra enviar legalmente.
+                  console.warn(`[FollowUp Worker] ⏭️  ${task.phone} fora da janela 24h e etapa ${task.stage_id} sem template aprovado — pulado`);
+                  await supabaseAdmin!
+                    .from('scheduled_followups')
+                    .update({ status: 'skipped_no_template' })
+                    .eq('id', task.id);
+                  continue;
+                }
+
+                const params = [task.contact_name || ''];
+                messageBody = {
+                  messaging_product: 'whatsapp', to: task.phone,
+                  type: 'template', template: buildTemplateMessagePayload(tpl, params),
+                };
+              }
+
               const metaRes = await fetch(
                 `https://graph.facebook.com/v21.0/${waAccount.phone_number_id}/messages`,
                 {
                   method: 'POST',
                   headers: { 'Authorization': `Bearer ${waAccount.access_token}`, 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    messaging_product: 'whatsapp', to: task.phone,
-                    type: 'text', text: { body: task.message },
-                  }),
+                  body: JSON.stringify(messageBody),
                 }
               );
               const metaData = await metaRes.json();
               sent = metaRes.ok && !metaData.error;
+              if (!sent) {
+                console.warn(`[FollowUp Worker] Meta recusou ${task.phone}:`, metaData?.error?.message || JSON.stringify(metaData));
+              }
             }
           }
 

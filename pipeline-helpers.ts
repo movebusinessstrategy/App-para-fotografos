@@ -30,6 +30,7 @@ const normalizeStage = (stage: any, fallback: PipelineStage): PipelineStage => (
   follow_up_message: stage.follow_up_message ?? null,
   auto_follow_up_enabled: Boolean(stage.auto_follow_up_enabled ?? false),
   follow_up_delay_hours: Number(stage.follow_up_delay_hours ?? 2),
+  follow_up_template_id: stage.follow_up_template_id ?? null,
 });
 
 // Etapas de produção: IDs começam com "prod-"

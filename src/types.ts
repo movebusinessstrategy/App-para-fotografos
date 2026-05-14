@@ -142,6 +142,7 @@ export interface PipelineStage {
   follow_up_message?: string | null;
   auto_follow_up_enabled?: boolean;
   follow_up_delay_hours?: number;
+  follow_up_template_id?: number | null;
 }
 
 export interface PipelineLabel {

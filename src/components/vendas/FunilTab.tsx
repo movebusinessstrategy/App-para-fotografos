@@ -12,8 +12,9 @@ import {
 import { SortableContext } from "@dnd-kit/sortable";
 import { Send, X, Loader2, CheckCircle2, AlertCircle, Rocket } from "lucide-react";
 
-import { Deal, PipelineStage, Client, PipelineLabel } from "../../types";
+import { Deal, PipelineStage, Client, PipelineLabel, WhatsAppMessageTemplate } from "../../types";
 import { authFetch } from "../../utils/authFetch";
+import { useApi } from "../../utils/useApi";
 import { DealCard } from "./DealCard";
 import { DealDetailDrawer } from "./DealDetailDrawer";
 
@@ -57,8 +58,16 @@ function FollowUpModal({ stage, dealsInStage, onClose }: FollowUpModalProps) {
   const [autoMessage, setAutoMessage] = useState(stage.follow_up_message || "");
   const [autoEnabled, setAutoEnabled] = useState(stage.auto_follow_up_enabled ?? false);
   const [delayHours, setDelayHours] = useState(stage.follow_up_delay_hours ?? 2);
+  const [followUpTemplateId, setFollowUpTemplateId] = useState<number | null>(stage.follow_up_template_id ?? null);
   const [saving, setSaving] = useState(false);
   const [saveOk, setSaveOk] = useState(false);
+
+  // Templates aprovados (pra disparo fora da janela de 24h)
+  const { data: templatesData } = useApi<WhatsAppMessageTemplate[]>("/api/meta/whatsapp/templates");
+  const approvedTemplates = useMemo(
+    () => (Array.isArray(templatesData) ? templatesData : []).filter((t) => t.status === "APPROVED"),
+    [templatesData]
+  );
 
   // Aba Agora
   const [nowMessage, setNowMessage] = useState(stage.follow_up_message || "");
@@ -81,7 +90,11 @@ function FollowUpModal({ stage, dealsInStage, onClose }: FollowUpModalProps) {
         }),
         authFetch(`/api/pipeline/stages/${stage.id}`, {
           method: "PUT",
-          body: JSON.stringify({ auto_follow_up_enabled: autoEnabled, follow_up_delay_hours: delayHours }),
+          body: JSON.stringify({
+            auto_follow_up_enabled: autoEnabled,
+            follow_up_delay_hours: delayHours,
+            follow_up_template_id: followUpTemplateId,
+          }),
         }),
       ]);
       const d1 = await r1.json();
@@ -230,6 +243,31 @@ function FollowUpModal({ stage, dealsInStage, onClose }: FollowUpModalProps) {
                   Use <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">{"{nome}"}</code> para inserir o nome do contato automaticamente.
                 </p>
               </div>
+
+              {/* Template pra fora da janela de 24h */}
+              {autoEnabled && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
+                    Template para envios fora de 24h
+                  </label>
+                  <select
+                    value={followUpTemplateId ?? ""}
+                    onChange={(e) => setFollowUpTemplateId(e.target.value ? Number(e.target.value) : null)}
+                    className="w-full rounded-xl bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-sm text-gray-800 dark:text-gray-200 px-4 py-2.5 outline-none focus:ring-2 focus:ring-gold-400"
+                  >
+                    <option value="">Não enviar (pular se fora da janela)</option>
+                    {approvedTemplates.map((t) => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-gray-400">
+                    Se o cliente não te escreveu nas últimas 24h, o WhatsApp só permite mensagem via template aprovado.
+                    {approvedTemplates.length === 0 && (
+                      <> Nenhum template aprovado ainda — crie em <strong>Configurações → Templates de Mensagem</strong>.</>
+                    )}
+                  </p>
+                </div>
+              )}
 
               {error && (
                 <div className="rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3 text-xs text-red-700 dark:text-red-400 whitespace-pre-wrap">
