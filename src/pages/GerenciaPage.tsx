@@ -637,32 +637,21 @@ function TaskModal({ task, teamMembers, jobs, stages, processes, onSave, onClose
 // ── Main Page ──────────────────────────────────────────────────────────────────
 
 export default function GerenciaPage() {
-  const [tasks, setTasks] = useState<Task[]>([]);
   const [jobs, setJobs] = useState<JobWithProduction[]>([]);
   const [stages, setStages] = useState<ProductionStageV2[]>([]);
   const [processes, setProcesses] = useState<ProductionProcess[]>([]);
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [taskFilter, setTaskFilter] = useState<string>("all");
-  const [taskModal, setTaskModal] = useState<Partial<Task> | null | false>(false);
-  const [viewTask, setViewTask] = useState<Task | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
 
   const fetchAll = async () => {
     try {
-      const [tasksRes, jobsRes, stagesRes, processesRes, membersRes] = await Promise.all([
-        authFetch("/api/tasks"),
+      const [jobsRes, stagesRes, processesRes] = await Promise.all([
         authFetch("/api/jobs"),
         authFetch("/api/production/stages-v2").catch(() => null),
         authFetch("/api/production/processes").catch(() => null),
-        authFetch("/api/team-members").catch(() => null),
       ]);
-      if (tasksRes.ok) setTasks(await tasksRes.json());
       if (jobsRes.ok) setJobs(await jobsRes.json());
       if (stagesRes?.ok) setStages(await stagesRes.json());
       if (processesRes?.ok) setProcesses(await processesRes.json());
-      if (membersRes?.ok) setTeamMembers(await membersRes.json());
     } finally {
       setLoading(false);
     }
@@ -716,72 +705,12 @@ export default function GerenciaPage() {
 
   const noStageJobs = useMemo(() => activeJobs.filter((j) => !j.production_stage), [activeJobs]);
 
-  // ── Task logic ─────────────────────────────────────────────────────────────
+  const totalDelayed = useMemo(
+    () => stageStats.reduce((sum, item) => sum + item.delayed, 0),
+    [stageStats]
+  );
 
-  const filteredTasks = useMemo(() => {
-    let list = [...tasks];
-    if (taskFilter === "pending") list = list.filter((t) => !t.completed_at);
-    else if (taskFilter === "completed") list = list.filter((t) => !!t.completed_at);
-    else if (taskFilter !== "all") list = list.filter((t) => t.assignee_id === taskFilter);
-    const order: Record<Urgency, number> = { overdue: 0, warning: 1, ok: 2, completed: 3 };
-    return list.sort((a, b) => order[getUrgency(a)] - order[getUrgency(b)]);
-  }, [tasks, taskFilter]);
-
-  const taskCounts = useMemo(() => {
-    const pending = tasks.filter((t) => !t.completed_at).length;
-    const overdue = tasks.filter((t) => getUrgency(t) === "overdue").length;
-    const completed = tasks.filter((t) => !!t.completed_at).length;
-    return { pending, overdue, completed };
-  }, [tasks]);
-
-  const handleSaveTask = async (data: Partial<Task>) => {
-    setSaving(true);
-    try {
-      if (data.id) {
-        await authFetch(`/api/tasks/${data.id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(data),
-        });
-        setTasks((prev) => prev.map((t) => (t.id === data.id ? { ...t, ...data } as Task : t)));
-      } else {
-        const res = await authFetch("/api/tasks", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(data),
-        });
-        const created = await res.json();
-        setTasks((prev) => [...prev, created]);
-      }
-      setTaskModal(false);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleToggleComplete = async (task: Task) => {
-    const completed = !task.completed_at;
-    const completedAt = completed ? new Date().toISOString() : null;
-    setTasks((prev) =>
-      prev.map((t) => (t.id === task.id ? { ...t, completed_at: completedAt } : t))
-    );
-    await authFetch(`/api/tasks/${task.id}/complete`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ completed }),
-    });
-  };
-
-  const handleDeleteTask = async (id: string) => {
-    setTasks((prev) => prev.filter((t) => t.id !== id));
-    await authFetch(`/api/tasks/${id}`, { method: "DELETE" });
-    setConfirmDelete(null);
-  };
-
-  const memberById = (id?: string | null) => teamMembers.find((m) => m.id === id);
-  const jobById = (id?: number | null) => jobs.find((j) => j.id === id);
-  const stageById = (id?: string | null) => stages.find((s) => s.id === id);
-  const processById = (id?: string | null) => processes.find((p) => p.id === id);
+  const jobsInProduction = activeJobs.length - noStageJobs.length;
 
   if (loading) {
     return (
@@ -802,25 +731,25 @@ export default function GerenciaPage() {
               Gerência de Produção
             </h2>
             <p className="text-gray-500 dark:text-gray-400 text-sm mt-0.5">
-              Acompanhe o desempenho e gerencie as tarefas da equipe.
+              Acompanhe desempenho, gargalos e metas de cada etapa.
             </p>
           </div>
 
           {/* Summary pills */}
           <div className="flex items-center gap-2 flex-wrap justify-end">
-            {taskCounts.overdue > 0 && (
+            {totalDelayed > 0 && (
               <span className="flex items-center gap-1.5 px-3 py-1.5 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 text-xs font-bold rounded-full animate-pulse">
                 <AlertTriangle size={12} />
-                {taskCounts.overdue} atrasada{taskCounts.overdue !== 1 ? "s" : ""}
+                {totalDelayed} atrasado{totalDelayed !== 1 ? "s" : ""}
               </span>
             )}
             <span className="flex items-center gap-1.5 px-3 py-1.5 bg-gold-50 dark:bg-gold-900/30 text-gold-600 dark:text-gold-400 text-xs font-semibold rounded-full">
               <Clock size={12} />
-              {taskCounts.pending} pendente{taskCounts.pending !== 1 ? "s" : ""}
+              {jobsInProduction} em produção
             </span>
             <span className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 text-xs font-semibold rounded-full">
               <Check size={12} />
-              {taskCounts.completed} concluída{taskCounts.completed !== 1 ? "s" : ""}
+              {activeJobs.length} trabalho{activeJobs.length !== 1 ? "s" : ""} ativo{activeJobs.length !== 1 ? "s" : ""}
             </span>
           </div>
         </div>
@@ -974,153 +903,7 @@ export default function GerenciaPage() {
             </div>
           )}
         </section>
-
-        {/* ── Section 2: Tasks ───────────────────────────────────────── */}
-        <section className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider flex items-center gap-2">
-              <CheckCircle2 size={15} className="text-gold-400" />
-              Tarefas da equipe
-            </h3>
-            <button
-              onClick={() => setTaskModal({})}
-              className="flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
-            >
-              <Plus size={15} />
-              Nova tarefa
-            </button>
-          </div>
-
-          {/* Filter tabs */}
-          <div className="flex gap-1.5 flex-wrap">
-            {[
-              { id: "all", label: `Todas (${tasks.length})` },
-              { id: "pending", label: `Pendentes (${taskCounts.pending})` },
-              { id: "completed", label: `Concluídas (${taskCounts.completed})` },
-              ...teamMembers.map((m) => ({
-                id: m.id,
-                label: m.name.split(" ")[0],
-              })),
-            ].map((f) => (
-              <button
-                key={f.id}
-                onClick={() => setTaskFilter(f.id)}
-                className={cn(
-                  "px-3 py-1.5 rounded-lg text-xs font-semibold transition-all",
-                  taskFilter === f.id
-                    ? "bg-gold-600 text-white shadow-sm"
-                    : "bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"
-                )}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Task list */}
-          <div className="space-y-2">
-            {filteredTasks.length === 0 ? (
-              <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-12 text-center">
-                <CheckCircle2 size={40} className="text-gray-200 dark:text-gray-700 mx-auto mb-3" />
-                <p className="text-gray-400 dark:text-gray-500 text-sm">
-                  {taskFilter === "completed"
-                    ? "Nenhuma tarefa concluída ainda."
-                    : "Nenhuma tarefa encontrada."}
-                </p>
-                {taskFilter === "all" && (
-                  <button
-                    onClick={() => setTaskModal({})}
-                    className="mt-4 px-5 py-2 bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold rounded-xl transition-colors"
-                  >
-                    Criar primeira tarefa
-                  </button>
-                )}
-              </div>
-            ) : (
-              filteredTasks.map((task) => {
-                const urgency = getUrgency(task);
-                return (
-                  <React.Fragment key={task.id}>
-                    <TaskRow
-                      task={task}
-                      urgency={urgency}
-                      member={memberById(task.assignee_id)}
-                      linkedJob={jobById(task.job_id)}
-                      onToggleComplete={() => handleToggleComplete(task)}
-                      onEdit={() => setTaskModal(task)}
-                      onDelete={() => setConfirmDelete({ id: task.id, title: task.title })}
-                      onView={() => setViewTask(task)}
-                    />
-                  </React.Fragment>
-                );
-              })
-            )}
-          </div>
-
-          {/* Legend */}
-          {tasks.length > 0 && (
-            <div className="flex items-center gap-5 text-xs text-gray-400 dark:text-gray-500 pt-1 flex-wrap">
-              <span className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-gold-400" />
-                Em dia
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
-                Mais da metade do prazo
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
-                Prazo estourado
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
-                Concluída
-              </span>
-            </div>
-          )}
-        </section>
       </div>
-
-      {/* Task Detail Drawer */}
-      {viewTask && (
-        <TaskDetailDrawer
-          task={viewTask}
-          urgency={getUrgency(viewTask)}
-          member={memberById(viewTask.assignee_id)}
-          linkedJob={jobById(viewTask.job_id)}
-          linkedStage={stageById(viewTask.stage_id)}
-          linkedProcess={processById(stageById(viewTask.stage_id)?.process_id)}
-          onClose={() => setViewTask(null)}
-          onEdit={() => { setViewTask(null); setTaskModal(viewTask); }}
-          onDelete={() => { setViewTask(null); setConfirmDelete({ id: viewTask.id, title: viewTask.title }); }}
-          onToggleComplete={() => { handleToggleComplete(viewTask); setViewTask(prev => prev ? { ...prev, completed_at: prev.completed_at ? null : new Date().toISOString() } : null); }}
-        />
-      )}
-
-      {/* Task Modal */}
-      {taskModal !== false && (
-        <TaskModal
-          task={taskModal}
-          teamMembers={teamMembers}
-          jobs={jobs}
-          stages={stages}
-          processes={processes}
-          onSave={handleSaveTask}
-          onClose={() => setTaskModal(false)}
-          saving={saving}
-        />
-      )}
-
-      {/* Confirm delete */}
-      <ConfirmModal
-        open={!!confirmDelete}
-        title="Excluir tarefa"
-        message={`Excluir "${confirmDelete?.title}"? Esta ação não pode ser desfeita.`}
-        confirmText="Excluir"
-        variant="danger"
-        onConfirm={() => confirmDelete && handleDeleteTask(confirmDelete.id)}
-        onCancel={() => setConfirmDelete(null)}
-      />
     </>
   );
 }

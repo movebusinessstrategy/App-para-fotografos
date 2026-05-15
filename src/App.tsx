@@ -25,6 +25,7 @@ const AdminPage = lazy(() => import("./pages/AdminPage"));
 const PrivacyPolicyPage = lazy(() => import("./pages/PrivacyPolicyPage"));
 const TermsOfServicePage = lazy(() => import("./pages/TermsOfServicePage"));
 const CatalogoPage = lazy(() => import("./pages/CatalogoPage"));
+const TasksPage = lazy(() => import("./pages/TasksPage"));
 
 export default function App() {
   return (
@@ -72,6 +73,7 @@ export default function App() {
                 <Route index element={<DashboardPage />} />
                 <Route path="clients" element={<ClientsPage />} />
                 <Route path="jobs" element={<JobsPage />} />
+                <Route path="tarefas" element={<TasksPage />} />
                 <Route path="vendas" element={<VendasPage />} />
                 <Route path="calendar" element={<CalendarPage />} />
                 <Route path="settings" element={<SettingsPage />} />
