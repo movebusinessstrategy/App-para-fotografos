@@ -7173,17 +7173,120 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return nums.length ? Math.max(...nums) : 0;
   };
 
-  // GET — lista os templates do usuário (do cache local)
+  const normalizeMetaTemplateStatus = (status: unknown): string => {
+    const value = String(status || 'PENDING').trim().toUpperCase();
+    return value || 'PENDING';
+  };
+
+  const parseMetaTemplate = (t: any, userId: string) => {
+    const comps = Array.isArray(t.components) ? t.components : [];
+    const bodyComp = comps.find((c: any) => String(c?.type || '').toUpperCase() === 'BODY');
+    const headerComp = comps.find((c: any) => String(c?.type || '').toUpperCase() === 'HEADER');
+    const footerComp = comps.find((c: any) => String(c?.type || '').toUpperCase() === 'FOOTER');
+    const buttonsComp = comps.find((c: any) => String(c?.type || '').toUpperCase() === 'BUTTONS');
+    const rawExamples = bodyComp?.example?.body_text;
+    const exampleValues = Array.isArray(rawExamples?.[0])
+      ? rawExamples[0].map(String)
+      : Array.isArray(rawExamples)
+        ? rawExamples.map(String)
+        : [];
+    const buttons = (buttonsComp?.buttons || []).map((b: any) => {
+      const out: any = { type: String(b.type || '').toUpperCase(), text: b.text || '' };
+      if (out.type === 'URL') out.url = b.url || '';
+      if (out.type === 'PHONE_NUMBER') out.phone_number = b.phone_number || '';
+      return out;
+    });
+
+    return {
+      user_id: userId,
+      meta_template_id: t.id || null,
+      name: String(t.name || ''),
+      status: normalizeMetaTemplateStatus(t.status),
+      category: String(t.category || 'UTILITY').toUpperCase(),
+      language: String(t.language || 'pt_BR'),
+      body_text: bodyComp?.text || '',
+      example_values: exampleValues,
+      header_text: headerComp?.format === 'TEXT' ? (headerComp.text || null) : null,
+      footer_text: footerComp?.text || null,
+      buttons,
+      rejection_reason: t.rejected_reason || t.rejection_reason || null,
+      updated_at: new Date().toISOString(),
+    };
+  };
+
+  const fetchMetaWhatsappTemplates = async (wabaId: string, accessToken: string): Promise<any[]> => {
+    const params = new URLSearchParams({
+      fields: 'id,name,status,category,language,components,rejected_reason',
+      limit: '200',
+    });
+    let url = `https://graph.facebook.com/v21.0/${wabaId}/message_templates?${params.toString()}`;
+    const templates: any[] = [];
+
+    for (let page = 0; url && page < 20; page++) {
+      const metaRes = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+      const metaData = await metaRes.json();
+      if (!metaRes.ok || metaData.error) {
+        throw new Error(metaData?.error?.message || 'Erro ao consultar templates no Meta');
+      }
+
+      if (Array.isArray(metaData.data)) templates.push(...metaData.data);
+      url = metaData.paging?.next || '';
+    }
+
+    return templates;
+  };
+
+  const syncWhatsappTemplatesFromMeta = async (
+    supabase: SupabaseClient,
+    userId: string,
+    acc: { waba_id: string; access_token: string },
+  ) => {
+    const metaTemplates = await fetchMetaWhatsappTemplates(acc.waba_id, acc.access_token);
+    const rows = metaTemplates
+      .map((t) => parseMetaTemplate(t, userId))
+      .filter((t) => t.name && t.body_text);
+
+    if (rows.length === 0) {
+      return { metaTemplates, rows: [] as any[] };
+    }
+
+    const { data, error } = await supabase
+      .from('whatsapp_message_templates')
+      .upsert(rows, { onConflict: 'user_id,name' })
+      .select('*');
+
+    if (error) throw error;
+
+    return { metaTemplates, rows: data || [] };
+  };
+
+  // GET — lista os templates diretamente sincronizados com o Meta.
   app.get('/api/meta/whatsapp/templates', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { data, error } = await supabase
-      .from('whatsapp_message_templates')
-      .select('*')
+
+    const { data: acc } = await supabase
+      .from('whatsapp_business_accounts')
+      .select('waba_id, access_token')
       .eq('user_id', userId)
-      .order('created_at', { ascending: false });
-    if (error) return res.status(500).json({ error: error.message });
-    res.json(data || []);
+      .maybeSingle();
+
+    if (!acc?.waba_id || !acc?.access_token) {
+      return res.json([]);
+    }
+
+    try {
+      const { rows } = await syncWhatsappTemplatesFromMeta(supabase, userId, acc);
+      const sortedRows = [...rows].sort((a: any, b: any) => {
+        const aTime = new Date(a.created_at || a.updated_at || 0).getTime();
+        const bTime = new Date(b.created_at || b.updated_at || 0).getTime();
+        return bTime - aTime;
+      });
+      res.json(sortedRows);
+    } catch (err: any) {
+      console.error('[Meta] listar templates error:', err);
+      res.status(500).json({ error: err.message || 'Erro ao consultar templates no Meta' });
+    }
   });
 
   // POST — cria um template no Meta e salva no cache como PENDING
@@ -7284,7 +7387,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           header_text: headerText || null,
           footer_text: footerText || null,
           buttons,
-          status: (metaData.status || 'PENDING').toUpperCase(),
+          status: normalizeMetaTemplateStatus(metaData.status),
         })
         .select()
         .single();
@@ -7296,7 +7399,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
   });
 
-  // POST /sync — consulta o Meta e atualiza status (PENDING → APPROVED/REJECTED)
+  // POST /sync — consulta o Meta e atualiza/importa o cache local.
   app.post('/api/meta/whatsapp/templates/sync', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
@@ -7311,46 +7414,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
 
     try {
-      const metaRes = await fetch(
-        `https://graph.facebook.com/v21.0/${acc.waba_id}/message_templates?fields=id,name,status,category,language,components,rejected_reason&limit=200&access_token=${acc.access_token}`
-      );
-      const metaData = await metaRes.json();
-      if (!metaRes.ok || metaData.error) {
-        return res.status(400).json({ error: metaData?.error?.message || 'Erro ao consultar templates no Meta' });
-      }
-
-      const metaTemplates: any[] = metaData.data || [];
-      let updated = 0;
-      for (const t of metaTemplates) {
-        const comps = t.components || [];
-        const bodyComp = comps.find((c: any) => c.type === 'BODY');
-        const headerComp = comps.find((c: any) => c.type === 'HEADER');
-        const footerComp = comps.find((c: any) => c.type === 'FOOTER');
-        const buttonsComp = comps.find((c: any) => c.type === 'BUTTONS');
-        const buttons = (buttonsComp?.buttons || []).map((b: any) => {
-          const out: any = { type: String(b.type || '').toUpperCase(), text: b.text || '' };
-          if (out.type === 'URL') out.url = b.url || '';
-          if (out.type === 'PHONE_NUMBER') out.phone_number = b.phone_number || '';
-          return out;
-        });
-        const { error } = await supabase
-          .from('whatsapp_message_templates')
-          .update({
-            meta_template_id: t.id,
-            status: (t.status || 'PENDING').toUpperCase(),
-            category: (t.category || 'UTILITY').toUpperCase(),
-            rejection_reason: t.rejected_reason || null,
-            body_text: bodyComp?.text || undefined,
-            header_text: headerComp?.format === 'TEXT' ? (headerComp.text || null) : null,
-            footer_text: footerComp?.text || null,
-            buttons,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('user_id', userId)
-          .eq('name', t.name);
-        if (!error) updated++;
-      }
-      res.json({ synced: metaTemplates.length, updated });
+      const { metaTemplates, rows } = await syncWhatsappTemplatesFromMeta(supabase, userId, acc);
+      res.json({ synced: metaTemplates.length, updated: rows.length });
     } catch (err: any) {
       console.error('[Meta] sync templates error:', err);
       res.status(500).json({ error: err.message });
