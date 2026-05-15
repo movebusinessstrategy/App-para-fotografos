@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from "react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { ArrowDownToLine, BarChart2, Camera, Edit2, LayoutGrid, List, Plus, Search, Settings, Tag, Trash2, X } from "lucide-react";
+import { ArrowDownToLine, BarChart2, Camera, Edit2, LayoutGrid, List, ListChecks, Plus, Search, Settings, Tag, Trash2, X } from "lucide-react";
 import GerenciaPage from "./GerenciaPage";
+import TasksPage from "./TasksPage";
 import { SearchableSelect } from "../components/ui/SearchableSelect";
 
 import { ConfirmModal } from "../components/ui/ConfirmModal";
@@ -44,7 +45,7 @@ export default function JobsPage() {
   // Mostra spinner só no primeiro load (sem dado em cache ainda)
   const loading = jobsLoading && !jobsData;
 
-  const [activeTab, setActiveTab] = useState<"funil" | "lista" | "gerencia">("funil");
+  const [activeTab, setActiveTab] = useState<"funil" | "lista" | "gerencia" | "tarefas">("funil");
   const [customizerOpen, setCustomizerOpen] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editingJob, setEditingJob] = useState<Job | null>(null);
@@ -236,9 +237,21 @@ export default function JobsPage() {
                 <BarChart2 size={15} />
                 Gerência
               </button>
+              <button
+                onClick={() => setActiveTab("tarefas")}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
+                  activeTab === "tarefas"
+                    ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
+                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                )}
+              >
+                <ListChecks size={15} />
+                Tarefas
+              </button>
             </div>
 
-            {activeTab !== "gerencia" && (
+            {activeTab !== "gerencia" && activeTab !== "tarefas" && (
               <button
                 onClick={() => { setEditingJob(null); setShowModal(true); }}
                 className="flex items-center gap-2 px-4 py-2 bg-gold-600 dark:bg-gold-500 text-white rounded-xl font-semibold hover:bg-gold-700 dark:hover:bg-gold-600 shadow-md shadow-gold-100 dark:shadow-gold-500/20 transition-all text-sm"
@@ -250,8 +263,8 @@ export default function JobsPage() {
           </div>
         </div>
 
-        {/* Filters — hidden on Gerência tab */}
-        {activeTab !== "gerencia" && <div className="flex flex-wrap items-center gap-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-3 shadow-sm">
+        {/* Filters — only for Kanban/List job views */}
+        {activeTab !== "gerencia" && activeTab !== "tarefas" && <div className="flex flex-wrap items-center gap-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-3 shadow-sm">
           {/* Search */}
           <div className="relative flex-1 min-w-[200px]">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 pointer-events-none" />
@@ -295,8 +308,11 @@ export default function JobsPage() {
         {/* Gerência tab */}
         {activeTab === "gerencia" && <GerenciaPage />}
 
+        {/* Tarefas tab */}
+        {activeTab === "tarefas" && <TasksPage />}
+
         {/* Banner: jobs fora da produção */}
-        {activeTab !== "gerencia" && processes.length > 0 && unstagedJobs.length > 0 && (
+        {activeTab !== "gerencia" && activeTab !== "tarefas" && processes.length > 0 && unstagedJobs.length > 0 && (
           <div className="flex items-center justify-between gap-4 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded-xl px-4 py-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-lg bg-amber-100 dark:bg-amber-500/20 flex items-center justify-center flex-shrink-0">
@@ -322,7 +338,7 @@ export default function JobsPage() {
         )}
 
         {/* Content — funil / lista */}
-        {activeTab !== "gerencia" && (activeTab === "funil" ? (
+        {activeTab !== "gerencia" && activeTab !== "tarefas" && (activeTab === "funil" ? (
           processes.length > 0 ? (
             <ProductionBoard
               jobs={filteredJobs}
