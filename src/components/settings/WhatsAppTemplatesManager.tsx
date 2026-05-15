@@ -99,8 +99,19 @@ function StatusBadge({ status }: { status: string }) {
     APPROVED: { label: "Aprovado", cls: "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300", icon: <CheckCircle2 size={11} /> },
     PENDING: { label: "Pendente", cls: "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300", icon: <Clock size={11} /> },
     REJECTED: { label: "Rejeitado", cls: "bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300", icon: <AlertCircle size={11} /> },
+    PAUSED: { label: "Pausado", cls: "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300", icon: <Clock size={11} /> },
+    DISABLED: { label: "Desativado", cls: "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300", icon: <AlertCircle size={11} /> },
+    IN_APPEAL: { label: "Em recurso", cls: "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300", icon: <Info size={11} /> },
+    PENDING_DELETION: { label: "Exclusão pendente", cls: "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300", icon: <Trash2 size={11} /> },
+    DELETED: { label: "Excluído", cls: "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300", icon: <Trash2 size={11} /> },
+    LIMIT_EXCEEDED: { label: "Limite excedido", cls: "bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300", icon: <AlertCircle size={11} /> },
   };
-  const it = map[status] || map.PENDING;
+  const normalized = String(status || "PENDING").trim().toUpperCase();
+  const it = map[normalized] || {
+    label: normalized.replace(/_/g, " "),
+    cls: "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300",
+    icon: <Info size={11} />,
+  };
   return (
     <span className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold", it.cls)}>
       {it.icon}
@@ -114,7 +125,7 @@ interface Props {
 }
 
 export function WhatsAppTemplatesManager({ onNotify }: Props) {
-  const { data, isLoading, mutate } = useApi<WhatsAppMessageTemplate[]>("/api/meta/whatsapp/templates");
+  const { data, error, isLoading, mutate } = useApi<WhatsAppMessageTemplate[]>("/api/meta/whatsapp/templates");
   const templates = useMemo(() => Array.isArray(data) ? data : [], [data]);
 
   const [showForm, setShowForm] = useState(false);
@@ -131,7 +142,7 @@ export function WhatsAppTemplatesManager({ onNotify }: Props) {
         onNotify("error", json.error || "Erro ao sincronizar");
         return;
       }
-      onNotify("success", `${json.updated} template(s) atualizado(s).`);
+      onNotify("success", `${json.updated} template(s) sincronizado(s) com o Meta.`);
       mutate();
     } finally {
       setSyncing(false);
@@ -195,7 +206,14 @@ export function WhatsAppTemplatesManager({ onNotify }: Props) {
       </div>
 
       {/* Lista */}
-      {isLoading && !data ? (
+      {error ? (
+        <div className="flex gap-2 p-3 rounded-xl bg-rose-50 dark:bg-rose-500/10 border border-rose-100 dark:border-rose-500/20">
+          <AlertCircle size={15} className="text-rose-500 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-rose-700 dark:text-rose-300">
+            Não consegui consultar os templates no Meta agora. Reconecte o WhatsApp Business ou tente sincronizar novamente.
+          </p>
+        </div>
+      ) : isLoading && !data ? (
         <div className="flex items-center justify-center py-10">
           <Loader2 size={20} className="animate-spin text-gray-400" />
         </div>

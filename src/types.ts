@@ -442,7 +442,17 @@ export interface ContractTemplate {
   updated_at?: string;
 }
 
-export type WhatsAppTemplateStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+export type WhatsAppTemplateStatus =
+  | 'PENDING'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'PAUSED'
+  | 'DISABLED'
+  | 'IN_APPEAL'
+  | 'PENDING_DELETION'
+  | 'DELETED'
+  | 'LIMIT_EXCEEDED'
+  | (string & {});
 export type WhatsAppTemplateCategory = 'UTILITY' | 'MARKETING' | 'AUTHENTICATION';
 export type WhatsAppButtonType = 'QUICK_REPLY' | 'URL' | 'PHONE_NUMBER';
 
@@ -470,4 +480,3 @@ export interface WhatsAppMessageTemplate {
   created_at: string;
   updated_at?: string;
 }
-
