@@ -49,7 +49,7 @@ export default function PlatformAdminLayout() {
 
         <div className="p-3 border-t border-gray-100 dark:border-gray-800">
           <Link
-            to="/"
+            to="/dashboard"
             className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white px-3 py-2"
           >
             <ArrowLeft size={14} /> Voltar ao app

@@ -14,6 +14,6 @@ export default function PlatformAdminRoute({ children }: { children: ReactNode }
     );
   }
   if (!user) return <Navigate to="/login" replace />;
-  if (!isPlatformAdmin) return <Navigate to="/" replace />;
+  if (!isPlatformAdmin) return <Navigate to="/dashboard" replace />;
   return <>{children}</>;
 }

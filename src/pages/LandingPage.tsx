@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import { motion, useReducedMotion } from "motion/react";
+import { useAuth } from "../contexts/AuthContext";
 import {
   Camera, Check, ChevronRight, Workflow, MessageCircle, Calendar, FileSignature,
   Users, ArrowRight, Zap, Shield, X, AlertTriangle, Clock,
@@ -61,6 +62,9 @@ const PLANS: Plan[] = [
 ];
 
 export default function LandingPage() {
+  const { user, loading } = useAuth();
+  // Usuários já logados pulam a landing — vão direto pro app
+  if (!loading && user) return <Navigate to="/dashboard" replace />;
 
   // Promoção termina em 7 dias (renovável; serve só pra demonstrar escassez)
   const promoEndsAt = React.useMemo(() => Date.now() + 7 * 24 * 60 * 60 * 1000, []);

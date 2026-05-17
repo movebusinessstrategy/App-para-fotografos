@@ -81,7 +81,8 @@ export default function App() {
           >
             <Routes>
               {/* Rotas públicas */}
-              <Route path="/landing" element={<LandingPage />} />
+              <Route path="/" element={<LandingPage />} />
+              <Route path="/landing" element={<Navigate to="/" replace />} />
               <Route path="/login" element={<Login />} />
               <Route path="/cadastro" element={<Cadastro />} />
               <Route path="/recuperar-senha" element={<RecuperarSenha />} />
@@ -96,7 +97,7 @@ export default function App() {
                   </ProtectedRoute>
                 }
               >
-                <Route index element={<DashboardPage />} />
+                <Route path="dashboard" element={<DashboardPage />} />
                 <Route path="clients" element={<ClientsPage />} />
                 <Route path="jobs" element={<JobsPage />} />
                 <Route path="tarefas" element={<TasksPage />} />

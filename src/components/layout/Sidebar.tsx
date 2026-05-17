@@ -26,7 +26,7 @@ import { cn } from "../../utils/cn";
 import { useAuth } from "../../contexts/AuthContext";
 
 const ALL_NAV_ITEMS = [
-  { to: "/",              label: "Dashboard",       icon: LayoutDashboard, end: true,  module: "dashboard" },
+  { to: "/dashboard",     label: "Dashboard",       icon: LayoutDashboard, end: true,  module: "dashboard" },
   { to: "/clients",       label: "Clientes",         icon: Users,           module: "clients" },
   { to: "/jobs",          label: "Produção",         icon: Camera,          module: "jobs" },
   { to: "/tarefas",       label: "Tarefas",          icon: ListChecks,      module: "jobs" },
