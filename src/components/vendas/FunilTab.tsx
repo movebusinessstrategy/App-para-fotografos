@@ -523,8 +523,8 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
       <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
         <div className="h-full flex flex-col">
           {sellers.length > 0 && (
-            <div className="flex items-center gap-2 px-2 pb-3 overflow-x-auto">
-              <span className="text-xs font-medium text-gray-500 dark:text-gray-400 flex-shrink-0 pl-1">Vendedor:</span>
+            <div className="flex items-center gap-2 px-3 sm:px-2 pt-2 pb-2 sm:pb-3 overflow-x-auto">
+              <span className="hidden sm:inline text-xs font-medium text-gray-500 dark:text-gray-400 flex-shrink-0 pl-1">Vendedor:</span>
               <button
                 onClick={() => setSellerFilter('all')}
                 className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
@@ -561,8 +561,8 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
               </button>
             </div>
           )}
-          <div ref={boardRef} className="flex-1 overflow-x-auto overflow-y-hidden pb-4">
-            <div className="flex gap-4 h-full px-1" style={{ minWidth: "max-content" }}>
+          <div ref={boardRef} className="flex-1 overflow-x-auto overflow-y-hidden pb-4 snap-x snap-mandatory sm:snap-none">
+            <div className="flex gap-2 sm:gap-4 h-full px-2 sm:px-1" style={{ minWidth: "max-content" }}>
               {activeStages.map((stage) => (
                 <React.Fragment key={stage.id}>
                   <StageColumn
@@ -631,7 +631,7 @@ function StageColumn({ stage, deals, clientMap, onDealClick, onFollowUp, labelMa
   return (
     <div
       ref={setNodeRef}
-      className={`flex flex-col flex-shrink-0 w-[280px] min-w-[280px] h-full rounded-lg border transition-colors ${
+      className={`flex flex-col flex-shrink-0 snap-center w-[85vw] sm:w-[280px] max-w-[320px] sm:min-w-[280px] h-full rounded-lg border transition-colors ${
         isOver
           ? "border-gray-400 dark:border-gray-500 bg-gray-50 dark:bg-gray-800/80"
           : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900"
