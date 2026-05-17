@@ -33,7 +33,7 @@ const Login = () => {
       }
 
       if (data.user) {
-        navigate("/");
+        navigate("/dashboard");
       }
     } catch (err) {
       setError("Ocorreu um erro inesperado. Tente novamente.");
