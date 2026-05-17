@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Plus, Search, X, Trash2, Package, Tag, Layers } from "lucide-react";
 import { PipelineStage, Client, DealPriority } from "../../types";
 import { authFetch } from "../../utils/authFetch";
@@ -6,6 +6,8 @@ import { useApi } from "../../utils/useApi";
 import { SearchableSelect } from "../ui/SearchableSelect";
 import { cn } from "../../utils/cn";
 import { normalizeText } from "../../utils/normalizeText";
+import { useSellers } from "../../hooks/useSellers";
+import { SellerPicker } from "./SellerPicker";
 
 interface NewDealModalProps {
   open: boolean;
@@ -44,6 +46,7 @@ const CATALOG_ICONS: Record<CatalogType, React.ReactNode> = {
 };
 
 export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewDealModalProps) {
+  const { sellers, currentMemberId } = useSellers();
   const [form, setForm] = useState({
     title: "",
     client_id: "",
@@ -52,9 +55,17 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
     priority: "medium" as DealPriority,
     stage: stages[0]?.id || "",
     notes: "",
+    assigned_to: null as string | null,
   });
   const [items, setItems] = useState<PendingItem[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // Quando o modal abre e ainda não tem responsável, usa o usuário logado como default
+  useEffect(() => {
+    if (open && !form.assigned_to && currentMemberId) {
+      setForm(f => ({ ...f, assigned_to: currentMemberId }));
+    }
+  }, [open, currentMemberId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Catálogos via SWR — cache compartilhado entre componentes
   const { data: produtosData } = useApi<any[]>(open ? "/api/produtos" : null);
@@ -142,6 +153,7 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
         priority: "medium",
         stage: stages[0]?.id || "",
         notes: "",
+        assigned_to: currentMemberId || null,
       });
       setItems([]);
       onCreated();
@@ -193,6 +205,17 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
               emptyMessage="Nenhum cliente encontrado"
               triggerClassName="py-2"
               options={clientOptions}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Vendedor responsável
+            </label>
+            <SellerPicker
+              sellers={sellers}
+              value={form.assigned_to}
+              onChange={(id) => setForm({ ...form, assigned_to: id })}
             />
           </div>
 

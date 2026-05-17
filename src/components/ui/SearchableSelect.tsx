@@ -118,6 +118,7 @@ export function SearchableSelect({
         type="button"
         aria-haspopup="listbox"
         aria-expanded={open}
+        title={selected?.label}
         onClick={() => setOpen((prev) => !prev)}
         className={cn(
           "flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-1.5 text-sm transition-colors outline-none",
@@ -186,18 +187,19 @@ export function SearchableSelect({
                     role="option"
                     aria-selected={opt.value === value}
                     onClick={() => handleSelect(opt)}
+                    title={opt.label}
                     className={cn(
-                      "flex w-full items-center justify-between px-3 py-2 text-sm transition-colors text-left",
+                      "flex w-full items-start justify-between gap-2 px-3 py-2 text-sm transition-colors text-left",
                       opt.value === value
                         ? "bg-gold-50 dark:bg-gold-900/30 text-gold-700 dark:text-gold-300 font-semibold"
                         : "text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800"
                     )}
                   >
-                    <span className="truncate">{opt.label}</span>
+                    <span className="flex-1 whitespace-normal break-words leading-snug">{opt.label}</span>
                     {opt.value === value && (
                       <Check
                         size={13}
-                        className="flex-shrink-0 text-gold-600 dark:text-gold-400"
+                        className="flex-shrink-0 mt-0.5 text-gold-600 dark:text-gold-400"
                       />
                     )}
                   </button>

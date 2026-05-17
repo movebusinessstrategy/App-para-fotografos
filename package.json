@@ -19,6 +19,8 @@
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@hapi/boom": "^10.0.1",
     "@radix-ui/react-select": "^2.2.6",
+    "@sentry/node": "^8.43.0",
+    "@sentry/react": "^8.43.0",
     "@supabase/supabase-js": "^2.99.1",
     "@tailwindcss/vite": "^4.1.14",
     "@types/cors": "^2.8.19",

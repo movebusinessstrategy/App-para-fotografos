@@ -192,6 +192,7 @@ export interface Deal {
   catalog_name?: string | null;
   catalog_value?: number | null;
   items?: DealItem[];
+  assigned_to?: string | null;
 }
 
 export interface DealItem {

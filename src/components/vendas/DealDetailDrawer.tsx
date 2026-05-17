@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { format } from "date-fns";
 import {
   X, Trash2, CheckCircle, XCircle, User, Phone, Mail, Instagram,
-  Edit3, Link2, Trophy, Pencil, Search, Check, Package, Layers, Briefcase, ChevronDown, Plus, MessageCircle, Tag
+  Edit3, Link2, Trophy, Pencil, Search, Check, Package, Layers, Briefcase, ChevronDown, Plus, Tag
 } from "lucide-react";
 import { ConfirmModal } from "../ui/ConfirmModal";
 import { Deal, Client, PipelineStage, DealActivity, StageHistoryEntry, Produto, Servico, Combo, DealItem, PipelineLabel } from "../../types";
@@ -11,7 +11,8 @@ import { authFetch } from "../../utils/authFetch";
 import { useApi } from "../../utils/useApi";
 import { parseDate } from "../../utils/date";
 import { DealConversionModal } from "../pipeline/DealConversionModal";
-import { ChatView } from "./inbox/ChatView";
+import { useSellers } from "../../hooks/useSellers";
+import { SellerPicker } from "./SellerPicker";
 
 // Wrapper seguro: retorna o texto formatado, ou null se a data não for parseável.
 function safeFormat(value: string | null | undefined, pattern: string): string | null {
@@ -159,7 +160,6 @@ interface DealDetailDrawerProps {
   stages: PipelineStage[];
   onClose: () => void;
   onUpdate: (options?: { silent?: boolean }) => void | Promise<void>;
-  onOpenChat?: (phone: string, name: string) => void;
 }
 
 const PRIORITY_OPTIONS = [
@@ -185,7 +185,7 @@ const LABEL_COLORS = [
 ];
 
 export function DealDetailDrawer({
-  deal, client, clients = [], stages, onClose, onUpdate, onOpenChat,
+  deal, client, clients = [], stages, onClose, onUpdate,
 }: DealDetailDrawerProps) {
   const [activities, setActivities] = useState<DealActivity[]>([]);
   const [loadingActivities, setLoadingActivities] = useState(false);
@@ -196,7 +196,6 @@ export function DealDetailDrawer({
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historyError, setHistoryError] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<'info' | 'chat'>('chat');
   const [showConversionModal, setShowConversionModal] = useState(false);
   const [isEditingContact, setIsEditingContact] = useState(false);
   const [contactData, setContactData] = useState({
@@ -386,7 +385,6 @@ export function DealDetailDrawer({
       setEditingValue(false);
       setEditingDate(false);
       setEditingPriority(false);
-      setActiveTab(deal.contact_phone || undefined ? 'chat' : 'info');
       setEditingTitleVal(deal.title || "");
       setEditingTitle(false);
       setDealLabels(Array.isArray(deal.labels) ? deal.labels : []);
@@ -798,43 +796,9 @@ export function DealDetailDrawer({
               )}
             </div>
 
-            {/* Abas */}
-            <div className="flex gap-1">
-              <button
-                onClick={() => setActiveTab('chat')}
-                disabled={!chatPhone}
-                className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                  activeTab === 'chat'
-                    ? 'border-green-500 text-green-600 dark:text-green-400'
-                    : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
-                }`}
-                title={!chatPhone ? 'Nenhum telefone cadastrado' : undefined}
-              >
-                <MessageCircle size={14} /> Chat
-                {!chatPhone && <span className="text-[10px] text-gray-400">(sem telefone)</span>}
-              </button>
-              <button
-                onClick={() => setActiveTab('info')}
-                className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                  activeTab === 'info'
-                    ? 'border-violet-600 text-violet-600 dark:text-violet-400'
-                    : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
-                }`}
-              >
-                <User size={14} /> Informações
-              </button>
-            </div>
           </div>
 
-          {/* Aba Chat */}
-          {activeTab === 'chat' && chatPhone && (
-            <div className="flex-1 min-h-0" style={{ background: '#ECE5DD' }}>
-              <ChatView phone={chatPhone} contactName={chatName} showHeader={false} />
-            </div>
-          )}
-
-          {/* Aba Informações */}
-          {activeTab === 'info' && <div className="flex-1 overflow-y-auto p-4 space-y-6">
+          <div className="flex-1 overflow-y-auto p-4 space-y-6">
 
             {/* ── Info principal: Valor / Previsão / Prioridade ── */}
             <div className="grid grid-cols-3 gap-3">
@@ -949,6 +913,9 @@ export function DealDetailDrawer({
               </div>
             </div>
 
+            {/* ── Vendedor responsável ── */}
+            <AssigneeField deal={deal} onUpdate={updateDeal} />
+
             {/* ── Cliente / Contato ── */}
             <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-4 space-y-3">
               <div className="flex items-center justify-between">
@@ -989,14 +956,6 @@ export function DealDetailDrawer({
                     {linkedClient.phone && (
                       <p className="flex items-center gap-2">
                         <Phone size={12} /> {linkedClient.phone}
-                        {onOpenChat && (
-                          <button
-                            onClick={() => onOpenChat(linkedClient.phone!, linkedClient.name)}
-                            className="ml-auto flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/40 transition-colors"
-                          >
-                            <MessageCircle size={11} /> Chat
-                          </button>
-                        )}
                       </p>
                     )}
                     {linkedClient.email && <p className="flex items-center gap-2"><Mail size={12} /> {linkedClient.email}</p>}
@@ -1023,14 +982,6 @@ export function DealDetailDrawer({
                       {deal.contact_phone && (
                         <p className="text-gray-500 dark:text-gray-400 flex items-center gap-2">
                           <Phone size={12} /> {deal.contact_phone}
-                          {onOpenChat && (
-                            <button
-                              onClick={() => onOpenChat(deal.contact_phone!, deal.contact_name || deal.title)}
-                              className="ml-auto flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/40 transition-colors"
-                            >
-                              <MessageCircle size={11} /> Chat
-                            </button>
-                          )}
                         </p>
                       )}
                       {deal.contact_email && <p className="text-gray-500 dark:text-gray-400 flex items-center gap-2"><Mail size={12} /> {deal.contact_email}</p>}
@@ -1472,7 +1423,7 @@ export function DealDetailDrawer({
                 <Trash2 size={16} /> Excluir Negócio
               </button>
             </div>
-          </div>} {/* fim aba info */}
+          </div> {/* fim conteúdo */}
 
         </div> {/* fim modal */}
       </div> {/* fim overlay */}
@@ -1496,5 +1447,21 @@ export function DealDetailDrawer({
         onCancel={() => setConfirmModal(p => ({ ...p, open: false }))}
       />
     </>
+  );
+}
+
+function AssigneeField({ deal, onUpdate }: { deal: Deal; onUpdate: (data: Partial<Deal>) => Promise<void> }) {
+  const { sellers } = useSellers();
+  return (
+    <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-4 space-y-2">
+      <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase flex items-center gap-1">
+        <User size={12} /> Vendedor responsável
+      </label>
+      <SellerPicker
+        sellers={sellers}
+        value={deal.assigned_to || null}
+        onChange={(id) => onUpdate({ assigned_to: id })}
+      />
+    </div>
   );
 }

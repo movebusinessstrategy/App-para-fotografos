@@ -56,12 +56,16 @@ export function DateTimePicker({
     if (!triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
     const dropHeight = 420; // calendar is taller than select
-    const spaceBelow = window.innerHeight - rect.bottom;
-    const openUpward = spaceBelow < dropHeight && rect.top > dropHeight;
+    const gap = 12;
+    const spaceBelow = window.innerHeight - rect.bottom - gap;
+    const spaceAbove = rect.top - gap;
+    const openUpward = spaceBelow < dropHeight && spaceAbove > spaceBelow;
+    const availableHeight = Math.max(openUpward ? spaceAbove : spaceBelow, 280);
     setDropdownStyle({
       position: "fixed",
       left: rect.left,
       width: Math.max(rect.width, 288), // min 288px (w-72)
+      maxHeight: availableHeight,
       zIndex: 9999,
       ...(openUpward
         ? { bottom: window.innerHeight - rect.top + 4 }
@@ -171,7 +175,7 @@ export function DateTimePicker({
           <div
             ref={dropdownRef}
             style={dropdownStyle}
-            className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-2xl overflow-hidden"
+            className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-2xl overflow-y-auto"
           >
             {/* Month navigation */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 dark:border-gray-800">

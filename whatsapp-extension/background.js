@@ -44,18 +44,25 @@ async function apiFetch(path, options = {}) {
   const { token, apiBase } = await getAuth();
   if (!token) throw new Error('Não autenticado — configure o token no popup da extensão.');
 
-  const response = await fetch(`${apiBase}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...(options.headers || {}),
-    },
-  });
+  let response;
+  try {
+    response = await fetch(`${apiBase}${path}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        ...(options.headers || {}),
+      },
+    });
+  } catch (networkErr) {
+    // Erro de rede (CORS, host bloqueado, servidor fora do ar)
+    throw new Error(`Falha ao acessar ${apiBase}. Confira a URL no popup. Detalhe: ${networkErr.message}`);
+  }
 
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || `HTTP ${response.status}`);
+    const msg = body.error || `HTTP ${response.status}`;
+    throw new Error(`${msg} (em ${apiBase}${path})`);
   }
 
   return response.json();
@@ -73,7 +80,12 @@ async function handleMessage(message) {
   switch (message.type) {
     case 'OPEN_LOGIN_TAB': {
       const url = chrome.runtime.getURL('popup.html');
-      chrome.tabs.create({ url });
+      chrome.windows.create({
+        url,
+        type: 'popup',
+        width: 360,
+        height: 560,
+      });
       return { ok: true };
     }
     case 'GET_DEAL_BY_PHONE': {
@@ -88,6 +100,47 @@ async function handleMessage(message) {
     }
     case 'CREATE_DEAL': {
       return apiFetch('/api/deals/quick', {
+        method: 'POST',
+        body: JSON.stringify(message.data),
+      });
+    }
+    case 'UPDATE_DEAL': {
+      return apiFetch(`/api/deals/${message.dealId}`, {
+        method: 'PUT',
+        body: JSON.stringify(message.data),
+      });
+    }
+    case 'CONVERT_DEAL': {
+      return apiFetch(`/api/deals/${message.dealId}/convert`, {
+        method: 'POST',
+        body: JSON.stringify(message.data),
+      });
+    }
+    case 'LOST_DEAL': {
+      return apiFetch(`/api/deals/${message.dealId}/lost`, {
+        method: 'POST',
+        body: JSON.stringify(message.data),
+      });
+    }
+    case 'GET_TEAM_MEMBERS': {
+      return apiFetch('/api/team-members');
+    }
+    case 'GET_ME': {
+      return apiFetch('/api/me');
+    }
+    case 'GET_CLIENTS': {
+      return apiFetch('/api/clients');
+    }
+    case 'GET_CATALOG': {
+      const [produtos, servicos, combos] = await Promise.all([
+        apiFetch('/api/produtos'),
+        apiFetch('/api/servicos'),
+        apiFetch('/api/combos'),
+      ]);
+      return { produtos, servicos, combos };
+    }
+    case 'ADD_DEAL_ITEM': {
+      return apiFetch(`/api/deals/${message.dealId}/items`, {
         method: 'POST',
         body: JSON.stringify(message.data),
       });

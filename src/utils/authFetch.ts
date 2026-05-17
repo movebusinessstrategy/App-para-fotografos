@@ -4,20 +4,49 @@ import { supabase } from "../integrations/supabase/client";
 // serão prefixadas com essa URL. Em desenvolvimento e no Render fica vazio.
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string) || '';
 
+// Chaves usadas pelo painel ADM para impersonar. Lê do sessionStorage
+// para que feche a aba = sai da impersonação. Compartilhado com ImpersonationContext.
+// Membro tem prioridade sobre dono — só um header é enviado.
+export const IMPERSONATION_STORAGE_KEY        = 'platform_admin_impersonate_owner_id';
+export const IMPERSONATION_MEMBER_STORAGE_KEY = 'platform_admin_impersonate_member_id';
+
 async function buildHeaders(token?: string): Promise<HeadersInit> {
   const accessToken = token ?? (await supabase.auth.getSession()).data.session?.access_token ?? '';
-  return {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${accessToken}`,
   };
+  if (typeof window !== 'undefined') {
+    const memberId = sessionStorage.getItem(IMPERSONATION_MEMBER_STORAGE_KEY);
+    const ownerId  = sessionStorage.getItem(IMPERSONATION_STORAGE_KEY);
+    if (memberId)      headers['X-Impersonate-Member-Id'] = memberId;
+    else if (ownerId)  headers['X-Impersonate-Owner-Id']  = ownerId;
+  }
+  return headers;
 }
 
 // Mantido para compatibilidade
 export const getAuthHeaders = () => buildHeaders();
 
+// Dispara um evento global quando o backend recusa por motivo de billing
+// (402 = pagamento necessário, ou 403 com `limit_reached`).
+// O componente <BillingGate> no AppLayout escuta e mostra modal de upgrade.
+async function notifyBillingBlock(res: Response): Promise<void> {
+  if (res.status !== 402 && res.status !== 403) return;
+  try {
+    const clone = res.clone();
+    const data = await clone.json();
+    if (res.status === 402 || data?.limit_reached) {
+      window.dispatchEvent(new CustomEvent('billing:blocked', {
+        detail: { ...data, httpStatus: res.status },
+      }));
+    }
+  } catch { /* response sem JSON, ignora */ }
+}
+
 export const authFetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
   const headers = await buildHeaders();
-  const res = await fetch(`${API_BASE}${url}`, {
+  let res = await fetch(`${API_BASE}${url}`, {
     ...options,
     headers: { ...headers, ...(options.headers || {}) },
   });
@@ -26,14 +55,15 @@ export const authFetch = async (url: string, options: RequestInit = {}): Promise
   // Renova a sessão e tenta uma vez antes de desistir.
   if (res.status === 401) {
     const { data: { session: refreshed } } = await supabase.auth.refreshSession();
-    if (!refreshed?.access_token) return res; // sem sessão válida — retorna 401 original
-
-    const freshHeaders = await buildHeaders(refreshed.access_token);
-    return fetch(`${API_BASE}${url}`, {
-      ...options,
-      headers: { ...freshHeaders, ...(options.headers || {}) },
-    });
+    if (refreshed?.access_token) {
+      const freshHeaders = await buildHeaders(refreshed.access_token);
+      res = await fetch(`${API_BASE}${url}`, {
+        ...options,
+        headers: { ...freshHeaders, ...(options.headers || {}) },
+      });
+    }
   }
 
+  await notifyBillingBlock(res);
   return res;
 };

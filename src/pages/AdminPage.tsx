@@ -5,6 +5,7 @@ import {
 import { authFetch } from "../utils/authFetch";
 import { TeamMember } from "../types";
 import { ConfirmModal } from "../components/ui/ConfirmModal";
+import UsageBar from "../components/UsageBar";
 
 // ── Módulos disponíveis para controle de acesso ──────────────────────────────
 
@@ -159,13 +160,20 @@ function MemberModal({ member, onSave, onClose, saving }: MemberModalProps) {
 
 // ── Página principal ──────────────────────────────────────────────────────────
 
-export default function AdminPage() {
+interface AdminPageProps {
+  /** Trava na aba escolhida e esconde o seletor de abas */
+  lockedTab?: "members" | "permissions";
+  /** Esconde título "Administração" e botão "+ Novo membro" (quando renderizado dentro de outra página) */
+  embedded?: boolean;
+}
+
+export default function AdminPage({ lockedTab, embedded = false }: AdminPageProps = {}) {
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [inviting, setInviting] = useState<string | null>(null); // id do membro sendo convidado
   const [inviteStatus, setInviteStatus] = useState<{ id: string; ok: boolean; msg: string } | null>(null);
-  const [tab, setTab] = useState<"members" | "permissions">("members");
+  const [tab, setTab] = useState<"members" | "permissions">(lockedTab || "members");
   const [modal, setModal] = useState<Partial<TeamMember> | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ open: boolean; id: string; name: string }>({ open: false, id: "", name: "" });
 
@@ -271,18 +279,41 @@ export default function AdminPage() {
   return (
     <>
       <div className="space-y-5 max-w-5xl">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-2xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
-              <Shield size={22} className="text-gold-500" />
-              Administração
-            </h3>
-            <p className="text-gray-500 dark:text-gray-400 text-sm mt-0.5">
-              Gerencie membros da equipe e controle de acesso.
-            </p>
+        {/* Header — escondido quando embedded em outra página */}
+        {!embedded && (
+          <div className="flex items-center justify-between">
+            <div className="flex-1">
+              <h3 className="text-2xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                <Shield size={22} className="text-gold-500" />
+                Administração
+              </h3>
+              <p className="text-gray-500 dark:text-gray-400 text-sm mt-0.5">
+                Gerencie membros da equipe e controle de acesso.
+              </p>
+              {tab === "members" && (
+                <div className="mt-3 max-w-xs">
+                  <UsageBar resource="team_members" />
+                </div>
+              )}
+            </div>
+            {tab === "members" && (
+              <button
+                onClick={() => setModal({})}
+                className="flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
+              >
+                <Plus size={15} />
+                Novo membro
+              </button>
+            )}
           </div>
-          {tab === "members" && (
+        )}
+
+        {/* Quando embedded em "Equipe", mostra UsageBar + botão Novo membro inline */}
+        {embedded && tab === "members" && (
+          <div className="flex items-end justify-between gap-3 flex-wrap">
+            <div className="flex-1 min-w-[200px] max-w-xs">
+              <UsageBar resource="team_members" />
+            </div>
             <button
               onClick={() => setModal({})}
               className="flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
@@ -290,11 +321,11 @@ export default function AdminPage() {
               <Plus size={15} />
               Novo membro
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
-        {/* Tabs */}
-        <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-xl p-1 w-fit">
+        {/* Tabs — escondidas quando lockedTab */}
+        {!lockedTab && <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-xl p-1 w-fit">
           {[
             { id: "members" as const, label: "Membros da equipe", icon: Users },
             { id: "permissions" as const, label: "Permissões de acesso", icon: Shield },
@@ -312,7 +343,7 @@ export default function AdminPage() {
               {label}
             </button>
           ))}
-        </div>
+        </div>}
 
         {/* ── Aba: Membros ── */}
         {tab === "members" && (

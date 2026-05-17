@@ -10,6 +10,7 @@ const Cadastro = () => {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
@@ -32,6 +33,11 @@ const Cadastro = () => {
 
     if (!isPasswordValid) {
       setError("Por favor, atenda todos os requisitos de senha.");
+      return;
+    }
+
+    if (!acceptedTerms) {
+      setError("Você precisa aceitar os Termos de Uso e a Política de Privacidade para continuar.");
       return;
     }
 
@@ -182,9 +188,30 @@ const Cadastro = () => {
             <ValidationItem valid={passwordValidations.passwordsMatch} text="Senhas coincidem" />
           </div>
 
+          {/* Aceite de termos */}
+          <label className="flex items-start gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={acceptedTerms}
+              onChange={(e) => setAcceptedTerms(e.target.checked)}
+              className="mt-0.5 w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500"
+            />
+            <span className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
+              Li e aceito os{" "}
+              <Link to="/termos" target="_blank" className="text-purple-600 dark:text-purple-400 hover:underline">
+                Termos de Uso
+              </Link>
+              {" "}e a{" "}
+              <Link to="/privacidade" target="_blank" className="text-purple-600 dark:text-purple-400 hover:underline">
+                Política de Privacidade
+              </Link>
+              .
+            </span>
+          </label>
+
           <button
             type="submit"
-            disabled={loading || !isPasswordValid}
+            disabled={loading || !isPasswordValid || !acceptedTerms}
             className="w-full py-2 px-4 bg-purple-600 dark:bg-purple-500 hover:bg-purple-700 dark:hover:bg-purple-600 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
           >
             {loading ? (

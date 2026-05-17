@@ -4,6 +4,9 @@ import { Outlet, useLocation } from "react-router-dom";
 import Sidebar from "./Sidebar";
 import Header from "./Header";
 import ContactOpportunityModal from "../shared/ContactOpportunityModal";
+import ImpersonationBanner from "../ImpersonationBanner";
+import TrialBanner from "../TrialBanner";
+import BillingGate from "../BillingGate";
 import { useAuth } from "../../contexts/AuthContext";
 import { authFetch } from "../../utils/authFetch";
 import { Client, Opportunity } from "../../types";
@@ -62,6 +65,8 @@ export default function AppLayout() {
       />
 
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <ImpersonationBanner />
+        <TrialBanner />
         <Header
           title={pageTitle}
           userInitial={user?.email?.charAt(0).toUpperCase()}
@@ -100,6 +105,8 @@ export default function AppLayout() {
           onDiscard={handleDiscard}
         />
       )}
+
+      <BillingGate />
     </div>
   );
 }

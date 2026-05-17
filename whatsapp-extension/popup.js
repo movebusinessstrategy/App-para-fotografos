@@ -1,10 +1,33 @@
 const SUPABASE_URL = 'https://rxzxmwvnovhrerbsmkqj.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ4enhtd3Zub3ZocmVyYnNta3FqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyNzg0OTAsImV4cCI6MjA4ODg1NDQ5MH0.vS93umaTw9xVwoQMTFmSQGgAt9JZqeV2PLS_hrufMFM';
 
+const DEFAULT_API_BASE = 'https://app-para-fotografos.onrender.com';
+
 const body = document.getElementById('body-content');
 
-function renderLogin(errorMsg) {
+// Tira "/" final e valida formato
+function normalizeApiBase(url) {
+  return String(url || '').trim().replace(/\/+$/, '');
+}
+
+async function checkApiHealth(apiBase) {
+  try {
+    const r = await fetch(`${apiBase}/api/health`, { method: 'GET' });
+    if (!r.ok) return false;
+    const j = await r.json().catch(() => ({}));
+    return j.ok === true;
+  } catch {
+    return false;
+  }
+}
+
+function renderLogin(errorMsg, currentApiBase) {
   body.innerHTML = `
+    <div class="field">
+      <label>URL do servidor</label>
+      <input type="text" id="api-base-input" placeholder="${DEFAULT_API_BASE}" value="${escHtml(currentApiBase || DEFAULT_API_BASE)}" autocomplete="off" />
+      <span class="hint">Onde seu backend está hospedado (Render, Vercel ou http://localhost:3000)</span>
+    </div>
     <div class="field">
       <label>E-mail</label>
       <input type="email" id="email-input" placeholder="seu@email.com" autocomplete="email" />
@@ -14,29 +37,39 @@ function renderLogin(errorMsg) {
       <input type="password" id="password-input" placeholder="••••••••" autocomplete="current-password" />
     </div>
     <button class="btn-primary" id="login-btn">Entrar</button>
-    ${errorMsg ? `<div class="status error">${errorMsg}</div>` : ''}
+    ${errorMsg ? `<div class="status error">${escHtml(errorMsg)}</div>` : ''}
   `;
 
   const loginBtn = document.getElementById('login-btn');
+  const apiBaseInput = document.getElementById('api-base-input');
   const emailInput = document.getElementById('email-input');
   const passwordInput = document.getElementById('password-input');
 
-  // Enter no campo de senha faz login
   passwordInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') loginBtn.click();
   });
 
   loginBtn.addEventListener('click', async () => {
+    const apiBase = normalizeApiBase(apiBaseInput.value) || DEFAULT_API_BASE;
     const email = emailInput.value.trim();
     const password = passwordInput.value;
 
     if (!email || !password) {
-      renderLogin('Preencha e-mail e senha.');
+      renderLogin('Preencha e-mail e senha.', apiBase);
+      return;
+    }
+
+    loginBtn.textContent = 'Testando servidor...';
+    loginBtn.disabled = true;
+
+    // 1) Valida que o backend responde
+    const healthy = await checkApiHealth(apiBase);
+    if (!healthy) {
+      renderLogin(`Servidor não respondeu em ${apiBase}/api/health. Confira a URL.`, apiBase);
       return;
     }
 
     loginBtn.textContent = 'Entrando...';
-    loginBtn.disabled = true;
 
     try {
       const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
@@ -54,28 +87,27 @@ function renderLogin(errorMsg) {
         throw new Error(data.error_description || data.msg || 'E-mail ou senha incorretos.');
       }
 
-      // Salva token e dados do usuário
       const userName = data.user?.user_metadata?.full_name || data.user?.email || email;
       chrome.storage.local.set({
+        fp_api_base: apiBase,
         fp_token: data.access_token,
         fp_refresh_token: data.refresh_token,
         fp_user_name: userName,
         fp_user_email: data.user?.email || email,
         fp_token_expires: Date.now() + (data.expires_in * 1000),
       }, () => {
-        renderLoggedIn(userName, data.user?.email || email);
+        renderLoggedIn(userName, data.user?.email || email, apiBase, true);
       });
 
     } catch (err) {
-      renderLogin(err.message);
+      renderLogin(err.message, apiBase);
     }
   });
 
-  // Foca no email ao abrir
   setTimeout(() => emailInput.focus(), 50);
 }
 
-function renderLoggedIn(name, email) {
+function renderLoggedIn(name, email, apiBase, justLoggedIn = false) {
   body.innerHTML = `
     <div class="logged-card">
       <div>
@@ -87,15 +119,30 @@ function renderLoggedIn(name, email) {
         Conectado ao CRM
       </div>
     </div>
-    <div class="status ok">✓ Extensão pronta! Abra uma conversa no WhatsApp.</div>
-    <button class="btn-logout" id="logout-btn">Sair da conta</button>
+    <div class="server-row">
+      <span class="server-label">Servidor:</span>
+      <code class="server-url">${escHtml(apiBase)}</code>
+    </div>
+    <div class="status ok">${justLoggedIn ? '✓ Login realizado! Fechando…' : '✓ Extensão pronta! Abra uma conversa no WhatsApp.'}</div>
+    <button class="btn-logout" id="logout-btn">Sair e mudar servidor</button>
   `;
 
   document.getElementById('logout-btn').addEventListener('click', () => {
-    chrome.storage.local.remove(['fp_token', 'fp_refresh_token', 'fp_user_name', 'fp_user_email', 'fp_token_expires'], () => {
-      renderLogin();
-    });
+    chrome.storage.local.remove(
+      ['fp_token', 'fp_refresh_token', 'fp_user_name', 'fp_user_email', 'fp_token_expires'],
+      () => renderLogin(null, apiBase),
+    );
   });
+
+  // Se este popup foi aberto como janela (chrome.windows.create do botão "Fazer login"
+  // dentro do WhatsApp Web), fecha automaticamente após o login.
+  if (justLoggedIn) {
+    chrome.windows.getCurrent((win) => {
+      if (win && win.type === 'popup') {
+        setTimeout(() => window.close(), 900);
+      }
+    });
+  }
 }
 
 function escHtml(str) {
@@ -105,26 +152,29 @@ function escHtml(str) {
     .replace(/>/g, '&gt;');
 }
 
-// Verifica se já está logado ao abrir o popup
-chrome.storage.local.get(['fp_token', 'fp_user_name', 'fp_user_email', 'fp_token_expires'], async (result) => {
-  if (result.fp_token && result.fp_user_name) {
-    // Verifica se token ainda é válido (com 5min de margem)
-    const expires = result.fp_token_expires || 0;
-    if (Date.now() < expires - 300000) {
-      renderLoggedIn(result.fp_user_name, result.fp_user_email);
-      return;
+// Boot
+chrome.storage.local.get(
+  ['fp_token', 'fp_user_name', 'fp_user_email', 'fp_token_expires', 'fp_api_base'],
+  async (result) => {
+    const apiBase = result.fp_api_base || DEFAULT_API_BASE;
+
+    if (result.fp_token && result.fp_user_name) {
+      const expires = result.fp_token_expires || 0;
+      if (Date.now() < expires - 300000) {
+        renderLoggedIn(result.fp_user_name, result.fp_user_email, apiBase);
+        return;
+      }
+      try {
+        await refreshToken();
+        renderLoggedIn(result.fp_user_name, result.fp_user_email, apiBase);
+        return;
+      } catch {
+        // refresh falhou, mostra login
+      }
     }
-    // Token expirado — tenta renovar com refresh token
-    try {
-      await refreshToken();
-      renderLoggedIn(result.fp_user_name, result.fp_user_email);
-      return;
-    } catch {
-      // refresh falhou, mostra login
-    }
-  }
-  renderLogin();
-});
+    renderLogin(null, apiBase);
+  },
+);
 
 async function refreshToken() {
   return new Promise((resolve, reject) => {
