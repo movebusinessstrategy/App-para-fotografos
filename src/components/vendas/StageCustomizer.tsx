@@ -194,9 +194,9 @@ export function StageCustomizer({
 
   return (
     <>
-      <div className="fixed inset-0 z-50 sm:flex sm:items-center sm:justify-center sm:p-4">
+      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4">
         <div className="absolute inset-0 bg-black/30 dark:bg-black/60" onClick={onClose} />
-        <div className="relative bg-white dark:bg-gray-900 sm:rounded-xl shadow-xl dark:shadow-2xl dark:shadow-black/30 w-full h-full sm:max-w-md sm:max-h-[90vh] sm:h-auto overflow-hidden flex flex-col border border-transparent dark:border-gray-800">
+        <div className="relative bg-white dark:bg-gray-900 rounded-t-2xl sm:rounded-xl shadow-xl dark:shadow-2xl dark:shadow-black/30 w-full h-[88vh] sm:h-auto sm:max-w-md sm:max-h-[90vh] overflow-hidden flex flex-col border border-transparent dark:border-gray-800">
           <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-800">
             <h2 className="text-lg font-bold text-gray-900 dark:text-white">Personalizar Funil</h2>
             <button

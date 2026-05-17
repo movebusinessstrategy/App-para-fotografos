@@ -345,6 +345,15 @@
   animation: pulse-amber 1.8s ease-in-out infinite;
 }
 
+/* Bottom-sheet entrance (mobile popups estilo WhatsApp) */
+@keyframes slide-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+.animate-slide-up {
+  animation: slide-up 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 /* Mobile - esconde scrollbar mas mantém funcionalidade */
 @media (max-width: 768px) {
   .overflow-x-auto {
