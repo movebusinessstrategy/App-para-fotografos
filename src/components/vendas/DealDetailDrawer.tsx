@@ -580,16 +580,13 @@ export function DealDetailDrawer({
 
   return (
     <>
-      {/* Modal centralizado com backdrop blur */}
-      <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* Modal — tela cheia no mobile, centralizado a partir de sm: */}
+      <div className="fixed inset-0 z-50 sm:flex sm:items-center sm:justify-center">
         <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
 
-        <div
-          className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-          style={{ width: '65vw', height: '85vh' }}
-        >
+        <div className="relative bg-white dark:bg-gray-900 sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden w-full h-full sm:w-[92vw] sm:h-[90vh] lg:w-[75vw] xl:w-[65vw]">
           {/* Header */}
-          <div className={`border-b border-gray-200 dark:border-gray-800 px-5 pt-4 pb-0 flex-shrink-0 ${
+          <div className={`border-b border-gray-200 dark:border-gray-800 px-3 sm:px-5 pt-3 sm:pt-4 pb-0 flex-shrink-0 ${
             isWon ? "bg-emerald-50 dark:bg-emerald-950/30" :
             isLost ? "bg-red-50 dark:bg-red-950/30" :
             "bg-white dark:bg-gray-900"
@@ -798,10 +795,10 @@ export function DealDetailDrawer({
 
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-6">
+          <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-4 sm:space-y-6">
 
             {/* ── Info principal: Valor / Previsão / Prioridade ── */}
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
 
               {/* Valor */}
               <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-3">
