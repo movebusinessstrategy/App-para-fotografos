@@ -580,11 +580,11 @@ export function DealDetailDrawer({
 
   return (
     <>
-      {/* Modal — tela cheia no mobile, centralizado a partir de sm: */}
-      <div className="fixed inset-0 z-50 sm:flex sm:items-center sm:justify-center">
+      {/* Modal — bottom-sheet popup no mobile (estilo WhatsApp), centralizado a partir de sm: */}
+      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
         <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
 
-        <div className="relative bg-white dark:bg-gray-900 sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden w-full h-full sm:w-[92vw] sm:h-[90vh] lg:w-[75vw] xl:w-[65vw]">
+        <div className="relative bg-white dark:bg-gray-900 rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden w-full h-[92vh] sm:h-[90vh] sm:w-[92vw] lg:w-[75vw] xl:w-[65vw] animate-slide-up sm:animate-none">
           {/* Header */}
           <div className={`border-b border-gray-200 dark:border-gray-800 px-3 sm:px-5 pt-3 sm:pt-4 pb-0 flex-shrink-0 ${
             isWon ? "bg-emerald-50 dark:bg-emerald-950/30" :

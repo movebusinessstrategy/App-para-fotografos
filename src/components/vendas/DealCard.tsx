@@ -94,30 +94,30 @@ export function DealCard({ deal, client, onClick, labelMap, seller }: DealCardPr
       {...attributes}
       {...listeners}
       onClick={onClick}
-      className={`group relative bg-white dark:bg-gray-800/90 backdrop-blur-sm ${ringClass} rounded-2xl p-3.5 cursor-pointer shadow-sm hover:shadow-md hover:-translate-y-0.5 dark:shadow-black/20 transition-all ${
+      className={`group relative bg-white dark:bg-gray-800/90 backdrop-blur-sm ${ringClass} rounded-xl sm:rounded-2xl p-2.5 sm:p-3.5 cursor-pointer shadow-sm hover:shadow-md hover:-translate-y-0.5 dark:shadow-black/20 transition-all ${
         isDragging ? 'opacity-50 shadow-xl rotate-1' : ''
       }`}
     >
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-2 sm:gap-3">
         {/* Avatar */}
         <div className="relative flex-shrink-0">
           {avatarUrl ? (
             <img
               src={avatarUrl}
               alt={contactName}
-              className="w-11 h-11 rounded-xl object-cover ring-2 ring-white dark:ring-gray-800 shadow-sm"
+              className="w-9 h-9 sm:w-11 sm:h-11 rounded-lg sm:rounded-xl object-cover ring-2 ring-white dark:ring-gray-800 shadow-sm"
               onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
             />
           ) : (
             <div
-              className="w-11 h-11 rounded-xl flex items-center justify-center text-white text-sm font-bold ring-2 ring-white dark:ring-gray-800 shadow-sm"
+              className="w-9 h-9 sm:w-11 sm:h-11 rounded-lg sm:rounded-xl flex items-center justify-center text-white text-xs sm:text-sm font-bold ring-2 ring-white dark:ring-gray-800 shadow-sm"
               style={{ background: avatarBg }}
             >
               {initials}
             </div>
           )}
           {staleness && (
-            <span className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-white dark:border-gray-800 ${
+            <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 sm:w-3.5 sm:h-3.5 rounded-full border-2 border-white dark:border-gray-800 ${
               staleness === 'urgent' ? 'bg-red-500' : 'bg-amber-400'
             }`} />
           )}
@@ -195,7 +195,7 @@ export function DealCard({ deal, client, onClick, labelMap, seller }: DealCardPr
       )}
 
       {/* Footer: valor + vendedor + alerta */}
-      <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-gray-100 dark:border-gray-700/50">
+      <div className="flex items-center justify-between mt-2 sm:mt-3 pt-2 sm:pt-2.5 border-t border-gray-100 dark:border-gray-700/50">
         <span className="text-sm font-bold text-gray-900 dark:text-white">
           {deal.value ? `R$ ${Number(deal.value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
         </span>
