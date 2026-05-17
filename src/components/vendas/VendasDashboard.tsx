@@ -99,16 +99,16 @@ export function VendasDashboard() {
 
   return (
     <div className="flex flex-col flex-1 min-h-0 bg-gray-50 dark:bg-gray-900">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900 dark:text-white">Vendas</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-            {activeDeals.length} lead{activeDeals.length !== 1 ? "s" : ""} ativos no pipeline
+      {/* Header — compacto no mobile */}
+      <div className="flex items-center justify-between gap-2 px-3 sm:px-6 py-3 sm:py-4 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-base sm:text-xl font-bold text-gray-900 dark:text-white truncate">Vendas</h1>
+          <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-0.5 truncate">
+            {activeDeals.length} lead{activeDeals.length !== 1 ? "s" : ""} ativos
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
           <button
             onClick={() => fetchData()}
             disabled={refreshing}
@@ -120,29 +120,31 @@ export function VendasDashboard() {
           {tab === "kanban" && (
             <button
               onClick={() => setCustomizerOpen(true)}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600 text-sm font-medium transition-colors"
+              title="Configurar funil"
+              className="flex items-center justify-center w-9 h-9 sm:w-auto sm:gap-2 sm:px-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600 text-sm font-medium transition-colors"
             >
               <Settings size={15} />
-              Configurar funil
+              <span className="hidden sm:inline">Configurar funil</span>
             </button>
           )}
           <button
             onClick={() => setNewDealOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold transition-colors"
+            title="Novo Lead"
+            className="flex items-center justify-center h-9 w-9 sm:w-auto sm:gap-2 sm:px-4 rounded-lg bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold transition-colors"
           >
             <Plus size={16} />
-            Novo Lead
+            <span className="hidden sm:inline">Novo Lead</span>
           </button>
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1 px-6 py-2.5 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+      {/* Tabs — scroll horizontal se necessário no mobile, sem quebrar */}
+      <div className="flex gap-1 px-3 sm:px-6 py-2 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex-shrink-0 overflow-x-auto">
         {TABS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
             onClick={() => setTab(id)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+            className={`flex items-center gap-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-colors ${
               tab === id
                 ? "bg-gold-50 dark:bg-gold-900/30 text-gold-700 dark:text-gold-300"
                 : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
