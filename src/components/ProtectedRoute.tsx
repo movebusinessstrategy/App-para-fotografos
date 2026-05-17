@@ -23,7 +23,10 @@ const ProtectedRoute = ({ children }: ProtectedRouteProps) => {
   }
 
   if (!user) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
+    // Não-logados batem na raiz → landing pública. Em rotas internas, manda direto pro login
+    // pra preservar a URL de destino e voltar pra ela depois do login.
+    const isRoot = location.pathname === "/";
+    return <Navigate to={isRoot ? "/landing" : "/login"} state={{ from: location }} replace />;
   }
 
   return <>{children}</>;

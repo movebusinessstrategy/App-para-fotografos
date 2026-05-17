@@ -9,6 +9,7 @@ interface AuthContextType {
   loading: boolean;
   isMember: boolean;
   permissions: Record<string, boolean> | null;
+  isPlatformAdmin: boolean;
   canAccess: (module: string) => boolean;
   signOut: () => Promise<void>;
 }
@@ -19,6 +20,7 @@ const AuthContext = createContext<AuthContextType>({
   loading: true,
   isMember: false,
   permissions: null,
+  isPlatformAdmin: false,
   canAccess: () => true,
   signOut: async () => {},
 });
@@ -39,6 +41,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   const [loading, setLoading] = useState(true);
   const [isMember, setIsMember] = useState(false);
   const [permissions, setPermissions] = useState<Record<string, boolean> | null>(null);
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
 
   const fetchMe = async () => {
     try {
@@ -47,6 +50,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         const data = await res.json();
         setIsMember(data.isMember ?? false);
         setPermissions(data.permissions ?? null);
+        setIsPlatformAdmin(data.isPlatformAdmin ?? false);
       }
     } catch {
       // silencia — se falhar, trata como dono
@@ -75,6 +79,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         } else {
           setIsMember(false);
           setPermissions(null);
+          setIsPlatformAdmin(false);
           setLoading(false);
         }
       }
@@ -95,10 +100,11 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     setSession(null);
     setIsMember(false);
     setPermissions(null);
+    setIsPlatformAdmin(false);
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, isMember, permissions, canAccess, signOut }}>
+    <AuthContext.Provider value={{ user, session, loading, isMember, permissions, isPlatformAdmin, canAccess, signOut }}>
       {children}
     </AuthContext.Provider>
   );

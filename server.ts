@@ -11,6 +11,11 @@ import { Readable } from 'stream';
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 import * as BaileysManager from './baileys-manager.js';
+import * as Asaas from './asaas-client.js';
+import { initSentry } from './sentry-server.js';
+
+// Não bloqueia o boot — roda em paralelo
+const sentryReady = initSentry();
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createSupabaseClient, supabaseAdmin } from './supabase.js';
 import {
@@ -833,6 +838,140 @@ async function startServer() {
   // Health check — used by frontend to warm up Render free tier
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
+  // ============ PLATFORM ADMIN HELPERS ============
+  // Checa se um auth.users.id pertence a um super-admin do SaaS.
+  const isSuperAdmin = async (userId: string): Promise<boolean> => {
+    if (!supabaseAdmin) return false;
+    const { data } = await supabaseAdmin
+      .from('platform_admins')
+      .select('user_id')
+      .eq('user_id', userId)
+      .maybeSingle();
+    return !!data;
+  };
+
+  // Garante que existe uma linha em platform_accounts para o dono (criação lazy).
+  // Retorna a conta (status, plan_id) ou null se a tabela ainda não foi criada.
+  const TRIAL_DAYS = 7;
+
+  // Paths que SEMPRE devem ser acessíveis mesmo com pagamento atrasado
+  // (pra o user ver/pagar a assinatura)
+  const BILLING_EXEMPT_PREFIXES = ['/api/billing/', '/api/me', '/api/platform/', '/api/team-members'];
+  const isBillingExemptPath = (p: string) => BILLING_EXEMPT_PREFIXES.some((pref) => p.startsWith(pref));
+
+  // Retorna true se a conta precisa pagar agora (sem trial ativo, sem assinatura ativa)
+  const accountRequiresPayment = (acct: any): { blocked: boolean; reason?: string } => {
+    if (!acct) return { blocked: false };
+    const status = acct.subscription_status;
+    if (status === 'active') return { blocked: false };
+    if (status === 'trial') {
+      if (!acct.trial_ends_at) return { blocked: false };
+      const expired = new Date(acct.trial_ends_at) < new Date();
+      return expired ? { blocked: true, reason: 'trial_expired' } : { blocked: false };
+    }
+    if (['past_due', 'cancelled', 'expired'].includes(status)) {
+      return { blocked: true, reason: status };
+    }
+    return { blocked: false };
+  };
+
+  type LimitResource = 'clients' | 'jobs' | 'team_members';
+  const LIMIT_KEY: Record<LimitResource, string> = {
+    clients: 'max_clients',
+    jobs: 'max_jobs',
+    team_members: 'max_team_members',
+  };
+
+  // Checa se o plano permite criar mais 1 do recurso. `max=-1` significa ilimitado.
+  // Retorna { allowed, current, max, planSlug } pro endpoint poder mostrar erro útil.
+  const checkPlanLimit = async (
+    supabase: SupabaseClient,
+    ownerUserId: string,
+    resource: LimitResource,
+  ): Promise<{ allowed: boolean; current: number; max: number; planSlug?: string }> => {
+    if (!supabaseAdmin) return { allowed: true, current: 0, max: -1 };
+    const { data: acct } = await supabaseAdmin
+      .from('platform_accounts')
+      .select('plan_id')
+      .eq('owner_user_id', ownerUserId)
+      .maybeSingle();
+    if (!acct?.plan_id) return { allowed: true, current: 0, max: -1 };
+
+    const { data: plan } = await supabaseAdmin
+      .from('platform_plans')
+      .select('slug, limits')
+      .eq('id', acct.plan_id)
+      .maybeSingle();
+    const max = Number(plan?.limits?.[LIMIT_KEY[resource]] ?? -1);
+    if (max < 0) return { allowed: true, current: 0, max: -1, planSlug: plan?.slug };
+
+    // Conta os ativos. Usa o supabase do request (já com user_id scoping).
+    const table = resource === 'team_members' ? 'team_members' : resource;
+    const column = resource === 'team_members' ? 'owner_user_id' : 'user_id';
+    let q = supabase.from(table).select('id', { count: 'exact', head: true }).eq(column, ownerUserId);
+    if (resource === 'team_members') q = q.eq('is_active', true);
+    const { count } = await q;
+    const current = count || 0;
+    return { allowed: current < max, current, max, planSlug: plan?.slug };
+  };
+
+  const ensurePlatformAccount = async (ownerUserId: string) => {
+    if (!supabaseAdmin) return null;
+    const { data: existing, error: selErr } = await supabaseAdmin
+      .from('platform_accounts')
+      .select('owner_user_id, plan_id, status, suspended_reason, subscription_status, trial_ends_at')
+      .eq('owner_user_id', ownerUserId)
+      .maybeSingle();
+    // Tabela ainda não criada (migração não aplicada) — fail-open
+    if (selErr && /relation .* does not exist/i.test(selErr.message)) return null;
+    if (existing) return existing;
+
+    // Novos signups entram com 7 dias de trial no plano Pro.
+    const { data: proPlan } = await supabaseAdmin
+      .from('platform_plans')
+      .select('id')
+      .eq('slug', 'pro')
+      .maybeSingle();
+
+    const now = new Date();
+    const trialEnds = new Date(now.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
+
+    const { data: created } = await supabaseAdmin
+      .from('platform_accounts')
+      .insert({
+        owner_user_id: ownerUserId,
+        plan_id: proPlan?.id ?? null,
+        status: 'active',
+        subscription_status: 'trial',
+        trial_started_at: now.toISOString(),
+        trial_ends_at: trialEnds.toISOString(),
+      })
+      .select('owner_user_id, plan_id, status, suspended_reason, subscription_status, trial_ends_at')
+      .single();
+    return created;
+  };
+
+  const logAdminAction = async (
+    adminUserId: string,
+    action: string,
+    targetOwnerId: string | null,
+    metadata: Record<string, any> = {},
+    ip: string | null = null,
+  ) => {
+    if (!supabaseAdmin) return;
+    try {
+      await supabaseAdmin.from('platform_audit_log').insert({
+        admin_user_id: adminUserId,
+        action,
+        target_owner_id: targetOwnerId,
+        metadata,
+        ip,
+      });
+    } catch (e) {
+      console.error('[platform-admin] falha ao gravar audit log:', e);
+    }
+  };
+
   // ============ AUTH MIDDLEWARE ============
   const requireAuth = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const authHeader = req.headers.authorization;
@@ -849,6 +988,47 @@ async function startServer() {
         return res.status(401).json({ error: 'Não autorizado' });
       }
 
+      // ── Impersonação (apenas super-admin) ─────────────────────────────
+      // Dois modos:
+      //  - X-Impersonate-Member-Id  → vê como aquele membro (com as permissões dele)
+      //  - X-Impersonate-Owner-Id   → vê como o dono da empresa (acesso total)
+      // Membro tem prioridade — só um header é enviado por vez.
+      const impersonateMemberHeader = (req.headers['x-impersonate-member-id'] as string | undefined)?.trim();
+      const impersonateOwnerHeader  = (req.headers['x-impersonate-owner-id']  as string | undefined)?.trim();
+
+      if ((impersonateMemberHeader || impersonateOwnerHeader) && supabaseAdmin) {
+        const allowed = await isSuperAdmin(user.id);
+        if (!allowed) {
+          return res.status(403).json({ error: 'Impersonação requer super-admin' });
+        }
+
+        if (impersonateMemberHeader) {
+          const { data: member } = await supabaseAdmin
+            .from('team_members')
+            .select('id, owner_user_id, permissions')
+            .eq('id', impersonateMemberHeader)
+            .maybeSingle();
+          if (!member) return res.status(404).json({ error: 'Membro não encontrado' });
+          (req as any).userId = member.owner_user_id;
+          (req as any).realUserId = user.id;
+          (req as any).isImpersonating = true;
+          (req as any).isPlatformAdmin = true;
+          (req as any).memberPermissions = member.permissions;
+          (req as any).isMember = true;
+          (req as any).supabase = supabaseAdmin;
+          return next();
+        }
+
+        (req as any).userId = impersonateOwnerHeader;
+        (req as any).realUserId = user.id;
+        (req as any).isImpersonating = true;
+        (req as any).isPlatformAdmin = true;
+        (req as any).memberPermissions = null;
+        (req as any).isMember = false;
+        (req as any).supabase = supabaseAdmin;
+        return next();
+      }
+
       // ── Detectar se é membro de equipe ────────────────────────────────
       if (supabaseAdmin) {
         // 1) Verificar por member_user_id (já vinculado)
@@ -860,9 +1040,31 @@ async function startServer() {
           .maybeSingle();
 
         if (memberById) {
+          const platformAdmin = await isSuperAdmin(user.id);
+          // Bloqueia se a conta do dono está suspensa/excluída (super-admin escapa)
+          const acct = await ensurePlatformAccount(memberById.owner_user_id);
+          if (acct && acct.status !== 'active' && !platformAdmin) {
+            return res.status(403).json({
+              error: acct.status === 'suspended' ? 'Conta suspensa' : 'Conta excluída',
+              account_status: acct.status,
+            });
+          }
+          if (req.method !== 'GET' && !isBillingExemptPath(req.path)) {
+            const pay = accountRequiresPayment(acct);
+            if (pay.blocked && !platformAdmin) {
+              return res.status(402).json({
+                error: 'Assinatura necessária pra continuar',
+                subscription_status: (acct as any)?.subscription_status,
+                reason: pay.reason,
+                trial_ends_at: (acct as any)?.trial_ends_at,
+              });
+            }
+          }
           (req as any).userId = memberById.owner_user_id;
+          (req as any).realUserId = user.id;
           (req as any).memberPermissions = memberById.permissions;
           (req as any).isMember = true;
+          (req as any).isPlatformAdmin = platformAdmin;
           (req as any).supabase = supabaseAdmin;
           return next();
         }
@@ -883,9 +1085,30 @@ async function startServer() {
               .update({ member_user_id: user.id })
               .eq('id', memberByEmail.id);
 
+            const platformAdmin = await isSuperAdmin(user.id);
+            const acct = await ensurePlatformAccount(memberByEmail.owner_user_id);
+            if (acct && acct.status !== 'active' && !platformAdmin) {
+              return res.status(403).json({
+                error: acct.status === 'suspended' ? 'Conta suspensa' : 'Conta excluída',
+                account_status: acct.status,
+              });
+            }
+            if (req.method !== 'GET' && !isBillingExemptPath(req.path)) {
+              const pay = accountRequiresPayment(acct);
+              if (pay.blocked && !platformAdmin) {
+                return res.status(402).json({
+                  error: 'Assinatura necessária pra continuar',
+                  subscription_status: (acct as any)?.subscription_status,
+                  reason: pay.reason,
+                  trial_ends_at: (acct as any)?.trial_ends_at,
+                });
+              }
+            }
             (req as any).userId = memberByEmail.owner_user_id;
+            (req as any).realUserId = user.id;
             (req as any).memberPermissions = memberByEmail.permissions;
             (req as any).isMember = true;
+            (req as any).isPlatformAdmin = platformAdmin;
             (req as any).supabase = supabaseAdmin;
             return next();
           }
@@ -893,15 +1116,52 @@ async function startServer() {
       }
 
       // ── Dono da conta ─────────────────────────────────────────────────
+      // Cria/garante a platform_account e bloqueia se suspensa/excluída.
+      // Super-admin nunca é bloqueado, mesmo que sua própria conta esteja suspensa.
+      const acct = await ensurePlatformAccount(user.id);
+      const platformAdmin = await isSuperAdmin(user.id);
+      if (acct && acct.status !== 'active' && !platformAdmin) {
+        return res.status(403).json({
+          error: acct.status === 'suspended' ? 'Conta suspensa' : 'Conta excluída',
+          account_status: acct.status,
+          reason: acct.suspended_reason ?? null,
+        });
+      }
+      // Bloqueio por pagamento: trial expirado ou assinatura cancelada/atrasada.
+      // Permite GETs (leitura) e rotas de billing/me/admin/team (pra o user pagar).
+      if (!platformAdmin && req.method !== 'GET' && !isBillingExemptPath(req.path)) {
+        const pay = accountRequiresPayment(acct);
+        if (pay.blocked) {
+          return res.status(402).json({
+            error: 'Assinatura necessária pra continuar',
+            subscription_status: (acct as any)?.subscription_status,
+            reason: pay.reason,
+            trial_ends_at: (acct as any)?.trial_ends_at,
+          });
+        }
+      }
       (req as any).userId = user.id;
+      (req as any).realUserId = user.id;
       (req as any).memberPermissions = null;
       (req as any).isMember = false;
+      (req as any).isPlatformAdmin = platformAdmin;
       (req as any).supabase = userClient;
       next();
     } catch (err) {
       console.error('Erro ao validar token:', err);
       return res.status(401).json({ error: 'Não autorizado' });
     }
+  };
+
+  // ============ SUPER-ADMIN MIDDLEWARE ============
+  // Requer requireAuth antes. Bloqueia se o REAL user (não o impersonado) não for super-admin.
+  const requireSuperAdmin = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const realUserId = (req as any).realUserId as string | undefined;
+    if (!realUserId) return res.status(401).json({ error: 'Não autorizado' });
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role não configurado' });
+    const allowed = await isSuperAdmin(realUserId);
+    if (!allowed) return res.status(403).json({ error: 'Acesso restrito ao painel da plataforma' });
+    next();
   };
 
   // ============ WHATSAPP ROUTES (Z-API OU EVOLUTION) ============
@@ -2725,6 +2985,17 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
 
+    const limit = await checkPlanLimit(supabase, userId, 'clients');
+    if (!limit.allowed) {
+      return res.status(403).json({
+        error: `Limite do plano atingido (${limit.current}/${limit.max} clientes). Faça upgrade pra continuar.`,
+        limit_reached: 'clients',
+        current: limit.current,
+        max: limit.max,
+        plan_slug: limit.planSlug,
+      });
+    }
+
     const { data, error } = await supabase
       .from('clients')
       .insert({ ...req.body, user_id: userId })
@@ -2816,6 +3087,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.post('/api/jobs', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
+
+    const limit = await checkPlanLimit(supabase, userId, 'jobs');
+    if (!limit.allowed) {
+      return res.status(403).json({
+        error: `Limite do plano atingido (${limit.current}/${limit.max} jobs). Faça upgrade pra continuar.`,
+        limit_reached: 'jobs',
+        current: limit.current,
+        max: limit.max,
+        plan_slug: limit.planSlug,
+      });
+    }
+
     const { client_id, job_type, job_date, job_time, job_end_time, job_name, amount, payment_method, payment_status, status, notes } = req.body;
 
     // Sanitize amount — empty string from form becomes 0
@@ -4467,6 +4750,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const supabase = (req as any).supabase as SupabaseClient;
     const { name, email, color, permissions, password } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'Nome obrigatório' });
+
+    const limit = await checkPlanLimit(supabase, userId, 'team_members');
+    if (!limit.allowed) {
+      return res.status(403).json({
+        error: `Limite do plano atingido (${limit.current}/${limit.max} membros). Faça upgrade pra continuar.`,
+        limit_reached: 'team_members',
+        current: limit.current,
+        max: limit.max,
+        plan_slug: limit.planSlug,
+      });
+    }
+
     const defaultPermissions = { dashboard: true, clients: true, jobs: true, vendas: true, calendar: true, finance: true, oportunidades: true, contratos: true };
 
     // Cria o registro na tabela team_members
@@ -4650,10 +4945,781 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   app.get('/api/me', requireAuth, async (req, res) => {
+    const realUserId = (req as any).realUserId || (req as any).userId;
+    const ownerId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    // Tenta achar o team_member que representa o usuário atual.
+    // - Se é member: buscamos por member_user_id.
+    // - Se é owner: pode haver um team_member auto-criado pra ele com member_user_id = ownerId.
+    let currentMember: { id: string; name: string; color?: string | null } | null = null;
+    try {
+      const { data } = await supabase
+        .from('team_members')
+        .select('id, name, color')
+        .eq('owner_user_id', ownerId)
+        .eq('member_user_id', realUserId)
+        .eq('is_active', true)
+        .maybeSingle();
+      if (data) currentMember = { id: data.id, name: data.name, color: data.color };
+    } catch { /* ignora — endpoint não pode quebrar */ }
+
     res.json({
       isMember: (req as any).isMember ?? false,
       permissions: (req as any).memberPermissions ?? null,
+      isPlatformAdmin: (req as any).isPlatformAdmin ?? false,
+      isImpersonating: (req as any).isImpersonating ?? false,
+      impersonatingOwnerId: (req as any).isImpersonating ? (req as any).userId : null,
+      currentMember,
     });
+  });
+
+  // ============================================================================
+  // BILLING — integração Asaas (PIX recorrente + cartão de crédito)
+  // ============================================================================
+
+  // Retorna status atual da assinatura + dias restantes do trial
+  app.get('/api/billing/me', requireAuth, async (req, res) => {
+    const ownerId = (req as any).userId;
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+
+    const acct = await ensurePlatformAccount(ownerId);
+    if (!acct) return res.json({ subscription_status: 'unknown', trial_days_left: 0 });
+
+    const { data: plan } = await supabaseAdmin
+      .from('platform_plans')
+      .select('id, slug, name, price_cents, limits')
+      .eq('id', (acct as any).plan_id)
+      .maybeSingle();
+
+    let trialDaysLeft = 0;
+    if ((acct as any).trial_ends_at) {
+      const ms = new Date((acct as any).trial_ends_at).getTime() - Date.now();
+      trialDaysLeft = Math.max(0, Math.ceil(ms / (24 * 60 * 60 * 1000)));
+    }
+
+    res.json({
+      subscription_status: (acct as any).subscription_status || 'trial',
+      trial_ends_at: (acct as any).trial_ends_at,
+      trial_days_left: trialDaysLeft,
+      asaas_customer_id: (acct as any).asaas_customer_id || null,
+      asaas_subscription_id: (acct as any).asaas_subscription_id || null,
+      plan,
+    });
+  });
+
+  // Uso atual vs limites do plano — pra UI mostrar barra de progresso e alertar
+  app.get('/api/billing/limits', requireAuth, async (req, res) => {
+    const ownerId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const resources: Array<'clients' | 'jobs' | 'team_members'> = ['clients', 'jobs', 'team_members'];
+    const results = await Promise.all(resources.map(async (r) => {
+      const l = await checkPlanLimit(supabase, ownerId, r);
+      return [r, { current: l.current, max: l.max, allowed: l.allowed }];
+    }));
+    res.json(Object.fromEntries(results));
+  });
+
+  // ============================================================================
+  // COMPANY INFO — dados da empresa (usado em contratos e cobranças)
+  // ============================================================================
+  app.get('/api/company-info', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data } = await supabase
+      .from('company_info')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+    res.json(data || null);
+  });
+
+  app.put('/api/company-info', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const payload = { ...req.body, user_id: userId };
+    delete payload.created_at;
+    delete payload.updated_at;
+    const { data, error } = await supabase
+      .from('company_info')
+      .upsert(payload, { onConflict: 'user_id' })
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  // Histórico de pagamentos do dono da conta
+  app.get('/api/billing/payments', requireAuth, async (req, res) => {
+    const ownerId = (req as any).userId;
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    const { data } = await supabaseAdmin
+      .from('billing_payments')
+      .select('id, asaas_payment_id, amount_cents, status, billing_type, due_date, paid_at, invoice_url, created_at')
+      .eq('owner_user_id', ownerId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    res.json(data || []);
+  });
+
+  // Lista de planos acessível sem autenticação — usada pela landing pública.
+  // Retorna só campos comerciais (slug, name, price_cents, limits) — nada sensível.
+  app.get('/api/public/plans', async (_req, res) => {
+    if (!supabaseAdmin) return res.json([]);
+    const { data } = await supabaseAdmin
+      .from('platform_plans')
+      .select('id, slug, name, price_cents, limits, sort_order')
+      .eq('is_active', true)
+      .order('sort_order');
+    res.json(data || []);
+  });
+
+  // Lista pública dos planos ativos (pra página de assinatura mostrar)
+  app.get('/api/platform/plans-public', requireAuth, async (_req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    const { data } = await supabaseAdmin
+      .from('platform_plans')
+      .select('id, slug, name, price_cents, limits, sort_order')
+      .eq('is_active', true)
+      .order('sort_order');
+    res.json(data || []);
+  });
+
+  // Cria customer no Asaas + subscription. Retorna invoiceUrl pra pagamento.
+  // Body: { planSlug: 'pro'|'business', billingType: 'PIX'|'CREDIT_CARD',
+  //         cpfCnpj, mobilePhone, creditCard?, creditCardHolderInfo? }
+  app.post('/api/billing/subscribe', requireAuth, async (req, res) => {
+    const ownerId = (req as any).userId;
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+
+    const { planSlug, billingType, cpfCnpj, mobilePhone, creditCard, creditCardHolderInfo } = req.body || {};
+    if (!planSlug || !['pro', 'business'].includes(planSlug)) return res.status(400).json({ error: 'planSlug inválido' });
+    if (!['PIX', 'CREDIT_CARD'].includes(billingType)) return res.status(400).json({ error: 'billingType inválido' });
+    if (!cpfCnpj) return res.status(400).json({ error: 'CPF/CNPJ obrigatório' });
+
+    const { data: plan } = await supabaseAdmin
+      .from('platform_plans')
+      .select('id, slug, name, price_cents')
+      .eq('slug', planSlug)
+      .maybeSingle();
+    if (!plan) return res.status(404).json({ error: 'Plano não encontrado' });
+
+    // Email/nome do user logado pra criar customer no Asaas
+    const { data: userInfo } = await supabaseAdmin.auth.admin.getUserById(ownerId);
+    const userEmail = userInfo?.user?.email;
+    const userName = (userInfo?.user?.user_metadata as any)?.name || userEmail?.split('@')[0] || 'Cliente';
+    if (!userEmail) return res.status(400).json({ error: 'Usuário sem email' });
+
+    try {
+      const customer = await Asaas.upsertCustomer({
+        name: userName,
+        email: userEmail,
+        cpfCnpj: String(cpfCnpj).replace(/\D/g, ''),
+        mobilePhone: mobilePhone ? String(mobilePhone).replace(/\D/g, '') : undefined,
+        externalReference: ownerId,
+      });
+
+      // Cobra amanhã (dá tempo do cliente confirmar)
+      const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      const nextDueDate = tomorrow.toISOString().slice(0, 10);
+
+      const subscription = await Asaas.createSubscription({
+        customer: customer.id,
+        billingType: billingType as Asaas.AsaasBillingType,
+        value: plan.price_cents / 100,
+        nextDueDate,
+        cycle: 'MONTHLY',
+        description: `Assinatura ${plan.name} — FocalPoint CRM`,
+        externalReference: ownerId,
+        creditCard,
+        creditCardHolderInfo,
+        remoteIp: (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip,
+      });
+
+      await supabaseAdmin
+        .from('platform_accounts')
+        .update({
+          plan_id: plan.id,
+          asaas_customer_id: customer.id,
+          asaas_subscription_id: subscription.id,
+          subscription_status: billingType === 'CREDIT_CARD' ? 'active' : 'trial', // PIX confirma só após pagar
+          subscription_payment_method: billingType,
+          subscription_started_at: new Date().toISOString(),
+        })
+        .eq('owner_user_id', ownerId);
+
+      res.json({ subscription_id: subscription.id, customer_id: customer.id, status: subscription.status });
+    } catch (err: any) {
+      console.error('[billing/subscribe]', err);
+      res.status(500).json({ error: err.message || 'Erro ao criar assinatura' });
+    }
+  });
+
+  // Cancela assinatura corrente
+  app.post('/api/billing/cancel', requireAuth, async (req, res) => {
+    const ownerId = (req as any).userId;
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+
+    const { data: acct } = await supabaseAdmin
+      .from('platform_accounts')
+      .select('asaas_subscription_id')
+      .eq('owner_user_id', ownerId)
+      .maybeSingle();
+
+    if (!acct?.asaas_subscription_id) return res.status(400).json({ error: 'Sem assinatura ativa' });
+
+    try {
+      await Asaas.cancelSubscription(acct.asaas_subscription_id);
+      await supabaseAdmin
+        .from('platform_accounts')
+        .update({ subscription_status: 'cancelled' })
+        .eq('owner_user_id', ownerId);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Webhook do Asaas — não usa requireAuth, mas valida token compartilhado.
+  // Configure no painel Asaas: URL = https://seu-app.com/api/billing/webhook
+  //                            Token = valor de ASAAS_WEBHOOK_TOKEN
+  app.post('/api/billing/webhook', express.json({ limit: '1mb' }), async (req, res) => {
+    const token = req.headers['asaas-access-token'] as string | undefined;
+    if (process.env.ASAAS_WEBHOOK_TOKEN && token !== process.env.ASAAS_WEBHOOK_TOKEN) {
+      return res.status(401).json({ error: 'Token inválido' });
+    }
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+
+    const payload = req.body;
+    const eventId = payload?.id || payload?.payment?.id;
+    const eventType = payload?.event;
+    if (!eventId || !eventType) return res.status(400).json({ error: 'Payload inválido' });
+
+    // Idempotência: se já processamos esse event_id, devolve 200 sem reprocessar
+    const { data: already } = await supabaseAdmin
+      .from('billing_webhook_events')
+      .select('id, processed_at')
+      .eq('event_id', eventId)
+      .maybeSingle();
+    if (already?.processed_at) return res.json({ ok: true, deduped: true });
+
+    if (!already) {
+      await supabaseAdmin.from('billing_webhook_events').insert({
+        event_id: eventId, event_type: eventType, payload,
+      });
+    }
+
+    try {
+      const payment = payload.payment;
+      if (payment) {
+        // Acha o owner via subscription externalReference ou customer
+        let ownerId: string | null = null;
+        if (payment.subscription) {
+          const { data: acct } = await supabaseAdmin
+            .from('platform_accounts')
+            .select('owner_user_id')
+            .eq('asaas_subscription_id', payment.subscription)
+            .maybeSingle();
+          ownerId = acct?.owner_user_id || null;
+        }
+        if (!ownerId && payment.customer) {
+          const { data: acct } = await supabaseAdmin
+            .from('platform_accounts')
+            .select('owner_user_id')
+            .eq('asaas_customer_id', payment.customer)
+            .maybeSingle();
+          ownerId = acct?.owner_user_id || null;
+        }
+
+        if (ownerId) {
+          // Persiste o pagamento
+          await supabaseAdmin.from('billing_payments').upsert({
+            owner_user_id: ownerId,
+            asaas_payment_id: payment.id,
+            asaas_subscription_id: payment.subscription || null,
+            asaas_customer_id: payment.customer || null,
+            amount_cents: Math.round((payment.value || 0) * 100),
+            status: payment.status,
+            billing_type: payment.billingType,
+            due_date: payment.dueDate || null,
+            paid_at: payment.paymentDate || payment.clientPaymentDate || null,
+            invoice_url: payment.invoiceUrl || null,
+            raw: payment,
+          }, { onConflict: 'asaas_payment_id' });
+
+          // Atualiza status da assinatura conforme o evento
+          const updates: any = {};
+          if (['PAYMENT_RECEIVED', 'PAYMENT_CONFIRMED'].includes(eventType)) {
+            updates.subscription_status = 'active';
+            updates.last_payment_at = new Date().toISOString();
+            updates.subscription_renewed_at = new Date().toISOString();
+          } else if (eventType === 'PAYMENT_OVERDUE') {
+            updates.subscription_status = 'past_due';
+          } else if (['PAYMENT_DELETED', 'PAYMENT_REFUNDED', 'PAYMENT_CHARGEBACK_REQUESTED'].includes(eventType)) {
+            updates.subscription_status = 'past_due';
+          } else if (['SUBSCRIPTION_INACTIVE'].includes(eventType)) {
+            updates.subscription_status = 'cancelled';
+          }
+          if (Object.keys(updates).length) {
+            await supabaseAdmin.from('platform_accounts').update(updates).eq('owner_user_id', ownerId);
+          }
+        }
+      }
+
+      await supabaseAdmin
+        .from('billing_webhook_events')
+        .update({ processed_at: new Date().toISOString() })
+        .eq('event_id', eventId);
+
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error('[billing/webhook]', err);
+      await supabaseAdmin
+        .from('billing_webhook_events')
+        .update({ error: String(err.message || err) })
+        .eq('event_id', eventId);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ============================================================================
+  // PLATFORM ADMIN ROUTES — painel do super-admin do SaaS
+  // Todas as rotas aqui exigem requireAuth + requireSuperAdmin.
+  // ============================================================================
+
+  // Status leve — usado pelo frontend pra decidir se mostra o item de menu
+  app.get('/api/platform/me', requireAuth, async (req, res) => {
+    res.json({ isPlatformAdmin: (req as any).isPlatformAdmin ?? false });
+  });
+
+  // ---- TENANTS (donos) ----
+  app.get('/api/platform/tenants', requireAuth, requireSuperAdmin, async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    const search = (req.query.q as string | undefined)?.trim().toLowerCase() ?? '';
+    const status = (req.query.status as string | undefined) ?? '';
+    const planId = (req.query.plan_id as string | undefined) ?? '';
+    const page = Math.max(1, parseInt((req.query.page as string) || '1', 10));
+    const pageSize = Math.min(100, Math.max(10, parseInt((req.query.page_size as string) || '25', 10)));
+
+    try {
+      // Lista usuários do auth.users via admin API
+      const { data: usersData, error: usersErr } = await supabaseAdmin.auth.admin.listUsers({
+        page,
+        perPage: pageSize,
+      });
+      if (usersErr) return res.status(500).json({ error: usersErr.message });
+
+      let users = usersData?.users ?? [];
+
+      // Filtra fora os membros de equipe — só queremos donos de conta
+      const { data: memberRows } = await supabaseAdmin
+        .from('team_members')
+        .select('member_user_id')
+        .not('member_user_id', 'is', null);
+      const memberIds = new Set((memberRows ?? []).map((r) => r.member_user_id));
+      users = users.filter((u) => !memberIds.has(u.id));
+
+      const totalUsers = users.length;
+      if (search) {
+        users = users.filter((u) => (u.email ?? '').toLowerCase().includes(search));
+      }
+
+      const userIds = users.map((u) => u.id);
+      if (userIds.length === 0) {
+        return res.json({ tenants: [], page, page_size: pageSize, total: totalUsers });
+      }
+
+      const [{ data: accounts }, { data: plans }] = await Promise.all([
+        supabaseAdmin
+          .from('platform_accounts')
+          .select('owner_user_id, plan_id, status, suspended_reason, trial_ends_at, notes, created_at')
+          .in('owner_user_id', userIds),
+        supabaseAdmin.from('platform_plans').select('id, slug, name'),
+      ]);
+
+      const acctByOwner = new Map((accounts ?? []).map((a) => [a.owner_user_id, a]));
+      const planById = new Map((plans ?? []).map((p) => [p.id, p]));
+
+      let tenants = users.map((u) => {
+        const acct = acctByOwner.get(u.id);
+        const plan = acct?.plan_id ? planById.get(acct.plan_id) : null;
+        return {
+          owner_user_id: u.id,
+          email: u.email,
+          created_at: u.created_at,
+          last_sign_in_at: u.last_sign_in_at,
+          status: acct?.status ?? 'active',
+          plan_id: acct?.plan_id ?? null,
+          plan_slug: plan?.slug ?? null,
+          plan_name: plan?.name ?? null,
+          suspended_reason: acct?.suspended_reason ?? null,
+          trial_ends_at: acct?.trial_ends_at ?? null,
+          notes: acct?.notes ?? null,
+        };
+      });
+
+      if (status) tenants = tenants.filter((t) => t.status === status);
+      if (planId) tenants = tenants.filter((t) => t.plan_id === planId);
+
+      res.json({ tenants, page, page_size: pageSize, total: totalUsers });
+    } catch (err: any) {
+      console.error('[platform/tenants] erro:', err);
+      res.status(500).json({ error: err.message ?? 'Falha ao listar tenants' });
+    }
+  });
+
+  app.get('/api/platform/tenants/:ownerId', requireAuth, requireSuperAdmin, async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    const ownerId = req.params.ownerId;
+
+    try {
+      const [
+        { data: userResp, error: userErr },
+        { data: acct },
+        { count: clientsCount },
+        { count: jobsCount },
+        { count: dealsCount },
+        { count: teamCount },
+      ] = await Promise.all([
+        supabaseAdmin.auth.admin.getUserById(ownerId),
+        supabaseAdmin
+          .from('platform_accounts')
+          .select('owner_user_id, plan_id, status, suspended_reason, trial_ends_at, notes, created_at, updated_at')
+          .eq('owner_user_id', ownerId)
+          .maybeSingle(),
+        supabaseAdmin.from('clients').select('id', { count: 'exact', head: true }).eq('user_id', ownerId),
+        supabaseAdmin.from('jobs').select('id', { count: 'exact', head: true }).eq('user_id', ownerId),
+        supabaseAdmin.from('deals').select('id', { count: 'exact', head: true }).eq('user_id', ownerId),
+        supabaseAdmin.from('team_members').select('id', { count: 'exact', head: true }).eq('owner_user_id', ownerId),
+      ]);
+
+      if (userErr || !userResp?.user) {
+        return res.status(404).json({ error: 'Usuário não encontrado' });
+      }
+
+      const { data: plans } = await supabaseAdmin.from('platform_plans').select('id, slug, name');
+      const plan = acct?.plan_id ? plans?.find((p) => p.id === acct.plan_id) : null;
+
+      res.json({
+        owner_user_id: ownerId,
+        email: userResp.user.email,
+        created_at: userResp.user.created_at,
+        last_sign_in_at: userResp.user.last_sign_in_at,
+        account: acct ?? { status: 'active', plan_id: null },
+        plan: plan ?? null,
+        metrics: {
+          clients: clientsCount ?? 0,
+          jobs: jobsCount ?? 0,
+          deals: dealsCount ?? 0,
+          team_members: teamCount ?? 0,
+        },
+      });
+    } catch (err: any) {
+      console.error('[platform/tenant detail] erro:', err);
+      res.status(500).json({ error: err.message ?? 'Falha ao carregar detalhe' });
+    }
+  });
+
+  app.patch('/api/platform/tenants/:ownerId', requireAuth, requireSuperAdmin, async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    const ownerId = req.params.ownerId;
+    const adminId = (req as any).realUserId as string;
+    const { plan_id, status, suspended_reason, trial_ends_at, notes } = req.body ?? {};
+
+    const update: Record<string, any> = {};
+    if (plan_id !== undefined) update.plan_id = plan_id;
+    if (status !== undefined) {
+      if (!['active', 'suspended', 'deleted'].includes(status)) {
+        return res.status(400).json({ error: 'status inválido' });
+      }
+      update.status = status;
+    }
+    if (suspended_reason !== undefined) update.suspended_reason = suspended_reason;
+    if (trial_ends_at !== undefined) update.trial_ends_at = trial_ends_at;
+    if (notes !== undefined) update.notes = notes;
+
+    if (Object.keys(update).length === 0) {
+      return res.status(400).json({ error: 'Nada para atualizar' });
+    }
+
+    // Upsert: se a conta ainda não existe, cria com defaults antes de aplicar
+    await ensurePlatformAccount(ownerId);
+
+    const { data, error } = await supabaseAdmin
+      .from('platform_accounts')
+      .update(update)
+      .eq('owner_user_id', ownerId)
+      .select('*')
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    await logAdminAction(adminId, 'tenant_update', ownerId, update, req.ip ?? null);
+    res.json(data);
+  });
+
+  // Estender o trial — atalho usado pelo admin pra dar mais alguns dias.
+  // Body: { extraDays: number }  (default 7, máx 14 contando do início do trial)
+  app.post('/api/platform/tenants/:ownerId/extend-trial', requireAuth, requireSuperAdmin, async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    const ownerId = req.params.ownerId;
+    const adminId = (req as any).realUserId as string;
+    const extraDays = Math.max(1, Math.min(14, Number(req.body?.extraDays || 7)));
+
+    await ensurePlatformAccount(ownerId);
+    const { data: acct } = await supabaseAdmin
+      .from('platform_accounts')
+      .select('trial_started_at, trial_ends_at')
+      .eq('owner_user_id', ownerId)
+      .maybeSingle();
+
+    const startedAt = (acct as any)?.trial_started_at ? new Date((acct as any).trial_started_at) : new Date();
+    const currentEnds = (acct as any)?.trial_ends_at ? new Date((acct as any).trial_ends_at) : new Date();
+    const base = currentEnds > new Date() ? currentEnds : new Date();
+    const newEnds = new Date(base.getTime() + extraDays * 24 * 60 * 60 * 1000);
+    // Limite: total não pode ultrapassar 14 dias contados do início
+    const maxAllowed = new Date(startedAt.getTime() + 14 * 24 * 60 * 60 * 1000);
+    const capped = newEnds > maxAllowed ? maxAllowed : newEnds;
+
+    const { error } = await supabaseAdmin
+      .from('platform_accounts')
+      .update({ trial_ends_at: capped.toISOString(), subscription_status: 'trial' })
+      .eq('owner_user_id', ownerId);
+    if (error) return res.status(500).json({ error: error.message });
+
+    await logAdminAction(adminId, 'trial_extended', ownerId, { extraDays, newEndsAt: capped.toISOString() }, req.ip ?? null);
+    res.json({ trial_ends_at: capped.toISOString() });
+  });
+
+  // Soft delete: marca como deleted (não apaga dados)
+  app.delete('/api/platform/tenants/:ownerId', requireAuth, requireSuperAdmin, async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    const ownerId = req.params.ownerId;
+    const adminId = (req as any).realUserId as string;
+    const reason = (req.body?.reason as string | undefined) ?? null;
+
+    await ensurePlatformAccount(ownerId);
+    const { error } = await supabaseAdmin
+      .from('platform_accounts')
+      .update({ status: 'deleted', suspended_reason: reason })
+      .eq('owner_user_id', ownerId);
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    await logAdminAction(adminId, 'tenant_delete', ownerId, { reason }, req.ip ?? null);
+    res.json({ success: true });
+  });
+
+  // Lista membros (equipe) de uma empresa
+  app.get('/api/platform/tenants/:ownerId/members', requireAuth, requireSuperAdmin, async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    const ownerId = req.params.ownerId;
+    const { data, error } = await supabaseAdmin
+      .from('team_members')
+      .select('id, name, email, member_user_id, permissions, is_active, color, created_at')
+      .eq('owner_user_id', ownerId)
+      .order('created_at', { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Hidrata last_sign_in_at dos que já fizeram login (têm member_user_id)
+    const ids = (data ?? []).map((m: any) => m.member_user_id).filter(Boolean) as string[];
+    const lastSignIns = new Map<string, string | null>();
+    await Promise.all(ids.map(async (id) => {
+      const { data: u } = await supabaseAdmin!.auth.admin.getUserById(id);
+      lastSignIns.set(id, u?.user?.last_sign_in_at ?? null);
+    }));
+
+    res.json((data ?? []).map((m: any) => ({
+      ...m,
+      last_sign_in_at: m.member_user_id ? lastSignIns.get(m.member_user_id) ?? null : null,
+    })));
+  });
+
+  app.post('/api/platform/members/:memberId/impersonate-start', requireAuth, requireSuperAdmin, async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    const memberId = req.params.memberId;
+    const adminId = (req as any).realUserId as string;
+    const { data: member } = await supabaseAdmin
+      .from('team_members')
+      .select('id, owner_user_id, email, name')
+      .eq('id', memberId)
+      .maybeSingle();
+    if (!member) return res.status(404).json({ error: 'Membro não encontrado' });
+    await logAdminAction(adminId, 'impersonate_member_start', member.owner_user_id, {
+      member_id: memberId,
+      member_email: member.email,
+      member_name: member.name,
+    }, req.ip ?? null);
+    res.json({ success: true, member_id: memberId, owner_user_id: member.owner_user_id });
+  });
+
+  // Impersonação — apenas registra start/stop no audit log.
+  // O frontend envia o header X-Impersonate-Owner-Id nas chamadas seguintes.
+  app.post('/api/platform/tenants/:ownerId/impersonate-start', requireAuth, requireSuperAdmin, async (req, res) => {
+    const adminId = (req as any).realUserId as string;
+    const ownerId = req.params.ownerId;
+    await logAdminAction(adminId, 'impersonate_start', ownerId, {}, req.ip ?? null);
+    res.json({ success: true, owner_user_id: ownerId });
+  });
+
+  app.post('/api/platform/impersonate-stop', requireAuth, async (req, res) => {
+    const adminId = (req as any).realUserId as string;
+    const ownerId = (req.body?.owner_user_id as string | undefined) ?? null;
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    const allowed = await isSuperAdmin(adminId);
+    if (!allowed) return res.status(403).json({ error: 'Apenas super-admin' });
+    await logAdminAction(adminId, 'impersonate_stop', ownerId, {}, req.ip ?? null);
+    res.json({ success: true });
+  });
+
+  // ---- PLANS ----
+  app.get('/api/platform/plans', requireAuth, requireSuperAdmin, async (_req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    const { data, error } = await supabaseAdmin
+      .from('platform_plans')
+      .select('*')
+      .order('sort_order', { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data ?? []);
+  });
+
+  app.post('/api/platform/plans', requireAuth, requireSuperAdmin, async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    const adminId = (req as any).realUserId as string;
+    const { slug, name, price_cents, limits, is_active, sort_order } = req.body ?? {};
+    if (!slug || !name) return res.status(400).json({ error: 'slug e name obrigatórios' });
+    const { data, error } = await supabaseAdmin
+      .from('platform_plans')
+      .insert({
+        slug,
+        name,
+        price_cents: price_cents ?? 0,
+        limits: limits ?? {},
+        is_active: is_active ?? true,
+        sort_order: sort_order ?? 0,
+      })
+      .select('*')
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    await logAdminAction(adminId, 'plan_create', null, { plan_id: data.id, slug }, req.ip ?? null);
+    res.json(data);
+  });
+
+  app.patch('/api/platform/plans/:id', requireAuth, requireSuperAdmin, async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    const adminId = (req as any).realUserId as string;
+    const id = req.params.id;
+    const { name, price_cents, limits, is_active, sort_order } = req.body ?? {};
+    const update: Record<string, any> = {};
+    if (name !== undefined) update.name = name;
+    if (price_cents !== undefined) update.price_cents = price_cents;
+    if (limits !== undefined) update.limits = limits;
+    if (is_active !== undefined) update.is_active = is_active;
+    if (sort_order !== undefined) update.sort_order = sort_order;
+    const { data, error } = await supabaseAdmin
+      .from('platform_plans')
+      .update(update)
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    await logAdminAction(adminId, 'plan_update', null, { plan_id: id, update }, req.ip ?? null);
+    res.json(data);
+  });
+
+  app.delete('/api/platform/plans/:id', requireAuth, requireSuperAdmin, async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    const adminId = (req as any).realUserId as string;
+    const id = req.params.id;
+    const { error } = await supabaseAdmin.from('platform_plans').delete().eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    await logAdminAction(adminId, 'plan_delete', null, { plan_id: id }, req.ip ?? null);
+    res.json({ success: true });
+  });
+
+  // ---- AUDIT LOG ----
+  app.get('/api/platform/audit-log', requireAuth, requireSuperAdmin, async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    const limit = Math.min(200, Math.max(10, parseInt((req.query.limit as string) || '50', 10)));
+    const targetOwnerId = req.query.target_owner_id as string | undefined;
+    const action = req.query.action as string | undefined;
+
+    let q = supabaseAdmin
+      .from('platform_audit_log')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (targetOwnerId) q = q.eq('target_owner_id', targetOwnerId);
+    if (action) q = q.eq('action', action);
+
+    const { data, error } = await q;
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Hidrata e-mails dos admin_user_id e target_owner_id
+    const ids = new Set<string>();
+    (data ?? []).forEach((row: any) => {
+      if (row.admin_user_id) ids.add(row.admin_user_id);
+      if (row.target_owner_id) ids.add(row.target_owner_id);
+    });
+    const emailMap = new Map<string, string>();
+    await Promise.all(
+      Array.from(ids).map(async (id) => {
+        const { data: u } = await supabaseAdmin!.auth.admin.getUserById(id);
+        if (u?.user?.email) emailMap.set(id, u.user.email);
+      }),
+    );
+
+    const enriched = (data ?? []).map((row: any) => ({
+      ...row,
+      admin_email: emailMap.get(row.admin_user_id) ?? null,
+      target_email: row.target_owner_id ? emailMap.get(row.target_owner_id) ?? null : null,
+    }));
+
+    res.json(enriched);
+  });
+
+  // ---- METRICS ----
+  app.get('/api/platform/metrics', requireAuth, requireSuperAdmin, async (_req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    try {
+      const [{ data: accounts }, { data: plans }, { data: usersData }] = await Promise.all([
+        supabaseAdmin.from('platform_accounts').select('owner_user_id, plan_id, status, created_at'),
+        supabaseAdmin.from('platform_plans').select('id, slug, name, price_cents'),
+        supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1 }),
+      ]);
+
+      const totalUsers = (usersData as any)?.total ?? (usersData?.users?.length ?? 0);
+      const accountsByStatus = { active: 0, suspended: 0, deleted: 0 };
+      const accountsByPlan: Record<string, number> = {};
+      const planById = new Map((plans ?? []).map((p) => [p.id, p]));
+
+      let mrrCents = 0;
+      const now = Date.now();
+      const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+      let newLast30 = 0;
+
+      (accounts ?? []).forEach((a: any) => {
+        if (accountsByStatus[a.status as keyof typeof accountsByStatus] !== undefined) {
+          accountsByStatus[a.status as keyof typeof accountsByStatus]++;
+        }
+        const plan = a.plan_id ? planById.get(a.plan_id) : null;
+        const key = plan?.slug ?? 'sem_plano';
+        accountsByPlan[key] = (accountsByPlan[key] ?? 0) + 1;
+        if (a.status === 'active' && plan?.price_cents) mrrCents += plan.price_cents;
+        if (new Date(a.created_at).getTime() >= thirtyDaysAgo) newLast30++;
+      });
+
+      res.json({
+        total_users: totalUsers,
+        accounts_by_status: accountsByStatus,
+        accounts_by_plan: accountsByPlan,
+        mrr_cents: mrrCents,
+        new_last_30_days: newLast30,
+      });
+    } catch (err: any) {
+      console.error('[platform/metrics] erro:', err);
+      res.status(500).json({ error: err.message ?? 'Falha nas métricas' });
+    }
   });
 
   app.post('/api/admin/invite', requireAuth, async (req, res) => {
@@ -4724,7 +5790,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const stages = await ensurePipelineStages(supabase, userId);
-    const { client_id, title, value, stage, priority, expected_close_date, next_follow_up, notes } = req.body;
+    const { client_id, title, value, stage, priority, expected_close_date, next_follow_up, notes, assigned_to } = req.body;
     const nowIso = new Date().toISOString();
     const stageId = stageIdOrDefault(stages, stage);
     const stageName = stages.find((s) => s.id === stageId)?.name || stageId;
@@ -4748,6 +5814,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       expected_close_date: expected_close_date || null,
       next_follow_up: next_follow_up || null,
       notes: notes || null,
+      assigned_to: assigned_to || null,
       user_id: userId,
       updated_at: nowIso,
     };
@@ -4781,8 +5848,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const supabase = (req as any).supabase as SupabaseClient;
     const stages = await ensurePipelineStages(supabase, userId);
     const firstStage = stages.find((s) => !s.is_final) || DEFAULT_STAGES[0];
-    const { name, phone, email, value, source } = req.body;
+    const { name, phone, email, value, source, stage: requestedStage, assigned_to } = req.body;
     if (!name || !phone) return res.status(400).json({ error: 'Nome e telefone são obrigatórios' });
+
+    // Stage solicitado (drag direto pra coluna específica) > primeira stage
+    const targetStage = (requestedStage && stages.find((s) => s.id === requestedStage)) || firstStage;
 
     const nowIso = new Date().toISOString();
     const payload: any = {
@@ -4792,18 +5862,19 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       contact_email: email || null,
       lead_source: source || null,
       value: Number(value) || 0,
-      stage: firstStage.id,
+      stage: targetStage.id,
       stage_entered_at: nowIso,
       current_stage_entered_at: nowIso,
       stage_history: [
         {
-          stage_id: firstStage.id,
-          stage_name: firstStage.name,
+          stage_id: targetStage.id,
+          stage_name: targetStage.name,
           entered_at: nowIso,
           left_at: null,
         },
       ],
       priority: 'medium',
+      assigned_to: assigned_to || null,
       user_id: userId,
       updated_at: nowIso,
     };
@@ -4813,7 +5884,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const retryPayload = {
         title: name,
         value: Number(value) || 0,
-        stage: firstStage.id,
+        stage: targetStage.id,
         priority: 'medium',
         notes: `Telefone: ${phone}${email ? ` | Email: ${email}` : ''}${source ? ` | Origem: ${source}` : ''}`,
         user_id: userId,
@@ -6084,16 +7155,36 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.get('/api/extension/deal-by-phone', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
     const phone = String(req.query.phone || '').replace(/\D/g, '');
     if (!phone) return res.status(400).json({ error: 'phone é obrigatório' });
 
     const stages = await ensurePipelineStages(supabase, userId);
 
+    // Gera variantes pra match flexível: com/sem DDI 55, com/sem nono dígito do celular Brasil.
+    // Ex.: 554398387146 → também tenta 4398387146, 5543998387146, 43998387146
+    const variants = new Set<string>([phone]);
+    const tail = phone.startsWith('55') && phone.length >= 12 ? phone.slice(2) : phone;
+    variants.add(tail);
+    variants.add(`55${tail}`);
+    // 10 dígitos = DDD + 8 (sem nono) — adiciona variante com nono
+    if (tail.length === 10) {
+      const withNine = `${tail.slice(0, 2)}9${tail.slice(2)}`;
+      variants.add(withNine);
+      variants.add(`55${withNine}`);
+    }
+    // 11 dígitos com nono — adiciona variante sem nono
+    if (tail.length === 11 && tail[2] === '9') {
+      const withoutNine = `${tail.slice(0, 2)}${tail.slice(3)}`;
+      variants.add(withoutNine);
+      variants.add(`55${withoutNine}`);
+    }
+
     const { data: deal } = await supabase
       .from('deals')
       .select('*')
       .eq('user_id', userId)
-      .eq('contact_phone', phone)
+      .in('contact_phone', Array.from(variants))
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -6101,7 +7192,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!deal) return res.json({ deal: null, stages });
 
     const stage = stages.find((s) => s.id === deal.stage) || null;
-    res.json({ deal: { ...deal, stage_name: stage?.name || deal.stage }, stages });
+    const { data: items } = await adminClient
+      .from('deal_items')
+      .select('*')
+      .eq('deal_id', deal.id)
+      .order('created_at');
+    res.json({ deal: { ...deal, items: items || [], stage_name: stage?.name || deal.stage }, stages });
   });
 
   // Mover deal de fase (PATCH mais simples que PUT completo)
@@ -8455,8 +9551,29 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     });
   }
 
+  // Error handler global — registra no Sentry se configurado
+  app.use(async (err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error('[express-error]', err);
+    const Sentry = await sentryReady;
+    if (Sentry?.captureException) Sentry.captureException(err);
+    if (res.headersSent) return;
+    res.status(500).json({ error: err?.message || 'Erro interno' });
+  });
+
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
+  });
+
+  // Crashes que escapam — também vão pro Sentry
+  process.on('unhandledRejection', async (reason) => {
+    console.error('[unhandledRejection]', reason);
+    const Sentry = await sentryReady;
+    if (Sentry?.captureException) Sentry.captureException(reason);
+  });
+  process.on('uncaughtException', async (err) => {
+    console.error('[uncaughtException]', err);
+    const Sentry = await sentryReady;
+    if (Sentry?.captureException) Sentry.captureException(err);
   });
 
   startFollowUpWorker();

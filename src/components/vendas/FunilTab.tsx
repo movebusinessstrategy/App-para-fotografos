@@ -12,11 +12,13 @@ import {
 import { SortableContext } from "@dnd-kit/sortable";
 import { Send, X, Loader2, CheckCircle2, AlertCircle, Rocket } from "lucide-react";
 
-import { Deal, PipelineStage, Client, PipelineLabel, WhatsAppMessageTemplate } from "../../types";
+import { Deal, PipelineStage, Client, PipelineLabel, TeamMember, WhatsAppMessageTemplate } from "../../types";
 import { authFetch } from "../../utils/authFetch";
 import { useApi } from "../../utils/useApi";
 import { DealCard } from "./DealCard";
 import { DealDetailDrawer } from "./DealDetailDrawer";
+import { useSellers } from "../../hooks/useSellers";
+import { SellerAvatar } from "./SellerPicker";
 
 interface FunilTabProps {
   deals: Deal[];
@@ -429,7 +431,10 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
   const [blastStage, setBlastStage] = useState<PipelineStage | null>(null);
   const [pipelineLabels, setPipelineLabels] = useState<PipelineLabel[]>([]);
+  const [sellerFilter, setSellerFilter] = useState<string | 'all' | 'none'>('all');
   const boardRef = useRef<HTMLDivElement>(null);
+
+  const { sellers, byId: sellerById } = useSellers();
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
@@ -461,14 +466,20 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
 
   const activeStages = stages.filter((s) => !s.is_final);
 
+  const filteredDeals = useMemo(() => {
+    if (sellerFilter === 'all') return localDeals;
+    if (sellerFilter === 'none') return localDeals.filter(d => !d.assigned_to);
+    return localDeals.filter(d => d.assigned_to === sellerFilter);
+  }, [localDeals, sellerFilter]);
+
   const dealsByStage = useMemo(() => {
     const map: Record<string, Deal[]> = {};
     activeStages.forEach((s) => (map[s.id] = []));
-    localDeals.forEach((d) => {
+    filteredDeals.forEach((d) => {
       if (map[d.stage]) map[d.stage].push(d);
     });
     return map;
-  }, [localDeals, activeStages]);
+  }, [filteredDeals, activeStages]);
 
   const handleDragStart = (event: DragStartEvent) => {
     const deal = localDeals.find((d) => String(d.id) === String(event.active.id));
@@ -511,6 +522,45 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
     <>
       <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
         <div className="h-full flex flex-col">
+          {sellers.length > 0 && (
+            <div className="flex items-center gap-2 px-2 pb-3 overflow-x-auto">
+              <span className="text-xs font-medium text-gray-500 dark:text-gray-400 flex-shrink-0 pl-1">Vendedor:</span>
+              <button
+                onClick={() => setSellerFilter('all')}
+                className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                  sellerFilter === 'all'
+                    ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900'
+                    : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-300'
+                }`}
+              >
+                Todos
+              </button>
+              {sellers.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => setSellerFilter(s.id)}
+                  className={`flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                    sellerFilter === s.id
+                      ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900'
+                      : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-300'
+                  }`}
+                >
+                  <SellerAvatar member={s} size={18} />
+                  {s.name.split(/\s+/)[0]}
+                </button>
+              ))}
+              <button
+                onClick={() => setSellerFilter('none')}
+                className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                  sellerFilter === 'none'
+                    ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900'
+                    : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-gray-300'
+                }`}
+              >
+                Sem responsável
+              </button>
+            </div>
+          )}
           <div ref={boardRef} className="flex-1 overflow-x-auto overflow-y-hidden pb-4">
             <div className="flex gap-4 h-full px-1" style={{ minWidth: "max-content" }}>
               {activeStages.map((stage) => (
@@ -522,6 +572,7 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
                     onDealClick={setSelectedDeal}
                     onFollowUp={() => setBlastStage(stage)}
                     labelMap={labelMap}
+                    sellerById={sellerById}
                   />
                 </React.Fragment>
               ))}
@@ -570,9 +621,10 @@ interface StageColumnProps {
   onDealClick: (deal: Deal) => void;
   onFollowUp: () => void;
   labelMap: Map<string, PipelineLabel>;
+  sellerById: Map<string, TeamMember>;
 }
 
-function StageColumn({ stage, deals, clientMap, onDealClick, onFollowUp, labelMap }: StageColumnProps) {
+function StageColumn({ stage, deals, clientMap, onDealClick, onFollowUp, labelMap, sellerById }: StageColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const totalValue = deals.reduce((sum, d) => sum + (d.value || 0), 0);
 
@@ -619,6 +671,7 @@ function StageColumn({ stage, deals, clientMap, onDealClick, onFollowUp, labelMa
                 client={deal.client_id ? clientMap.get(deal.client_id) : undefined}
                 onClick={() => onDealClick(deal)}
                 labelMap={labelMap}
+                seller={deal.assigned_to ? sellerById.get(deal.assigned_to) : undefined}
               />
             </React.Fragment>
           ))}

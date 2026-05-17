@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { BarChart3, LayoutGrid, Plus, MessageSquare, Settings, History } from "lucide-react";
+import { BarChart3, LayoutGrid, Plus, Settings, History, RefreshCw } from "lucide-react";
 import { FunilTab } from "./FunilTab";
 import { NewDealModal } from "./NewDealModal";
 import { StageCustomizer } from "./StageCustomizer";
@@ -44,12 +44,39 @@ export function VendasDashboard() {
   const clients = useMemo(() => Array.isArray(clientsData) ? clientsData : [], [clientsData]);
   const loading = dealsLoading && !dealsData;
 
+  const [refreshing, setRefreshing] = useState(false);
+
   // Substitui o antigo fetchData() — revalida tudo
-  const fetchData = (_options?: { silent?: boolean }) => {
-    mutateDeals();
-    refreshApi("/api/pipeline/stages");
-    refreshApi("/api/clients");
+  const fetchData = async (_options?: { silent?: boolean }) => {
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        mutateDeals(),
+        refreshApi("/api/pipeline/stages"),
+        refreshApi("/api/clients"),
+      ]);
+    } finally {
+      // Pequeno delay pra animação do ícone ficar perceptível
+      setTimeout(() => setRefreshing(false), 300);
+    }
   };
+
+  // Revalida automaticamente quando a aba volta a ficar visível (foco).
+  // Cobre o caso de você ter mexido em outra aba/dispositivo/extensão.
+  useEffect(() => {
+    const onFocus = () => {
+      if (document.visibilityState === 'visible') {
+        mutateDeals();
+        refreshApi("/api/pipeline/stages");
+      }
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, [mutateDeals]);
 
   // Reage à mudança nos params da URL (ex: clique no botão WA de um DealCard)
   useEffect(() => {
@@ -68,7 +95,6 @@ export function VendasDashboard() {
     { id: "kanban" as Tab, label: "Kanban", icon: LayoutGrid },
     { id: "historico" as Tab, label: "Histórico", icon: History },
     { id: "analises" as Tab, label: "Análises", icon: BarChart3 },
-    { id: "inbox" as Tab, label: "Inbox", icon: MessageSquare },
   ];
 
   return (
@@ -83,6 +109,14 @@ export function VendasDashboard() {
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => fetchData()}
+            disabled={refreshing}
+            title="Atualizar"
+            className="flex items-center justify-center w-9 h-9 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600 disabled:opacity-60 transition-colors"
+          >
+            <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
+          </button>
           {tab === "kanban" && (
             <button
               onClick={() => setCustomizerOpen(true)}

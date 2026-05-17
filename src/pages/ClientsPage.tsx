@@ -36,6 +36,7 @@ import { parseDate } from "../utils/date";
 import { cleanPhone, parseCSV, parseDateBR, parseValueBR } from "../utils/csvParser";
 import { supabase } from "../integrations/supabase/client";
 import { Client, Job, Opportunity } from "../types";
+import UsageBar from "../components/UsageBar";
 
 import * as Select from '@radix-ui/react-select';
 
@@ -822,9 +823,12 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
     <div className="space-y-6">
       {/* HEADER */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div>
+        <div className="flex-1">
           <h3 className="text-2xl font-bold text-gray-800 dark:text-white">Clientes</h3>
           <p className="text-gray-500 dark:text-gray-400 mt-1">Gerencie sua base de contatos e histórico</p>
+          <div className="mt-3 max-w-xs">
+            <UsageBar resource="clients" />
+          </div>
         </div>
         
         <div className="flex items-center gap-3">

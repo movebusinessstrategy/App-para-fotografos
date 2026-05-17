@@ -18,6 +18,7 @@ import { cn } from "../utils/cn";
 import { parseDate } from "../utils/date";
 import { normalizeText } from "../utils/normalizeText";
 import { Client, Job, ProductionProcess, ProductionStageV2, TeamMember } from "../types";
+import UsageBar from "../components/UsageBar";
 
 const LABEL_COLORS = ['#6366f1','#ec4899','#f59e0b','#10b981','#0ea5e9','#f43f5e','#8b5cf6','#22c55e'];
 function getLabelColor(label: string) {
@@ -185,9 +186,12 @@ export default function JobsPage() {
       <div className="space-y-5">
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
+          <div className="flex-1">
             <h3 className="text-2xl font-bold text-gray-800 dark:text-white">Produção</h3>
             <p className="text-gray-500 dark:text-gray-400 text-sm">Gerencie o fluxo de produção dos seus ensaios.</p>
+            <div className="mt-3 max-w-xs">
+              <UsageBar resource="jobs" />
+            </div>
           </div>
           <div className="flex items-center gap-2">
             {activeTab === "funil" && processes.length > 0 && (

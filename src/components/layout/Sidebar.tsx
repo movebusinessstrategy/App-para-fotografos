@@ -13,6 +13,7 @@ import {
   Package,
   Settings,
   Shield,
+  ShieldCheck,
   Trello,
   TrendingUp,
   Users,
@@ -36,15 +37,13 @@ const ALL_NAV_ITEMS = [
   { to: "/contratos",     label: "Contratos",        icon: FileText,        module: "contratos" },
 ];
 
-// Admin e configurações — apenas para donos
+// Item único de configurações — leva pra central com sidebar interna
 const OWNER_ITEMS = [
-  { to: "/admin",    label: "Administração",  icon: Shield },
-  { to: "/settings", label: "Configurações",  icon: Settings },
+  { to: "/configuracoes", label: "Configurações", icon: Settings },
 ];
 
-// Membros só podem acessar configurações de conta própria (senha, perfil)
 const MEMBER_BOTTOM_ITEMS = [
-  { to: "/settings", label: "Configurações",  icon: Settings },
+  { to: "/configuracoes", label: "Configurações", icon: Settings },
 ];
 
 const CATALOGO_SUBITEMS = [
@@ -59,7 +58,7 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
-  const { canAccess, isMember } = useAuth();
+  const { canAccess, isMember, isPlatformAdmin } = useAuth();
   const location = useLocation();
 
   const isCatalogo = location.pathname === "/catalogo";
@@ -190,6 +189,23 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
 
         {/* Rodapé */}
         <div className="p-4 border-t border-gray-100 dark:border-gray-800 space-y-1">
+          {isPlatformAdmin && (
+            <NavLink
+              to="/platform-admin"
+              onClick={onClose}
+              className={({ isActive }) =>
+                cn(
+                  "flex items-center gap-3 w-full px-4 py-3.5 rounded-xl transition-all duration-200",
+                  isActive
+                    ? "bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 font-semibold"
+                    : "text-purple-600 dark:text-purple-400 hover:bg-purple-50/50 dark:hover:bg-purple-900/20"
+                )
+              }
+            >
+              <ShieldCheck size={22} />
+              <span className="text-[15px] font-medium">Platform Admin</span>
+            </NavLink>
+          )}
           {bottomItems.map(item => (
             <NavLink
               key={item.to}

@@ -289,15 +289,24 @@ function TaskListRow({
   );
 }
 
+interface TaskBoardCardProps extends Omit<TaskRowProps, "linkedStage" | "linkedProcess"> {
+  isDragging?: boolean;
+  onDragStart?: (taskId: string) => void;
+  onDragEnd?: () => void;
+}
+
 function TaskBoardCard({
   task,
   member,
   linkedJob,
+  isDragging,
   onToggleComplete,
   onEdit,
   onDelete,
   onView,
-}: Omit<TaskRowProps, "linkedStage" | "linkedProcess">) {
+  onDragStart,
+  onDragEnd,
+}: TaskBoardCardProps) {
   const urgency = getUrgency(task);
   const accent = {
     ok: "border-l-gold-400",
@@ -308,12 +317,20 @@ function TaskBoardCard({
 
   return (
     <div
+      draggable
       onClick={onView}
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", task.id);
+        onDragStart?.(task.id);
+      }}
+      onDragEnd={() => onDragEnd?.()}
       className={cn(
-        "w-full text-left p-3 rounded-lg border border-l-4 border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 cursor-pointer",
+        "w-full text-left p-3 rounded-lg border border-l-4 border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 cursor-grab active:cursor-grabbing",
         "hover:border-gray-300 dark:hover:border-gray-700 hover:shadow-sm transition-all",
         accent,
-        task.completed_at && "opacity-70"
+        task.completed_at && "opacity-70",
+        isDragging && "opacity-40 ring-2 ring-gold-400"
       )}
     >
       <div className="flex items-start gap-2">
@@ -553,7 +570,7 @@ function TaskModal({ task, teamMembers, jobs, stages, processes, onSave, onClose
   const [assigneeId, setAssigneeId] = useState(task?.assignee_id || "");
   const [jobId, setJobId] = useState<number | "">(task?.job_id || "");
   const [stageId, setStageId] = useState(task?.stage_id || "");
-  const [dueDate, setDueDate] = useState(task?.due_date ? task.due_date.slice(0, 16) : "");
+  const [dueDate, setDueDate] = useState(task?.due_date || "");
 
   const isEdit = !!task?.id;
   const activeJobs = useMemo(() => jobs.filter((j) => j.status !== "cancelled"), [jobs]);
@@ -620,10 +637,7 @@ function TaskModal({ task, teamMembers, jobs, stages, processes, onSave, onClose
 
             <div>
               <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Prazo *</label>
-              <DateTimePicker
-                value={dueDate ? new Date(dueDate).toISOString() : ""}
-                onChange={(iso) => setDueDate(iso.slice(0, 16))}
-              />
+              <DateTimePicker value={dueDate} onChange={setDueDate} />
             </div>
           </div>
 
@@ -666,7 +680,7 @@ function TaskModal({ task, teamMembers, jobs, stages, processes, onSave, onClose
                 assignee_id: assigneeId || null,
                 job_id: jobId || null,
                 stage_id: stageId || null,
-                due_date: dueDate ? new Date(dueDate).toISOString() : undefined,
+                due_date: dueDate || undefined,
               })
             }
             disabled={!title.trim() || !dueDate || saving}
@@ -695,6 +709,71 @@ export default function TasksPage() {
   const [taskModal, setTaskModal] = useState<Partial<Task> | null | false>(false);
   const [viewTask, setViewTask] = useState<Task | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
+
+  const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+  const [dragOverColumn, setDragOverColumn] = useState<TaskBucket | null>(null);
+
+  const handleMoveTaskToBucket = async (taskId: string, targetBucket: TaskBucket) => {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return;
+    const currentBucket = getTaskBucket(task);
+    if (currentBucket === targetBucket) return;
+
+    if (targetBucket === "completed") {
+      if (task.completed_at) return;
+      return handleToggleComplete(task);
+    }
+
+    const wasCompleted = !!task.completed_at;
+    if (currentBucket === "completed") {
+      const keepsDueOk = (() => {
+        const due = new Date(task.due_date);
+        if (targetBucket === "today" && isToday(due)) return true;
+        if (targetBucket === "overdue" && Date.now() >= due.getTime() && !isToday(due)) return true;
+        if (targetBucket === "upcoming" && due.getTime() > Date.now() && !isToday(due)) return true;
+        return false;
+      })();
+      if (keepsDueOk) {
+        return handleToggleComplete(task);
+      }
+    }
+
+    const now = new Date();
+    let newDue: Date;
+    if (targetBucket === "overdue") {
+      newDue = new Date(now);
+      newDue.setDate(newDue.getDate() - 1);
+      newDue.setHours(23, 59, 0, 0);
+    } else if (targetBucket === "today") {
+      const eod = new Date(now);
+      eod.setHours(18, 0, 0, 0);
+      newDue = eod.getTime() > now.getTime() ? eod : new Date(now.getTime() + 2 * 60 * 60 * 1000);
+    } else {
+      newDue = new Date(now);
+      newDue.setDate(newDue.getDate() + 1);
+      newDue.setHours(9, 0, 0, 0);
+    }
+
+    const newDueIso = newDue.toISOString();
+    const payload: Partial<Task> = { ...task, due_date: newDueIso, completed_at: null };
+
+    setTasks((prev) =>
+      prev.map((t) => (t.id === taskId ? { ...t, due_date: newDueIso, completed_at: null } : t))
+    );
+
+    if (wasCompleted) {
+      await authFetch(`/api/tasks/${taskId}/complete`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ completed: false }),
+      });
+    }
+    await authFetch(`/api/tasks/${taskId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  };
 
   const fetchAll = async () => {
     try {
@@ -998,8 +1077,34 @@ export default function TasksPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 items-start">
-            {columns.map((column) => (
-              <section key={column.id} className="bg-gray-50 dark:bg-gray-900/60 border border-gray-200 dark:border-gray-800 rounded-2xl min-h-[320px]">
+            {columns.map((column) => {
+              const isDropTarget = dragOverColumn === column.id;
+              return (
+                <section
+                  key={column.id}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    if (dragOverColumn !== column.id) setDragOverColumn(column.id);
+                  }}
+                  onDragLeave={(e) => {
+                    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                    setDragOverColumn((prev) => (prev === column.id ? null : prev));
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const taskId = e.dataTransfer.getData("text/plain") || draggedTaskId;
+                    setDragOverColumn(null);
+                    setDraggedTaskId(null);
+                    if (taskId) handleMoveTaskToBucket(taskId, column.id);
+                  }}
+                  className={cn(
+                    "bg-gray-50 dark:bg-gray-900/60 border rounded-2xl min-h-[320px] transition-colors",
+                    isDropTarget
+                      ? "border-gold-400 dark:border-gold-500 bg-gold-50/40 dark:bg-gold-900/10"
+                      : "border-gray-200 dark:border-gray-800"
+                  )}
+                >
                 <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800 flex items-center gap-2">
                   <span className="text-gray-500 dark:text-gray-400">{column.icon}</span>
                   <h3 className="text-sm font-bold text-gray-800 dark:text-white">{column.title}</h3>
@@ -1017,6 +1122,9 @@ export default function TasksPage() {
                         task={task}
                         member={memberById(task.assignee_id)}
                         linkedJob={jobById(task.job_id)}
+                        isDragging={draggedTaskId === task.id}
+                        onDragStart={setDraggedTaskId}
+                        onDragEnd={() => { setDraggedTaskId(null); setDragOverColumn(null); }}
                         onToggleComplete={() => handleToggleComplete(task)}
                         onEdit={() => setTaskModal(task)}
                         onDelete={() => setConfirmDelete({ id: task.id, title: task.title })}
@@ -1026,7 +1134,8 @@ export default function TasksPage() {
                   )}
                 </div>
               </section>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

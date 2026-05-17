@@ -52,6 +52,13 @@ const createSupabaseClient = (req: VercelRequest): SupabaseClient => {
   );
 };
 
+const createAdminClient = (): SupabaseClient | null => {
+  const url = process.env.VITE_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceKey) return null;
+  return createClient(url, serviceKey);
+};
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -64,6 +71,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
   const supabase = createSupabaseClient(req);
+  const adminClient = createAdminClient() || supabase;
   const url = new URL(req.url!, `https://${req.headers.host}`);
   const path = url.pathname.replace('/api', '');
   const pathParts = path.split('/').filter(Boolean);
@@ -80,6 +88,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     (clientsRes.data || []).forEach((c) => clientMap.set(c.id, c.name));
 
     const dealsRaw = dealsRes.data || [];
+    let itemsMap = new Map<number, any[]>();
+    if (dealsRaw.length) {
+      const { data: allItems } = await adminClient
+        .from('deal_items')
+        .select('*')
+        .in('deal_id', dealsRaw.map((d: any) => d.id));
+      (allItems || []).forEach((item: any) => {
+        const list = itemsMap.get(item.deal_id) || [];
+        list.push(item);
+        itemsMap.set(item.deal_id, list);
+      });
+    }
+
     const activityMap = await fetchActivityMetrics(supabase, userId, dealsRaw.map((d: any) => d.id));
 
     const deals = dealsRaw.map((deal: any) => {
@@ -93,6 +114,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         temperature,
         temperature_score: score,
         client_name: deal.client_id ? clientMap.get(deal.client_id) || null : null,
+        items: itemsMap.get(deal.id) || [],
       };
     });
 
@@ -100,6 +122,51 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   };
 
   try {
+    // ============ CATÁLOGO ============
+    if (pathParts[0] === 'produtos' && req.method === 'GET') {
+      const { data, error } = await supabase
+        .from('produtos')
+        .select('*, fornecedores(nome)')
+        .eq('user_id', userId)
+        .order('nome');
+      if (error) return res.status(500).json({ error: error.message });
+      return res.json((data || []).map((p: any) => ({
+        ...p,
+        fornecedor_nome: p.fornecedores?.nome || null,
+        fornecedores: undefined,
+      })));
+    }
+
+    if (pathParts[0] === 'servicos' && req.method === 'GET') {
+      const { data, error } = await supabase
+        .from('servicos')
+        .select('*')
+        .eq('user_id', userId)
+        .order('nome');
+      if (error) return res.status(500).json({ error: error.message });
+      return res.json(data || []);
+    }
+
+    if (pathParts[0] === 'combos' && req.method === 'GET') {
+      const { data: combos, error } = await supabase
+        .from('combos')
+        .select('*')
+        .eq('user_id', userId)
+        .order('nome');
+      if (error) return res.status(500).json({ error: error.message });
+      if (!combos?.length) return res.json([]);
+
+      const { data: itens, error: itensError } = await adminClient
+        .from('combo_items')
+        .select('*')
+        .in('combo_id', combos.map((c: any) => c.id));
+      if (itensError) console.error('[combos GET] combo_items error:', itensError.message);
+      return res.json(combos.map((c: any) => ({
+        ...c,
+        itens: (itens || []).filter((i: any) => i.combo_id === c.id),
+      })));
+    }
+
     // ============ CLIENTS ============
     if (pathParts[0] === 'clients') {
       // GET /api/clients/export/csv
@@ -456,8 +523,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (pathParts[1] === 'quick' && req.method === 'POST') {
         const stages = await getStages();
         const firstStage = stages.find((s) => !s.is_final) || DEFAULT_STAGES[0];
-        const { name, phone, email, value, source } = req.body;
+        const { name, phone, email, value, source, stage: requestedStage } = req.body;
         if (!name || !phone) return res.status(400).json({ error: 'Nome e telefone são obrigatórios' });
+        const targetStage = (requestedStage && stages.find((s) => s.id === requestedStage)) || firstStage;
         const payload: any = {
           title: name,
           contact_name: name,
@@ -465,7 +533,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           contact_email: email || null,
           lead_source: source || null,
           value: Number(value) || 0,
-          stage: firstStage.id,
+          stage: targetStage.id,
           stage_entered_at: new Date().toISOString(),
           priority: 'medium',
           user_id: userId,
@@ -478,7 +546,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             .insert({
               title: name,
               value: Number(value) || 0,
-              stage: firstStage.id,
+              stage: targetStage.id,
               priority: 'medium',
               notes: `Telefone: ${phone}${email ? ` | Email: ${email}` : ''}${source ? ` | Origem: ${source}` : ''}`,
               user_id: userId,
@@ -492,20 +560,82 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.json({ id: data.id });
       }
 
+      // Deal Items
+      if (pathParts[2] === 'items' && req.method === 'POST') {
+        const dealId = Number(pathParts[1]);
+        if (!dealId) return res.status(400).json({ error: 'Deal inválido' });
+
+        const { data: deal } = await supabase
+          .from('deals')
+          .select('id, value')
+          .eq('id', dealId)
+          .eq('user_id', userId)
+          .single();
+        if (!deal) return res.status(404).json({ error: 'Deal not found' });
+
+        const { catalog_type, catalog_id, catalog_name, catalog_value, quantidade = 1 } = req.body;
+        if (!catalog_type || !catalog_id || !catalog_name) {
+          return res.status(400).json({ error: 'catalog_type, catalog_id, catalog_name são obrigatórios' });
+        }
+
+        const { data: newItem, error } = await adminClient
+          .from('deal_items')
+          .insert({
+            deal_id: dealId,
+            catalog_type,
+            catalog_id,
+            catalog_name,
+            catalog_value: catalog_value || 0,
+            quantidade,
+          })
+          .select()
+          .single();
+        if (error) return res.status(500).json({ error: error.message });
+
+        const { data: allItems } = await adminClient
+          .from('deal_items')
+          .select('catalog_value, quantidade')
+          .eq('deal_id', dealId);
+        const total = (allItems || []).reduce((sum: number, item: any) => {
+          return sum + ((Number(item.catalog_value) || 0) * (Number(item.quantidade) || 1));
+        }, 0);
+
+        await supabase
+          .from('deals')
+          .update({ value: total, updated_at: new Date().toISOString() })
+          .eq('id', dealId)
+          .eq('user_id', userId);
+
+        return res.json({ item: newItem, total });
+      }
+
       // Convert to won
       if (pathParts[2] === 'convert' && req.method === 'POST') {
         const stages = await getStages();
         const wonStage = stages.find((s) => s.is_won) || DEFAULT_STAGES.find((s) => s.is_won);
-        const { createClient, createJob, client, job } = req.body;
+        const { createClient, createJob, client, job, sinalAmount, existingClientId } = req.body;
         const { data: deal } = await supabase.from('deals').select('*').eq('id', pathParts[1]).eq('user_id', userId).single();
         if (!deal) return res.status(404).json({ error: 'Deal not found' });
 
-        let clientId = deal.client_id as number | null;
+        let clientId = (existingClientId as number | null) || (deal.client_id as number | null);
         if (createClient) {
+          const c = client || {};
+          const clientNotes = [
+            c.notes || '',
+            c.how_found ? `Como conheceu: ${c.how_found}` : '',
+          ].filter(Boolean).join('\n').trim();
           const payload = {
-            name: client?.name || deal.title,
-            phone: client?.phone || deal.contact_phone || null,
-            email: client?.email || deal.contact_email || null,
+            name: c.name || deal.title,
+            phone: c.phone || deal.contact_phone || null,
+            email: c.email || deal.contact_email || null,
+            cpf: c.document || null,
+            birth_date: c.birth_date || null,
+            address: c.address || null,
+            city: c.city || null,
+            state: c.state || null,
+            cep: c.zip_code || null,
+            instagram: c.instagram || deal.contact_instagram || null,
+            notes: clientNotes || null,
             status: 'active',
             user_id: userId,
           } as any;
@@ -527,12 +657,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             payment_method: job.payment_method || 'Pix',
             payment_status: job.payment_status || 'pending',
             status: job.status || 'scheduled',
-            notes: job.notes || '',
+            notes: [
+              job.notes || '',
+              sinalAmount && Number(sinalAmount) > 0 ? `Sinal pago: R$ ${Number(sinalAmount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '',
+            ].filter(Boolean).join('\n').trim(),
             user_id: userId,
           } as any;
           const { data: newJob, error } = await supabase.from('jobs').insert(payload).select().single();
           if (error) return res.status(500).json({ error: error.message });
           jobId = newJob?.id || null;
+
+          if (jobId && sinalAmount && Number(sinalAmount) > 0) {
+            await adminClient.from('job_payments').insert({
+              job_id: jobId,
+              amount: Number(sinalAmount),
+              description: 'Sinal',
+              payment_date: new Date().toISOString().slice(0, 10),
+              payment_method: job.payment_method || 'Pix',
+            }).select();
+          }
         }
 
         const updates: any = {
