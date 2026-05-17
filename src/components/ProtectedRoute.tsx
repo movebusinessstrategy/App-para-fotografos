@@ -13,10 +13,10 @@ const ProtectedRoute = ({ children }: ProtectedRouteProps) => {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-100 via-purple-50 to-slate-100 dark:from-slate-900 dark:via-purple-900 dark:to-slate-900">
+      <div className="min-h-screen flex items-center justify-center" style={{ background: "linear-gradient(135deg, #1a1207 0%, #2d1f08 40%, #1a1207 100%)" }}>
         <div className="flex flex-col items-center gap-4">
-          <Loader2 className="h-8 w-8 animate-spin text-purple-600 dark:text-purple-500" />
-          <p className="text-gray-600 dark:text-white/70">Carregando...</p>
+          <Loader2 className="h-8 w-8 animate-spin text-gold-400" />
+          <p className="text-white/70">Carregando...</p>
         </div>
       </div>
     );
