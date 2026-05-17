@@ -70,6 +70,7 @@ export default function AppLayout() {
         <Header
           title={pageTitle}
           userInitial={user?.email?.charAt(0).toUpperCase()}
+          userEmail={user?.email ?? undefined}
           onSignOut={signOut}
           onMenuClick={() => setSidebarOpen(true)}
         />
