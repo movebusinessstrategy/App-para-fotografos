@@ -78,11 +78,11 @@ const Cadastro = () => {
   );
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4">
-      <div className="w-full max-w-md bg-white dark:bg-gray-900 rounded-xl shadow-lg dark:shadow-2xl dark:shadow-purple-500/10 p-8 border border-transparent dark:border-gray-800">
+    <div className="min-h-screen flex items-center justify-center p-4" style={{ background: "linear-gradient(135deg, #1a1207 0%, #2d1f08 40%, #1a1207 100%)" }}>
+      <div className="w-full max-w-md bg-white dark:bg-gray-900 rounded-2xl shadow-2xl p-8 border border-gray-100 dark:border-gray-800">
         {/* Header */}
         <div className="text-center mb-6">
-          <div className="mx-auto mb-4 h-12 w-12 rounded-xl bg-purple-600 dark:bg-purple-500 flex items-center justify-center">
+          <div className="mx-auto mb-4 h-12 w-12 rounded-xl bg-gradient-to-br from-gold-500 to-gold-600 flex items-center justify-center shadow-lg shadow-gold-500/30">
             <span className="text-white font-bold text-xl">FP</span>
           </div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Criar conta</h1>
@@ -117,7 +117,7 @@ const Cadastro = () => {
               onChange={(e) => setNome(e.target.value)}
               required
               disabled={loading}
-              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:border-transparent outline-none transition bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:cursor-not-allowed"
+              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-gold-400 dark:focus:ring-gold-400 focus:border-transparent outline-none transition bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:cursor-not-allowed"
             />
           </div>
 
@@ -133,7 +133,7 @@ const Cadastro = () => {
               onChange={(e) => setEmail(e.target.value)}
               required
               disabled={loading}
-              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:border-transparent outline-none transition bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:cursor-not-allowed"
+              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-gold-400 dark:focus:ring-gold-400 focus:border-transparent outline-none transition bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:cursor-not-allowed"
             />
           </div>
 
@@ -150,7 +150,7 @@ const Cadastro = () => {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 disabled={loading}
-                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:border-transparent outline-none transition bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:cursor-not-allowed pr-10"
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-gold-400 dark:focus:ring-gold-400 focus:border-transparent outline-none transition bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:cursor-not-allowed pr-10"
               />
               <button
                 type="button"
@@ -174,7 +174,7 @@ const Cadastro = () => {
               onChange={(e) => setConfirmPassword(e.target.value)}
               required
               disabled={loading}
-              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:border-transparent outline-none transition bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:cursor-not-allowed"
+              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-gold-400 dark:focus:ring-gold-400 focus:border-transparent outline-none transition bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:cursor-not-allowed"
             />
           </div>
 
@@ -194,15 +194,15 @@ const Cadastro = () => {
               type="checkbox"
               checked={acceptedTerms}
               onChange={(e) => setAcceptedTerms(e.target.checked)}
-              className="mt-0.5 w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500"
+              className="mt-0.5 w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-gold-600 focus:ring-gold-500"
             />
             <span className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
               Li e aceito os{" "}
-              <Link to="/termos" target="_blank" className="text-purple-600 dark:text-purple-400 hover:underline">
+              <Link to="/termos" target="_blank" className="text-gold-600 dark:text-gold-400 hover:underline">
                 Termos de Uso
               </Link>
               {" "}e a{" "}
-              <Link to="/privacidade" target="_blank" className="text-purple-600 dark:text-purple-400 hover:underline">
+              <Link to="/privacidade" target="_blank" className="text-gold-600 dark:text-gold-400 hover:underline">
                 Política de Privacidade
               </Link>
               .
@@ -212,7 +212,7 @@ const Cadastro = () => {
           <button
             type="submit"
             disabled={loading || !isPasswordValid || !acceptedTerms}
-            className="w-full py-2 px-4 bg-purple-600 dark:bg-purple-500 hover:bg-purple-700 dark:hover:bg-purple-600 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+            className="w-full py-2 px-4 bg-gold-500 dark:bg-gold-400 hover:bg-gold-600 dark:hover:bg-gold-500 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
           >
             {loading ? (
               <>
@@ -226,7 +226,7 @@ const Cadastro = () => {
 
           <p className="text-sm text-center text-gray-600 dark:text-gray-400">
             Já tem uma conta?{" "}
-            <Link to="/login" className="text-purple-600 dark:text-purple-400 hover:text-purple-700 dark:hover:text-purple-300 hover:underline font-medium">
+            <Link to="/login" className="text-gold-600 dark:text-gold-400 hover:text-gold-700 dark:hover:text-gold-300 hover:underline font-medium">
               Entrar
             </Link>
           </p>

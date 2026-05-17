@@ -34,11 +34,11 @@ const RecuperarSenha = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4">
-      <div className="w-full max-w-md bg-white dark:bg-gray-900 rounded-xl shadow-lg dark:shadow-2xl dark:shadow-black/20 p-8 border border-transparent dark:border-gray-800">
+    <div className="min-h-screen flex items-center justify-center p-4" style={{ background: "linear-gradient(135deg, #1a1207 0%, #2d1f08 40%, #1a1207 100%)" }}>
+      <div className="w-full max-w-md bg-white dark:bg-gray-900 rounded-2xl shadow-2xl p-8 border border-gray-100 dark:border-gray-800">
         {/* Header */}
         <div className="text-center mb-6">
-          <div className="mx-auto mb-4 h-12 w-12 rounded-xl bg-purple-600 dark:bg-purple-500 flex items-center justify-center">
+          <div className="mx-auto mb-4 h-12 w-12 rounded-xl bg-gradient-to-br from-gold-500 to-gold-600 flex items-center justify-center shadow-lg shadow-gold-500/30">
             {emailSent ? (
               <Mail className="text-white" size={24} />
             ) : (
@@ -76,14 +76,14 @@ const RecuperarSenha = () => {
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 disabled={loading}
-                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:border-transparent outline-none transition disabled:bg-gray-100 dark:disabled:bg-gray-800/50 disabled:cursor-not-allowed"
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-gold-400 dark:focus:ring-gold-400 focus:border-transparent outline-none transition disabled:bg-gray-100 dark:disabled:bg-gray-800/50 disabled:cursor-not-allowed"
               />
             </div>
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-2 px-4 bg-purple-600 dark:bg-purple-500 hover:bg-purple-700 dark:hover:bg-purple-600 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+              className="w-full py-2 px-4 bg-gold-500 dark:bg-gold-400 hover:bg-gold-600 dark:hover:bg-gold-500 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
             >
               {loading ? (
                 <>
@@ -97,7 +97,7 @@ const RecuperarSenha = () => {
 
             <Link
               to="/login"
-              className="text-sm text-center text-purple-600 dark:text-purple-400 hover:text-purple-700 dark:hover:text-purple-300 hover:underline flex items-center justify-center gap-1 transition-colors"
+              className="text-sm text-center text-gold-600 dark:text-gold-400 hover:text-gold-700 dark:hover:text-gold-300 hover:underline flex items-center justify-center gap-1 transition-colors"
             >
               <ArrowLeft size={16} />
               Voltar para o login
@@ -114,7 +114,7 @@ const RecuperarSenha = () => {
 
             <Link
               to="/login"
-              className="text-sm text-center text-purple-600 dark:text-purple-400 hover:text-purple-700 dark:hover:text-purple-300 hover:underline flex items-center justify-center gap-1 transition-colors"
+              className="text-sm text-center text-gold-600 dark:text-gold-400 hover:text-gold-700 dark:hover:text-gold-300 hover:underline flex items-center justify-center gap-1 transition-colors"
             >
               <ArrowLeft size={16} />
               Voltar para o login
