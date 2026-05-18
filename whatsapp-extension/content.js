@@ -4299,6 +4299,25 @@
     if (/(push-pin|data-icon)/i.test(name)) return null;
     // Mensagens de sistema do grupo
     if (/\b(saiu|entrou|removeu|adicionou|convidou|left|joined|removed|added)\b/i.test(name) && name.length > 25) return null;
+
+    // Limpa "handle do Instagram colado" — ex.: "Clélia liaborgesfotografia"
+    // ou "Maria fotografiaoficial". Se tem pelo menos um token capitalizado
+    // e outro token todo minúsculo, longo, sem separador, é quase sempre o
+    // @handle/empresa colado. Mantém só os tokens "de nome".
+    const tokens = name.split(/\s+/);
+    if (tokens.length > 1) {
+      const hasCapitalized = tokens.some((t) => /^[A-ZÀ-Ý]/.test(t));
+      if (hasCapitalized) {
+        const isHandle = (tok) =>
+          /^[a-z][a-z0-9_.]{7,}$/.test(tok) || // tudo minúsculo, 8+ chars
+          /(fotografia|fotograf|studio|estudio|oficial|official|photo|photos|atelier)$/i.test(tok) && tok.length > 6;
+        const filtered = tokens.filter((tok) => !isHandle(tok));
+        if (filtered.length && filtered.length !== tokens.length) {
+          name = filtered.join(' ');
+        }
+      }
+    }
+
     return name;
   }
 
