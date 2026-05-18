@@ -9494,16 +9494,37 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     let failed = 0;
     const errors: Array<{ doc_id: string; reason: string }> = [];
 
+    // CPF (segundo critério de match — depois do email)
+    const { data: clientsWithCpf } = await supabase.from('clients').select('id, name, cpf').eq('user_id', userId).not('cpf', 'is', null);
+    const clientsByCpf = new Map<string, any>();
+    (clientsWithCpf || []).forEach((c: any) => {
+      if (c.cpf) clientsByCpf.set(String(c.cpf).replace(/\D/g, ''), c);
+    });
+
     for (const doc of docs) {
       try {
-        const ext = lib.extractFromDoc(doc);
+        const base = lib.extractFromDoc(doc);
+
+        // Baixa + parseia o PDF assinado pra ter CPF/telefone/endereço/valor
+        // Se falhar (sem PDF assinado, timeout, etc), segue só com metadados
+        let ext: any = base;
+        if (doc.pdf_url) {
+          try {
+            ext = await lib.downloadAndParsePdf(doc.pdf_url, base, 15_000);
+          } catch (pdfErr: any) {
+            console.warn(`[autentique-import] PDF parse falhou pra ${doc.id}: ${pdfErr.message} — seguindo só com metadados`);
+          }
+        }
+
         if (!ext.client_name) {
           failed++; errors.push({ doc_id: doc.id, reason: 'Sem nome de cliente' });
           continue;
         }
 
-        // Match cliente por email
-        let client: any = ext.client_email ? clientsByEmail.get(ext.client_email) : null;
+        // Match cliente: email → CPF
+        let client: any = null;
+        if (ext.client_email) client = clientsByEmail.get(ext.client_email);
+        if (!client && ext.client_cpf) client = clientsByCpf.get(ext.client_cpf);
 
         if (!client) {
           const { data: newClient, error: ce } = await supabase
@@ -9512,6 +9533,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
               user_id: userId,
               name: ext.client_name,
               email: ext.client_email || null,
+              cpf: ext.client_cpf || null,
+              phone: ext.client_phone || null,
+              address: ext.client_address || null,
+              cep: ext.client_cep || null,
+              city: ext.client_city || null,
+              state: ext.client_state || null,
               status: 'active',
               notes: `Importado do Autentique em ${new Date().toLocaleDateString('pt-BR')}`,
             })
@@ -9522,6 +9549,19 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           }
           client = newClient;
           if (client.email) clientsByEmail.set(String(client.email).toLowerCase(), client);
+          if (client.cpf) clientsByCpf.set(String(client.cpf).replace(/\D/g, ''), client);
+        } else {
+          // Cliente já existe — complementa dados vazios (não sobrescreve)
+          const patch: any = {};
+          if (!client.cpf && ext.client_cpf) patch.cpf = ext.client_cpf;
+          if (!client.phone && ext.client_phone) patch.phone = ext.client_phone;
+          if (!client.address && ext.client_address) patch.address = ext.client_address;
+          if (!client.cep && ext.client_cep) patch.cep = ext.client_cep;
+          if (!client.city && ext.client_city) patch.city = ext.client_city;
+          if (!client.state && ext.client_state) patch.state = ext.client_state;
+          if (Object.keys(patch).length > 0) {
+            await supabase.from('clients').update(patch).eq('id', client.id).eq('user_id', userId);
+          }
         }
 
         // Dedup
@@ -9537,7 +9577,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           job_name: jobName,
           job_type: ext.job_type || 'Outro',
           job_date: ext.job_date || null,
-          amount: 0,
+          amount: ext.job_value || 0,
           payment_method: '',
           payment_status: 'paid',
           status: 'completed',
