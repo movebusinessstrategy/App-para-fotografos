@@ -3171,7 +3171,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.put('/api/jobs/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { client_id, job_type, job_date, job_time, job_end_time, job_name, amount, payment_method, payment_status, status, notes, production_stage } = req.body;
+    const { client_id, job_type, job_date, job_time, job_end_time, job_name, amount, payment_method, payment_status, status, notes, production_stage, position, cover_image_url, labels } = req.body;
 
     const { data: oldJob } = await supabase
       .from('jobs')
@@ -3201,6 +3201,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         updatePayload.production_stage_entered_at = new Date().toISOString();
       }
     }
+    if (position !== undefined) updatePayload.position = Number(position) || 0;
+    if (cover_image_url !== undefined) updatePayload.cover_image_url = cover_image_url || null;
+    if (labels !== undefined) updatePayload.labels = Array.isArray(labels) ? labels : null;
 
     await supabase.from('jobs').update(updatePayload).eq('id', req.params.id).eq('user_id', userId);
 
@@ -3261,6 +3264,93 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
 
     syncJobToGoogleCalendar(supabase, jobId, userId);
+    res.json({ success: true });
+  });
+
+  // Reordenar jobs em uma etapa. Body: { stage_id, job_ids: [in order] }
+  // Atualiza o campo position de cada job em massa via supabaseAdmin pra
+  // bypassar RLS quirky de updates múltiplos.
+  app.post('/api/jobs/reorder', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+    const { stage_id, job_ids } = req.body || {};
+    if (!stage_id || !Array.isArray(job_ids)) {
+      return res.status(400).json({ error: 'stage_id e job_ids[] obrigatórios' });
+    }
+    try {
+      await Promise.all(
+        job_ids.map((id: number, idx: number) =>
+          adminClient
+            .from('jobs')
+            .update({ position: idx })
+            .eq('id', id)
+            .eq('user_id', userId)
+            .eq('production_stage', stage_id),
+        ),
+      );
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Upload de imagem de capa do job. Body: { dataUrl: "data:image/...;base64,..." }
+  // Sobe pro Supabase Storage (bucket 'job-covers'), salva URL pública.
+  let jobCoversBucketReady = false;
+  async function ensureJobCoversBucket() {
+    if (jobCoversBucketReady || !supabaseAdmin) return;
+    try {
+      const { data: buckets } = await supabaseAdmin.storage.listBuckets();
+      const exists = (buckets || []).some((b: any) => b.name === 'job-covers');
+      if (!exists) {
+        await supabaseAdmin.storage.createBucket('job-covers', { public: true, fileSizeLimit: 5_242_880 });
+      }
+      jobCoversBucketReady = true;
+    } catch (e: any) {
+      console.error('[jobs/cover] erro criando bucket:', e?.message);
+    }
+  }
+
+  app.post('/api/jobs/:id/cover', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Storage indisponível' });
+    const jobId = Number(req.params.id);
+
+    const { data: job } = await supabase.from('jobs').select('id').eq('id', jobId).eq('user_id', userId).single();
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+
+    const dataUrl: string = String(req.body?.dataUrl || '');
+    const match = dataUrl.match(/^data:(image\/[a-z+]+);base64,(.+)$/i);
+    if (!match) return res.status(400).json({ error: 'dataUrl inválido' });
+    const mime = match[1];
+    const buffer = Buffer.from(match[2], 'base64');
+    if (buffer.length > 5_242_880) return res.status(400).json({ error: 'Imagem muito grande (>5MB)' });
+
+    await ensureJobCoversBucket();
+    const ext = mime.split('/')[1]?.split('+')[0] || 'jpg';
+    const filename = `${userId}/${jobId}-${Date.now()}.${ext}`;
+    const { error: upErr } = await supabaseAdmin.storage.from('job-covers').upload(filename, buffer, {
+      contentType: mime,
+      upsert: false,
+    });
+    if (upErr) return res.status(500).json({ error: `Upload falhou: ${upErr.message}` });
+
+    const { data: pub } = supabaseAdmin.storage.from('job-covers').getPublicUrl(filename);
+    const url = pub?.publicUrl;
+    if (!url) return res.status(500).json({ error: 'Falha ao gerar URL pública' });
+
+    await supabase.from('jobs').update({ cover_image_url: url }).eq('id', jobId).eq('user_id', userId);
+    res.json({ cover_image_url: url });
+  });
+
+  // Remove a foto de capa
+  app.delete('/api/jobs/:id/cover', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const jobId = Number(req.params.id);
+    await supabase.from('jobs').update({ cover_image_url: null }).eq('id', jobId).eq('user_id', userId);
     res.json({ success: true });
   });
 
@@ -3561,7 +3651,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const adminClient = supabaseAdmin || supabase;
     const jobId = Number(req.params.id);
 
-    const { data: job } = await supabase.from('jobs').select('id, amount').eq('id', jobId).eq('user_id', userId).single();
+    const { data: job } = await supabase.from('jobs').select('id, amount, labels').eq('id', jobId).eq('user_id', userId).single();
     if (!job) return res.status(404).json({ error: 'Job not found' });
 
     const { catalog_type, catalog_id, catalog_name, catalog_value, quantidade = 1 } = req.body;
@@ -3573,6 +3663,19 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }).select().single();
 
     if (error) return res.status(500).json({ error: error.message });
+
+    // Auto-label "Álbum" se o produto adicionado tem "álbum" / "album" no nome
+    const nameLower = String(catalog_name).toLowerCase();
+    if (/\b[áa]lbum(?:s|es)?\b/.test(nameLower)) {
+      const currentLabels: string[] = Array.isArray(job.labels) ? job.labels : [];
+      if (!currentLabels.includes('Álbum')) {
+        await supabase
+          .from('jobs')
+          .update({ labels: [...currentLabels, 'Álbum'] })
+          .eq('id', jobId)
+          .eq('user_id', userId);
+      }
+    }
 
     const result = await recalcJobFinancials(supabase, adminClient, jobId, userId);
     res.json({ item, ...result });

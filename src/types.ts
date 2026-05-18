@@ -58,6 +58,8 @@ export interface Job {
   production_stage_entered_at?: string | null;
   labels?: string[];
   assignee_id?: string | null;
+  position?: number;
+  cover_image_url?: string | null;
 }
 
 export interface ProductionProcess {
