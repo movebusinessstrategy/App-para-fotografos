@@ -115,41 +115,66 @@ export function SalesOverviewPanel({ processes, stages, onRefreshJobs }: Props) 
       return;
     }
     try {
-      await authFetch(`/api/jobs/${sale.job_id}`, {
+      const r = await authFetch(`/api/jobs/${sale.job_id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ production_stage: entryStageId }),
       });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        alert(`Erro ao enviar pra produção: ${d.error || `${r.status}`}`);
+        return;
+      }
       load();
       onRefreshJobs?.();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      alert(`Erro inesperado: ${err?.message || err}`);
     }
   };
 
   const removeFromProduction = async (sale: Sale) => {
     if (!sale.job_id) return;
     try {
-      await authFetch(`/api/jobs/${sale.job_id}`, {
+      const r = await authFetch(`/api/jobs/${sale.job_id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ production_stage: null }),
       });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        alert(`Erro ao tirar da produção: ${d.error || `${r.status}`}`);
+        return;
+      }
       load();
       onRefreshJobs?.();
-    } catch (err) { console.error(err); }
+    } catch (err: any) {
+      console.error(err);
+      alert(`Erro inesperado: ${err?.message || err}`);
+    }
   };
 
   const cancelSale = async (sale: Sale) => {
     try {
-      await authFetch(`/api/deals/${sale.deal_id}/cancel-sale`, {
+      const r = await authFetch(`/api/deals/${sale.deal_id}/cancel-sale`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason: 'Cancelado pelo painel de Vendas recentes' }),
       });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        alert(`Não consegui cancelar a venda: ${data.error || `erro ${r.status}`}`);
+        return;
+      }
+      // Otimista: remove da lista imediatamente. O load() vai validar
+      // logo depois quando o backend reflete a mudança.
+      setSales(prev => prev.filter(s => s.deal_id !== sale.deal_id));
       load();
       onRefreshJobs?.();
-    } catch (err) { console.error(err); }
+    } catch (err: any) {
+      console.error('[cancelSale]', err);
+      alert(`Erro inesperado: ${err?.message || err}`);
+    }
   };
 
   const doMove = async () => {
