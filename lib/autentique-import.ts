@@ -1,8 +1,7 @@
 // Biblioteca pra importar histórico de contratos do Autentique.
-// Modo "leve": só usa metadados da API GraphQL (nome do doc, signatários,
-// data de criação). Não baixa PDFs — é instantâneo. Suficiente pra
-// vincular cliente e criar histórico de sessão; campos detalhados
-// (CPF, endereço, valor) ficam vazios e podem ser editados depois.
+// - Listagem: usa só metadados do GraphQL (rápido, sem PDF)
+// - Import: baixa o PDF assinado e extrai CPF/telefone/endereço/valor
+//   com regex (lento mas dados completos)
 
 const AUTENTIQUE_GQL = (sandbox: boolean) =>
   sandbox
@@ -147,4 +146,113 @@ export function extractFromDoc(doc: AutentiqueDoc): ExtractedFromDoc {
     job_date: (doc.created_at || '').slice(0, 10),
     doc_name: doc.name,
   };
+}
+
+// ─── PDF parse (rico — pra modo de import) ─────────────────────────────
+
+export interface FullParsedContract extends ExtractedFromDoc {
+  client_cpf?: string | null;
+  client_phone?: string | null;
+  client_address?: string | null;
+  client_cep?: string | null;
+  client_city?: string | null;
+  client_state?: string | null;
+  job_value?: number | null;
+  // Sobrescreve job_date se achar uma "data do ensaio" explícita no PDF
+  pdf_text_preview?: string;
+}
+
+function parsePdfText(text: string, base: ExtractedFromDoc): FullParsedContract {
+  const r: FullParsedContract = { ...base };
+
+  // CPF — primeira ocorrência válida
+  const cpfMatch = text.match(/(\d{3}[\.\s]?\d{3}[\.\s]?\d{3}[-\s]?\d{2})/);
+  if (cpfMatch) {
+    const d = cpfMatch[1].replace(/\D/g, '');
+    if (d.length === 11) r.client_cpf = d;
+  }
+
+  // Email — só sobrescreve se o do GraphQL tava vazio
+  if (!r.client_email) {
+    const em = text.match(/([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/);
+    if (em) r.client_email = em[1].toLowerCase();
+  }
+
+  // Telefone BR (com ou sem 9, com ou sem DDD entre parênteses)
+  const ph = text.match(/\(?(\d{2})\)?\s*9?\s*(\d{4,5})[-\s]?(\d{4})/);
+  if (ph) {
+    const all = ph[0].replace(/\D/g, '');
+    if (all.length >= 10 && all.length <= 11) r.client_phone = all;
+  }
+
+  // CEP
+  const cep = text.match(/\b(\d{5})-?(\d{3})\b/);
+  if (cep) r.client_cep = cep[1] + cep[2];
+
+  // Valor — pega o PRIMEIRO R$ encontrado (geralmente o total do contrato)
+  // Aceita formatos: R$ 1.200,00 / R$1200 / R$ 850,50
+  const val = text.match(/R\$\s*([\d.]+,\d{2}|\d+[.,]\d{2}|\d{2,7})/);
+  if (val) {
+    const raw = val[1].replace(/\./g, '').replace(',', '.');
+    const n = parseFloat(raw);
+    if (!isNaN(n) && n > 0 && n < 1_000_000) r.job_value = n;
+  }
+
+  // Nome do cliente — se a versão da API veio vazia, tenta no texto
+  if (!r.client_name) {
+    const m = text.match(/(?:CONTRATANTE|Cliente|Nome\s+completo|Nome)\s*:?\s*([A-ZÀ-Ý][a-zà-ÿA-ZÀ-Ý]+(?:\s+[A-ZÀ-Ý][a-zà-ÿA-ZÀ-Ý]+){1,6})/);
+    if (m && m[1].trim().length > 4) r.client_name = m[1].trim();
+  }
+
+  // Endereço — linha logo após "Endereço:"
+  const addr = text.match(/endere[çc]o\s*:?\s*([^\n\r]{5,120})/i);
+  if (addr) r.client_address = addr[1].trim().replace(/\s+/g, ' ');
+
+  // Cidade / UF
+  const city = text.match(/cidade\s*:?\s*([A-ZÀ-Ý][a-zà-ÿA-ZÀ-Ý\s]{2,40}?)(?:[\s\/,]+([A-Z]{2}))?(?:\s|$|\n)/i);
+  if (city) {
+    r.client_city = city[1].trim();
+    if (city[2]) r.client_state = city[2];
+  }
+
+  // Tipo de ensaio — se não veio do nome do doc, tenta no texto
+  if (!r.job_type) r.job_type = detectJobType(text) || null;
+
+  // Data do ensaio — explícita no PDF tem prioridade sobre created_at
+  const dateLabels = [
+    /(?:data\s+do\s+ensaio|data\s+da\s+sess[ãa]o|dia\s+do\s+ensaio|agendado\s+para|data\s+do\s+evento|data\s+do\s+casamento)\s*:?\s*(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/i,
+  ];
+  for (const re of dateLabels) {
+    const m = text.match(re);
+    if (m) {
+      const yyyy = m[3].length === 2 ? `20${m[3]}` : m[3];
+      r.job_date = `${yyyy}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+      break;
+    }
+  }
+
+  r.pdf_text_preview = text.slice(0, 200);
+  return r;
+}
+
+// Baixa e parseia o PDF assinado de um documento Autentique.
+// Usa pdf-parse v1 (legado, sem worker — funciona sem setup em Node).
+export async function downloadAndParsePdf(
+  url: string,
+  base: ExtractedFromDoc,
+  timeoutMs = 15_000,
+): Promise<FullParsedContract> {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, { signal: controller.signal });
+    if (!r.ok) throw new Error(`PDF download HTTP ${r.status}`);
+    const buf = Buffer.from(await r.arrayBuffer());
+    // @ts-ignore — pdf-parse v1 não tem types publicados
+    const pdfParse = (await import('pdf-parse')).default;
+    const parsed = await pdfParse(buf);
+    return parsePdfText(parsed.text || '', base);
+  } finally {
+    clearTimeout(t);
+  }
 }
