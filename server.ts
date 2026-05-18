@@ -6165,6 +6165,26 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     let jobId: number | null = null;
     if (createJob && job) {
+      // Determina a etapa de entrada da produção: primeira etapa do primeiro
+      // processo não-especial (tipicamente "Ensaios Vendidos" → "Vendido").
+      // Se a config não existir, o job nasce fora da produção (production_stage null).
+      let entryProductionStage: string | null = null;
+      try {
+        const processes = await ensureProductionProcesses(supabase, userId);
+        const stagesV2 = await ensureProductionStagesV2(supabase, userId);
+        const firstProcess = processes
+          .filter((p: any) => !p.is_special)
+          .sort((a: any, b: any) => (a.position || 0) - (b.position || 0))[0];
+        if (firstProcess) {
+          const firstStage = stagesV2
+            .filter((s: any) => s.process_id === firstProcess.id)
+            .sort((a: any, b: any) => (a.position || 0) - (b.position || 0))[0];
+          if (firstStage) entryProductionStage = firstStage.id;
+        }
+      } catch (err: any) {
+        console.warn('[convert] não foi possível resolver etapa de entrada:', err?.message);
+      }
+
       const jobPayload = {
         client_id: clientId || null,
         job_type: job.job_type,
@@ -6177,7 +6197,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         payment_status: job.payment_status || 'pending',
         status: job.status || 'scheduled',
         notes: job.notes || '',
-        // Não entra em produção automaticamente — usuário envia depois (após contrato).
+        // Auto-envio pra produção: novas vendas entram já na primeira etapa
+        // configurada (Ensaios Vendidos). Imports em lote/jobs antigos não são
+        // afetados — só converts a partir de agora.
+        production_stage: entryProductionStage,
+        production_stage_entered_at: entryProductionStage ? nowIso : null,
         user_id: userId,
       } as any;
       const { data: newJob, error } = await supabase.from('jobs').insert(jobPayload).select().single();
