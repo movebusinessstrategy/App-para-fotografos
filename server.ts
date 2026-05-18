@@ -4880,7 +4880,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.post('/api/tasks', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { title, description, assignee_id, job_id, stage_id, due_date } = req.body;
+    const { title, description, assignee_id, job_id, stage_id, client_id, due_date } = req.body;
     if (!title?.trim()) return res.status(400).json({ error: 'Título obrigatório' });
     if (!due_date) return res.status(400).json({ error: 'Prazo obrigatório' });
     const { data, error } = await supabase
@@ -4892,6 +4892,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         assignee_id: assignee_id || null,
         job_id: job_id || null,
         stage_id: stage_id || null,
+        client_id: client_id || null,
         due_date,
       })
       .select().single();
@@ -4902,7 +4903,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.put('/api/tasks/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { title, description, assignee_id, job_id, stage_id, due_date } = req.body;
+    const { title, description, assignee_id, job_id, stage_id, client_id, due_date } = req.body;
     const { error } = await supabase
       .from('tasks')
       .update({
@@ -4911,6 +4912,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         assignee_id: assignee_id || null,
         job_id: job_id || null,
         stage_id: stage_id || null,
+        client_id: client_id || null,
         due_date,
       })
       .eq('id', req.params.id)
@@ -7282,7 +7284,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .limit(1)
       .maybeSingle();
 
-    if (!deal) return res.json({ deal: null, stages });
+    if (!deal) return res.json({ deal: null, stages, pending_tasks: [] });
 
     const stage = stages.find((s) => s.id === deal.stage) || null;
     const { data: items } = await adminClient
@@ -7290,7 +7292,27 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .select('*')
       .eq('deal_id', deal.id)
       .order('created_at');
-    res.json({ deal: { ...deal, items: items || [], stage_name: stage?.name || deal.stage }, stages });
+
+    // Pega tarefas pendentes vinculadas ao cliente desse deal (pra mostrar
+    // na faixa do chat quando o lead abrir uma conversa no WhatsApp).
+    let pendingTasks: any[] = [];
+    if (deal.client_id) {
+      const { data: tks } = await supabase
+        .from('tasks')
+        .select('id, title, due_date, assignee_id, completed_at')
+        .eq('user_id', userId)
+        .eq('client_id', deal.client_id)
+        .is('completed_at', null)
+        .order('due_date', { ascending: true })
+        .limit(5);
+      pendingTasks = tks || [];
+    }
+
+    res.json({
+      deal: { ...deal, items: items || [], stage_name: stage?.name || deal.stage },
+      stages,
+      pending_tasks: pendingTasks,
+    });
   });
 
   // Mover deal de fase (PATCH mais simples que PUT completo)

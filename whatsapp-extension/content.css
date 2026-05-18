@@ -406,6 +406,240 @@
 #fp-kh-refresh:hover { background: #e9edef; }
 #fp-kh-logout:hover { background: #fee2e2; color: #b91c1c; }
 
+/* ─── KPI bar do Pipeline ──────────────────────────────────────────── */
+#fp-kpi {
+  background: linear-gradient(180deg, #fff 0%, #fafafb 100%);
+  border-bottom: 1px solid #e5e7eb;
+  padding: 12px 20px 14px;
+  flex-shrink: 0;
+}
+#fp-kpi-period {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.fp-kpi-period-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #667781;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-right: 4px;
+}
+.fp-kpi-chip {
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  color: #54656f;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  transition: all 0.12s;
+}
+.fp-kpi-chip:hover { border-color: #00a884; color: #00a884; }
+.fp-kpi-chip-active {
+  background: #00a884 !important;
+  color: #fff !important;
+  border-color: #00a884 !important;
+}
+#fp-kpi-range-label {
+  font-size: 11px;
+  color: #667781;
+  margin-left: 6px;
+  background: #f0f2f5;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+#fp-kpi-stats {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+}
+.fp-kpi-stat {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 9px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.fp-kpi-stat:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+}
+.fp-kpi-num {
+  font-size: 18px;
+  font-weight: 800;
+  color: #111b21;
+  line-height: 1.1;
+}
+.fp-kpi-label {
+  font-size: 10px;
+  color: #667781;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.fp-kpi-stat-open .fp-kpi-num { color: #0369a1; }
+.fp-kpi-stat-won .fp-kpi-num { color: #047857; }
+.fp-kpi-stat-lost .fp-kpi-num { color: #b91c1c; }
+.fp-kpi-stat-conv .fp-kpi-num { color: #7c3aed; }
+
+/* Popover do range customizado */
+#fp-kpi-custom-pop {
+  position: fixed;
+  z-index: 2147483004;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 16px 40px rgba(0,0,0,0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.fp-kpi-pop-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.fp-kpi-pop-row label {
+  font-size: 11px;
+  color: #667781;
+  font-weight: 600;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.fp-kpi-pop-row input[type="date"] {
+  border: 1.5px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+.fp-kpi-pop-row input[type="date"]:focus { border-color: #00a884; }
+#fp-kpi-pop-cancel,
+#fp-kpi-pop-apply {
+  flex: 1;
+  padding: 8px;
+  font-size: 12px;
+}
+
+/* ─── Linha de tarefas pendentes na conversa ──────────────────────── */
+#fp-chat-tasks {
+  position: fixed;
+  top: 60px;
+  left: 380px;
+  right: 0;
+  z-index: 2147482999;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: #fffbeb;
+  border-bottom: 1px solid #fde68a;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 11px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  min-height: 36px;
+  max-height: 36px;
+  scrollbar-width: none;
+}
+#fp-chat-tasks::-webkit-scrollbar { display: none; }
+.fp-chat-tasks-label {
+  flex: 0 0 auto;
+  font-weight: 700;
+  color: #92400e;
+  white-space: nowrap;
+}
+.fp-chat-task {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: #fff;
+  border: 1px solid #fcd34d;
+  border-radius: 999px;
+  font-size: 11px;
+  color: #92400e;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  transition: all 0.12s;
+}
+.fp-chat-task:hover {
+  background: #fef3c7;
+  border-color: #f59e0b;
+}
+.fp-chat-task-overdue {
+  background: #fee2e2;
+  border-color: #ef4444;
+  color: #b91c1c;
+}
+.fp-chat-task-overdue:hover { background: #fecaca; }
+.fp-chat-task-check {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid #f59e0b;
+  background: #fff;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.fp-chat-task-check:hover {
+  background: #f59e0b;
+  border-color: #d97706;
+}
+.fp-chat-task-overdue .fp-chat-task-check {
+  border-color: #ef4444;
+}
+.fp-chat-task-overdue .fp-chat-task-check:hover {
+  background: #ef4444;
+}
+.fp-chat-task-title {
+  font-weight: 600;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fp-chat-task-due {
+  font-size: 10px;
+  opacity: 0.7;
+  font-weight: 500;
+}
+.fp-chat-task-new {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  background: #00a884;
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  margin-left: 4px;
+}
+.fp-chat-task-new:hover { background: #008f6f; }
+
 /* FAB legado — removido. Substituído pela rail vertical (#fp-rail). */
 #fp-fab { display: none !important; }
 
@@ -1598,15 +1832,19 @@ body.fp-tasks-open #main {
   margin: 0;
 }
 #fp-tk-filters {
-  display: inline-flex;
+  display: flex;
   background: #f0f2f5;
-  border-radius: 999px;
-  padding: 3px;
-  gap: 2px;
+  padding: 8px 22px;
+  gap: 6px;
+  flex-shrink: 0;
+  border-bottom: 1px solid #e5e7eb;
+  overflow-x: auto;
 }
+#fp-tk-filters::-webkit-scrollbar { height: 3px; }
+#fp-tk-filters::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 2px; }
 .fp-tk-filter-btn {
-  border: none;
-  background: transparent;
+  border: 1px solid #e5e7eb;
+  background: #fff;
   padding: 6px 14px;
   font-size: 12px;
   font-weight: 600;
@@ -1614,24 +1852,27 @@ body.fp-tasks-open #main {
   border-radius: 999px;
   cursor: pointer;
   font-family: inherit;
-  transition: background 0.12s, color 0.12s;
+  flex-shrink: 0;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
-.fp-tk-filter-btn:hover { color: #111b21; }
+.fp-tk-filter-btn:hover { color: #111b21; border-color: #cbd5e1; }
 .fp-tk-filter-active {
-  background: #fff;
+  background: #00a884 !important;
+  color: #fff !important;
+  border-color: #00a884 !important;
+  box-shadow: 0 1px 3px rgba(0,168,132,0.25);
+}
+.fp-tk-client {
+  font-size: 11px;
   color: #00a884;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  font-weight: 600;
+  margin-top: 3px;
+  background: #e7f8f3;
+  padding: 2px 8px;
+  border-radius: 999px;
+  display: inline-block;
 }
-.fp-tk-show-done {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: #667781;
-  cursor: pointer;
-  user-select: none;
-}
-.fp-tk-show-done input { accent-color: #00a884; cursor: pointer; }
 #fp-tk-new {
   flex: 0 0 auto !important;
   padding: 8px 16px !important;

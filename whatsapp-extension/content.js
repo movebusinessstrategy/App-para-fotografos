@@ -41,6 +41,10 @@
   let suppressChatListClickUntil = 0;
   let q = '';
   let kanbanVisible = true;
+  // Filtro de período do Pipeline: 'all' | 'today' | '7d' | '30d' | 'custom'
+  // Pra 'custom', usa kanbanCustomRange = { from, to }
+  let kanbanPeriod = 'all';
+  let kanbanCustomRange = null;
 
   // ===== BG MESSAGES =====
   const bg = (msg) => new Promise((ok, fail) => {
@@ -345,6 +349,39 @@
         <button id="fp-kh-add">+ Novo Lead</button>
         <button id="fp-kh-logout" title="Sair da conta">⏻</button>
       </div>
+      <div id="fp-kpi">
+        <div id="fp-kpi-period">
+          <span class="fp-kpi-period-label">Período:</span>
+          <button class="fp-kpi-chip" data-period="all">Tudo</button>
+          <button class="fp-kpi-chip" data-period="today">Hoje</button>
+          <button class="fp-kpi-chip" data-period="7d">7 dias</button>
+          <button class="fp-kpi-chip" data-period="30d">30 dias</button>
+          <button class="fp-kpi-chip fp-kpi-chip-custom" data-period="custom">📅 Personalizado</button>
+          <span id="fp-kpi-range-label"></span>
+        </div>
+        <div id="fp-kpi-stats">
+          <div class="fp-kpi-stat" title="Total de leads no período">
+            <span class="fp-kpi-num" id="fp-kpi-total">—</span>
+            <span class="fp-kpi-label">Total</span>
+          </div>
+          <div class="fp-kpi-stat fp-kpi-stat-open" title="Leads em etapas abertas (não-finais)">
+            <span class="fp-kpi-num" id="fp-kpi-open">—</span>
+            <span class="fp-kpi-label">Em aberto</span>
+          </div>
+          <div class="fp-kpi-stat fp-kpi-stat-won" title="Leads convertidos em ganho">
+            <span class="fp-kpi-num" id="fp-kpi-won">—</span>
+            <span class="fp-kpi-label">Ganho</span>
+          </div>
+          <div class="fp-kpi-stat fp-kpi-stat-lost" title="Leads perdidos">
+            <span class="fp-kpi-num" id="fp-kpi-lost">—</span>
+            <span class="fp-kpi-label">Perdido</span>
+          </div>
+          <div class="fp-kpi-stat fp-kpi-stat-conv" title="Conversão = ganho / (ganho + perdido)">
+            <span class="fp-kpi-num" id="fp-kpi-conv">—</span>
+            <span class="fp-kpi-label">Conversão</span>
+          </div>
+        </div>
+      </div>
       <div id="fp-board"></div>
     `;
     document.body.appendChild(k);
@@ -384,6 +421,17 @@
     document.getElementById('fp-kh-add').addEventListener('click', () => openModal());
     document.getElementById('fp-kh-logout').addEventListener('click', confirmLogout);
     document.getElementById('fp-q').addEventListener('input', (e) => { q = e.target.value.toLowerCase(); renderBoard(); });
+    document.querySelectorAll('.fp-kpi-chip').forEach((b) => {
+      b.addEventListener('click', () => {
+        const period = b.getAttribute('data-period');
+        if (period === 'custom') {
+          openCustomRangePicker();
+          return;
+        }
+        kanbanPeriod = period;
+        renderBoard();
+      });
+    });
     document.getElementById('fp-mc').addEventListener('click', closeModal);
     document.getElementById('fp-ms').addEventListener('click', saveNewDeal);
     m.addEventListener('click', (e) => { if (e.target === m) closeModal(); });
@@ -565,6 +613,7 @@
   function renderBoard() {
     const b = document.getElementById('fp-board');
     if (!b) return;
+    renderKpi();
     const all = orderedStages(stages);
     if (!all.length) { showBoardState('<p>Nenhuma etapa encontrada.</p>'); return; }
 
@@ -1030,8 +1079,129 @@
   }
 
   function matches(d) {
-    if (!q) return true;
-    return `${d.contact_name || d.title || ''} ${d.contact_phone || ''} ${getDealShootType(d)}`.toLowerCase().includes(q);
+    if (!q) return matchesPeriod(d);
+    const txt = `${d.contact_name || d.title || ''} ${d.contact_phone || ''} ${getDealShootType(d)}`.toLowerCase();
+    return txt.includes(q) && matchesPeriod(d);
+  }
+
+  // Retorna {from, to} (Date objects) do filtro atual; null se 'all'
+  function getKanbanPeriodRange() {
+    if (kanbanPeriod === 'all') return null;
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    if (kanbanPeriod === 'today') {
+      const end = new Date(today); end.setDate(end.getDate() + 1);
+      return { from: today, to: end };
+    }
+    if (kanbanPeriod === '7d') {
+      const from = new Date(today); from.setDate(from.getDate() - 6);
+      const to = new Date(today); to.setDate(to.getDate() + 1);
+      return { from, to };
+    }
+    if (kanbanPeriod === '30d') {
+      const from = new Date(today); from.setDate(from.getDate() - 29);
+      const to = new Date(today); to.setDate(to.getDate() + 1);
+      return { from, to };
+    }
+    if (kanbanPeriod === 'custom' && kanbanCustomRange) {
+      const from = new Date(kanbanCustomRange.from + 'T00:00:00');
+      const to = new Date(kanbanCustomRange.to + 'T00:00:00');
+      to.setDate(to.getDate() + 1);
+      return { from, to };
+    }
+    return null;
+  }
+
+  function matchesPeriod(d) {
+    const range = getKanbanPeriodRange();
+    if (!range) return true;
+    if (!d.created_at) return false;
+    const t = new Date(d.created_at).getTime();
+    return t >= range.from.getTime() && t < range.to.getTime();
+  }
+
+  function renderKpi() {
+    const totalEl = document.getElementById('fp-kpi-total');
+    if (!totalEl) return;
+
+    // Aplica só o filtro de período (não a busca) — KPI mostra o panorama do período
+    const inPeriod = deals.filter((d) => matchesPeriod(d));
+    const stageById = new Map(stages.map((s) => [s.id, s]));
+    const isWonStage = (s) => s && s.is_final && s.is_won;
+    const isLostStage = (s) => s && s.is_final && !s.is_won;
+
+    const total = inPeriod.length;
+    const won = inPeriod.filter((d) => isWonStage(stageById.get(d.stage))).length;
+    const lost = inPeriod.filter((d) => isLostStage(stageById.get(d.stage))).length;
+    const open = total - won - lost;
+    const closed = won + lost;
+    const conv = closed > 0 ? Math.round((won / closed) * 100) : 0;
+
+    totalEl.textContent = total;
+    document.getElementById('fp-kpi-open').textContent = open;
+    document.getElementById('fp-kpi-won').textContent = won;
+    document.getElementById('fp-kpi-lost').textContent = lost;
+    document.getElementById('fp-kpi-conv').textContent = closed > 0 ? `${conv}%` : '—';
+
+    // Estado visual dos chips
+    document.querySelectorAll('.fp-kpi-chip').forEach((b) => {
+      b.classList.toggle('fp-kpi-chip-active', b.getAttribute('data-period') === kanbanPeriod);
+    });
+
+    // Label de range customizado
+    const rangeLabel = document.getElementById('fp-kpi-range-label');
+    if (rangeLabel) {
+      if (kanbanPeriod === 'custom' && kanbanCustomRange) {
+        const f = new Date(kanbanCustomRange.from + 'T00:00:00').toLocaleDateString('pt-BR');
+        const t = new Date(kanbanCustomRange.to + 'T00:00:00').toLocaleDateString('pt-BR');
+        rangeLabel.textContent = `${f} → ${t}`;
+        rangeLabel.style.display = '';
+      } else {
+        rangeLabel.style.display = 'none';
+      }
+    }
+  }
+
+  function openCustomRangePicker() {
+    document.getElementById('fp-kpi-custom-pop')?.remove();
+    const btn = document.querySelector('.fp-kpi-chip-custom');
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    const today = new Date().toISOString().slice(0, 10);
+    const monthAgo = new Date(); monthAgo.setDate(monthAgo.getDate() - 30);
+    const from = kanbanCustomRange?.from || monthAgo.toISOString().slice(0, 10);
+    const to = kanbanCustomRange?.to || today;
+    const pop = document.createElement('div');
+    pop.id = 'fp-kpi-custom-pop';
+    pop.style.left = `${rect.left}px`;
+    pop.style.top = `${rect.bottom + 6}px`;
+    pop.innerHTML = `
+      <div class="fp-kpi-pop-row">
+        <label>De <input type="date" id="fp-kpi-pop-from" value="${from}" /></label>
+        <label>Até <input type="date" id="fp-kpi-pop-to" value="${to}" /></label>
+      </div>
+      <div class="fp-kpi-pop-row">
+        <button class="fp-btn-w" id="fp-kpi-pop-cancel">Cancelar</button>
+        <button class="fp-btn-g" id="fp-kpi-pop-apply">Aplicar</button>
+      </div>
+    `;
+    document.body.appendChild(pop);
+    const close = () => {
+      pop.remove();
+      document.removeEventListener('mousedown', onDoc, true);
+    };
+    const onDoc = (e) => { if (!pop.contains(e.target) && !btn.contains(e.target)) close(); };
+    pop.querySelector('#fp-kpi-pop-cancel').addEventListener('click', close);
+    pop.querySelector('#fp-kpi-pop-apply').addEventListener('click', () => {
+      const f = pop.querySelector('#fp-kpi-pop-from').value;
+      const t = pop.querySelector('#fp-kpi-pop-to').value;
+      if (!f || !t || f > t) return toast('Faixa de datas inválida.', true);
+      kanbanCustomRange = { from: f, to: t };
+      kanbanPeriod = 'custom';
+      close();
+      renderBoard();
+    });
+    setTimeout(() => document.addEventListener('mousedown', onDoc, true), 0);
   }
 
   function getDealShootType(deal) {
@@ -2633,10 +2803,10 @@
   // 'overdue' (vencidas), 'today' (vencem hoje). Sempre esconde concluídas
   // a não ser que o toggle "Mostrar concluídas" esteja ligado.
   let tasksState = {
-    filter: 'mine',
-    showCompleted: false,
+    filter: 'mine',     // mine | all | overdue | today | completed
     tasks: [],
     members: [],
+    clients: [],        // pra busca de cliente no modal de tarefa
     me: null,
     loading: false,
   };
@@ -2650,20 +2820,17 @@
       <div id="fp-tk-h">
         <h3 id="fp-tk-title">Tarefas</h3>
         <div style="flex:1"></div>
-        <div id="fp-tk-filters">
-          <button class="fp-tk-filter-btn" data-filter="mine">Minhas</button>
-          <button class="fp-tk-filter-btn" data-filter="all">Equipe</button>
-          <button class="fp-tk-filter-btn" data-filter="overdue">Atrasadas</button>
-          <button class="fp-tk-filter-btn" data-filter="today">Hoje</button>
-        </div>
-        <label class="fp-tk-show-done">
-          <input type="checkbox" id="fp-tk-show-done" />
-          <span>Concluídas</span>
-        </label>
         <button id="fp-tk-refresh" class="fp-icon-btn" title="Atualizar">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
         </button>
-        <button id="fp-tk-new" class="fp-btn-g">+ Nova tarefa</button>
+        <button id="fp-tk-new" class="fp-btn-g">+ Nova</button>
+      </div>
+      <div id="fp-tk-filters">
+        <button class="fp-tk-filter-btn" data-filter="mine">Minhas</button>
+        <button class="fp-tk-filter-btn" data-filter="all">Equipe</button>
+        <button class="fp-tk-filter-btn" data-filter="overdue">Atrasadas</button>
+        <button class="fp-tk-filter-btn" data-filter="today">Hoje</button>
+        <button class="fp-tk-filter-btn" data-filter="completed">Concluídas</button>
       </div>
       <div id="fp-tk-list"></div>
     `;
@@ -2674,10 +2841,6 @@
         tasksState.filter = b.getAttribute('data-filter');
         renderTasks();
       });
-    });
-    el.querySelector('#fp-tk-show-done').addEventListener('change', (e) => {
-      tasksState.showCompleted = e.target.checked;
-      renderTasks();
     });
     el.querySelector('#fp-tk-refresh').addEventListener('click', loadTasks);
     el.querySelector('#fp-tk-new').addEventListener('click', () => openTaskModal(null));
@@ -2690,6 +2853,7 @@
       const data = await bg({ type: 'GET_TASKS_DATA' });
       tasksState.tasks = data.tasks || [];
       tasksState.members = data.members || [];
+      tasksState.clients = data.clients || [];
       tasksState.me = data.me || null;
     } catch (err) {
       console.error('[FocalPoint] erro carregando tarefas:', err);
@@ -2713,21 +2877,24 @@
     document.querySelectorAll('.fp-tk-filter-btn').forEach((b) => {
       b.classList.toggle('fp-tk-filter-active', b.getAttribute('data-filter') === tasksState.filter);
     });
-    document.getElementById('fp-tk-show-done').checked = tasksState.showCompleted;
 
     const meId = tasksState.me?.team_member_id || tasksState.me?.id || null;
     const memberById = new Map(tasksState.members.map((m) => [m.id, m]));
+    const clientById = new Map((tasksState.clients || []).map((c) => [c.id, c]));
     const todayStr = new Date().toISOString().slice(0, 10);
 
+    // Esconde concluídas por padrão; só aparecem se o filtro for "completed"
     let items = tasksState.tasks.slice();
-    if (!tasksState.showCompleted) items = items.filter((t) => !t.completed_at);
+    if (tasksState.filter !== 'completed') items = items.filter((t) => !t.completed_at);
 
     if (tasksState.filter === 'mine') {
       items = items.filter((t) => meId && t.assignee_id === meId);
     } else if (tasksState.filter === 'overdue') {
-      items = items.filter((t) => !t.completed_at && t.due_date && t.due_date.slice(0, 10) < todayStr);
+      items = items.filter((t) => t.due_date && t.due_date.slice(0, 10) < todayStr);
     } else if (tasksState.filter === 'today') {
       items = items.filter((t) => t.due_date && t.due_date.slice(0, 10) === todayStr);
+    } else if (tasksState.filter === 'completed') {
+      items = items.filter((t) => !!t.completed_at);
     }
 
     items.sort((a, b) => {
@@ -2748,6 +2915,7 @@
 
     list.innerHTML = items.map((t) => {
       const assignee = t.assignee_id ? memberById.get(t.assignee_id) : null;
+      const client = t.client_id ? clientById.get(t.client_id) : null;
       const isMine = meId && t.assignee_id === meId;
       const isDone = !!t.completed_at;
       const dueStr = t.due_date ? t.due_date.slice(0, 10) : '';
@@ -2762,6 +2930,7 @@
           </button>
           <div class="fp-tk-body" data-edit>
             <div class="fp-tk-title-line">${esc(t.title || 'Sem título')}</div>
+            ${client ? `<div class="fp-tk-client">👥 ${esc(client.name)}</div>` : ''}
             ${t.description ? `<div class="fp-tk-desc">${esc(t.description)}</div>` : ''}
             <div class="fp-tk-meta">
               <span class="fp-tk-due ${overdue ? 'fp-tk-due-late' : ''}">📅 ${esc(dueLabel)}</span>
@@ -2811,8 +2980,10 @@
     });
   }
 
-  // Modal de criar/editar tarefa
-  function openTaskModal(task) {
+  // Modal de criar/editar tarefa.
+  // Opção `prefillClientId`/`prefillClientName` pra abrir o modal já com um
+  // cliente vinculado (usado quando criar tarefa direto da conversa do WA).
+  function openTaskModal(task, opts = {}) {
     document.getElementById('fp-task-overlay')?.remove();
     const isEdit = !!task;
     const meId = tasksState.me?.team_member_id || tasksState.me?.id || null;
@@ -2823,6 +2994,7 @@
     const initDesc = task?.description || '';
     const initDue = (task?.due_date || defaultDue).slice(0, 10);
     const initAssignee = task?.assignee_id || meId || '';
+    const initClientId = task?.client_id || opts.prefillClientId || '';
 
     const overlay = document.createElement('div');
     overlay.id = 'fp-task-overlay';
@@ -2855,6 +3027,10 @@
               <div id="fp-tk-assignee-slot"></div>
             </div>
           </div>
+          <div class="fp-mf">
+            <span class="fp-ml">Cliente vinculado <span style="opacity:0.6;font-weight:500">(opcional — aparece na conversa do WhatsApp)</span></span>
+            <div id="fp-tk-client-slot"></div>
+          </div>
         </div>
         <div class="fp-quickjob-foot">
           ${isEdit ? `<button class="fp-btn-w fp-qj-delete" id="fp-tk-input-delete">Excluir</button>` : ''}
@@ -2876,6 +3052,25 @@
     });
     overlay.querySelector('#fp-tk-assignee-slot').appendChild(assigneeSelect.element);
 
+    // Garante que clients estejam carregados (modal pode ser aberto sem ir em Tarefas antes)
+    if (!tasksState.clients || tasksState.clients.length === 0) {
+      bg({ type: 'GET_CLIENTS' }).then((cs) => {
+        tasksState.clients = cs || [];
+        const items = [{ value: '', label: 'Nenhum' }]
+          .concat(tasksState.clients.map((c) => ({ value: c.id, label: c.name })));
+        clientSelect.setItems(items);
+      }).catch(() => {});
+    }
+    const clientItems = [{ value: '', label: 'Nenhum' }]
+      .concat((tasksState.clients || []).map((c) => ({ value: c.id, label: c.name })));
+    const clientSelect = fpSelect({
+      items: clientItems,
+      value: initClientId,
+      placeholder: opts.prefillClientName ? opts.prefillClientName : 'Buscar cliente…',
+      searchable: true,
+    });
+    overlay.querySelector('#fp-tk-client-slot').appendChild(clientSelect.element);
+
     const close = () => overlay.remove();
     overlay.querySelectorAll('[data-tk-close]').forEach((b) => b.addEventListener('click', close));
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
@@ -2885,20 +3080,22 @@
       const description = overlay.querySelector('#fp-tk-input-desc').value.trim();
       const due_date = overlay.querySelector('#fp-tk-input-due').value;
       const assignee_id = assigneeSelect.getValue() || null;
+      const client_id = clientSelect.getValue() || null;
       if (!title) return toast('Coloca um título.', true);
       if (!due_date) return toast('Define um prazo.', true);
       const btn = overlay.querySelector('#fp-tk-input-save');
       btn.disabled = true; btn.textContent = 'Salvando…';
       try {
         if (isEdit) {
-          await bg({ type: 'UPDATE_TASK', taskId: task.id, data: { title, description, due_date, assignee_id, job_id: task.job_id, stage_id: task.stage_id } });
+          await bg({ type: 'UPDATE_TASK', taskId: task.id, data: { title, description, due_date, assignee_id, client_id, job_id: task.job_id, stage_id: task.stage_id } });
           toast('Tarefa atualizada.');
         } else {
-          await bg({ type: 'CREATE_TASK', data: { title, description, due_date, assignee_id } });
+          await bg({ type: 'CREATE_TASK', data: { title, description, due_date, assignee_id, client_id } });
           toast('Tarefa criada.');
         }
         close();
-        loadTasks();
+        if (opts.onSaved) opts.onSaved();
+        else loadTasks();
       } catch (err) {
         btn.disabled = false; btn.textContent = isEdit ? 'Salvar' : 'Criar';
         toast(err?.message || 'Erro ao salvar', true);
@@ -3348,6 +3545,8 @@
     strip.style.setProperty('--fp-chat-strip-left', `${left}px`);
     strip.style.setProperty('--fp-chat-strip-right', `${right}px`);
     strip.style.setProperty('--fp-chat-strip-top', `${Math.round(headerRect?.bottom || mainRect.top)}px`);
+    // Reposiciona linha de tarefas logo abaixo (se existir)
+    positionChatTasksRow();
   }
 
   function mountChatStrip(strip) {
@@ -3497,6 +3696,7 @@
 
   function removeChatStrip() {
     document.getElementById('fp-chat-strip')?.remove();
+    document.getElementById('fp-chat-tasks')?.remove();
     removeStageMenu();
   }
 
@@ -3523,9 +3723,11 @@
       const result = await bg({ type: 'GET_DEAL_BY_PHONE', phone: cleanPhone });
       chatStages = result.stages || stages;
       chatDeal = result.deal;
+      chatPendingTasks = result.pending_tasks || [];
 
       if (chatDeal) {
         injectChatStrip(chatDeal, chatStages);
+        injectPendingTasksRow(chatDeal);
       } else {
         // Contato sem deal — mostra strip mínima com botão "Adicionar"
         injectAddStrip(cleanPhone);
@@ -3533,6 +3735,80 @@
     } catch {
       // silencia — não atrapalha o chat
     }
+  }
+
+  // Mostra tarefas pendentes vinculadas ao cliente desse deal, logo abaixo da
+  // faixa do CRM. Click numa tarefa abre o modal de edição.
+  let chatPendingTasks = [];
+  function injectPendingTasksRow(deal) {
+    document.getElementById('fp-chat-tasks')?.remove();
+    const tasks = chatPendingTasks || [];
+    if (!tasks.length) return;
+
+    const row = document.createElement('div');
+    row.id = 'fp-chat-tasks';
+    const todayStr = new Date().toISOString().slice(0, 10);
+    row.innerHTML = `
+      <span class="fp-chat-tasks-label">📋 ${tasks.length} ${tasks.length === 1 ? 'tarefa' : 'tarefas'} pendentes:</span>
+      ${tasks.map((t) => {
+        const dueStr = (t.due_date || '').slice(0, 10);
+        const overdue = dueStr && dueStr < todayStr;
+        const dueLabel = dueStr ? new Date(dueStr + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }) : '';
+        return `
+          <button class="fp-chat-task ${overdue ? 'fp-chat-task-overdue' : ''}" data-tid="${esc(t.id)}" title="${esc(t.title)}">
+            <span class="fp-chat-task-check" data-toggle="${esc(t.id)}"></span>
+            <span class="fp-chat-task-title">${esc(t.title)}</span>
+            ${dueLabel ? `<span class="fp-chat-task-due">${esc(dueLabel)}</span>` : ''}
+          </button>
+        `;
+      }).join('')}
+      <button class="fp-chat-task-new" id="fp-chat-task-new" title="Criar tarefa pra esse cliente">+ Tarefa</button>
+    `;
+    document.body.appendChild(row);
+    positionChatTasksRow();
+
+    row.querySelectorAll('.fp-chat-task').forEach((btn) => {
+      const tid = btn.getAttribute('data-tid');
+      btn.querySelector('[data-toggle]')?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        try {
+          await bg({ type: 'TOGGLE_TASK', taskId: tid, completed: true });
+          chatPendingTasks = chatPendingTasks.filter((t) => String(t.id) !== String(tid));
+          injectPendingTasksRow(deal);
+          toast('Tarefa concluída.');
+        } catch (err) { toast(err?.message || 'Erro', true); }
+      });
+      btn.addEventListener('click', (e) => {
+        if (e.target.closest('[data-toggle]')) return;
+        // Pra editar, precisa do registro completo — recarrega tasksState
+        bg({ type: 'GET_TASKS_DATA' }).then((data) => {
+          tasksState.tasks = data.tasks || [];
+          tasksState.members = data.members || [];
+          tasksState.clients = data.clients || [];
+          tasksState.me = data.me || null;
+          const full = tasksState.tasks.find((t) => String(t.id) === String(tid));
+          if (full) openTaskModal(full, { onSaved: () => onChatOpened(deal.contact_phone) });
+        });
+      });
+    });
+
+    row.querySelector('#fp-chat-task-new')?.addEventListener('click', () => {
+      openTaskModal(null, {
+        prefillClientId: deal.client_id,
+        prefillClientName: deal.contact_name || deal.title || '',
+        onSaved: () => onChatOpened(deal.contact_phone),
+      });
+    });
+  }
+
+  function positionChatTasksRow() {
+    const row = document.getElementById('fp-chat-tasks');
+    const strip = document.getElementById('fp-chat-strip');
+    if (!row || !strip) return;
+    const stripRect = strip.getBoundingClientRect();
+    row.style.top = `${Math.round(stripRect.bottom)}px`;
+    row.style.left = strip.style.getPropertyValue('--fp-chat-strip-left') || `${stripRect.left}px`;
+    row.style.right = strip.style.getPropertyValue('--fp-chat-strip-right') || '0px';
   }
 
   async function createDealFromChat(phone, stageId, stageName) {
