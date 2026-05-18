@@ -7283,25 +7283,39 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.post('/api/deals/:id/cancel-sale', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
     const stages = await ensurePipelineStages(supabase, userId);
-    const lostStage = stages.find((s) => s.is_final && !s.is_won);
-    if (!lostStage) return res.status(400).json({ error: 'Sem etapa "perdido" configurada' });
 
-    const { data: deal } = await supabase
+    // Resolução robusta da etapa "perdido": prioriza id='lost' (mais comum),
+    // depois qualquer is_final && !is_won, depois fallback do DEFAULT.
+    const lostStage =
+      stages.find((s) => s.id === 'lost') ||
+      stages.find((s) => s.is_final && !s.is_won) ||
+      DEFAULT_STAGES.find((s) => s.id === 'lost');
+    if (!lostStage) {
+      console.warn('[cancel-sale] sem etapa "perdido" configurada', { userId });
+      return res.status(400).json({ error: 'Sem etapa "perdido" configurada no funil' });
+    }
+
+    const { data: deal, error: dealErr } = await supabase
       .from('deals')
       .select('*')
       .eq('id', req.params.id)
       .eq('user_id', userId)
       .single();
-    if (!deal) return res.status(404).json({ error: 'Venda não encontrada' });
+    if (dealErr || !deal) {
+      console.warn('[cancel-sale] deal não encontrado:', dealErr?.message);
+      return res.status(404).json({ error: 'Venda não encontrada' });
+    }
 
-    // Apaga o job vinculado primeiro (se houver) — assim não fica órfão
+    // Apaga o job vinculado primeiro (se houver) — usa admin pra bypassar
+    // qualquer RLS quirky e garantir que sumiu mesmo.
     if (deal.converted_job_id) {
-      await supabase
+      const { error: jobErr } = await adminClient
         .from('jobs')
         .delete()
-        .eq('id', deal.converted_job_id)
-        .eq('user_id', userId);
+        .eq('id', deal.converted_job_id);
+      if (jobErr) console.warn('[cancel-sale] falha apagando job:', jobErr.message);
     }
 
     const nowIso = new Date().toISOString();
@@ -7313,6 +7327,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       converted: false,
       converted_at: null,
       converted_job_id: null,
+      temperature: 'cold',
+      temperature_locked: true,
       lost_reason: req.body?.reason || 'Cancelado (venda duplicada/erro)',
     };
 
@@ -7321,18 +7337,26 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .update(updates)
       .eq('id', req.params.id)
       .eq('user_id', userId);
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) {
+      console.error('[cancel-sale] update do deal falhou:', error.message);
+      return res.status(500).json({ error: `Falha ao mover pra perdido: ${error.message}` });
+    }
 
-    await recordStageEvent(
-      supabase,
-      userId,
-      Number(req.params.id),
-      deal.stage,
-      lostStage.id,
-      deal.current_stage_entered_at || deal.stage_entered_at
-    );
+    try {
+      await recordStageEvent(
+        supabase,
+        userId,
+        Number(req.params.id),
+        deal.stage,
+        lostStage.id,
+        deal.current_stage_entered_at || deal.stage_entered_at
+      );
+    } catch (e: any) {
+      // recordStageEvent é "best effort" — não bloqueia o cancel
+      console.warn('[cancel-sale] recordStageEvent falhou (não-bloqueante):', e?.message);
+    }
 
-    res.json({ success: true });
+    res.json({ success: true, moved_to: lostStage.id, job_deleted: !!deal.converted_job_id });
   });
 
   app.get('/api/extension/agenda', requireAuth, async (req, res) => {
