@@ -7221,6 +7221,62 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   // Buscar deal por telefone (extensão usa ?phone=5511...)
   // Agenda do mês pra extensão WhatsApp — agrega jobs e (futuro) Google events
+  // Painel "Vendas recentes" da extensão — vendas (deals convertidos) num
+  // período, com cross-reference do status na produção (em qual etapa o job
+  // está, ou se ficou fora da produção).
+  app.get('/api/extension/sales-overview', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const days = Math.max(1, Math.min(365, parseInt(String(req.query.days || '7'), 10)));
+    const fromIso = new Date(Date.now() - days * 86400000).toISOString();
+
+    const stages = await ensurePipelineStages(supabase, userId);
+    const wonStageIds = stages.filter((s) => s.is_won).map((s) => s.id);
+    if (wonStageIds.length === 0) return res.json({ sales: [], days });
+
+    const { data: deals } = await supabase
+      .from('deals')
+      .select('id, title, contact_name, contact_phone, value, converted_at, converted_job_id, client_id, stage')
+      .eq('user_id', userId)
+      .in('stage', wonStageIds)
+      .gte('converted_at', fromIso)
+      .order('converted_at', { ascending: false })
+      .limit(200);
+
+    const jobIds = (deals || []).map((d) => d.converted_job_id).filter(Boolean) as number[];
+    let jobsRes: { data: any[] | null } = { data: [] };
+    if (jobIds.length) {
+      jobsRes = await supabase
+        .from('jobs')
+        .select('id, production_stage, job_name, job_date')
+        .in('id', jobIds);
+    }
+    const jobById = new Map<number, any>((jobsRes.data || []).map((j: any) => [j.id, j]));
+
+    const prodStages = await ensureProductionStagesV2(supabase, userId);
+    const prodById = new Map(prodStages.map((s: any) => [s.id, s]));
+
+    const sales = (deals || []).map((d: any) => {
+      const job = d.converted_job_id ? jobById.get(d.converted_job_id) : null;
+      const prodStage = job?.production_stage ? prodById.get(job.production_stage) : null;
+      return {
+        deal_id: d.id,
+        job_id: job?.id || null,
+        job_name: job?.job_name || null,
+        job_date: job?.job_date || null,
+        client_name: d.contact_name || d.title || 'Sem nome',
+        contact_phone: d.contact_phone || null,
+        value: Number(d.value) || 0,
+        converted_at: d.converted_at,
+        in_production: !!prodStage,
+        production_stage_id: prodStage?.id || null,
+        production_stage_name: prodStage?.name || null,
+      };
+    });
+
+    res.json({ sales, days });
+  });
+
   app.get('/api/extension/agenda', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
