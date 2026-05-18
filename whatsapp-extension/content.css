@@ -545,6 +545,22 @@
   -webkit-user-drag: none;
 }
 .fpc-open:hover { text-decoration: underline; }
+/* Follow-up — destacado em pill verde pra reforçar a ação primária da etapa */
+.fpc-followup {
+  background: #00a884;
+  color: #fff !important;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.2px;
+  transition: background 0.12s, transform 0.1s;
+}
+.fpc-followup:hover {
+  background: #008069;
+  text-decoration: none;
+  transform: translateY(-1px);
+}
 .fpc-seller {
   display: inline-flex;
   align-items: center;

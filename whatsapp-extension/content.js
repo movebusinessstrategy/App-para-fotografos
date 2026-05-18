@@ -835,6 +835,7 @@
           <span class="fpc-val">${d.value ? brl.format(d.value) : '—'}</span>
           <div class="fpc-actions">
             ${sellerBadge}
+            ${phone ? `<button class="fpc-open fpc-followup" data-action="followup" data-phone="${esc(phone)}" title="Enviar mensagem de follow-up da etapa">Follow-up</button>` : ''}
             ${phone ? `<button class="fpc-open" data-action="open" data-phone="${esc(phone)}">Chat</button>` : ''}
             <button class="fpc-open" data-action="edit">Editar</button>
             <button class="fpc-open" data-action="move">Mover</button>
@@ -879,6 +880,10 @@
     el.querySelector('[data-action="open"]')?.addEventListener('click', e => {
       e.stopPropagation();
       openChat(phone, name);
+    });
+    el.querySelector('[data-action="followup"]')?.addEventListener('click', e => {
+      e.stopPropagation();
+      if (deal) sendFollowUp(deal);
     });
     el.querySelector('[data-action="edit"]')?.addEventListener('click', e => {
       e.stopPropagation();
@@ -991,6 +996,66 @@
     }
 
     setTimeout(() => { dragMoved = false; }, 220);
+  }
+
+  // Primeiro nome do contato (pra usar no template "Olá {nome}!").
+  function firstNameOf(deal) {
+    const full = (deal?.contact_name || deal?.title || '').trim();
+    if (!full) return '';
+    // Remove emoji/caracteres especiais e pega só a primeira palavra alfabética
+    const cleaned = full.replace(/[^\p{L}\s'-]/gu, '').trim();
+    return cleaned.split(/\s+/)[0] || '';
+  }
+
+  // Tenta escrever um texto no compositor de mensagens do WhatsApp Web
+  // (contenteditable). Preserva mensagem caso o user já estivesse digitando.
+  function setWhatsappComposer(text) {
+    if (!text) return false;
+    const composer =
+      document.querySelector('#main footer div[contenteditable="true"]') ||
+      document.querySelector('div[role="textbox"][contenteditable="true"][data-tab]') ||
+      document.querySelector('footer [contenteditable="true"]');
+    if (!composer) return false;
+    composer.focus();
+    document.execCommand('selectAll', false, null);
+    document.execCommand('delete', false, null);
+    document.execCommand('insertText', false, text);
+    return true;
+  }
+
+  // Abre o chat do contato e pré-preenche a mensagem de follow-up da etapa.
+  // O user revisa e envia — não dispara sozinho (evita spam acidental).
+  async function sendFollowUp(deal) {
+    const phone = deal?.contact_phone;
+    if (!phone) return toast('Lead sem telefone', true);
+
+    const stage = stages.find(s => s.id === deal.stage);
+    const template = stage?.follow_up_message?.trim();
+    if (!template) {
+      toast(`A etapa "${stage?.name || deal.stage}" não tem mensagem de follow-up configurada`, true);
+      return;
+    }
+
+    // Substitui {nome} e {primeiro_nome} pelo primeiro nome do contato
+    const first = firstNameOf(deal);
+    const message = template
+      .replace(/\{nome\}/gi, first)
+      .replace(/\{primeiro_nome\}/gi, first)
+      .replace(/\{name\}/gi, first);
+
+    toast('Abrindo conversa…');
+    const ok = await openByNumberInApp(phone, deal.contact_name || '');
+    if (!ok) return;
+
+    // Aguarda o WA renderizar o compositor e injeta a mensagem
+    for (let i = 0; i < 12; i++) {
+      await sleep(180);
+      if (setWhatsappComposer(message)) {
+        toast('Mensagem pronta — revise e envie 💬');
+        return;
+      }
+    }
+    toast('Conversa aberta, mas não consegui colar a mensagem. Cole manualmente.', true);
   }
 
   async function moveDealToStage(dealId, stageId) {
@@ -1439,9 +1504,13 @@
     }
     removeChatStrip();
     buildAgendaOverlay();
+    adjustPosition(); // garante que a agenda começa DEPOIS da lista de chats do WA
     document.getElementById('fp-agenda')?.classList.remove('fp-hidden');
     setRailActive('fp-rail-agenda');
     loadAgenda();
+    // Re-ajusta caso o WA termine de renderizar tarde
+    setTimeout(adjustPosition, 200);
+    setTimeout(adjustPosition, 800);
   }
 
   function hideAgenda() {
