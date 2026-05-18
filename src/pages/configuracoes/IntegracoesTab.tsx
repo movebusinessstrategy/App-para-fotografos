@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Calendar, MessageCircle, CheckCircle2, ChevronRight, Circle, Chrome } from "lucide-react";
+import { Calendar, MessageCircle, CheckCircle2, ChevronRight, Circle, Chrome, FileSignature } from "lucide-react";
 import { authFetch } from "../../utils/authFetch";
+import { useAuth } from "../../contexts/AuthContext";
 
 interface IntegrationCardProps {
   to: string;
@@ -55,6 +56,8 @@ function IntegrationCard({ to, title, description, connected, loading, badge, ic
 }
 
 export default function IntegracoesTab() {
+  const { isMember, isPlatformAdmin } = useAuth();
+  const isOwner = !isMember || isPlatformAdmin;
   const [googleConnected, setGoogleConnected] = useState(false);
   const [waConnected, setWaConnected] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -102,6 +105,16 @@ export default function IntegracoesTab() {
           icon={<Chrome size={22} className="text-blue-600 dark:text-blue-400" />}
           iconBg="bg-blue-50 dark:bg-blue-900/20"
         />
+        {isOwner && (
+          <IntegrationCard
+            to="/configuracoes/integracoes/autentique"
+            title="Autentique — Importar histórico"
+            description="Puxa contratos antigos do Autentique e cria clientes + histórico de sessões."
+            badge="Importar"
+            icon={<FileSignature size={22} className="text-gold-600 dark:text-gold-400" />}
+            iconBg="bg-gold-50 dark:bg-gold-900/20"
+          />
+        )}
       </div>
     </div>
   );
