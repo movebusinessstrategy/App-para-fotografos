@@ -88,6 +88,7 @@ interface CatalogItem {
   catalog_name: string;
   catalog_value: number;
   quantidade: number;
+  discount_value?: number;
 }
 
 const CATALOG_CFG = {
@@ -103,7 +104,7 @@ interface JobDetailDrawerProps {
   onStageChange: (jobId: number, stageId: string) => void;
   onLabelsChange?: (jobId: number, labels: string[]) => void;
   onRemoveFromProduction?: (jobId: number) => void;
-  onJobUpdate?: (jobId: number, patch: { amount?: number; payment_status?: string; amount_paid?: number }) => void;
+  onJobUpdate?: (jobId: number, patch: Partial<JobWithProduction>) => void;
 }
 
 const formatCurrency = (v: number) =>
@@ -630,17 +631,19 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                 )}
               </section>
 
-              {/* Job notes */}
-              {job.notes && (
-                <section>
-                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
-                    Observações
-                  </h3>
-                  <p className="rounded-xl border border-gray-200 p-3 text-sm text-gray-700 dark:border-gray-700 dark:text-gray-300">
-                    {job.notes}
-                  </p>
-                </section>
-              )}
+              {/* Observações — editável inline */}
+              <EditableNotesSection
+                jobId={job.id}
+                initialNotes={job.notes || ''}
+                onSaved={(notes) => onJobUpdate?.(job.id, { notes })}
+              />
+
+              {/* Imagem de capa do card */}
+              <CoverImageSection
+                jobId={job.id}
+                currentUrl={job.cover_image_url || null}
+                onChanged={(url) => onJobUpdate?.(job.id, { cover_image_url: url })}
+              />
 
               {/* Labels */}
               <section>
@@ -1213,4 +1216,242 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
       )}
     </>
   );
+}
+
+// ─── Observações editáveis (substitui texto read-only) ─────────────────
+function EditableNotesSection({
+  jobId,
+  initialNotes,
+  onSaved,
+}: {
+  jobId: number;
+  initialNotes: string;
+  onSaved: (notes: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(initialNotes);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => { setValue(initialNotes); }, [initialNotes, jobId]);
+
+  async function save() {
+    if (value === initialNotes) { setEditing(false); return; }
+    setSaving(true);
+    try {
+      await authFetch(`/api/jobs/${jobId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes: value }),
+      });
+      onSaved(value);
+      setEditing(false);
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <section>
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+          Observações
+        </h3>
+        {!editing && (
+          <button
+            onClick={() => setEditing(true)}
+            className="text-[10px] text-gold-600 hover:text-gold-700 font-semibold"
+          >
+            {initialNotes ? 'Editar' : '+ Adicionar'}
+          </button>
+        )}
+      </div>
+      {editing ? (
+        <div className="space-y-2">
+          <textarea
+            autoFocus
+            value={value}
+            onChange={e => setValue(e.target.value)}
+            rows={4}
+            placeholder="Ex: mãe pediu pra editar mais a pele, foco no bebê..."
+            className="w-full rounded-xl border border-gray-200 p-3 text-sm text-gray-700 outline-none focus:border-gold-400 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
+          />
+          <div className="flex gap-2 justify-end">
+            <button
+              onClick={() => { setValue(initialNotes); setEditing(false); }}
+              disabled={saving}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-gray-200 text-gray-600 hover:border-gray-300 dark:border-gray-700 dark:text-gray-300"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={save}
+              disabled={saving}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gold-600 text-white hover:bg-gold-700 disabled:opacity-60"
+            >
+              {saving ? 'Salvando…' : 'Salvar'}
+            </button>
+          </div>
+        </div>
+      ) : initialNotes ? (
+        <p className="rounded-xl border border-gray-200 p-3 text-sm text-gray-700 dark:border-gray-700 dark:text-gray-300 whitespace-pre-wrap">
+          {initialNotes}
+        </p>
+      ) : (
+        <p className="rounded-xl border border-dashed border-gray-200 p-3 text-xs text-gray-400 italic dark:border-gray-700">
+          Sem observações. Clique em "+ Adicionar" pra escrever.
+        </p>
+      )}
+    </section>
+  );
+}
+
+// ─── Upload de imagem de capa do card ──────────────────────────────────
+function CoverImageSection({
+  jobId,
+  currentUrl,
+  onChanged,
+}: {
+  jobId: number;
+  currentUrl: string | null;
+  onChanged: (url: string | null) => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  async function uploadFile(file: File) {
+    setError(null);
+    if (!file.type.startsWith('image/')) { setError('Arquivo precisa ser imagem'); return; }
+    if (file.size > 5_242_880) { setError('Imagem muito grande (>5MB)'); return; }
+
+    setUploading(true);
+    try {
+      // Redimensiona pra 1200px max via canvas pra economizar storage
+      const dataUrl = await resizeImage(file, 1200);
+      const r = await authFetch(`/api/jobs/${jobId}/cover`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataUrl }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.error || `HTTP ${r.status}`);
+      }
+      const j = await r.json();
+      onChanged(j.cover_image_url);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function remove() {
+    setUploading(true);
+    try {
+      await authFetch(`/api/jobs/${jobId}/cover`, { method: 'DELETE' });
+      onChanged(null);
+    } finally { setUploading(false); }
+  }
+
+  function handlePaste(e: React.ClipboardEvent) {
+    const items = Array.from(e.clipboardData?.items || []) as DataTransferItem[];
+    const item = items.find(it => it.type.startsWith('image/'));
+    if (item) {
+      const file = item.getAsFile();
+      if (file) uploadFile(file);
+    }
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    const file = e.dataTransfer?.files?.[0];
+    if (file) uploadFile(file);
+  }
+
+  return (
+    <section onPaste={handlePaste}>
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+          Imagem de referência
+        </h3>
+        {currentUrl && (
+          <button
+            onClick={remove}
+            disabled={uploading}
+            className="text-[10px] text-red-500 hover:text-red-600 font-semibold"
+          >
+            Remover
+          </button>
+        )}
+      </div>
+      {currentUrl ? (
+        <div className="relative group">
+          <img
+            src={currentUrl}
+            alt="Capa do job"
+            className="w-full max-h-72 object-cover rounded-xl border border-gray-200 dark:border-gray-700"
+          />
+          <button
+            onClick={() => inputRef.current?.click()}
+            disabled={uploading}
+            className="absolute bottom-2 right-2 px-3 py-1.5 bg-white/95 dark:bg-gray-900/95 border border-gray-200 dark:border-gray-700 rounded-lg text-xs font-semibold opacity-0 group-hover:opacity-100 transition-opacity"
+          >
+            Trocar
+          </button>
+        </div>
+      ) : (
+        <div
+          onDragOver={e => e.preventDefault()}
+          onDrop={handleDrop}
+          onClick={() => inputRef.current?.click()}
+          className="border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl p-6 text-center cursor-pointer hover:border-gold-400 hover:bg-gold-50/30 dark:hover:bg-gold-900/10 transition-colors"
+        >
+          <Image size={28} className="mx-auto text-gray-300 dark:text-gray-600 mb-2" />
+          <p className="text-sm font-medium text-gray-600 dark:text-gray-300">
+            {uploading ? 'Enviando…' : 'Arrastar, colar ou clicar pra escolher'}
+          </p>
+          <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+            Foto de referência da edição, capa do álbum, etc. (max 5MB)
+          </p>
+        </div>
+      )}
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={e => {
+          const f = e.target.files?.[0];
+          if (f) uploadFile(f);
+          e.target.value = '';
+        }}
+      />
+      {error && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
+    </section>
+  );
+}
+
+// Redimensiona imagem via canvas pra max width N, retorna data URL JPEG
+async function resizeImage(file: File, maxWidth: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new window.Image();
+      img.onload = () => {
+        const ratio = Math.min(1, maxWidth / img.width);
+        const w = Math.round(img.width * ratio);
+        const h = Math.round(img.height * ratio);
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return reject(new Error('canvas indisponível'));
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', 0.85));
+      };
+      img.onerror = () => reject(new Error('falha ao carregar imagem'));
+      img.src = String(reader.result);
+    };
+    reader.onerror = () => reject(new Error('falha lendo arquivo'));
+    reader.readAsDataURL(file);
+  });
 }

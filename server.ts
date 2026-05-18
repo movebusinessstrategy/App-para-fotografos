@@ -3654,12 +3654,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const { data: job } = await supabase.from('jobs').select('id, amount, labels').eq('id', jobId).eq('user_id', userId).single();
     if (!job) return res.status(404).json({ error: 'Job not found' });
 
-    const { catalog_type, catalog_id, catalog_name, catalog_value, quantidade = 1 } = req.body;
+    const { catalog_type, catalog_id, catalog_name, catalog_value, quantidade = 1, discount_value = 0 } = req.body;
     if (!catalog_type || !catalog_id || !catalog_name) return res.status(400).json({ error: 'Campos obrigatórios ausentes' });
 
     const { data: item, error } = await adminClient.from('job_items').insert({
       job_id: jobId, catalog_type, catalog_id, catalog_name,
       catalog_value: catalog_value || 0, quantidade,
+      discount_value: Number(discount_value) || 0,
     }).select().single();
 
     if (error) return res.status(500).json({ error: error.message });
@@ -3689,8 +3690,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Busca deal vinculado
     const { data: deal } = await supabase.from('deals').select('id, value').eq('converted_job_id', jobId).eq('user_id', userId).maybeSingle();
 
-    const { data: jItems } = await adminClient.from('job_items').select('catalog_value, quantidade').eq('job_id', jobId);
-    const jobItemsTotal = (jItems || []).reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
+    const { data: jItems } = await adminClient.from('job_items').select('catalog_value, quantidade, discount_value').eq('job_id', jobId);
+    const jobItemsTotal = (jItems || []).reduce((s: number, i: any) => {
+      const gross = (i.catalog_value || 0) * (i.quantidade || 1);
+      return s + Math.max(0, gross - (i.discount_value || 0));
+    }, 0);
 
     let realTotal: number;
     if (deal?.id) {
@@ -3730,8 +3734,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const { data: job } = await supabase.from('jobs').select('id').eq('id', item.job_id).eq('user_id', userId).single();
     if (!job) return res.status(403).json({ error: 'Forbidden' });
 
-    const newQty = Math.max(1, parseInt(req.body.quantidade) || 1);
-    await adminClient.from('job_items').update({ quantidade: newQty }).eq('id', req.params.id);
+    // Aceita patch parcial: quantidade, catalog_value (preço editado),
+    // discount_value (R$ de desconto). Frontend pode mandar só o que mudou.
+    const patch: any = {};
+    if (req.body.quantidade !== undefined) {
+      patch.quantidade = Math.max(1, parseInt(req.body.quantidade) || 1);
+    }
+    if (req.body.catalog_value !== undefined) {
+      patch.catalog_value = Math.max(0, Number(req.body.catalog_value) || 0);
+    }
+    if (req.body.discount_value !== undefined) {
+      patch.discount_value = Math.max(0, Number(req.body.discount_value) || 0);
+    }
+    if (Object.keys(patch).length === 0) return res.json({ success: true });
+
+    await adminClient.from('job_items').update(patch).eq('id', req.params.id);
 
     const result = await recalcJobFinancials(supabase, adminClient, item.job_id, userId);
     res.json({ success: true, ...result });
