@@ -396,6 +396,28 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
     }
   };
 
+  // Atualiza preço e/ou desconto de um item (popover de edição)
+  const handleUpdateJobItemPrice = async (
+    id: string,
+    patch: { catalog_value?: number; discount_value?: number },
+  ) => {
+    if (!job) return;
+    // Optimista
+    setJobItems(prev => prev.map(i => i.id === id ? { ...i, ...patch } : i));
+    const res = await authFetch(`/api/job-items/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setJobAmount(data.newAmount || 0);
+      if (onJobUpdate) onJobUpdate(job.id, { amount: data.newAmount, payment_status: data.payment_status });
+    } else {
+      loadFinanceiro(job.id);
+    }
+  };
+
   if (!job) return null;
 
   const jobDate = job.job_date ? parseDate(job.job_date) : null;
@@ -928,9 +950,10 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                                     className="w-5 h-5 rounded flex items-center justify-center text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 text-xs font-bold"
                                   >+</button>
                                 </div>
-                                <span className="text-xs font-semibold text-gray-700 dark:text-gray-300 mr-1 flex-shrink-0">
-                                  {formatCurrency(item.catalog_value * item.quantidade)}
-                                </span>
+                                <JobItemPriceEditor
+                                  item={item}
+                                  onSave={(patch) => handleUpdateJobItemPrice(item.id, patch)}
+                                />
                                 <button onMouseDown={e => e.preventDefault()} onClick={() => handleDeleteJobItem(item.id)}
                                   className="text-gray-300 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400 flex-shrink-0">
                                   <X size={13} />
@@ -1427,6 +1450,136 @@ function CoverImageSection({
       />
       {error && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
     </section>
+  );
+}
+
+// ─── Editor inline de preço/desconto do item de job ────────────────────
+function JobItemPriceEditor({
+  item,
+  onSave,
+}: {
+  item: CatalogItem;
+  onSave: (patch: { catalog_value?: number; discount_value?: number }) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [price, setPrice] = useState(String(item.catalog_value));
+  const [discount, setDiscount] = useState(String(item.discount_value || 0));
+  const [discountMode, setDiscountMode] = useState<'value' | 'percent'>('value');
+  const popRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setPrice(String(item.catalog_value));
+    setDiscount(String(item.discount_value || 0));
+  }, [item.catalog_value, item.discount_value]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (popRef.current && !popRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  const gross = item.catalog_value * item.quantidade;
+  const discountAbs = item.discount_value || 0;
+  const finalValue = Math.max(0, gross - discountAbs);
+  const hasDiscount = discountAbs > 0;
+  const percentOff = gross > 0 ? Math.round((discountAbs / gross) * 100) : 0;
+
+  function apply() {
+    const newPrice = Math.max(0, parseFloat(price.replace(',', '.')) || 0);
+    let newDiscount = Math.max(0, parseFloat(discount.replace(',', '.')) || 0);
+    if (discountMode === 'percent') {
+      // % do bruto pós-quantidade
+      const grossWithNewPrice = newPrice * item.quantidade;
+      newDiscount = (grossWithNewPrice * newDiscount) / 100;
+    }
+    const patch: { catalog_value?: number; discount_value?: number } = {};
+    if (newPrice !== item.catalog_value) patch.catalog_value = newPrice;
+    if (newDiscount !== (item.discount_value || 0)) patch.discount_value = newDiscount;
+    if (Object.keys(patch).length > 0) onSave(patch);
+    setOpen(false);
+  }
+
+  return (
+    <div className="relative flex-shrink-0">
+      <button
+        onMouseDown={e => e.preventDefault()}
+        onClick={() => setOpen(o => !o)}
+        title="Clique pra editar preço/desconto"
+        className="text-xs font-semibold mr-1 px-1.5 py-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors text-right"
+      >
+        {hasDiscount ? (
+          <div className="flex flex-col items-end leading-tight">
+            <span className="text-[10px] line-through opacity-50 text-gray-500">
+              {(gross).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 0 })}
+            </span>
+            <span className="text-emerald-700 dark:text-emerald-400">
+              {(finalValue).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 0 })}
+            </span>
+          </div>
+        ) : (
+          <span className="text-gray-700 dark:text-gray-300">
+            {(gross).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 0 })}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div
+          ref={popRef}
+          className="absolute right-0 top-full mt-1 z-30 w-64 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl p-3 space-y-3"
+          onClick={e => e.stopPropagation()}
+        >
+          <div>
+            <label className="block text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1">
+              Preço unitário
+            </label>
+            <input
+              type="number" step="0.01" min="0" value={price}
+              onChange={e => setPrice(e.target.value)}
+              className="w-full px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none focus:border-gold-400 dark:bg-gray-900"
+            />
+            <p className="text-[10px] text-gray-400 mt-1">
+              Total bruto: {((parseFloat(price.replace(',', '.')) || 0) * item.quantidade).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+            </p>
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                Desconto
+              </label>
+              <div className="flex gap-0.5 text-[10px] font-semibold">
+                <button
+                  onClick={() => setDiscountMode('value')}
+                  className={`px-1.5 py-0.5 rounded ${discountMode === 'value' ? 'bg-gold-500 text-white' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                >R$</button>
+                <button
+                  onClick={() => setDiscountMode('percent')}
+                  className={`px-1.5 py-0.5 rounded ${discountMode === 'percent' ? 'bg-gold-500 text-white' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                >%</button>
+              </div>
+            </div>
+            <input
+              type="number" step="0.01" min="0" value={discount}
+              onChange={e => setDiscount(e.target.value)}
+              placeholder="0"
+              className="w-full px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none focus:border-gold-400 dark:bg-gray-900"
+            />
+          </div>
+          <div className="flex gap-1.5 justify-end">
+            <button
+              onClick={() => setOpen(false)}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+            >Cancelar</button>
+            <button
+              onClick={apply}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gold-600 text-white hover:bg-gold-700"
+            >Aplicar</button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
