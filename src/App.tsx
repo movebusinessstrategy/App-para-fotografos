@@ -41,6 +41,7 @@ const IntegracoesTab = lazy(() => import("./pages/configuracoes/IntegracoesTab")
 const IntegracaoCalendar = lazy(() => import("./pages/configuracoes/IntegracaoCalendar"));
 const IntegracaoWhatsApp = lazy(() => import("./pages/configuracoes/IntegracaoWhatsApp"));
 const IntegracaoExtensao = lazy(() => import("./pages/configuracoes/IntegracaoExtensao"));
+const IntegracaoAutentique = lazy(() => import("./pages/configuracoes/IntegracaoAutentique"));
 const EquipeTab = lazy(() => import("./pages/configuracoes/EquipeTab"));
 const PermissoesTab = lazy(() => import("./pages/configuracoes/PermissoesTab"));
 const OportunidadesConfigTab = lazy(() => import("./pages/configuracoes/AutomacoesTab"));
@@ -127,6 +128,7 @@ export default function App() {
                   <Route path="integracoes/calendar" element={<IntegracaoCalendar />} />
                   <Route path="integracoes/whatsapp" element={<IntegracaoWhatsApp />} />
                   <Route path="integracoes/extensao" element={<IntegracaoExtensao />} />
+                  <Route path="integracoes/autentique" element={<PermissionRoute ownerOnly><IntegracaoAutentique /></PermissionRoute>} />
                   <Route path="equipe" element={<PermissionRoute ownerOnly><EquipeTab /></PermissionRoute>} />
                   <Route path="permissoes" element={<PermissionRoute ownerOnly><PermissoesTab /></PermissionRoute>} />
                   <Route path="oportunidades" element={<OportunidadesConfigTab />} />
