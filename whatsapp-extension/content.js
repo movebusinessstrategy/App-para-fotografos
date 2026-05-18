@@ -1284,11 +1284,28 @@
 
     try {
       const res = await bg({ type: 'GET_AGENDA', year: agendaState.year, month: agendaState.month });
+      console.log('[FocalPoint] agenda response:', res);
       agendaState.events = res?.events || [];
     } catch (err) {
+      console.error('[FocalPoint] agenda erro:', err);
       agendaState.events = [];
     }
     renderAgendaGrid();
+  }
+
+  // Paleta de cores por tipo de trabalho — visual estilo Google Calendar
+  const AGENDA_COLORS = {
+    'Newborn':         { bg: '#fce7f3', text: '#9d174d', dot: '#ec4899' },
+    'Gestante':        { bg: '#f3e8ff', text: '#6b21a8', dot: '#a855f7' },
+    'Família':         { bg: '#dcfce7', text: '#166534', dot: '#22c55e' },
+    'Smash the Cake':  { bg: '#fef3c7', text: '#92400e', dot: '#f59e0b' },
+    'Aniversário':     { bg: '#fee2e2', text: '#991b1b', dot: '#ef4444' },
+    'Acompanhamento':  { bg: '#dbeafe', text: '#1e40af', dot: '#3b82f6' },
+    'Casamento':       { bg: '#cffafe', text: '#155e75', dot: '#06b6d4' },
+    'default':         { bg: '#e0e7ff', text: '#3730a3', dot: '#6366f1' },
+  };
+  function agendaColor(type) {
+    return AGENDA_COLORS[type] || AGENDA_COLORS.default;
   }
 
   function renderAgendaGrid() {
@@ -1302,30 +1319,60 @@
     const { year, month, events } = agendaState;
     const firstWeekday = new Date(year, month - 1, 1).getDay();
     const lastDay = new Date(year, month, 0).getDate();
+    const prevLastDay = new Date(year, month - 1, 0).getDate();
     const today = new Date();
     const isCurrentMonth = today.getFullYear() === year && (today.getMonth() + 1) === month;
 
-    // Agrupa eventos por dia
+    // Agrupa eventos por dia, ordena por horário
     const byDay = new Map();
     events.forEach((e) => {
       const day = Number(String(e.date).slice(8, 10));
+      if (!day) return;
       if (!byDay.has(day)) byDay.set(day, []);
       byDay.get(day).push(e);
     });
+    byDay.forEach((list) => list.sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99')));
 
+    // Total de células: completa 6 linhas (42 células) pra grid não pular
+    const totalCells = 42;
     let html = '';
-    for (let i = 0; i < firstWeekday; i++) html += `<div class="fp-ag-cell fp-ag-empty"></div>`;
+
+    // Dias do mês anterior (cinza)
+    for (let i = firstWeekday - 1; i >= 0; i--) {
+      html += `<div class="fp-ag-cell fp-ag-other"><span class="fp-ag-day-num">${prevLastDay - i}</span></div>`;
+    }
+
+    // Dias do mês atual
     for (let d = 1; d <= lastDay; d++) {
       const list = byDay.get(d) || [];
       const isToday = isCurrentMonth && today.getDate() === d;
-      const hasEvents = list.length > 0;
+      const visible = list.slice(0, 3);
+      const extra = list.length - visible.length;
       html += `
-        <div class="fp-ag-cell ${isToday ? 'fp-ag-today-cell' : ''} ${hasEvents ? 'fp-ag-has' : ''}" data-day="${d}">
+        <div class="fp-ag-cell ${isToday ? 'fp-ag-today-cell' : ''}" data-day="${d}">
           <span class="fp-ag-day-num">${d}</span>
-          ${hasEvents ? `<span class="fp-ag-dot-row">${list.slice(0, 3).map(() => '<span class="fp-ag-dot"></span>').join('')}${list.length > 3 ? `<span class="fp-ag-more">+${list.length - 3}</span>` : ''}</span>` : ''}
+          <div class="fp-ag-chips">
+            ${visible.map((e) => {
+              const c = agendaColor(e.type);
+              const time = e.time ? e.time.slice(0, 5) : '';
+              return `<span class="fp-ag-chip" style="background:${c.bg};color:${c.text}" title="${esc((time ? time + ' · ' : '') + (e.title || ''))}">
+                ${time ? `<span class="fp-ag-chip-time">${time}</span>` : ''}
+                <span class="fp-ag-chip-title">${esc(e.title || '')}</span>
+              </span>`;
+            }).join('')}
+            ${extra > 0 ? `<span class="fp-ag-chip-more">+${extra} mais</span>` : ''}
+          </div>
         </div>
       `;
     }
+
+    // Dias do próximo mês (preencher até 42 células)
+    const filled = firstWeekday + lastDay;
+    const remaining = totalCells - filled;
+    for (let d = 1; d <= remaining; d++) {
+      html += `<div class="fp-ag-cell fp-ag-other"><span class="fp-ag-day-num">${d}</span></div>`;
+    }
+
     grid.innerHTML = html;
 
     grid.querySelectorAll('.fp-ag-cell[data-day]').forEach((cell) => {
@@ -1337,8 +1384,9 @@
       });
     });
 
-    // Por padrão mostra hoje (se está no mês atual) ou o primeiro dia com evento
-    const initialDay = isCurrentMonth ? today.getDate() : (Array.from(byDay.keys())[0] || 1);
+    // Por padrão mostra hoje (se está no mês atual) ou o primeiro dia com evento, ou dia 1
+    const firstWithEvent = Array.from(byDay.keys()).sort((a, b) => a - b)[0];
+    const initialDay = isCurrentMonth ? today.getDate() : (firstWithEvent || 1);
     renderAgendaDayList(initialDay);
     grid.querySelector(`.fp-ag-cell[data-day="${initialDay}"]`)?.classList.add('fp-ag-selected');
   }
@@ -1346,29 +1394,40 @@
   function renderAgendaDayList(day) {
     const list = document.getElementById('fp-ag-day-list');
     if (!list) return;
-    const items = (agendaState.events || []).filter((e) => Number(String(e.date).slice(8, 10)) === day);
+    const items = (agendaState.events || [])
+      .filter((e) => Number(String(e.date).slice(8, 10)) === day)
+      .sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'));
     const dateStr = new Date(agendaState.year, agendaState.month - 1, day).toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' });
 
     if (items.length === 0) {
       list.innerHTML = `
         <div class="fp-ag-day-header">${dateStr}</div>
-        <div class="fp-ag-empty-state">Nenhum trabalho marcado pra esse dia ✨</div>
+        <div class="fp-ag-empty-state">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="40" height="40" style="opacity:0.4;margin-bottom:8px"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+          <p>Nada marcado pra esse dia.</p>
+        </div>
       `;
       return;
     }
 
     list.innerHTML = `
-      <div class="fp-ag-day-header">${dateStr} — ${items.length} ${items.length === 1 ? 'compromisso' : 'compromissos'}</div>
-      ${items.map((e) => `
-        <div class="fp-ag-event">
-          <div class="fp-ag-event-time">${e.time ? e.time.slice(0, 5) : '—'}</div>
-          <div class="fp-ag-event-body">
-            <div class="fp-ag-event-title">${esc(e.title)}</div>
-            <div class="fp-ag-event-sub">${esc([e.type, e.client_name].filter(Boolean).join(' · ') || '')}</div>
+      <div class="fp-ag-day-header">${dateStr} <span class="fp-ag-day-count">${items.length}</span></div>
+      ${items.map((e) => {
+        const c = agendaColor(e.type);
+        const timeStr = e.time
+          ? (e.end_time ? `${e.time.slice(0, 5)} – ${e.end_time.slice(0, 5)}` : e.time.slice(0, 5))
+          : 'Dia inteiro';
+        return `
+          <div class="fp-ag-event" style="border-left:3px solid ${c.dot}">
+            <div class="fp-ag-event-time">${timeStr}</div>
+            <div class="fp-ag-event-body">
+              <div class="fp-ag-event-title">${esc(e.title)}</div>
+              <div class="fp-ag-event-sub">${esc([e.type, e.client_name].filter(Boolean).join(' · ') || '')}</div>
+            </div>
+            ${e.status ? `<span class="fp-ag-event-status fp-ag-st-${esc(e.status)}">${esc(e.status)}</span>` : ''}
           </div>
-          ${e.status ? `<span class="fp-ag-event-status fp-ag-st-${esc(e.status)}">${esc(e.status)}</span>` : ''}
-        </div>
-      `).join('')}
+        `;
+      }).join('')}
     `;
   }
 
