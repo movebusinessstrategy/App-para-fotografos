@@ -591,7 +591,7 @@ export function DealDetailDrawer({
             isLost ? "bg-red-50 dark:bg-red-950/30" :
             "bg-white dark:bg-gray-900"
           }`}>
-            {/* Row 1: Photo + Name/Phone + Action buttons + Close */}
+            {/* Row 1: Identidade (foto + nome + telefone) + Fechar */}
             <div className="flex items-center gap-3 mb-3">
               {/* WhatsApp profile photo */}
               <div className="flex-shrink-0">
@@ -641,50 +641,62 @@ export function DealDetailDrawer({
                     </button>
                   </div>
                 )}
-                <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 mt-0.5 flex-wrap">
                   {chatPhone && (
                     <span className="flex items-center gap-1">
                       <Phone size={10} /> {chatPhone}
                     </span>
                   )}
                   {chatPhone && <span>·</span>}
-                  <span>{currentStage?.name || deal.stage}</span>
+                  <span className="truncate">{currentStage?.name || deal.stage}</span>
                 </div>
               </div>
 
-              {/* Action buttons */}
-              {!isFinal && (
-                <>
-                  <button
-                    onClick={markAsWon}
-                    title="Converter em venda"
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold transition-colors flex-shrink-0"
-                  >
-                    <Trophy size={13} /> Converter
-                  </button>
-                  <button
-                    onClick={markAsLost}
-                    title="Marcar como perdido"
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 text-xs font-semibold transition-colors flex-shrink-0"
-                  >
-                    <XCircle size={13} /> Perdido
-                  </button>
-                </>
-              )}
-              <button
-                onClick={deleteDeal}
-                title="Excluir negócio"
-                className="p-1.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors flex-shrink-0"
-              >
-                <Trash2 size={16} />
-              </button>
+              {/* Fechar — sempre visível no canto */}
               <button
                 onClick={onClose}
-                className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex-shrink-0"
+                title="Fechar"
+                className="p-2 -m-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex-shrink-0"
               >
-                <X size={18} />
+                <X size={20} />
               </button>
             </div>
+
+            {/* Row 2: Botões de ação — empilham com gap respiratório */}
+            {!isFinal && (
+              <div className="flex items-center gap-2 mb-3 flex-wrap">
+                <button
+                  onClick={markAsWon}
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold transition-colors min-w-[120px]"
+                >
+                  <Trophy size={13} /> Converter
+                </button>
+                <button
+                  onClick={markAsLost}
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 text-xs font-semibold transition-colors min-w-[100px]"
+                >
+                  <XCircle size={13} /> Perdido
+                </button>
+                <button
+                  onClick={deleteDeal}
+                  title="Excluir negócio"
+                  className="flex items-center justify-center p-2 text-gray-400 hover:text-red-500 dark:hover:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors flex-shrink-0 ml-auto sm:ml-0"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            )}
+            {isFinal && (
+              <div className="flex justify-end mb-3">
+                <button
+                  onClick={deleteDeal}
+                  title="Excluir negócio"
+                  className="flex items-center justify-center p-2 text-gray-400 hover:text-red-500 dark:hover:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            )}
 
             {/* Etiquetas do lead — dropdown inline no header */}
             <div ref={headerLabelRef} className="relative flex items-center gap-1.5 mb-2 flex-wrap">
