@@ -1621,7 +1621,11 @@
   }
 
   // ===== AGENDA =====
-  let agendaState = { year: new Date().getFullYear(), month: new Date().getMonth() + 1, events: [] };
+  // view: 'month' | 'week' | 'day'
+  // anchor: data de referência (Date) — usada pra calcular mês/semana/dia visível
+  const _now = new Date();
+  let agendaState = { view: 'month', anchor: new Date(_now.getFullYear(), _now.getMonth(), _now.getDate()), events: [] };
+  let agendaTimeLineInterval = null;
 
   function buildAgendaOverlay() {
     if (document.getElementById('fp-agenda')) return;
@@ -1630,52 +1634,135 @@
     el.className = 'fp-hidden';
     el.innerHTML = `
       <div id="fp-ag-h">
-        <button id="fp-ag-prev" title="Mês anterior">‹</button>
-        <h3 id="fp-ag-title">—</h3>
-        <button id="fp-ag-next" title="Próximo mês">›</button>
-        <div style="flex:1"></div>
+        <button id="fp-ag-prev" title="Anterior" class="fp-ag-nav">‹</button>
+        <button id="fp-ag-next" title="Próximo" class="fp-ag-nav">›</button>
         <button id="fp-ag-today">Hoje</button>
+        <h3 id="fp-ag-title">—</h3>
+        <div style="flex:1"></div>
+        <div id="fp-ag-views">
+          <button class="fp-ag-view-btn" data-view="month">Mês</button>
+          <button class="fp-ag-view-btn" data-view="week">Semana</button>
+          <button class="fp-ag-view-btn" data-view="day">Dia</button>
+        </div>
+        <button id="fp-ag-back-pipeline" title="Voltar pro Pipeline">⬡ Pipeline</button>
       </div>
-      <div id="fp-ag-weekdays"></div>
-      <div id="fp-ag-grid"></div>
-      <div id="fp-ag-day-list"></div>
+      <div id="fp-ag-content"></div>
     `;
     document.body.appendChild(el);
     el.querySelector('#fp-ag-prev')?.addEventListener('click', () => navigateAgenda(-1));
     el.querySelector('#fp-ag-next')?.addEventListener('click', () => navigateAgenda(1));
     el.querySelector('#fp-ag-today')?.addEventListener('click', () => {
       const n = new Date();
-      agendaState.year = n.getFullYear();
-      agendaState.month = n.getMonth() + 1;
+      agendaState.anchor = new Date(n.getFullYear(), n.getMonth(), n.getDate());
       loadAgenda();
     });
+    el.querySelectorAll('.fp-ag-view-btn').forEach((b) => {
+      b.addEventListener('click', () => {
+        const v = b.getAttribute('data-view');
+        if (v === agendaState.view) return;
+        agendaState.view = v;
+        loadAgenda();
+      });
+    });
+    el.querySelector('#fp-ag-back-pipeline')?.addEventListener('click', showKanban);
   }
 
   function navigateAgenda(delta) {
-    let m = agendaState.month + delta;
-    let y = agendaState.year;
-    if (m < 1) { m = 12; y -= 1; }
-    if (m > 12) { m = 1; y += 1; }
-    agendaState.year = y;
-    agendaState.month = m;
+    const d = new Date(agendaState.anchor);
+    if (agendaState.view === 'month') {
+      d.setMonth(d.getMonth() + delta);
+    } else if (agendaState.view === 'week') {
+      d.setDate(d.getDate() + delta * 7);
+    } else {
+      d.setDate(d.getDate() + delta);
+    }
+    agendaState.anchor = d;
     loadAgenda();
   }
 
   async function loadAgenda() {
     buildAgendaOverlay();
-    const titleEl = document.getElementById('fp-ag-title');
-    const monthName = new Date(agendaState.year, agendaState.month - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
-    if (titleEl) titleEl.textContent = monthName.charAt(0).toUpperCase() + monthName.slice(1);
 
+    // Atualiza botão de view ativo
+    document.querySelectorAll('.fp-ag-view-btn').forEach((b) => {
+      b.classList.toggle('fp-ag-view-active', b.getAttribute('data-view') === agendaState.view);
+    });
+
+    // Atualiza título conforme view
+    const titleEl = document.getElementById('fp-ag-title');
+    if (titleEl) titleEl.textContent = formatAgendaTitle();
+
+    // Determina range de meses pra buscar (semana e dia podem cruzar mês)
+    const rangeMonths = monthsToFetch();
     try {
-      const res = await bg({ type: 'GET_AGENDA', year: agendaState.year, month: agendaState.month });
-      console.log('[FocalPoint] agenda response:', res);
-      agendaState.events = res?.events || [];
+      const results = await Promise.all(rangeMonths.map((rm) =>
+        bg({ type: 'GET_AGENDA', year: rm.year, month: rm.month }).catch(() => ({ events: [] }))
+      ));
+      const merged = [];
+      results.forEach((r) => (r?.events || []).forEach((e) => merged.push(e)));
+      // Dedup por id
+      const seen = new Set();
+      agendaState.events = merged.filter((e) => {
+        if (seen.has(e.id)) return false;
+        seen.add(e.id);
+        return true;
+      });
+      console.log('[FocalPoint] agenda events:', agendaState.events.length);
     } catch (err) {
       console.error('[FocalPoint] agenda erro:', err);
       agendaState.events = [];
     }
     renderAgendaGrid();
+    startAgendaTimeLineTicker();
+  }
+
+  function formatAgendaTitle() {
+    const d = agendaState.anchor;
+    if (agendaState.view === 'month') {
+      const s = d.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+      return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+    if (agendaState.view === 'week') {
+      const start = startOfWeek(d);
+      const end = new Date(start); end.setDate(end.getDate() + 6);
+      const sameMonth = start.getMonth() === end.getMonth();
+      if (sameMonth) {
+        const m = start.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+        return `${start.getDate()} – ${end.getDate()} ${m.charAt(0).toUpperCase() + m.slice(1)}`;
+      }
+      const a = start.toLocaleDateString('pt-BR', { day: 'numeric', month: 'short' });
+      const b = end.toLocaleDateString('pt-BR', { day: 'numeric', month: 'short', year: 'numeric' });
+      return `${a} – ${b}`;
+    }
+    return d.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  }
+
+  function monthsToFetch() {
+    const d = agendaState.anchor;
+    if (agendaState.view === 'month') return [{ year: d.getFullYear(), month: d.getMonth() + 1 }];
+    if (agendaState.view === 'day') return [{ year: d.getFullYear(), month: d.getMonth() + 1 }];
+    // Week: pega início e fim e busca os meses relevantes (1 ou 2)
+    const s = startOfWeek(d);
+    const e = new Date(s); e.setDate(e.getDate() + 6);
+    const ms = new Set([`${s.getFullYear()}-${s.getMonth() + 1}`, `${e.getFullYear()}-${e.getMonth() + 1}`]);
+    return Array.from(ms).map((k) => {
+      const [y, m] = k.split('-').map(Number);
+      return { year: y, month: m };
+    });
+  }
+
+  function startOfWeek(d) {
+    const r = new Date(d);
+    r.setDate(r.getDate() - r.getDay()); // domingo = 0
+    r.setHours(0, 0, 0, 0);
+    return r;
+  }
+
+  function ymd(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${dd}`;
   }
 
   // Paleta de cores por tipo de trabalho — visual estilo Google Calendar
@@ -1694,14 +1781,27 @@
   }
 
   function renderAgendaGrid() {
+    const content = document.getElementById('fp-ag-content');
+    if (!content) return;
+    if (agendaState.view === 'month') return renderMonthView(content);
+    if (agendaState.view === 'week') return renderWeekView(content);
+    if (agendaState.view === 'day') return renderDayView(content);
+  }
+
+  function renderMonthView(content) {
+    const d = agendaState.anchor;
+    const year = d.getFullYear();
+    const month = d.getMonth() + 1;
+    content.innerHTML = `
+      <div id="fp-ag-weekdays"></div>
+      <div id="fp-ag-grid"></div>
+      <div id="fp-ag-day-list"></div>
+    `;
     const grid = document.getElementById('fp-ag-grid');
     const wkd = document.getElementById('fp-ag-weekdays');
-    const dayList = document.getElementById('fp-ag-day-list');
-    if (!grid || !wkd || !dayList) return;
+    wkd.innerHTML = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((d) => `<span>${d}</span>`).join('');
 
-    wkd.innerHTML = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(d => `<span>${d}</span>`).join('');
-
-    const { year, month, events } = agendaState;
+    const events = agendaState.events;
     const firstWeekday = new Date(year, month - 1, 1).getDay();
     const lastDay = new Date(year, month, 0).getDate();
     const prevLastDay = new Date(year, month - 1, 0).getDate();
@@ -1776,13 +1876,213 @@
     grid.querySelector(`.fp-ag-cell[data-day="${initialDay}"]`)?.classList.add('fp-ag-selected');
   }
 
+  // ─── Time grid (Semana / Dia) ─────────────────────────────────────────────
+  const HOUR_HEIGHT = 48; // px por hora
+  const DAY_START_HOUR = 0;
+  const DAY_END_HOUR = 24;
+
+  function parseTimeToMinutes(t) {
+    if (!t) return null;
+    const m = String(t).match(/^(\d{1,2}):(\d{2})/);
+    if (!m) return null;
+    return Number(m[1]) * 60 + Number(m[2]);
+  }
+
+  function eventToBlock(ev, dayStartMs) {
+    const startMin = parseTimeToMinutes(ev.time) ?? (9 * 60); // 9h default se sem hora
+    const endMin = ev.end_time ? (parseTimeToMinutes(ev.end_time) ?? startMin + 60) : startMin + 60;
+    return {
+      top: (startMin / 60) * HOUR_HEIGHT,
+      height: Math.max(22, ((endMin - startMin) / 60) * HOUR_HEIGHT),
+      startMin,
+    };
+  }
+
+  function buildTimeGridColumn(dateStr, dayEvents) {
+    const blocks = dayEvents
+      .map((ev) => ({ ev, ...eventToBlock(ev) }))
+      .sort((a, b) => a.startMin - b.startMin);
+
+    const events = blocks.map(({ ev, top, height }) => {
+      const c = agendaColor(ev.type);
+      const timeStr = ev.time
+        ? (ev.end_time ? `${ev.time.slice(0, 5)}–${ev.end_time.slice(0, 5)}` : ev.time.slice(0, 5))
+        : '';
+      return `
+        <div class="fp-ag-tg-event" style="top:${top}px;height:${height}px;background:${c.bg};color:${c.text};border-left:3px solid ${c.dot}">
+          <div class="fp-ag-tg-event-time">${esc(timeStr)}</div>
+          <div class="fp-ag-tg-event-title">${esc(ev.title || '')}</div>
+          ${ev.client_name ? `<div class="fp-ag-tg-event-sub">${esc(ev.client_name)}</div>` : ''}
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="fp-ag-tg-col" data-date="${esc(dateStr)}" style="height:${HOUR_HEIGHT * 24}px">
+        ${Array.from({ length: 24 }).map((_, h) => `
+          <div class="fp-ag-tg-slot" data-hour="${h}" data-date="${esc(dateStr)}" style="height:${HOUR_HEIGHT}px"></div>
+        `).join('')}
+        ${events}
+      </div>
+    `;
+  }
+
+  function timeAxisColumn() {
+    const html = Array.from({ length: 24 }).map((_, h) => {
+      const label = h === 0 ? '' : `${String(h).padStart(2, '0')}:00`;
+      return `<div class="fp-ag-tg-hour-label" style="height:${HOUR_HEIGHT}px">${label}</div>`;
+    }).join('');
+    return `<div class="fp-ag-tg-axis">${html}</div>`;
+  }
+
+  function eventsForDate(dateStr) {
+    return (agendaState.events || [])
+      .filter((e) => String(e.date).slice(0, 10) === dateStr)
+      .sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'));
+  }
+
+  function renderWeekView(content) {
+    const start = startOfWeek(agendaState.anchor);
+    const days = Array.from({ length: 7 }).map((_, i) => {
+      const d = new Date(start); d.setDate(d.getDate() + i);
+      return d;
+    });
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+
+    content.innerHTML = `
+      <div class="fp-ag-tg-header">
+        <div class="fp-ag-tg-axis-spacer"></div>
+        ${days.map((d) => {
+          const isToday = d.getTime() === today.getTime();
+          const wk = d.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '');
+          return `
+            <div class="fp-ag-tg-day-head ${isToday ? 'fp-ag-tg-today' : ''}" data-date="${ymd(d)}">
+              <span class="fp-ag-tg-day-wk">${wk}</span>
+              <span class="fp-ag-tg-day-num ${isToday ? 'fp-ag-tg-day-num-today' : ''}">${d.getDate()}</span>
+            </div>
+          `;
+        }).join('')}
+      </div>
+      <div class="fp-ag-tg-scroll">
+        <div class="fp-ag-tg-body">
+          ${timeAxisColumn()}
+          ${days.map((d) => buildTimeGridColumn(ymd(d), eventsForDate(ymd(d)))).join('')}
+          <div class="fp-ag-tg-now" id="fp-ag-tg-now"></div>
+        </div>
+      </div>
+    `;
+    wireTimeGridInteractions(content);
+    scrollToReasonableHour(content);
+  }
+
+  function renderDayView(content) {
+    const d = agendaState.anchor;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const isToday = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() === today.getTime();
+    const dStr = ymd(d);
+
+    content.innerHTML = `
+      <div class="fp-ag-tg-header fp-ag-tg-header-day">
+        <div class="fp-ag-tg-axis-spacer"></div>
+        <div class="fp-ag-tg-day-head ${isToday ? 'fp-ag-tg-today' : ''}">
+          <span class="fp-ag-tg-day-wk">${d.toLocaleDateString('pt-BR', { weekday: 'long' })}</span>
+          <span class="fp-ag-tg-day-num ${isToday ? 'fp-ag-tg-day-num-today' : ''}">${d.getDate()}</span>
+        </div>
+      </div>
+      <div class="fp-ag-tg-scroll">
+        <div class="fp-ag-tg-body fp-ag-tg-body-day">
+          ${timeAxisColumn()}
+          ${buildTimeGridColumn(dStr, eventsForDate(dStr))}
+          <div class="fp-ag-tg-now" id="fp-ag-tg-now"></div>
+        </div>
+      </div>
+    `;
+    wireTimeGridInteractions(content);
+    scrollToReasonableHour(content);
+  }
+
+  function wireTimeGridInteractions(content) {
+    // Hover em slot mostra "+" pra agendar (link pro app)
+    content.querySelectorAll('.fp-ag-tg-slot').forEach((slot) => {
+      slot.addEventListener('click', (e) => {
+        // Não dispara se clicou em cima de um evento (eventos têm z-index maior)
+        if (e.target.closest('.fp-ag-tg-event')) return;
+        const date = slot.getAttribute('data-date');
+        const hour = slot.getAttribute('data-hour');
+        const time = `${String(hour).padStart(2, '0')}:00`;
+        // Abre o app web pra criar o job
+        const url = `${API_BASE_PATH}/jobs?new=1&date=${date}&time=${time}`;
+        window.open(url, '_blank');
+      });
+    });
+  }
+
+  // Tenta scrollar pra perto da hora atual (ou 8h se for outro dia)
+  function scrollToReasonableHour(content) {
+    const scroller = content.querySelector('.fp-ag-tg-scroll');
+    if (!scroller) return;
+    const now = new Date();
+    const hour = now.getHours();
+    scroller.scrollTop = Math.max(0, (hour - 1) * HOUR_HEIGHT);
+  }
+
+  function startAgendaTimeLineTicker() {
+    clearInterval(agendaTimeLineInterval);
+    updateAgendaTimeLine();
+    agendaTimeLineInterval = setInterval(updateAgendaTimeLine, 60000);
+  }
+
+  function updateAgendaTimeLine() {
+    const line = document.getElementById('fp-ag-tg-now');
+    if (!line) return;
+    // Só mostra a linha vermelha se "hoje" está visível na view atual
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    let showFor = false;
+    let column = null;
+
+    if (agendaState.view === 'day') {
+      const a = agendaState.anchor;
+      const dayDate = new Date(a.getFullYear(), a.getMonth(), a.getDate());
+      showFor = dayDate.getTime() === today.getTime();
+      column = document.querySelector('.fp-ag-tg-col');
+    } else if (agendaState.view === 'week') {
+      const start = startOfWeek(agendaState.anchor);
+      const end = new Date(start); end.setDate(end.getDate() + 7);
+      showFor = today >= start && today < end;
+      column = document.querySelector(`.fp-ag-tg-col[data-date="${ymd(today)}"]`);
+    }
+
+    if (!showFor || !column) {
+      line.style.display = 'none';
+      return;
+    }
+    const minutes = now.getHours() * 60 + now.getMinutes();
+    const top = (minutes / 60) * HOUR_HEIGHT;
+    const rect = column.getBoundingClientRect();
+    const bodyRect = column.parentElement.getBoundingClientRect();
+    line.style.display = 'block';
+    line.style.top = `${top}px`;
+    line.style.left = `${rect.left - bodyRect.left}px`;
+    line.style.width = `${rect.width}px`;
+  }
+
+  // Resolve a URL pública do app (pra abrir "+ Novo trabalho" em nova aba).
+  // Como a extensão roda dentro do web.whatsapp.com, precisamos saber a origem
+  // do front. Pegamos do storage; cai pro DEFAULT_API_BASE do popup.js.
+  let API_BASE_PATH = '';
+  chrome.storage?.local?.get?.(['fp_api_base'], (r) => {
+    API_BASE_PATH = (r?.fp_api_base || 'https://app-para-fotografos.onrender.com').replace(/\/+$/, '');
+  });
+
   function renderAgendaDayList(day) {
     const list = document.getElementById('fp-ag-day-list');
     if (!list) return;
+    const anchor = agendaState.anchor;
     const items = (agendaState.events || [])
       .filter((e) => Number(String(e.date).slice(8, 10)) === day)
       .sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'));
-    const dateStr = new Date(agendaState.year, agendaState.month - 1, day).toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' });
+    const dateStr = new Date(anchor.getFullYear(), anchor.getMonth(), day).toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' });
 
     if (items.length === 0) {
       list.innerHTML = `

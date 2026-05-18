@@ -49,7 +49,7 @@
   min-width: 220px;
   text-align: left;
 }
-#fp-ag-prev, #fp-ag-next {
+#fp-ag-prev, #fp-ag-next, .fp-ag-nav {
   width: 36px; height: 36px;
   border: none; background: transparent;
   border-radius: 50%;
@@ -58,8 +58,10 @@
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   transition: background 0.12s;
+  font-family: inherit;
+  flex-shrink: 0;
 }
-#fp-ag-prev:hover, #fp-ag-next:hover { background: #f1f3f4; color: #202124; }
+#fp-ag-prev:hover, #fp-ag-next:hover, .fp-ag-nav:hover { background: #f1f3f4; color: #202124; }
 #fp-ag-today {
   padding: 7px 18px;
   background: #fff;
@@ -71,8 +73,71 @@
   cursor: pointer;
   font-family: inherit;
   transition: background 0.12s, border-color 0.12s;
+  flex-shrink: 0;
 }
 #fp-ag-today:hover { background: #f8f9fa; border-color: #c4c7c9; }
+
+/* Seletor de view (Mês / Semana / Dia) */
+#fp-ag-views {
+  display: inline-flex;
+  align-items: center;
+  background: #f1f3f4;
+  border-radius: 999px;
+  padding: 3px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.fp-ag-view-btn {
+  border: none;
+  background: transparent;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #5f6368;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s, color 0.12s;
+}
+.fp-ag-view-btn:hover { color: #202124; }
+.fp-ag-view-active {
+  background: #fff;
+  color: #1a73e8;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+/* Botão "voltar pra Pipeline" */
+#fp-ag-back-pipeline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #dadce0;
+  background: #fff;
+  color: #3c4043;
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+#fp-ag-back-pipeline:hover {
+  background: #e7f8f3;
+  border-color: #00a884;
+  color: #00a884;
+}
+
+/* Wrapper de conteúdo da agenda (Mês OU Semana/Dia) */
+#fp-ag-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
 
 /* Cabeçalho dos dias da semana */
 #fp-ag-weekdays {
@@ -1456,4 +1521,194 @@
   display: flex; flex-direction: column;
   align-items: center; gap: 12px;
   color: #667781; text-align: center;
+}
+
+/* ─── Time grid (Semana / Dia) — estilo Google Calendar ─────────────────── */
+.fp-ag-tg-header {
+  display: grid;
+  grid-template-columns: 60px repeat(7, 1fr);
+  background: #fff;
+  border-bottom: 1px solid #e8eaed;
+  flex-shrink: 0;
+}
+.fp-ag-tg-header-day {
+  grid-template-columns: 60px 1fr;
+}
+.fp-ag-tg-axis-spacer {
+  border-right: 1px solid #f1f3f4;
+}
+.fp-ag-tg-day-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 4px;
+  border-right: 1px solid #f1f3f4;
+  cursor: default;
+}
+.fp-ag-tg-day-head:last-child { border-right: none; }
+.fp-ag-tg-day-wk {
+  font-size: 10px;
+  font-weight: 600;
+  color: #70757a;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+.fp-ag-tg-day-num {
+  font-size: 22px;
+  font-weight: 400;
+  color: #3c4043;
+  line-height: 1;
+}
+.fp-ag-tg-day-num-today {
+  background: #1a73e8;
+  color: #fff;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 500;
+  font-size: 18px;
+}
+.fp-ag-tg-today .fp-ag-tg-day-wk {
+  color: #1a73e8;
+}
+
+/* Scroll vertical do grid de horários */
+.fp-ag-tg-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+  background: #fff;
+}
+.fp-ag-tg-scroll::-webkit-scrollbar { width: 8px; }
+.fp-ag-tg-scroll::-webkit-scrollbar-track { background: transparent; }
+.fp-ag-tg-scroll::-webkit-scrollbar-thumb {
+  background: #dadce0; border-radius: 4px;
+}
+
+.fp-ag-tg-body {
+  display: grid;
+  grid-template-columns: 60px repeat(7, 1fr);
+  position: relative;
+  min-height: 100%;
+}
+.fp-ag-tg-body-day {
+  grid-template-columns: 60px 1fr;
+}
+
+/* Coluna de horas (eixo Y) */
+.fp-ag-tg-axis {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #e8eaed;
+  background: #fff;
+}
+.fp-ag-tg-hour-label {
+  font-size: 10px;
+  color: #70757a;
+  text-align: right;
+  padding: 0 6px 0 0;
+  margin-top: -6px;
+  font-weight: 500;
+  position: relative;
+}
+
+/* Coluna de um dia (contém slots + eventos posicionados absolutamente) */
+.fp-ag-tg-col {
+  position: relative;
+  border-right: 1px solid #f1f3f4;
+  background: #fff;
+}
+.fp-ag-tg-col:last-child { border-right: none; }
+
+/* Cada slot de 1h — alvo de clique pra "agendar" */
+.fp-ag-tg-slot {
+  border-bottom: 1px solid #f1f3f4;
+  cursor: pointer;
+  transition: background 0.1s;
+  position: relative;
+}
+.fp-ag-tg-slot:hover {
+  background: rgba(26, 115, 232, 0.06);
+}
+.fp-ag-tg-slot:hover::after {
+  content: '+';
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #1a73e8;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+/* Bloco de evento — posicionamento absoluto na coluna */
+.fp-ag-tg-event {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 11px;
+  line-height: 1.25;
+  overflow: hidden;
+  cursor: pointer;
+  z-index: 2;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  transition: box-shadow 0.12s, transform 0.1s;
+}
+.fp-ag-tg-event:hover {
+  box-shadow: 0 3px 8px rgba(0,0,0,0.14);
+  transform: translateY(-1px);
+  z-index: 3;
+}
+.fp-ag-tg-event-time {
+  font-weight: 700;
+  font-size: 10px;
+  opacity: 0.85;
+}
+.fp-ag-tg-event-title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fp-ag-tg-event-sub {
+  font-size: 10px;
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Linha vermelha "agora" — estilo Google Calendar */
+.fp-ag-tg-now {
+  position: absolute;
+  height: 2px;
+  background: #ea4335;
+  z-index: 4;
+  pointer-events: none;
+  display: none;
+}
+.fp-ag-tg-now::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: -5px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ea4335;
 }
