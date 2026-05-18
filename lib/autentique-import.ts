@@ -236,23 +236,47 @@ function parsePdfText(text: string, base: ExtractedFromDoc): FullParsedContract 
 }
 
 // Baixa e parseia o PDF assinado de um documento Autentique.
-// Usa pdf-parse v1 (legado, sem worker — funciona sem setup em Node).
+// Usa pdf-parse v1 importado direto de /lib/pdf-parse.js (o index.js
+// do pacote tem um bug conhecido que tenta abrir um PDF de teste).
+// Trata 429 (rate limit do Autentique) com backoff exponencial.
 export async function downloadAndParsePdf(
   url: string,
   base: ExtractedFromDoc,
   timeoutMs = 15_000,
+  maxRetries = 3,
 ): Promise<FullParsedContract> {
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const r = await fetch(url, { signal: controller.signal });
-    if (!r.ok) throw new Error(`PDF download HTTP ${r.status}`);
-    const buf = Buffer.from(await r.arrayBuffer());
-    // @ts-ignore — pdf-parse v1 não tem types publicados
-    const pdfParse = (await import('pdf-parse')).default;
-    const parsed = await pdfParse(buf);
-    return parsePdfText(parsed.text || '', base);
-  } finally {
-    clearTimeout(t);
+  let lastErr: Error | null = null;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const r = await fetch(url, { signal: controller.signal });
+      // 429 = rate limit. 425 = "too early" (PDF ainda não pronto). Retry.
+      if (r.status === 429 || r.status === 425) {
+        clearTimeout(t);
+        const wait = Math.min(2000 * Math.pow(2, attempt), 10_000); // 2s, 4s, 8s
+        await new Promise((res) => setTimeout(res, wait));
+        lastErr = new Error(`PDF download HTTP ${r.status} (tentativa ${attempt + 1}/${maxRetries})`);
+        continue;
+      }
+      if (!r.ok) throw new Error(`PDF download HTTP ${r.status}`);
+      const buf = Buffer.from(await r.arrayBuffer());
+      // BUG do pdf-parse@1: o index.js tenta abrir um PDF de teste ao ser
+      // importado. Workaround: importa direto o módulo interno.
+      // @ts-ignore — pdf-parse v1 não tem types publicados
+      const pdfParse = (await import('pdf-parse/lib/pdf-parse.js')).default;
+      const parsed = await pdfParse(buf);
+      return parsePdfText(parsed.text || '', base);
+    } catch (err: any) {
+      lastErr = err;
+      // Erro de rede/timeout: retry com backoff
+      if (attempt < maxRetries - 1) {
+        await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)));
+      }
+    } finally {
+      clearTimeout(t);
+    }
   }
+  throw lastErr || new Error('PDF parse falhou após retries');
 }
