@@ -168,22 +168,10 @@
     `;
     document.body.appendChild(k);
 
-    // Rail vertical estreita à esquerda — substitui o FAB antigo
-    const rail = document.createElement('div');
-    rail.id = 'fp-rail';
-    rail.innerHTML = `
-      <button id="fp-rail-pipeline" class="fp-rail-btn" title="Pipeline de vendas">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="6" height="18" rx="1.5"/><rect x="10.5" y="3" width="6" height="13" rx="1.5"/><rect x="18" y="3" width="3" height="8" rx="1"/></svg>
-        <span>Pipeline</span>
-      </button>
-      <button id="fp-rail-agenda" class="fp-rail-btn" title="Agenda">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
-        <span>Agenda</span>
-      </button>
-    `;
-    document.body.appendChild(rail);
-    rail.querySelector('#fp-rail-pipeline')?.addEventListener('click', showKanban);
-    rail.querySelector('#fp-rail-agenda')?.addEventListener('click', showAgenda);
+    // Injeção dos botões DENTRO da barra de ícones nativa do WhatsApp.
+    // O mount real acontece em mountNativeRail() — chamado no startObserver
+    // porque a sidebar é renderizada pelo React do WhatsApp.
+    mountNativeRail();
 
     // Toast
     const t = document.createElement('div');
@@ -238,6 +226,54 @@
     if (k) k.style.left = left + 'px';
     const ag = document.getElementById('fp-agenda');
     if (ag) ag.style.left = left + 'px';
+  }
+
+  // Acha o container da barra de ícones nativa do WhatsApp (Chats, Status, Comunidades…).
+  // O WhatsApp não tem um seletor estável — usamos heurística: a sidebar é uma
+  // <nav> à esquerda contendo vários botões com aria-label.
+  function findWaSidebar() {
+    // Tenta achar um <nav> com vários botões/ícones
+    const navs = document.querySelectorAll('nav, header > div');
+    for (const n of navs) {
+      const rect = n.getBoundingClientRect();
+      if (rect.width > 0 && rect.width < 110 && rect.height > 200) {
+        const btns = n.querySelectorAll('[role="button"], button');
+        if (btns.length >= 3) return n;
+      }
+    }
+    // Fallback: procura um elemento que tem botão com aria-label "Conversas" ou similar
+    const chatBtn = document.querySelector('[aria-label*="onversas" i], [aria-label*="hats" i]');
+    return chatBtn?.closest('nav, header, [role="navigation"]') || null;
+  }
+
+  function mountNativeRail() {
+    if (document.getElementById('fp-rail-mounted')?.isConnected) return;
+    const sidebar = findWaSidebar();
+    if (!sidebar) return; // tenta de novo no próximo MutationObserver tick
+
+    const container = document.createElement('div');
+    container.id = 'fp-rail-mounted';
+    container.className = 'fp-rail-nat';
+    container.innerHTML = `
+      <button id="fp-rail-pipeline" class="fp-rail-nat-btn" title="Pipeline de vendas" aria-label="Pipeline de vendas">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="6" height="18" rx="1.5"/><rect x="10.5" y="3" width="6" height="13" rx="1.5"/><rect x="18" y="3" width="3" height="8" rx="1"/></svg>
+      </button>
+      <button id="fp-rail-agenda" class="fp-rail-nat-btn" title="Agenda" aria-label="Agenda">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+      </button>
+    `;
+
+    container.querySelector('#fp-rail-pipeline')?.addEventListener('click', showKanban);
+    container.querySelector('#fp-rail-agenda')?.addEventListener('click', showAgenda);
+
+    // Procura o último divisor / "configurações" pra inserir antes dele,
+    // senão appenda no final
+    const settingsBtn = sidebar.querySelector('[aria-label*="onfigura" i], [aria-label*="ettings" i]');
+    if (settingsBtn?.parentElement) {
+      settingsBtn.parentElement.insertBefore(container, settingsBtn);
+    } else {
+      sidebar.appendChild(container);
+    }
   }
 
   // ===== KANBAN =====
@@ -3102,6 +3138,8 @@
     }, true);
 
     new MutationObserver(() => {
+      // Garante que a rail nativa sobreviva às re-renderizações da sidebar
+      if (!document.getElementById('fp-rail-mounted')?.isConnected) mountNativeRail();
       if (kanbanVisible) return;
       positionChatStrip();
       clearTimeout(detectDebounce);
