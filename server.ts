@@ -3665,9 +3665,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     if (error) return res.status(500).json({ error: error.message });
 
-    // Auto-label "Álbum" se o produto adicionado tem "álbum" / "album" no nome
-    const nameLower = String(catalog_name).toLowerCase();
-    if (/\b[áa]lbum(?:s|es)?\b/.test(nameLower)) {
+    // Auto-label "Álbum" se o produto adicionado tem "álbum" / "album" no nome.
+    // Não usa \b porque em JS o word boundary não funciona com chars
+    // não-ASCII (á), então normaliza acentos antes do match.
+    const nameNorm = String(catalog_name)
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '');
+    if (/(^|[^a-z])album(s|es)?($|[^a-z])/.test(nameNorm)) {
       const currentLabels: string[] = Array.isArray(job.labels) ? job.labels : [];
       if (!currentLabels.includes('Álbum')) {
         await supabase
