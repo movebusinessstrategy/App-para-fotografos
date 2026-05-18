@@ -9152,7 +9152,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // Get single contract
-  app.get('/api/contracts/:id', requireAuth, async (req, res) => {
+  // Restringe :id a só dígitos pra não capturar paths como /autentique-list
+  app.get('/api/contracts/:id(\\d+)', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const { data, error } = await supabase
@@ -9191,7 +9192,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // Update contract (form edits, status changes, signer updates)
-  app.put('/api/contracts/:id', requireAuth, async (req, res) => {
+  app.put('/api/contracts/:id(\\d+)', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const body = req.body || {};
@@ -9215,7 +9216,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json(data);
   });
 
-  app.delete('/api/contracts/:id', requireAuth, async (req, res) => {
+  app.delete('/api/contracts/:id(\\d+)', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const { error } = await supabase
