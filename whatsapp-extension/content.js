@@ -402,11 +402,15 @@
   function adjustPosition() {
     const side = document.querySelector('#side, #pane-side, [data-testid="chat-list"]')?.getBoundingClientRect();
     const left = side ? Math.round(side.right) : 380;
+    // Expõe globalmente pra CSS poder calcular max-width do #main com fp-tasks-open
+    document.documentElement.style.setProperty('--fp-side-width', left + 'px');
     document.getElementById('fp-kanban')?.style.setProperty('--fp-side-width', left + 'px');
     const k = document.getElementById('fp-kanban');
     if (k) k.style.left = left + 'px';
     const ag = document.getElementById('fp-agenda');
     if (ag) ag.style.left = left + 'px';
+    const pr = document.getElementById('fp-production');
+    if (pr) pr.style.left = left + 'px';
   }
 
   // Acha o container da barra de ícones nativa do WhatsApp (Chats, Status, Comunidades…).
@@ -1789,6 +1793,9 @@
     document.getElementById('fp-agenda')?.classList.add('fp-hidden');
     document.getElementById('fp-tasks')?.classList.add('fp-hidden');
     document.getElementById('fp-production')?.classList.add('fp-hidden');
+    // Tarefas é o único que afeta o layout do WA (painel lateral) —
+    // tira a classe pra liberar o #main de volta ao tamanho normal
+    document.body.classList.remove('fp-tasks-open');
   }
 
   function hideKanban() {
@@ -2907,13 +2914,14 @@
   }
 
   function showTasks() {
-    deselectWhatsappChat();
+    // Tarefas NÃO esconde o chat ativo — o painel fica do lado direito
+    // pra você ler mensagens e olhar tarefas ao mesmo tempo.
     kanbanVisible = false;
     hideAllOverlays();
-    removeChatStrip();
     buildTasksOverlay();
-    adjustPosition();
+    adjustPosition(); // mantém o --fp-side-width atualizado pro cálculo do max-width
     document.getElementById('fp-tasks')?.classList.remove('fp-hidden');
+    document.body.classList.add('fp-tasks-open');
     setRailActive('fp-rail-tasks');
     loadTasks();
     setTimeout(adjustPosition, 200);
