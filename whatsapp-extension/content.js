@@ -28,6 +28,9 @@
   let chatPhone = null, chatDeal = null, chatStages = [];
   let chatKey = null;
   let modalContext = { fromChat: false };
+  // Pickers do modal "Novo Lead" — instâncias fpSelect
+  let modalStageSel = null;
+  let modalAssignSel = null;
   let draggingId = null;
   let draggingInboxIdx = null;
   let dragMoved = false;
@@ -59,6 +62,184 @@
     clearTimeout(toastT);
     toastT = setTimeout(() => el.classList.remove('on'), 2600);
   };
+
+  // ─── Tradução de status (vindo do backend em inglês) ─────────────────
+  const STATUS_LABELS_PT = {
+    scheduled:   'Agendado',
+    in_progress: 'Em andamento',
+    editing:     'Em edição',
+    completed:   'Concluído',
+    delivered:   'Entregue',
+    cancelled:   'Cancelado',
+    paid:        'Pago',
+    pending:     'Pendente',
+    partial:     'Parcial',
+  };
+  const prettyStatus = (s) => STATUS_LABELS_PT[s] || s || '';
+
+  // ─── fpSelect: dropdown custom (substitui <select> nativo) ───────────
+  // Uso:
+  //   const sel = fpSelect({ items: [{value, label}], value, placeholder, searchable, onChange });
+  //   container.appendChild(sel.element);
+  //   sel.getValue(); sel.setValue(v); sel.setItems(arr);
+  function fpSelect({ items = [], value = '', placeholder = 'Selecione…', searchable = false, onChange } = {}) {
+    const wrap = document.createElement('div');
+    wrap.className = 'fp-fselect';
+    let _items = items.slice();
+    let currentValue = value;
+    let currentItem = _items.find((it) => String(it.value) === String(value)) || null;
+
+    function getLabel() {
+      return currentItem ? (currentItem.label || currentItem.value) : '';
+    }
+
+    function render() {
+      const lbl = getLabel();
+      wrap.innerHTML = `
+        <button type="button" class="fp-fselect-trigger ${lbl ? '' : 'fp-fselect-empty'}">
+          <span class="fp-fselect-value">${lbl ? esc(lbl) : esc(placeholder)}</span>
+          <svg class="fp-fselect-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+      `;
+      wrap.querySelector('.fp-fselect-trigger').addEventListener('click', openMenu);
+    }
+
+    function openMenu() {
+      document.querySelectorAll('.fp-fselect-menu').forEach((m) => m.remove());
+      const trigger = wrap.querySelector('.fp-fselect-trigger');
+      const rect = trigger.getBoundingClientRect();
+      const menu = document.createElement('div');
+      menu.className = 'fp-fselect-menu';
+      menu.style.left = `${rect.left}px`;
+      menu.style.top = `${rect.bottom + 6}px`;
+      menu.style.minWidth = `${rect.width}px`;
+      const showSearch = searchable || _items.length > 6;
+      menu.innerHTML = `
+        ${showSearch ? `
+          <div class="fp-fselect-search">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+            <input type="text" placeholder="Buscar…" autocomplete="off" />
+          </div>
+        ` : ''}
+        <div class="fp-fselect-list"></div>
+      `;
+      document.body.appendChild(menu);
+
+      function renderList(filter = '') {
+        const f = filter.trim().toLowerCase();
+        const filtered = f
+          ? _items.filter((it) => String(it.label || it.value).toLowerCase().includes(f))
+          : _items;
+        const list = menu.querySelector('.fp-fselect-list');
+        if (filtered.length === 0) {
+          list.innerHTML = `<div class="fp-fselect-empty-msg">Nenhum resultado</div>`;
+          return;
+        }
+        list.innerHTML = filtered.map((it) => {
+          const active = String(it.value) === String(currentValue);
+          return `
+            <button type="button" class="fp-fselect-item ${active ? 'fp-fselect-item-active' : ''}" data-val="${esc(it.value)}">
+              ${it.swatch ? `<span class="fp-fselect-swatch" style="background:${esc(it.swatch)}"></span>` : ''}
+              <span class="fp-fselect-item-label">${esc(it.label || it.value)}</span>
+              ${active ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 12 10 17 20 7"/></svg>` : ''}
+            </button>
+          `;
+        }).join('');
+        list.querySelectorAll('.fp-fselect-item').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const v = btn.getAttribute('data-val');
+            const item = _items.find((it) => String(it.value) === v) || { value: v, label: v };
+            currentValue = item.value;
+            currentItem = item;
+            render();
+            close();
+            if (onChange) onChange(currentValue, item);
+          });
+        });
+      }
+      renderList();
+      const searchInput = menu.querySelector('.fp-fselect-search input');
+      if (searchInput) {
+        searchInput.addEventListener('input', () => renderList(searchInput.value));
+        setTimeout(() => searchInput.focus(), 30);
+      }
+      function close() {
+        menu.remove();
+        document.removeEventListener('mousedown', onDoc, true);
+        document.removeEventListener('keydown', onKey, true);
+        window.removeEventListener('scroll', close, true);
+      }
+      function onDoc(e) { if (!menu.contains(e.target) && !wrap.contains(e.target)) close(); }
+      function onKey(e) { if (e.key === 'Escape') close(); }
+      setTimeout(() => {
+        document.addEventListener('mousedown', onDoc, true);
+        document.addEventListener('keydown', onKey, true);
+        window.addEventListener('scroll', close, true);
+      }, 0);
+    }
+
+    render();
+
+    return {
+      element: wrap,
+      getValue: () => currentValue,
+      getLabel,
+      getItems: () => _items.slice(),
+      setValue: (v) => {
+        currentValue = v;
+        currentItem = _items.find((it) => String(it.value) === String(v)) || null;
+        render();
+      },
+      setItems: (arr) => {
+        _items = arr.slice();
+        currentItem = _items.find((it) => String(it.value) === String(currentValue)) || null;
+        render();
+      },
+    };
+  }
+
+  // ─── fpConfirm: modal de confirmação premium (substitui window.confirm) ──
+  // Retorna Promise<boolean>. Uso:
+  //   const ok = await fpConfirm({ title, message, danger: true });
+  //   if (ok) { ... }
+  function fpConfirm({ title = 'Tem certeza?', message = '', confirmLabel = 'Confirmar', cancelLabel = 'Cancelar', danger = false } = {}) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'fp-info-overlay fp-confirm-overlay';
+      overlay.innerHTML = `
+        <div class="fp-confirm-box ${danger ? 'fp-confirm-danger' : ''}">
+          <div class="fp-confirm-icon">
+            ${danger
+              ? `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`
+              : `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`}
+          </div>
+          <div class="fp-confirm-body">
+            <div class="fp-confirm-title">${esc(title)}</div>
+            ${message ? `<div class="fp-confirm-msg">${esc(message)}</div>` : ''}
+          </div>
+          <div class="fp-confirm-foot">
+            <button type="button" class="fp-btn-w fp-confirm-cancel">${esc(cancelLabel)}</button>
+            <button type="button" class="${danger ? 'fp-btn-danger-solid' : 'fp-btn-g'} fp-confirm-ok">${esc(confirmLabel)}</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      const cleanup = (val) => {
+        overlay.remove();
+        document.removeEventListener('keydown', onKey, true);
+        resolve(val);
+      };
+      function onKey(e) {
+        if (e.key === 'Escape') cleanup(false);
+        if (e.key === 'Enter' && document.activeElement?.classList?.contains('fp-confirm-ok')) cleanup(true);
+      }
+      overlay.querySelector('.fp-confirm-cancel').addEventListener('click', () => cleanup(false));
+      overlay.querySelector('.fp-confirm-ok').addEventListener('click', () => cleanup(true));
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(false); });
+      document.addEventListener('keydown', onKey, true);
+      setTimeout(() => overlay.querySelector('.fp-confirm-ok')?.focus(), 30);
+    });
+  }
 
   function loadContactPhotos() {
     try {
@@ -188,8 +369,8 @@
         <div class="fp-mf"><label class="fp-ml">Nome</label><input class="fp-mi" id="fp-mn" placeholder="Nome do contato" /></div>
         <div class="fp-mf"><label class="fp-ml">Telefone</label><input class="fp-mi" id="fp-mp" placeholder="5511999999999" /></div>
         <div class="fp-mf"><label class="fp-ml">Valor (R$)</label><input class="fp-mi" id="fp-mv" type="number" placeholder="0" /></div>
-        <div class="fp-mf"><label class="fp-ml">Etapa do funil</label><select class="fp-mi" id="fp-msid"></select></div>
-        <div class="fp-mf"><label class="fp-ml">Vendedor responsável</label><select class="fp-mi" id="fp-massign"></select></div>
+        <div class="fp-mf"><label class="fp-ml">Etapa do funil</label><div id="fp-msid-slot"></div></div>
+        <div class="fp-mf"><label class="fp-ml">Vendedor responsável</label><div id="fp-massign-slot"></div></div>
         <div class="fp-mrow">
           <button class="fp-btn-w" id="fp-mc">Cancelar</button>
           <button class="fp-btn-g" id="fp-ms">Criar</button>
@@ -2074,7 +2255,11 @@
       <div class="fp-quickjob-box">
         <div class="fp-quickjob-head">
           <div>
-            <div class="fp-quickjob-kicker">${isEdit ? 'Editar agendamento' : 'Novo agendamento'}</div>
+            <div class="fp-quickjob-kicker">
+              ${isEdit
+                ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 113 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>Editar agendamento`
+                : `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Novo agendamento`}
+            </div>
             <div class="fp-quickjob-date">${esc(dateLabel)}</div>
           </div>
           <button class="fp-info-close" data-qj-close>×</button>
@@ -2082,9 +2267,7 @@
         <div class="fp-quickjob-body">
           <div class="fp-mf">
             <span class="fp-ml">Tipo</span>
-            <select class="fp-mi" id="fp-qj-type">
-              ${typeOptions.map((t) => `<option value="${esc(t)}" ${t === initType ? 'selected' : ''}>${esc(t)}</option>`).join('')}
-            </select>
+            <div data-slot="type"></div>
           </div>
           <div class="fp-mf">
             <span class="fp-ml">Nome / título</span>
@@ -2112,12 +2295,7 @@
           ${isEdit ? `
             <div class="fp-mf">
               <span class="fp-ml">Status</span>
-              <select class="fp-mi" id="fp-qj-status">
-                <option value="scheduled" ${initStatus === 'scheduled' ? 'selected' : ''}>Agendado</option>
-                <option value="in_progress" ${initStatus === 'in_progress' ? 'selected' : ''}>Em andamento</option>
-                <option value="completed" ${initStatus === 'completed' ? 'selected' : ''}>Concluído</option>
-                <option value="cancelled" ${initStatus === 'cancelled' ? 'selected' : ''}>Cancelado</option>
-              </select>
+              <div data-slot="status"></div>
             </div>
           ` : `
             <div class="fp-mf">
@@ -2127,14 +2305,47 @@
           `}
         </div>
         <div class="fp-quickjob-foot">
-          ${isEdit ? `<button class="fp-btn-w fp-qj-delete" id="fp-qj-delete">Excluir</button>` : ''}
+          ${isEdit ? `
+            <button class="fp-btn-w fp-qj-delete" id="fp-qj-delete">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
+              Excluir
+            </button>
+          ` : ''}
           <div style="flex:1"></div>
           <button class="fp-btn-w" data-qj-close>Cancelar</button>
-          <button class="fp-btn-g" id="fp-qj-save">${isEdit ? 'Salvar' : 'Agendar'}</button>
+          <button class="fp-btn-g" id="fp-qj-save">
+            ${isEdit
+              ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><polyline points="20 6 9 17 4 12"/></svg>Salvar`
+              : 'Agendar'}
+          </button>
         </div>
       </div>
     `;
     document.body.appendChild(overlay);
+
+    // ─── Substitui <select> nativos pelo fpSelect premium ───
+    const typeSelect = fpSelect({
+      items: typeOptions.map((t) => ({ value: t, label: t })),
+      value: initType,
+      placeholder: 'Selecione um tipo',
+      searchable: typeOptions.length > 5,
+    });
+    overlay.querySelector('[data-slot="type"]').appendChild(typeSelect.element);
+
+    let statusSelect = null;
+    if (isEdit) {
+      statusSelect = fpSelect({
+        items: [
+          { value: 'scheduled',   label: 'Agendado' },
+          { value: 'in_progress', label: 'Em andamento' },
+          { value: 'completed',   label: 'Concluído' },
+          { value: 'cancelled',   label: 'Cancelado' },
+        ],
+        value: initStatus,
+        placeholder: 'Selecione o status',
+      });
+      overlay.querySelector('[data-slot="status"]').appendChild(statusSelect.element);
+    }
 
     const close = () => overlay.remove();
     overlay.querySelectorAll('[data-qj-close]').forEach((b) => b.addEventListener('click', close));
@@ -2209,7 +2420,7 @@
       }
 
       const payload = {
-        job_type: overlay.querySelector('#fp-qj-type').value,
+        job_type: typeSelect.getValue(),
         job_name: overlay.querySelector('#fp-qj-name').value || 'Sessão',
         job_date: overlay.querySelector('#fp-qj-date').value || initDate,
         job_time: overlay.querySelector('#fp-qj-start').value || null,
@@ -2219,7 +2430,7 @@
 
       try {
         if (isEdit) {
-          payload.status = overlay.querySelector('#fp-qj-status').value;
+          payload.status = statusSelect.getValue();
           await bg({ type: 'UPDATE_JOB', jobId, data: payload });
           toast('Agendamento atualizado!');
         } else {
@@ -2242,7 +2453,14 @@
     });
 
     overlay.querySelector('#fp-qj-delete')?.addEventListener('click', async () => {
-      if (!confirm('Excluir esse agendamento? Não dá pra desfazer.')) return;
+      const ok = await fpConfirm({
+        title: 'Excluir agendamento?',
+        message: 'Essa ação não pode ser desfeita. O agendamento sai da sua agenda imediatamente.',
+        confirmLabel: 'Sim, excluir',
+        cancelLabel: 'Manter',
+        danger: true,
+      });
+      if (!ok) return;
       const btn = overlay.querySelector('#fp-qj-delete');
       btn.disabled = true;
       btn.textContent = 'Excluindo…';
@@ -2345,7 +2563,7 @@
               <div class="fp-ag-event-title">${esc(e.title)}</div>
               <div class="fp-ag-event-sub">${esc([e.type, e.client_name].filter(Boolean).join(' · ') || '')}</div>
             </div>
-            ${e.status ? `<span class="fp-ag-event-status fp-ag-st-${esc(e.status)}">${esc(e.status)}</span>` : ''}
+            ${e.status ? `<span class="fp-ag-event-status fp-ag-st-${esc(e.status)}">${esc(prettyStatus(e.status))}</span>` : ''}
           </div>
         `;
       }).join('')}
@@ -2383,8 +2601,15 @@
   }
 
   // ===== LOGOUT =====
-  function confirmLogout() {
-    if (!confirm('Sair da conta? Você precisará logar novamente.')) return;
+  async function confirmLogout() {
+    const ok = await fpConfirm({
+      title: 'Sair da conta?',
+      message: 'Você precisará entrar de novo pra acessar seus dados.',
+      confirmLabel: 'Sair',
+      cancelLabel: 'Cancelar',
+      danger: true,
+    });
+    if (!ok) return;
     chrome.storage.local.remove(
       ['fp_token', 'fp_refresh_token', 'fp_user_name', 'fp_user_email', 'fp_token_expires'],
       () => {
@@ -2806,10 +3031,8 @@
           <div class="fp-mf"><label class="fp-ml">Valor (R$)</label><input class="fp-mi" id="fp-ed-value" type="number" value="${Number(deal.value) || 0}" /></div>
           <div class="fp-mf"><label class="fp-ml">E-mail</label><input class="fp-mi" id="fp-ed-email" value="${esc(deal.contact_email || '')}" /></div>
           <div class="fp-mf"><label class="fp-ml">Origem</label><input class="fp-mi" id="fp-ed-source" value="${esc(deal.lead_source || '')}" placeholder="WhatsApp, Instagram..." /></div>
-          <div class="fp-mf"><label class="fp-ml">Etapa do funil</label><select class="fp-mi" id="fp-ed-stage">
-            ${ordered.map(s => `<option value="${esc(s.id)}" ${s.id === deal.stage ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
-          </select></div>
-          <div class="fp-mf"><label class="fp-ml">Vendedor responsável</label><select class="fp-mi" id="fp-ed-assign"></select></div>
+          <div class="fp-mf"><label class="fp-ml">Etapa do funil</label><div id="fp-ed-stage-slot"></div></div>
+          <div class="fp-mf"><label class="fp-ml">Vendedor responsável</label><div id="fp-ed-assign-slot"></div></div>
           <div class="fp-mf"><label class="fp-ml">Observações</label><textarea class="fp-mi fp-edit-notes" id="fp-ed-notes" placeholder="Detalhes do atendimento, pacote, data provável...">${esc(notes)}</textarea></div>
         </div>
         <div class="fp-mrow fp-deal-edit-actions">
@@ -2819,6 +3042,17 @@
       </div>
     `;
     document.body.appendChild(modal);
+
+    // Picker de etapa (fpSelect) — guarda instância no slot pra ler depois
+    const stageSlot = modal.querySelector('#fp-ed-stage-slot');
+    const stageSel = fpSelect({
+      items: ordered.map((s) => ({ value: s.id, label: s.name, swatch: s.color || undefined })),
+      value: deal.stage,
+      placeholder: 'Etapa do funil',
+      searchable: ordered.length > 5,
+    });
+    stageSlot.appendChild(stageSel.element);
+    stageSlot._fpSel = stageSel;
 
     // Popula o select de vendedor (current value e lista) + re-popula após fetch
     populateAssigneeSelect('fp-ed-assign', deal.assigned_to);
@@ -2838,8 +3072,8 @@
     const value = Number(modal.querySelector('#fp-ed-value')?.value) || 0;
     const email = modal.querySelector('#fp-ed-email')?.value.trim() || null;
     const source = modal.querySelector('#fp-ed-source')?.value.trim() || null;
-    const stage = modal.querySelector('#fp-ed-stage')?.value || deal.stage;
-    const assigned_to = modal.querySelector('#fp-ed-assign')?.value || null;
+    const stage = modal.querySelector('#fp-ed-stage-slot')?._fpSel?.getValue() || deal.stage;
+    const assigned_to = modal.querySelector('#fp-ed-assign-slot')?._fpSel?.getValue() || null;
     const notes = modal.querySelector('#fp-ed-notes')?.value.trim() || '';
 
     if (!phone) return toast('Telefone é obrigatório', true);
@@ -2909,9 +3143,7 @@
         <div class="fp-lost-body">
           <div class="fp-mf">
             <label class="fp-ml">Motivo *</label>
-            <select class="fp-mi" id="fp-lost-reason">
-              ${LOST_REASONS.map(reason => `<option ${reason === currentReason ? 'selected' : ''}>${esc(reason)}</option>`).join('')}
-            </select>
+            <div id="fp-lost-reason-slot"></div>
           </div>
           <div class="fp-mf">
             <label class="fp-ml">Observações</label>
@@ -2926,6 +3158,15 @@
     `;
     document.body.appendChild(modal);
 
+    const reasonSel = fpSelect({
+      items: LOST_REASONS.map((r) => ({ value: r, label: r })),
+      value: currentReason,
+      placeholder: 'Selecione o motivo',
+    });
+    const reasonSlot = modal.querySelector('#fp-lost-reason-slot');
+    reasonSlot.appendChild(reasonSel.element);
+    reasonSlot._fpSel = reasonSel;
+
     const close = () => modal.remove();
     modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
     modal.querySelector('#fp-lost-close')?.addEventListener('click', close);
@@ -2934,7 +3175,7 @@
   }
 
   async function saveLostDeal(deal, modal, stageId) {
-    const reason = modal.querySelector('#fp-lost-reason')?.value.trim();
+    const reason = modal.querySelector('#fp-lost-reason-slot')?._fpSel?.getValue()?.trim();
     const notes = modal.querySelector('#fp-lost-notes')?.value.trim() || '';
     const targetStage = stages.find(s => s.id === stageId) || stages.find(isLostStage);
     const targetId = targetStage?.id || stageId || 'lost';
@@ -2998,16 +3239,34 @@
   }
 
   async function loadClientsForConversion(modal) {
-    const select = modal.querySelector('#fp-win-client-select');
-    if (!select) return;
+    const slot = modal.querySelector('#fp-win-client-select-slot');
+    if (!slot) return;
+
+    const placeholder = (label) => {
+      const sel = fpSelect({ items: [{ value: '', label }], value: '', placeholder: label });
+      slot.innerHTML = '';
+      slot.appendChild(sel.element);
+      slot._fpSel = sel;
+    };
 
     try {
       const clients = await bg({ type: 'GET_CLIENTS' });
-      select.innerHTML = '<option value="">Selecione um cliente</option>' + (clients || [])
-        .map(c => `<option value="${esc(c.id)}">${esc(c.name || 'Cliente')} ${c.phone ? `- ${esc(c.phone)}` : ''}</option>`)
-        .join('');
+      const items = [{ value: '', label: 'Selecione um cliente' }]
+        .concat((clients || []).map((c) => ({
+          value: String(c.id),
+          label: `${c.name || 'Cliente'}${c.phone ? ` — ${c.phone}` : ''}`,
+        })));
+      const sel = fpSelect({
+        items,
+        value: '',
+        placeholder: 'Buscar cliente…',
+        searchable: true,
+      });
+      slot.innerHTML = '';
+      slot.appendChild(sel.element);
+      slot._fpSel = sel;
     } catch {
-      select.innerHTML = '<option value="">Não foi possível carregar clientes</option>';
+      placeholder('Não foi possível carregar clientes');
     }
   }
 
@@ -3179,19 +3438,39 @@
     return true;
   }
 
-  function setSelectByText(select, value) {
-    if (!select || !value) return false;
+  // Aceita tanto <select> nativo quanto um slot com fpSelect (._fpSel) — usa
+  // o conteúdo textual da opção pra fazer match com o valor extraído da conversa.
+  function setSelectByText(target, value) {
+    if (!target || !value) return false;
     const wanted = normalizeCadastroText(value);
-    const option = Array.from(select.options).find(opt => {
+
+    // Caminho fpSelect: aceita o slot (com _fpSel) ou a própria instância
+    const fp = target._fpSel || (typeof target.getValue === 'function' ? target : null);
+    if (fp) {
+      const items = fp.getItems();
+      const item = items.find((it) => {
+        const lbl = normalizeCadastroText(it.label || it.value);
+        return lbl && (wanted.includes(lbl) || lbl.includes(wanted));
+      }) || items.find((it) => normalizeCadastroText(it.label || it.value) === 'outro');
+      if (item) {
+        fp.setValue(item.value);
+        return true;
+      }
+      return false;
+    }
+
+    // Caminho legado <select>
+    const select = target;
+    if (!select.options) return false;
+    const wantedOpt = Array.from(select.options).find((opt) => {
       const label = normalizeCadastroText(opt.value || opt.textContent);
       return label && (wanted.includes(label) || label.includes(wanted));
     });
-    if (option) {
-      select.value = option.value;
+    if (wantedOpt) {
+      select.value = wantedOpt.value;
       return true;
     }
-
-    const other = Array.from(select.options).find(opt => normalizeCadastroText(opt.value || opt.textContent) === 'outro');
+    const other = Array.from(select.options).find((opt) => normalizeCadastroText(opt.value || opt.textContent) === 'outro');
     if (other) {
       select.value = other.value;
       return true;
@@ -3218,7 +3497,7 @@
 
     const inferredCity = inferCityFromAddress(data.address);
     if (inferredCity && setModalValue(modal, '#fp-win-client-city', inferredCity)) filled += 1;
-    if (setSelectByText(modal.querySelector('#fp-win-client-found'), data.found)) filled += 1;
+    if (setSelectByText(modal.querySelector('#fp-win-client-found-slot'), data.found)) filled += 1;
 
     const jobNoteLines = [
       data.baby ? `Nome/idade do bebê: ${data.baby}` : '',
@@ -3319,26 +3598,42 @@
   }
 
   async function loadCatalogForConversion(modal) {
-    const select = modal.querySelector('#fp-win-catalog-select');
-    if (!select) return;
+    const slot = modal.querySelector('#fp-win-catalog-select-slot');
+    if (!slot) return;
 
-    select.disabled = true;
-    select.innerHTML = '<option value="">Carregando catálogo...</option>';
+    const placeholder = (label) => {
+      const sel = fpSelect({ items: [{ value: '', label }], value: '', placeholder: label });
+      slot.innerHTML = '';
+      slot.appendChild(sel.element);
+      slot._fpSel = sel;
+    };
+    placeholder('Carregando catálogo…');
+
     try {
       const catalog = await bg({ type: 'GET_CATALOG' });
       const items = normalizeCatalogForConversion(catalog);
       modal.__fpCatalogItems = items;
       if (!items.length) {
-        select.innerHTML = '<option value="">Nenhum item ativo no catálogo</option>';
+        placeholder('Nenhum item ativo no catálogo');
         return;
       }
-      select.disabled = false;
-      select.innerHTML = '<option value="">Selecione um item</option>' + items
-        .map((item, index) => `<option value="${index}">${esc(catalogTypeLabel(item.type))} - ${esc(item.name)} (${esc(brl.format(item.value))})</option>`)
-        .join('');
+      const opts = [{ value: '', label: 'Selecione um item' }]
+        .concat(items.map((item, index) => ({
+          value: String(index),
+          label: `${catalogTypeLabel(item.type)} — ${item.name} (${brl.format(item.value)})`,
+        })));
+      const sel = fpSelect({
+        items: opts,
+        value: '',
+        placeholder: 'Buscar produto/serviço/combo…',
+        searchable: true,
+      });
+      slot.innerHTML = '';
+      slot.appendChild(sel.element);
+      slot._fpSel = sel;
       autoAddCatalogFromConversation(modal);
     } catch (err) {
-      select.innerHTML = '<option value="">Erro ao carregar catálogo</option>';
+      placeholder('Erro ao carregar catálogo');
       toast(err.message || 'Não foi possível carregar o catálogo', true);
     }
   }
@@ -3359,10 +3654,11 @@
   }
 
   function addCatalogItemToWonModal(modal) {
-    const select = modal.querySelector('#fp-win-catalog-select');
+    const sel = modal.querySelector('#fp-win-catalog-select-slot')?._fpSel;
     const qtyInput = modal.querySelector('#fp-win-catalog-qty');
     const catalog = Array.isArray(modal.__fpCatalogItems) ? modal.__fpCatalogItems : [];
-    const selected = catalog[Number(select?.value)];
+    const selectedIdx = sel?.getValue();
+    const selected = catalog[Number(selectedIdx)];
     const quantity = Math.max(1, Number(qtyInput?.value) || 1);
     if (!selected) {
       toast('Selecione um produto, serviço ou combo', true);
@@ -3373,7 +3669,7 @@
       ...selectedCatalogItems(modal),
       { ...selected, quantity, existing: false },
     ];
-    if (select) select.value = '';
+    if (sel) sel.setValue('');
     if (qtyInput) qtyInput.value = '1';
     renderSelectedCatalogItems(modal);
   }
@@ -3443,7 +3739,7 @@
           </div>
 
           <div class="fp-won-existing fp-hidden">
-            <div class="fp-mf"><label class="fp-ml">Cliente existente</label><select class="fp-mi" id="fp-win-client-select"><option>Carregando...</option></select></div>
+            <div class="fp-mf"><label class="fp-ml">Cliente existente</label><div id="fp-win-client-select-slot"></div></div>
           </div>
 
           <div class="fp-won-section fp-won-client-section">
@@ -3464,9 +3760,7 @@
             </div>
             <div class="fp-won-grid">
               <div class="fp-mf"><label class="fp-ml">Como conheceu</label>
-                <select class="fp-mi" id="fp-win-client-found">
-                  <option value="">Selecione</option><option>Instagram</option><option>Facebook</option><option>Google</option><option>Indicação</option><option>Site</option><option>WhatsApp</option><option>Outro</option>
-                </select>
+                <div id="fp-win-client-found-slot"></div>
               </div>
               <div class="fp-mf"><label class="fp-ml">Observações do cliente</label><input class="fp-mi" id="fp-win-client-notes" value="${esc(notes)}" /></div>
             </div>
@@ -3478,9 +3772,7 @@
             <div class="fp-won-section-title">Dados do trabalho</div>
             <div class="fp-won-grid fp-won-grid-4">
               <div class="fp-mf"><label class="fp-ml">Tipo *</label>
-                <select class="fp-mi" id="fp-win-job-type">
-                  ${['Gestante','Newborn','Família','Casamento','Ensaio Externo','Aniversário','Batizado','Corporativo','Outro'].map(type => `<option ${type === shootType ? 'selected' : ''}>${type}</option>`).join('')}
-                </select>
+                <div id="fp-win-job-type-slot"></div>
               </div>
               <div class="fp-mf"><label class="fp-ml">Data *</label><input class="fp-mi" id="fp-win-job-date" type="date" value="${todayISO()}" /></div>
               <div class="fp-mf"><label class="fp-ml">Início</label><input class="fp-mi" id="fp-win-job-time" type="time" value="09:00" /></div>
@@ -3491,7 +3783,7 @@
             <div class="fp-won-catalog">
               <div class="fp-won-section-title">Produtos, serviços e combos</div>
               <div class="fp-catalog-row">
-                <select class="fp-mi" id="fp-win-catalog-select"><option value="">Carregando catálogo...</option></select>
+                <div id="fp-win-catalog-select-slot"></div>
                 <input class="fp-mi fp-catalog-qty" id="fp-win-catalog-qty" type="number" min="1" value="1" title="Quantidade" />
                 <button class="fp-btn-g fp-catalog-add" type="button" id="fp-win-catalog-add">Adicionar</button>
               </div>
@@ -3501,10 +3793,10 @@
               <div class="fp-mf"><label class="fp-ml">Valor total</label><input class="fp-mi" id="fp-win-job-amount" type="number" value="0" readonly /></div>
               <div class="fp-mf"><label class="fp-ml">Sinal pago</label><input class="fp-mi" id="fp-win-sinal" type="number" value="0" /></div>
               <div class="fp-mf"><label class="fp-ml">Forma de pagamento</label>
-                <select class="fp-mi" id="fp-win-payment-method"><option>Pix</option><option>Cartão de Crédito</option><option>Cartão de Débito</option><option>Dinheiro</option><option>Boleto</option><option>Transferência</option></select>
+                <div id="fp-win-payment-method-slot"></div>
               </div>
               <div class="fp-mf"><label class="fp-ml">Status</label>
-                <select class="fp-mi" id="fp-win-job-status"><option value="scheduled">Agendado</option><option value="in_progress">Em Andamento</option><option value="editing">Em Edição</option><option value="completed">Concluído</option><option value="delivered">Entregue</option><option value="cancelled">Cancelado</option></select>
+                <div id="fp-win-job-status-slot"></div>
               </div>
             </div>
             <div class="fp-won-summary">
@@ -3523,6 +3815,61 @@
       </div>
     `;
     document.body.appendChild(modal);
+
+    // ─── Pickers premium (substituem os <select> nativos) ───
+    const foundOpts = ['Instagram', 'Facebook', 'Google', 'Indicação', 'Site', 'WhatsApp', 'Outro'];
+    const foundSel = fpSelect({
+      items: [{ value: '', label: 'Selecione' }, ...foundOpts.map((o) => ({ value: o, label: o }))],
+      value: '',
+      placeholder: 'Selecione',
+    });
+    const foundSlot = modal.querySelector('#fp-win-client-found-slot');
+    foundSlot.appendChild(foundSel.element);
+    foundSlot._fpSel = foundSel;
+
+    const jobTypes = ['Gestante', 'Newborn', 'Família', 'Casamento', 'Ensaio Externo', 'Aniversário', 'Batizado', 'Corporativo', 'Outro'];
+    const typeSel = fpSelect({
+      items: jobTypes.map((t) => ({ value: t, label: t })),
+      value: jobTypes.includes(shootType) ? shootType : jobTypes[0],
+      placeholder: 'Tipo de ensaio',
+    });
+    const typeSlot = modal.querySelector('#fp-win-job-type-slot');
+    typeSlot.appendChild(typeSel.element);
+    typeSlot._fpSel = typeSel;
+
+    const paymentSel = fpSelect({
+      items: [
+        { value: 'Pix', label: 'Pix' },
+        { value: 'Cartão de Crédito', label: 'Cartão de Crédito' },
+        { value: 'Cartão de Débito', label: 'Cartão de Débito' },
+        { value: 'Dinheiro', label: 'Dinheiro' },
+        { value: 'Boleto', label: 'Boleto' },
+        { value: 'Transferência', label: 'Transferência' },
+      ],
+      value: 'Pix',
+      placeholder: 'Forma de pagamento',
+    });
+    const paymentSlot = modal.querySelector('#fp-win-payment-method-slot');
+    paymentSlot.appendChild(paymentSel.element);
+    paymentSlot._fpSel = paymentSel;
+
+    const statusSel = fpSelect({
+      items: [
+        { value: 'scheduled',   label: 'Agendado' },
+        { value: 'in_progress', label: 'Em andamento' },
+        { value: 'editing',     label: 'Em edição' },
+        { value: 'completed',   label: 'Concluído' },
+        { value: 'delivered',   label: 'Entregue' },
+        { value: 'cancelled',   label: 'Cancelado' },
+      ],
+      value: 'scheduled',
+      placeholder: 'Status',
+    });
+    const statusSlot = modal.querySelector('#fp-win-job-status-slot');
+    statusSlot.appendChild(statusSel.element);
+    statusSlot._fpSel = statusSel;
+
+    // Cliente existente e catálogo são populados depois (load*ForConversion)
     seedWonCatalogItems(modal, deal);
     applyConversationCadastroToWonModal(modal);
     loadClientsForConversion(modal);
@@ -3553,14 +3900,18 @@
   }
 
   function val(modal, selector) {
-    return modal.querySelector(selector)?.value?.trim() || '';
+    const el = modal.querySelector(selector);
+    if (!el) return '';
+    // Slot do fpSelect? Lê pelo helper
+    if (el._fpSel) return String(el._fpSel.getValue() || '').trim();
+    return el.value?.trim() || '';
   }
 
   async function saveWonConversion(deal, modal) {
     const mode = modal.querySelector('input[name="fp-win-mode"]:checked')?.value || 'new';
     const createJob = !!modal.querySelector('#fp-win-create-job')?.checked;
     const createClient = mode === 'new';
-    const existingClientId = mode === 'existing' ? Number(val(modal, '#fp-win-client-select')) || undefined : undefined;
+    const existingClientId = mode === 'existing' ? Number(val(modal, '#fp-win-client-select-slot')) || undefined : undefined;
 
     const client = createClient ? {
       name: val(modal, '#fp-win-client-name') || deal.title,
@@ -3573,7 +3924,7 @@
       state: val(modal, '#fp-win-client-state').toUpperCase(),
       zip_code: val(modal, '#fp-win-client-zip'),
       instagram: val(modal, '#fp-win-client-instagram'),
-      how_found: val(modal, '#fp-win-client-found'),
+      how_found: val(modal, '#fp-win-client-found-slot'),
       notes: val(modal, '#fp-win-client-notes'),
     } : undefined;
 
@@ -3605,15 +3956,15 @@
     ].filter(Boolean).join('\n');
 
     const job = createJob ? {
-      job_type: val(modal, '#fp-win-job-type') || 'Gestante',
+      job_type: val(modal, '#fp-win-job-type-slot') || 'Gestante',
       job_date: val(modal, '#fp-win-job-date') || todayISO(),
       job_time: val(modal, '#fp-win-job-time') || null,
       job_end_time: val(modal, '#fp-win-job-end') || null,
       job_name: val(modal, '#fp-win-job-name') || deal.title,
       amount,
-      payment_method: val(modal, '#fp-win-payment-method') || 'Pix',
+      payment_method: val(modal, '#fp-win-payment-method-slot') || 'Pix',
       payment_status: autoPaymentStatus(amount, sinalAmount),
-      status: val(modal, '#fp-win-job-status') || 'scheduled',
+      status: val(modal, '#fp-win-job-status-slot') || 'scheduled',
       notes: jobNotes,
     } : undefined;
 
@@ -4177,20 +4528,25 @@
 
   // ===== MODAL =====
   function populateModalStages(defaultStageId) {
-    const select = document.getElementById('fp-msid');
-    if (!select) return;
+    const slot = document.getElementById('fp-msid-slot');
+    if (!slot) return;
 
     const list = orderedStages(chatStages.length ? chatStages : stages);
-    if (!list.length) {
-      select.innerHTML = '<option value="">Carregando etapas...</option>';
-      select.disabled = true;
-      return;
-    }
+    const items = list.map((s) => ({ value: s.id, label: s.name, swatch: s.color || undefined }));
+    const fallback = list.find((s) => s.id === defaultStageId)?.id || firstOpenStage(list)?.id || list[0]?.id || '';
 
-    select.disabled = false;
-    select.innerHTML = list.map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('');
-    const fallback = list.find(s => s.id === defaultStageId)?.id || firstOpenStage(list)?.id || list[0]?.id || '';
-    select.value = fallback;
+    if (!modalStageSel) {
+      modalStageSel = fpSelect({
+        items,
+        value: fallback,
+        placeholder: list.length ? 'Selecione a etapa' : 'Carregando etapas…',
+      });
+      slot.innerHTML = '';
+      slot.appendChild(modalStageSel.element);
+    } else {
+      modalStageSel.setItems(items);
+      modalStageSel.setValue(fallback);
+    }
   }
 
   function refreshModalStages(defaultStageId) {
@@ -4218,14 +4574,32 @@
     } catch { /* silencioso — sem equipe, o select fica como "sem responsável" */ }
   }
 
-  function populateAssigneeSelect(selectId, currentValue) {
-    const select = document.getElementById(selectId);
-    if (!select) return;
+  function populateAssigneeSelect(slotId, currentValue) {
+    const slot = document.getElementById(slotId + '-slot') || document.getElementById(slotId);
+    if (!slot) return;
     const value = currentValue || '';
-    const opts = ['<option value="">Sem responsável</option>']
-      .concat(teamMembers.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`));
-    select.innerHTML = opts.join('');
-    select.value = value;
+    const items = [{ value: '', label: 'Sem responsável' }]
+      .concat(teamMembers.map((m) => ({ value: m.id, label: m.name })));
+
+    // O id determina qual instância armazenamos (modal Novo Lead vs. edição)
+    const isNew = slotId === 'fp-massign';
+    const existing = isNew ? modalAssignSel : null;
+    if (existing) {
+      existing.setItems(items);
+      existing.setValue(value);
+      return;
+    }
+    const sel = fpSelect({
+      items,
+      value,
+      placeholder: 'Sem responsável',
+      searchable: teamMembers.length > 5,
+    });
+    slot.innerHTML = '';
+    slot.appendChild(sel.element);
+    if (isNew) modalAssignSel = sel;
+    // Para selects de edição (não-Novo-Lead), guardamos a instância no próprio slot
+    else slot._fpSel = sel;
   }
 
   function openModal(phone, name, stageId, fromChat = false) {
@@ -4264,8 +4638,8 @@
     let name = document.getElementById('fp-mn')?.value.trim();
     const phone = digits(document.getElementById('fp-mp')?.value || '');
     const value = Number(document.getElementById('fp-mv')?.value) || 0;
-    const stage = document.getElementById('fp-msid')?.value || undefined;
-    const assigned_to = document.getElementById('fp-massign')?.value || null;
+    const stage = modalStageSel?.getValue() || undefined;
+    const assigned_to = modalAssignSel?.getValue() || null;
     if (!name && phone) name = phone;
     if (!name) return toast('Nome é obrigatório', true);
     if (!phone) return toast('Telefone é obrigatório', true);
