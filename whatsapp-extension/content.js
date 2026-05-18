@@ -3141,7 +3141,11 @@
     jobs: [],
     clients: [],
     members: [],
-    openProcessId: null,
+    openProcessId: null, // null + view='sales' = aba "Vendas recentes" aberta
+    view: 'kanban',      // 'kanban' | 'sales'
+    salesPeriod: 7,      // dias pra filtrar em "Vendas recentes"
+    salesData: null,     // resposta do GET_SALES_OVERVIEW
+    salesLoading: false,
     loading: false,
   };
 
@@ -3218,8 +3222,18 @@
       }
     });
 
-    tabsEl.innerHTML = productionState.processes.map((p) => {
-      const isActive = p.id === productionState.openProcessId;
+    // Aba especial "Vendas recentes" sempre no topo
+    const isSalesActive = productionState.view === 'sales';
+    const salesTabHtml = `
+      <button class="fp-pr-tab fp-pr-tab-sales ${isSalesActive ? 'fp-pr-tab-active' : ''}"
+              data-view="sales">
+        <span class="fp-pr-tab-emoji">📥</span>
+        <span class="fp-pr-tab-name">Vendas recentes</span>
+      </button>
+    `;
+
+    tabsEl.innerHTML = salesTabHtml + productionState.processes.map((p) => {
+      const isActive = !isSalesActive && p.id === productionState.openProcessId;
       const count = jobCountByProcess.get(p.id) || 0;
       const isSpecial = !!p.is_special;
       const color = p.color || '#94a3b8';
@@ -3236,10 +3250,23 @@
     }).join('');
     tabsEl.querySelectorAll('.fp-pr-tab').forEach((btn) => {
       btn.addEventListener('click', () => {
-        productionState.openProcessId = btn.getAttribute('data-pid');
-        renderProduction();
+        if (btn.getAttribute('data-view') === 'sales') {
+          productionState.view = 'sales';
+          renderProduction();
+          loadSalesOverview();
+        } else {
+          productionState.view = 'kanban';
+          productionState.openProcessId = btn.getAttribute('data-pid');
+          renderProduction();
+        }
       });
     });
+
+    // ─── Se aba "Vendas recentes" está ativa, renderiza esse painel ──
+    if (isSalesActive) {
+      renderSalesOverview(boardEl);
+      return;
+    }
 
     // ─── Renderiza o kanban da pasta ativa ────────────────────────────
     const activeProcess = productionState.processes.find((p) => p.id === productionState.openProcessId);
@@ -3354,6 +3381,273 @@
         </div>
       </div>
     `;
+  }
+
+  // ─── Painel "Vendas recentes" ─────────────────────────────────────
+  async function loadSalesOverview() {
+    productionState.salesLoading = true;
+    renderProduction();
+    try {
+      const data = await bg({ type: 'GET_SALES_OVERVIEW', days: productionState.salesPeriod });
+      productionState.salesData = data;
+    } catch (err) {
+      console.error('[FocalPoint] erro vendas recentes:', err);
+      productionState.salesData = { sales: [], days: productionState.salesPeriod, error: err.message };
+    }
+    productionState.salesLoading = false;
+    renderProduction();
+  }
+
+  function renderSalesOverview(boardEl) {
+    if (productionState.salesLoading) {
+      boardEl.innerHTML = `<div class="fp-tk-loading"><div class="fp-spin"></div></div>`;
+      return;
+    }
+    const data = productionState.salesData || { sales: [] };
+    const sales = data.sales || [];
+
+    boardEl.className = 'fp-pr-sales';
+
+    const pendingCount = sales.filter((s) => !s.in_production && s.job_id).length;
+    const inProdCount = sales.filter((s) => s.in_production).length;
+    const noJobCount = sales.filter((s) => !s.job_id).length;
+
+    const headerHtml = `
+      <div class="fp-pr-sales-header">
+        <div class="fp-pr-sales-chips">
+          ${[
+            { d: 7,  label: '7 dias' },
+            { d: 14, label: '14 dias' },
+            { d: 30, label: '30 dias' },
+            { d: 90, label: '90 dias' },
+          ].map((p) => `
+            <button class="fp-pr-sales-chip ${productionState.salesPeriod === p.d ? 'fp-pr-sales-chip-active' : ''}" data-days="${p.d}">${p.label}</button>
+          `).join('')}
+        </div>
+        <div class="fp-pr-sales-summary">
+          <span class="fp-pr-sales-pill fp-pr-sales-pill-pending"><strong>${pendingCount}</strong> pendentes</span>
+          <span class="fp-pr-sales-pill fp-pr-sales-pill-active"><strong>${inProdCount}</strong> em produção</span>
+          ${noJobCount > 0 ? `<span class="fp-pr-sales-pill fp-pr-sales-pill-nojob"><strong>${noJobCount}</strong> sem job</span>` : ''}
+        </div>
+      </div>
+    `;
+
+    if (sales.length === 0) {
+      boardEl.innerHTML = `
+        ${headerHtml}
+        <div class="fp-board-state"><p>Nenhuma venda nos últimos ${data.days || productionState.salesPeriod} dias.</p></div>
+      `;
+      wireSalesChips(boardEl);
+      return;
+    }
+
+    boardEl.innerHTML = `
+      ${headerHtml}
+      <div class="fp-pr-sales-list">
+        ${sales.map((s) => salesRowHtml(s)).join('')}
+      </div>
+    `;
+
+    wireSalesChips(boardEl);
+
+    // Wire ações de cada linha
+    boardEl.querySelectorAll('.fp-pr-sales-row').forEach((row) => {
+      const dealId = row.getAttribute('data-deal-id');
+      const jobId = row.getAttribute('data-job-id');
+      const sale = sales.find((s) => String(s.deal_id) === dealId);
+
+      row.querySelector('[data-action="send"]')?.addEventListener('click', async () => {
+        await sendSaleToProduction(sale);
+      });
+
+      row.querySelector('[data-action="edit"]')?.addEventListener('click', () => {
+        openSaleEditMenu(row.querySelector('[data-action="edit"]'), sale);
+      });
+    });
+  }
+
+  function wireSalesChips(boardEl) {
+    boardEl.querySelectorAll('.fp-pr-sales-chip').forEach((b) => {
+      b.addEventListener('click', () => {
+        productionState.salesPeriod = Number(b.getAttribute('data-days'));
+        loadSalesOverview();
+      });
+    });
+  }
+
+  function salesRowHtml(s) {
+    const valueLabel = (s.value || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 0 });
+    const whenLabel = s.converted_at
+      ? new Date(s.converted_at).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
+      : '—';
+    const jobDateLabel = s.job_date
+      ? new Date(String(s.job_date).slice(0, 10) + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
+      : '';
+
+    let statusHtml, actionHtml;
+    if (!s.job_id) {
+      statusHtml = `<span class="fp-pr-sales-status fp-pr-sales-status-nojob">Sem job criado</span>`;
+      actionHtml = '<span class="fp-pr-sales-empty-action">—</span>';
+    } else if (s.in_production) {
+      statusHtml = `<span class="fp-pr-sales-status fp-pr-sales-status-in"><span class="fp-pr-sales-dot fp-pr-sales-dot-in"></span>Em produção · ${esc(s.production_stage_name || '')}</span>`;
+      actionHtml = `<button class="fp-btn-w fp-pr-sales-btn" data-action="edit">Editar</button>`;
+    } else {
+      statusHtml = `<span class="fp-pr-sales-status fp-pr-sales-status-pending"><span class="fp-pr-sales-dot fp-pr-sales-dot-pending"></span>Pendente</span>`;
+      actionHtml = `<button class="fp-btn-g fp-pr-sales-btn" data-action="send">→ Enviar pra produção</button>`;
+    }
+
+    return `
+      <div class="fp-pr-sales-row ${s.in_production ? 'fp-pr-sales-row-inactive' : ''} ${!s.job_id ? 'fp-pr-sales-row-nojob' : ''}" data-deal-id="${esc(s.deal_id)}" data-job-id="${esc(s.job_id || '')}">
+        <div class="fp-pr-sales-info">
+          <div class="fp-pr-sales-name">${esc(s.client_name)}</div>
+          <div class="fp-pr-sales-meta">
+            <span>${esc(valueLabel)}</span>
+            <span>· vendido ${esc(whenLabel)}</span>
+            ${jobDateLabel ? `<span>· sessão ${esc(jobDateLabel)}</span>` : ''}
+          </div>
+        </div>
+        ${statusHtml}
+        ${actionHtml}
+      </div>
+    `;
+  }
+
+  // Envia o job pra primeira etapa do primeiro processo de produção
+  async function sendSaleToProduction(sale) {
+    if (!sale?.job_id) return toast('Sem job pra enviar.', true);
+    const firstProcess = productionState.processes
+      .filter((p) => !p.is_special)
+      .sort((a, b) => (a.position || 0) - (b.position || 0))[0];
+    if (!firstProcess) return toast('Configure um processo de produção primeiro.', true);
+    const firstStage = productionState.stages
+      .filter((s) => s.process_id === firstProcess.id)
+      .sort((a, b) => (a.position || 0) - (b.position || 0))[0];
+    if (!firstStage) return toast('Sem etapa nesse processo.', true);
+
+    try {
+      await bg({ type: 'MOVE_JOB_PRODUCTION_STAGE', jobId: sale.job_id, stageId: firstStage.id });
+      toast(`Enviado pra "${firstStage.name}"`);
+      loadSalesOverview();
+      // Recarrega jobs em segundo plano pro kanban refletir
+      bg({ type: 'GET_PRODUCTION_DATA' }).then((data) => {
+        productionState.jobs = data.jobs || [];
+      }).catch(() => {});
+    } catch (err) {
+      toast(err?.message || 'Erro ao enviar', true);
+    }
+  }
+
+  // Menu pequeno pra editar/mover/tirar de produção
+  function openSaleEditMenu(anchorBtn, sale) {
+    document.querySelectorAll('.fp-pr-sales-menu').forEach((m) => m.remove());
+    const rect = anchorBtn.getBoundingClientRect();
+    const menu = document.createElement('div');
+    menu.className = 'fp-pr-sales-menu';
+    menu.style.right = `${Math.round(window.innerWidth - rect.right)}px`;
+    menu.style.top = `${Math.round(rect.bottom + 6)}px`;
+    menu.innerHTML = `
+      <button class="fp-pr-sales-menu-item" data-act="move">Mover de etapa</button>
+      <button class="fp-pr-sales-menu-item" data-act="remove">Tirar da produção</button>
+      <button class="fp-pr-sales-menu-item fp-pr-sales-menu-danger" data-act="back">Voltar pra fila de edição</button>
+    `;
+    document.body.appendChild(menu);
+
+    const close = () => {
+      menu.remove();
+      document.removeEventListener('mousedown', onDoc, true);
+    };
+    const onDoc = (e) => { if (!menu.contains(e.target) && !anchorBtn.contains(e.target)) close(); };
+    setTimeout(() => document.addEventListener('mousedown', onDoc, true), 0);
+
+    menu.querySelector('[data-act="move"]').addEventListener('click', async () => {
+      close();
+      openMoveStageDialog(sale);
+    });
+    menu.querySelector('[data-act="remove"]').addEventListener('click', async () => {
+      close();
+      const ok = await fpConfirm({
+        title: 'Tirar da produção?',
+        message: `O trabalho de ${sale.client_name} vai sair da produção (mas continua salvo).`,
+        confirmLabel: 'Tirar',
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        await bg({ type: 'MOVE_JOB_PRODUCTION_STAGE', jobId: sale.job_id, stageId: null });
+        toast('Tirado da produção.');
+        loadSalesOverview();
+        bg({ type: 'GET_PRODUCTION_DATA' }).then((data) => {
+          productionState.jobs = data.jobs || [];
+        }).catch(() => {});
+      } catch (err) {
+        toast(err?.message || 'Erro', true);
+      }
+    });
+    menu.querySelector('[data-act="back"]').addEventListener('click', async () => {
+      close();
+      // "Voltar pra fila de edição" = mover pra primeira etapa de novo
+      sendSaleToProduction(sale);
+    });
+  }
+
+  function openMoveStageDialog(sale) {
+    document.getElementById('fp-pr-move-overlay')?.remove();
+    const allStages = productionState.stages.slice().sort((a, b) => (a.position || 0) - (b.position || 0));
+    const processById = new Map(productionState.processes.map((p) => [p.id, p]));
+
+    const overlay = document.createElement('div');
+    overlay.id = 'fp-pr-move-overlay';
+    overlay.className = 'fp-info-overlay';
+    overlay.innerHTML = `
+      <div class="fp-quickjob-box" style="width:380px">
+        <div class="fp-quickjob-head">
+          <div>
+            <div class="fp-quickjob-kicker">Mover de etapa</div>
+            <div class="fp-quickjob-date">${esc(sale.client_name)}</div>
+          </div>
+          <button class="fp-info-close" data-close>×</button>
+        </div>
+        <div class="fp-quickjob-body">
+          <div class="fp-mf">
+            <span class="fp-ml">Para qual etapa?</span>
+            <div id="fp-pr-move-slot"></div>
+          </div>
+        </div>
+        <div class="fp-quickjob-foot">
+          <div style="flex:1"></div>
+          <button class="fp-btn-w" data-close>Cancelar</button>
+          <button class="fp-btn-g" id="fp-pr-move-save">Mover</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const items = allStages.map((s) => ({
+      value: s.id,
+      label: `${processById.get(s.process_id)?.name || '?'} → ${s.name}`,
+    }));
+    const select = fpSelect({ items, value: sale.production_stage_id, searchable: true, placeholder: 'Escolher etapa' });
+    overlay.querySelector('#fp-pr-move-slot').appendChild(select.element);
+
+    const close = () => overlay.remove();
+    overlay.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+    overlay.querySelector('#fp-pr-move-save').addEventListener('click', async () => {
+      const stageId = select.getValue();
+      if (!stageId) return toast('Escolhe uma etapa.', true);
+      try {
+        await bg({ type: 'MOVE_JOB_PRODUCTION_STAGE', jobId: sale.job_id, stageId });
+        toast('Movido.');
+        close();
+        loadSalesOverview();
+        bg({ type: 'GET_PRODUCTION_DATA' }).then((data) => {
+          productionState.jobs = data.jobs || [];
+        }).catch(() => {});
+      } catch (err) {
+        toast(err?.message || 'Erro', true);
+      }
+    });
   }
 
   async function moveJobToProductionStage(jobId, stageId) {

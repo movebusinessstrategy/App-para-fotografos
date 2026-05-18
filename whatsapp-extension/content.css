@@ -2157,6 +2157,205 @@ body.fp-tasks-open #main {
   color: #54656f;
 }
 
+/* Aba especial "Vendas recentes" */
+.fp-pr-tab-sales {
+  background: linear-gradient(135deg, #00a884 0%, #008f6f 100%) !important;
+  color: #fff !important;
+  font-weight: 800;
+}
+.fp-pr-tab-sales.fp-pr-tab-active {
+  background: #fff !important;
+  color: #00a884 !important;
+  border-color: #00a884 !important;
+}
+.fp-pr-tab-emoji { font-size: 13px; }
+
+/* ─── Painel "Vendas recentes" ──────────────────────────────────── */
+.fp-pr-sales {
+  flex-direction: column !important;
+  padding: 16px 22px 22px !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  align-items: stretch !important;
+  gap: 14px !important;
+}
+.fp-pr-sales-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f0f2f5;
+}
+.fp-pr-sales-chips {
+  display: flex;
+  gap: 6px;
+}
+.fp-pr-sales-chip {
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #54656f;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.12s;
+}
+.fp-pr-sales-chip:hover { border-color: #00a884; color: #00a884; }
+.fp-pr-sales-chip-active {
+  background: #00a884 !important;
+  color: #fff !important;
+  border-color: #00a884 !important;
+}
+.fp-pr-sales-summary {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.fp-pr-sales-pill {
+  font-size: 11px;
+  font-weight: 600;
+  color: #54656f;
+  background: #f0f2f5;
+  padding: 5px 12px;
+  border-radius: 999px;
+}
+.fp-pr-sales-pill strong { font-weight: 800; }
+.fp-pr-sales-pill-pending { background: #fef3c7; color: #92400e; }
+.fp-pr-sales-pill-active { background: #d1fae5; color: #047857; }
+.fp-pr-sales-pill-nojob { background: #f0f2f5; color: #94a3b8; }
+
+.fp-pr-sales-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fp-pr-sales-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.fp-pr-sales-row:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+.fp-pr-sales-row-inactive {
+  opacity: 0.65;
+  background: #fafafa;
+}
+.fp-pr-sales-row-nojob {
+  opacity: 0.5;
+  background: #fafafa;
+}
+.fp-pr-sales-info {
+  flex: 1;
+  min-width: 0;
+}
+.fp-pr-sales-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: #111b21;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fp-pr-sales-meta {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: #667781;
+  margin-top: 3px;
+}
+.fp-pr-sales-status {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 5px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.fp-pr-sales-status-pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+.fp-pr-sales-status-in {
+  background: #d1fae5;
+  color: #047857;
+}
+.fp-pr-sales-status-nojob {
+  background: #f0f2f5;
+  color: #94a3b8;
+  font-style: italic;
+}
+.fp-pr-sales-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.fp-pr-sales-dot-pending { background: #f59e0b; animation: fp-pulse-amber 2s infinite; }
+.fp-pr-sales-dot-in { background: #10b981; }
+@keyframes fp-pulse-amber {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4); }
+  50% { box-shadow: 0 0 0 4px rgba(245, 158, 11, 0); }
+}
+.fp-pr-sales-btn {
+  flex: 0 0 auto !important;
+  padding: 7px 14px !important;
+  font-size: 12px !important;
+  white-space: nowrap;
+}
+.fp-pr-sales-empty-action {
+  color: #cbd5e1;
+  font-size: 12px;
+  padding: 0 16px;
+}
+
+/* Menu pop pra editar (mover/tirar/voltar) */
+.fp-pr-sales-menu {
+  position: fixed;
+  z-index: 2147483005;
+  min-width: 200px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow: 0 14px 34px rgba(0,0,0,0.18);
+  padding: 5px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.fp-pr-sales-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 9px 12px;
+  font-size: 12px;
+  color: #111b21;
+  cursor: pointer;
+  font-family: inherit;
+  border-radius: 7px;
+  font-weight: 500;
+  transition: background 0.1s;
+}
+.fp-pr-sales-menu-item:hover { background: #f0f2f5; }
+.fp-pr-sales-menu-danger {
+  color: #b91c1c;
+}
+.fp-pr-sales-menu-danger:hover { background: #fee2e2; }
+
 /* ─── Board do kanban (pastas) ────────────────────────────────────── */
 #fp-pr-board {
   flex: 1;

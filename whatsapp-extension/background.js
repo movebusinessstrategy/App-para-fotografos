@@ -257,6 +257,10 @@ async function handleMessage(message) {
         body: JSON.stringify({ production_stage: message.stageId }),
       });
     }
+    case 'GET_SALES_OVERVIEW': {
+      const days = Number(message.days) || 7;
+      return apiFetch(`/api/extension/sales-overview?days=${days}`);
+    }
     default:
       throw new Error(`Tipo de mensagem desconhecido: ${message.type}`);
   }
