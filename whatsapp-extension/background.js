@@ -204,15 +204,16 @@ async function handleMessage(message) {
       });
     }
     case 'GET_TASKS_DATA': {
-      // Junta tasks + team-members + me numa chamada — a extensão precisa
-      // dos três pra montar a tela (filtrar "minhas", mostrar avatar do
-      // responsável, etc).
-      const [tasks, members, me] = await Promise.all([
+      // Junta tasks + team-members + me + clients numa chamada — a extensão
+      // precisa dos quatro pra montar a tela (filtrar "minhas", mostrar
+      // avatar do responsável, escolher cliente vinculado).
+      const [tasks, members, me, clients] = await Promise.all([
         apiFetch('/api/tasks'),
         apiFetch('/api/team-members').catch(() => []),
         apiFetch('/api/me').catch(() => null),
+        apiFetch('/api/clients').catch(() => []),
       ]);
-      return { tasks, members, me };
+      return { tasks, members, me, clients };
     }
     case 'CREATE_TASK': {
       return apiFetch('/api/tasks', {
