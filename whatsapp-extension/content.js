@@ -1888,12 +1888,20 @@
     return Number(m[1]) * 60 + Number(m[2]);
   }
 
-  function eventToBlock(ev, dayStartMs) {
+  // Total de "linhas de hora" visíveis (00:00 → 23:00). Não rendemos o slot
+  // entre 23:00 e meia-noite pra não deixar aquele espaço vazio no rodapé.
+  const VISIBLE_HOURS = 23;
+
+  function eventToBlock(ev) {
     const startMin = parseTimeToMinutes(ev.time) ?? (9 * 60); // 9h default se sem hora
     const endMin = ev.end_time ? (parseTimeToMinutes(ev.end_time) ?? startMin + 60) : startMin + 60;
+    // Clamp pra não estourar do grid (eventos a partir de 23h ficam comprimidos no fim)
+    const maxMin = VISIBLE_HOURS * 60;
+    const clampedTop = Math.min(startMin, maxMin - 15);
+    const clampedSpan = Math.min(endMin - clampedTop, maxMin - clampedTop);
     return {
-      top: (startMin / 60) * HOUR_HEIGHT,
-      height: Math.max(22, ((endMin - startMin) / 60) * HOUR_HEIGHT),
+      top: (clampedTop / 60) * HOUR_HEIGHT,
+      height: Math.max(22, (clampedSpan / 60) * HOUR_HEIGHT),
       startMin,
     };
   }
@@ -1909,7 +1917,7 @@
         ? (ev.end_time ? `${ev.time.slice(0, 5)}–${ev.end_time.slice(0, 5)}` : ev.time.slice(0, 5))
         : '';
       return `
-        <div class="fp-ag-tg-event" style="top:${top}px;height:${height}px;background:${c.bg};color:${c.text};border-left:3px solid ${c.dot}">
+        <div class="fp-ag-tg-event" data-event-id="${esc(ev.id || '')}" style="top:${top}px;height:${height}px;background:${c.bg};color:${c.text};border-left:3px solid ${c.dot}">
           <div class="fp-ag-tg-event-time">${esc(timeStr)}</div>
           <div class="fp-ag-tg-event-title">${esc(ev.title || '')}</div>
           ${ev.client_name ? `<div class="fp-ag-tg-event-sub">${esc(ev.client_name)}</div>` : ''}
@@ -1918,8 +1926,8 @@
     }).join('');
 
     return `
-      <div class="fp-ag-tg-col" data-date="${esc(dateStr)}" style="height:${HOUR_HEIGHT * 24}px">
-        ${Array.from({ length: 24 }).map((_, h) => `
+      <div class="fp-ag-tg-col" data-date="${esc(dateStr)}" style="height:${HOUR_HEIGHT * VISIBLE_HOURS}px">
+        ${Array.from({ length: VISIBLE_HOURS }).map((_, h) => `
           <div class="fp-ag-tg-slot" data-hour="${h}" data-date="${esc(dateStr)}" style="height:${HOUR_HEIGHT}px"></div>
         `).join('')}
         ${events}
@@ -1928,11 +1936,12 @@
   }
 
   function timeAxisColumn() {
-    const html = Array.from({ length: 24 }).map((_, h) => {
+    const html = Array.from({ length: VISIBLE_HOURS }).map((_, h) => {
       const label = h === 0 ? '' : `${String(h).padStart(2, '0')}:00`;
       return `<div class="fp-ag-tg-hour-label" style="height:${HOUR_HEIGHT}px">${label}</div>`;
     }).join('');
-    return `<div class="fp-ag-tg-axis">${html}</div>`;
+    // Label "23:00" fica no rodapé como marcador de fim — não ocupa altura.
+    return `<div class="fp-ag-tg-axis">${html}<div class="fp-ag-tg-hour-end">${String(VISIBLE_HOURS).padStart(2, '0')}:00</div></div>`;
   }
 
   function eventsForDate(dateStr) {
@@ -2002,7 +2011,7 @@
   }
 
   function wireTimeGridInteractions(content) {
-    // Hover em slot mostra "+" pra agendar (link pro app)
+    // Hover em slot mostra "+" pra agendar — clique abre modal inline
     content.querySelectorAll('.fp-ag-tg-slot').forEach((slot) => {
       slot.addEventListener('click', (e) => {
         // Não dispara se clicou em cima de um evento (eventos têm z-index maior)
@@ -2010,11 +2019,174 @@
         const date = slot.getAttribute('data-date');
         const hour = slot.getAttribute('data-hour');
         const time = `${String(hour).padStart(2, '0')}:00`;
-        // Abre o app web pra criar o job
-        const url = `${API_BASE_PATH}/jobs?new=1&date=${date}&time=${time}`;
-        window.open(url, '_blank');
+        openQuickJobModal(date, time);
       });
     });
+  }
+
+  // ───── Mini-modal de criação rápida de agendamento ─────
+  // Cria o job direto pelo backend; depois fecha e recarrega a agenda.
+  function openQuickJobModal(date, time) {
+    // Remove qualquer instância anterior
+    document.getElementById('fp-quickjob-overlay')?.remove();
+
+    const types = ['Newborn', 'Gestante', 'Família', 'Smash the Cake', 'Aniversário', 'Acompanhamento', 'Casamento', 'Outro'];
+    const [h, m] = (time || '09:00').split(':').map(Number);
+    const endH = Math.min(h + 1, 23);
+    const endTime = `${String(endH).padStart(2, '0')}:${String(m || 0).padStart(2, '0')}`;
+    const dateLabel = new Date(date + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' });
+
+    const overlay = document.createElement('div');
+    overlay.id = 'fp-quickjob-overlay';
+    overlay.className = 'fp-info-overlay';
+    overlay.innerHTML = `
+      <div class="fp-quickjob-box">
+        <div class="fp-quickjob-head">
+          <div>
+            <div class="fp-quickjob-kicker">Novo agendamento</div>
+            <div class="fp-quickjob-date">${esc(dateLabel)}</div>
+          </div>
+          <button class="fp-info-close" data-qj-close>×</button>
+        </div>
+        <div class="fp-quickjob-body">
+          <div class="fp-mf">
+            <span class="fp-ml">Tipo</span>
+            <select class="fp-mi" id="fp-qj-type">
+              ${types.map((t) => `<option value="${esc(t)}">${esc(t)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="fp-mf">
+            <span class="fp-ml">Nome / título</span>
+            <input class="fp-mi" id="fp-qj-name" placeholder="Ex: Sessão newborn — Marina" value="Sessão" />
+          </div>
+          <div class="fp-mrow">
+            <div class="fp-mf" style="flex:1">
+              <span class="fp-ml">Início</span>
+              <input class="fp-mi" id="fp-qj-start" type="time" value="${esc(time)}" />
+            </div>
+            <div class="fp-mf" style="flex:1">
+              <span class="fp-ml">Fim</span>
+              <input class="fp-mi" id="fp-qj-end" type="time" value="${esc(endTime)}" />
+            </div>
+          </div>
+          <div class="fp-mf">
+            <span class="fp-ml">Cliente <span style="opacity:0.6;font-weight:500">(opcional — busca ou cria novo)</span></span>
+            <input class="fp-mi" id="fp-qj-client" placeholder="Digite o nome do cliente" autocomplete="off" />
+            <div id="fp-qj-client-results" class="fp-qj-results"></div>
+          </div>
+          <div class="fp-mf">
+            <span class="fp-ml">Valor (opcional)</span>
+            <input class="fp-mi" id="fp-qj-amount" type="number" min="0" step="50" placeholder="0" />
+          </div>
+        </div>
+        <div class="fp-quickjob-foot">
+          <button class="fp-btn-w" data-qj-close>Cancelar</button>
+          <button class="fp-btn-g" id="fp-qj-save">Agendar</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    overlay.querySelectorAll('[data-qj-close]').forEach((b) => b.addEventListener('click', close));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+
+    // Busca de cliente (debounced, mostra sugestões abaixo do input)
+    const clientInput = overlay.querySelector('#fp-qj-client');
+    const clientResults = overlay.querySelector('#fp-qj-client-results');
+    let selectedClientId = null;
+    let clientCache = null;
+    let searchTimer;
+
+    async function ensureClients() {
+      if (clientCache) return clientCache;
+      try {
+        clientCache = await bg({ type: 'GET_CLIENTS' });
+      } catch {
+        clientCache = [];
+      }
+      return clientCache;
+    }
+
+    clientInput.addEventListener('input', () => {
+      selectedClientId = null;
+      clientInput.classList.remove('fp-qj-client-picked');
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(async () => {
+        const q = clientInput.value.trim().toLowerCase();
+        if (!q) { clientResults.innerHTML = ''; return; }
+        const all = await ensureClients();
+        const matches = (all || [])
+          .filter((c) => (c.name || '').toLowerCase().includes(q))
+          .slice(0, 6);
+        if (matches.length === 0) {
+          clientResults.innerHTML = `<div class="fp-qj-result fp-qj-result-empty">Nenhum encontrado — vai criar um novo com esse nome.</div>`;
+          return;
+        }
+        clientResults.innerHTML = matches.map((c) => `
+          <button type="button" class="fp-qj-result" data-cid="${esc(c.id)}" data-cname="${esc(c.name)}">
+            <strong>${esc(c.name)}</strong>
+            ${c.phone ? `<span>${esc(c.phone)}</span>` : ''}
+          </button>
+        `).join('');
+        clientResults.querySelectorAll('.fp-qj-result').forEach((b) => {
+          b.addEventListener('click', () => {
+            selectedClientId = b.getAttribute('data-cid');
+            clientInput.value = b.getAttribute('data-cname');
+            clientInput.classList.add('fp-qj-client-picked');
+            clientResults.innerHTML = '';
+          });
+        });
+      }, 200);
+    });
+
+    overlay.querySelector('#fp-qj-save').addEventListener('click', async () => {
+      const btn = overlay.querySelector('#fp-qj-save');
+      btn.disabled = true;
+      btn.textContent = 'Salvando…';
+
+      const typed = clientInput.value.trim();
+      let clientId = selectedClientId;
+
+      // Se digitou um nome mas não selecionou nenhum existente, cria cliente "leve"
+      if (typed && !clientId) {
+        try {
+          const created = await bg({ type: 'CREATE_CLIENT_QUICK', data: { name: typed } });
+          clientId = created?.id || null;
+        } catch {
+          // Se falhar, segue sem cliente; o agendamento ainda é criado.
+        }
+      }
+
+      const payload = {
+        job_type: overlay.querySelector('#fp-qj-type').value,
+        job_name: overlay.querySelector('#fp-qj-name').value || 'Sessão',
+        job_date: date,
+        job_time: overlay.querySelector('#fp-qj-start').value || time,
+        job_end_time: overlay.querySelector('#fp-qj-end').value || null,
+        status: 'scheduled',
+        client_id: clientId,
+        amount: Number(overlay.querySelector('#fp-qj-amount').value) || 0,
+        payment_method: '',
+        payment_status: 'pending',
+        notes: '',
+      };
+
+      try {
+        await bg({ type: 'CREATE_JOB', data: payload });
+        toast('Agendamento criado!');
+        close();
+        loadAgenda();
+      } catch (err) {
+        console.error('[FocalPoint] erro ao criar job:', err);
+        btn.disabled = false;
+        btn.textContent = 'Agendar';
+        toast(err?.message || 'Erro ao criar agendamento', true);
+      }
+    });
+
+    setTimeout(() => overlay.querySelector('#fp-qj-name')?.focus(), 80);
   }
 
   // Tenta scrollar pra perto da hora atual (ou 8h se for outro dia)
@@ -2066,14 +2238,6 @@
     line.style.left = `${rect.left - bodyRect.left}px`;
     line.style.width = `${rect.width}px`;
   }
-
-  // Resolve a URL pública do app (pra abrir "+ Novo trabalho" em nova aba).
-  // Como a extensão roda dentro do web.whatsapp.com, precisamos saber a origem
-  // do front. Pegamos do storage; cai pro DEFAULT_API_BASE do popup.js.
-  let API_BASE_PATH = '';
-  chrome.storage?.local?.get?.(['fp_api_base'], (r) => {
-    API_BASE_PATH = (r?.fp_api_base || 'https://app-para-fotografos.onrender.com').replace(/\/+$/, '');
-  });
 
   function renderAgendaDayList(day) {
     const list = document.getElementById('fp-ag-day-list');
