@@ -10,6 +10,18 @@ function normalizeApiBase(url) {
   return String(url || '').trim().replace(/\/+$/, '');
 }
 
+// Resolve a URL "boa" da API: se o que está no storage for localhost
+// (sobrou de algum teste local), força produção. Mantém custom URLs
+// não-localhost (ex.: staging) intactas.
+function resolveApiBase(stored) {
+  const v = normalizeApiBase(stored);
+  if (!v) return DEFAULT_API_BASE;
+  if (/(^https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|\/|$)/i.test(v)) {
+    return DEFAULT_API_BASE;
+  }
+  return v;
+}
+
 async function checkApiHealth(apiBase) {
   try {
     const r = await fetch(`${apiBase}/api/health`, { method: 'GET' });
@@ -163,7 +175,12 @@ function escHtml(str) {
 chrome.storage.local.get(
   ['fp_token', 'fp_user_name', 'fp_user_email', 'fp_token_expires', 'fp_api_base'],
   async (result) => {
-    const apiBase = result.fp_api_base || DEFAULT_API_BASE;
+    const apiBase = resolveApiBase(result.fp_api_base);
+
+    // Se mudou de localhost → prod, persiste a correção pra não cair nesse ramo de novo
+    if (apiBase !== normalizeApiBase(result.fp_api_base)) {
+      chrome.storage.local.set({ fp_api_base: apiBase });
+    }
 
     if (result.fp_token && result.fp_user_name) {
       const expires = result.fp_token_expires || 0;

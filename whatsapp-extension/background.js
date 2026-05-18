@@ -5,15 +5,29 @@ const API_BASE = 'https://app-para-fotografos.onrender.com';
 const SUPABASE_URL = 'https://rxzxmwvnovhrerbsmkqj.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ4enhtd3Zub3ZocmVyYnNta3FqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyNzg0OTAsImV4cCI6MjA4ODg1NDQ5MH0.vS93umaTw9xVwoQMTFmSQGgAt9JZqeV2PLS_hrufMFM';
 
+// Se o storage ficou com URL de localhost (sobrou de teste local), ignora
+// e força a URL de produção. Custom URLs não-localhost são respeitadas.
+function resolveApiBase(stored) {
+  const v = String(stored || '').trim().replace(/\/+$/, '');
+  if (!v) return API_BASE;
+  if (/(^https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|\/|$)/i.test(v)) {
+    // Limpa o storage pra não cair aqui de novo
+    try { chrome.storage.local.set({ fp_api_base: API_BASE }); } catch {}
+    return API_BASE;
+  }
+  return v;
+}
+
 async function getAuth() {
   return new Promise(async (resolve, reject) => {
     chrome.storage.local.get(['fp_token', 'fp_refresh_token', 'fp_token_expires', 'fp_api_base'], async (result) => {
       if (!result.fp_token) return reject(new Error('Não autenticado — faça login no ícone da extensão.'));
 
+      const apiBase = resolveApiBase(result.fp_api_base);
       const expires = result.fp_token_expires || 0;
       // Se token ainda válido (com 2min de margem), usa ele
       if (Date.now() < expires - 120000) {
-        return resolve({ token: result.fp_token, apiBase: result.fp_api_base || API_BASE });
+        return resolve({ token: result.fp_token, apiBase });
       }
 
       // Tenta renovar
@@ -32,7 +46,7 @@ async function getAuth() {
           fp_refresh_token: data.refresh_token,
           fp_token_expires: Date.now() + (data.expires_in * 1000),
         });
-        resolve({ token: data.access_token, apiBase: result.fp_api_base || API_BASE });
+        resolve({ token: data.access_token, apiBase });
       } catch (err) {
         reject(err);
       }
