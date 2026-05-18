@@ -7277,6 +7277,64 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ sales, days });
   });
 
+  // Cancela uma venda (geralmente duplicata): move o deal pra etapa
+  // "perdido", limpa as flags de conversão e apaga o job vinculado (se
+  // houver). O deal continua salvo no histórico — só sai do "ganho".
+  app.post('/api/deals/:id/cancel-sale', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const stages = await ensurePipelineStages(supabase, userId);
+    const lostStage = stages.find((s) => s.is_final && !s.is_won);
+    if (!lostStage) return res.status(400).json({ error: 'Sem etapa "perdido" configurada' });
+
+    const { data: deal } = await supabase
+      .from('deals')
+      .select('*')
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .single();
+    if (!deal) return res.status(404).json({ error: 'Venda não encontrada' });
+
+    // Apaga o job vinculado primeiro (se houver) — assim não fica órfão
+    if (deal.converted_job_id) {
+      await supabase
+        .from('jobs')
+        .delete()
+        .eq('id', deal.converted_job_id)
+        .eq('user_id', userId);
+    }
+
+    const nowIso = new Date().toISOString();
+    const updates: any = {
+      stage: lostStage.id,
+      stage_entered_at: nowIso,
+      current_stage_entered_at: nowIso,
+      stage_history: appendStageHistory(deal.stage_history, lostStage.id, lostStage.name, nowIso),
+      converted: false,
+      converted_at: null,
+      converted_job_id: null,
+      lost_reason: req.body?.reason || 'Cancelado (venda duplicada/erro)',
+    };
+
+    const { error } = await supabase
+      .from('deals')
+      .update(updates)
+      .eq('id', req.params.id)
+      .eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+
+    await recordStageEvent(
+      supabase,
+      userId,
+      Number(req.params.id),
+      deal.stage,
+      lostStage.id,
+      deal.current_stage_entered_at || deal.stage_entered_at
+    );
+
+    res.json({ success: true });
+  });
+
   app.get('/api/extension/agenda', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;

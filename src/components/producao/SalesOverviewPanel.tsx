@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from "react";
-import { ArrowRight, Edit2, MoreVertical, Trash2, X, ChevronRight } from "lucide-react";
+import { ArrowRight, Edit2, MoreVertical, Trash2, X, ChevronRight, XCircle } from "lucide-react";
 import { ProductionProcess, ProductionStageV2 } from "../../types";
 import { authFetch } from "../../utils/authFetch";
 import { cn } from "../../utils/cn";
@@ -58,6 +58,7 @@ export function SalesOverviewPanel({ processes, stages, onRefreshJobs }: Props) 
   const [movingSale, setMovingSale] = useState<Sale | null>(null);
   const [moveStageId, setMoveStageId] = useState<string>('');
   const [confirmRemove, setConfirmRemove] = useState<Sale | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState<Sale | null>(null);
 
   async function load() {
     setLoading(true);
@@ -133,6 +134,18 @@ export function SalesOverviewPanel({ processes, stages, onRefreshJobs }: Props) 
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ production_stage: null }),
+      });
+      load();
+      onRefreshJobs?.();
+    } catch (err) { console.error(err); }
+  };
+
+  const cancelSale = async (sale: Sale) => {
+    try {
+      await authFetch(`/api/deals/${sale.deal_id}/cancel-sale`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Cancelado pelo painel de Vendas recentes' }),
       });
       load();
       onRefreshJobs?.();
@@ -252,7 +265,7 @@ export function SalesOverviewPanel({ processes, stages, onRefreshJobs }: Props) 
                     </span>
                   )}
 
-                  {/* Ação */}
+                  {/* Ação primária */}
                   {hasNoJob ? (
                     <span className="text-gray-300 dark:text-gray-700 text-xs px-3">—</span>
                   ) : isInProd ? (
@@ -264,7 +277,7 @@ export function SalesOverviewPanel({ processes, stages, onRefreshJobs }: Props) 
                         <Edit2 size={12} /> Editar
                       </button>
                       {openMenuFor === sale.deal_id && (
-                        <div className="absolute right-0 top-full mt-1.5 z-40 min-w-[200px] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg py-1.5">
+                        <div className="absolute right-0 top-full mt-1.5 z-40 min-w-[210px] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg py-1.5">
                           <button
                             onClick={() => { setOpenMenuFor(null); setMovingSale(sale); setMoveStageId(sale.production_stage_id || ''); }}
                             className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-2"
@@ -284,6 +297,12 @@ export function SalesOverviewPanel({ processes, stages, onRefreshJobs }: Props) 
                           >
                             <Trash2 size={13} /> Tirar da produção
                           </button>
+                          <button
+                            onClick={() => { setOpenMenuFor(null); setConfirmCancel(sale); }}
+                            className="w-full text-left px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"
+                          >
+                            <XCircle size={13} /> Cancelar venda (duplicada)
+                          </button>
                         </div>
                       )}
                     </div>
@@ -293,6 +312,17 @@ export function SalesOverviewPanel({ processes, stages, onRefreshJobs }: Props) 
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
                     >
                       <ArrowRight size={12} /> Enviar pra produção
+                    </button>
+                  )}
+
+                  {/* Cancelar venda — disponível em todas as linhas (pendente/sem job tem como botão direto; em produção tá no menu) */}
+                  {!isInProd && (
+                    <button
+                      onClick={() => setConfirmCancel(sale)}
+                      title="Cancelar venda (duplicada ou erro)"
+                      className="flex items-center justify-center w-8 h-8 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors flex-shrink-0"
+                    >
+                      <XCircle size={16} />
                     </button>
                   )}
                 </div>
@@ -354,6 +384,17 @@ export function SalesOverviewPanel({ processes, stages, onRefreshJobs }: Props) 
         variant="danger"
         onConfirm={() => { if (confirmRemove) removeFromProduction(confirmRemove); setConfirmRemove(null); }}
         onCancel={() => setConfirmRemove(null)}
+      />
+
+      {/* Confirma cancelamento de venda (duplicada) */}
+      <ConfirmModal
+        open={!!confirmCancel}
+        title="Cancelar venda?"
+        message={`A venda de "${confirmCancel?.client_name || ''}" será marcada como perdida e o trabalho vinculado vai ser excluído. O cliente continua salvo. Use isso pra duplicatas ou erros de conversão.`}
+        confirmText="Sim, cancelar venda"
+        variant="danger"
+        onConfirm={() => { if (confirmCancel) cancelSale(confirmCancel); setConfirmCancel(null); }}
+        onCancel={() => setConfirmCancel(null)}
       />
     </div>
   );
