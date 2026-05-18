@@ -1153,6 +1153,38 @@ async function startServer() {
     }
   };
 
+  // ============ PERMISSION MIDDLEWARE ============
+  // Requer requireAuth antes. Bloqueia o request se for membro e a
+  // permissão do módulo estiver desabilitada (permissions[module] === false).
+  // Dono (não-membro) e platform-admin sempre passam.
+  function requirePermission(module: string) {
+    return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+      const isMember = (req as any).isMember;
+      const isPlatformAdmin = (req as any).isPlatformAdmin;
+      if (!isMember || isPlatformAdmin) return next();
+      const perms = (req as any).memberPermissions || {};
+      if (perms[module] === false) {
+        return res.status(403).json({
+          error: `Sem permissão pra acessar "${module}". Peça pro administrador liberar.`,
+          permission_denied: module,
+        });
+      }
+      next();
+    };
+  }
+
+  // Owner-only: bloqueia qualquer membro (independente das permissions).
+  // Pra dados sensíveis como faturamento, equipe, billing.
+  function requireOwnerOrPlatformAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+    const isMember = (req as any).isMember;
+    const isPlatformAdmin = (req as any).isPlatformAdmin;
+    if (!isMember || isPlatformAdmin) return next();
+    return res.status(403).json({
+      error: 'Essa ação é restrita ao dono da conta.',
+      owner_only: true,
+    });
+  }
+
   // ============ SUPER-ADMIN MIDDLEWARE ============
   // Requer requireAuth antes. Bloqueia se o REAL user (não o impersonado) não for super-admin.
   const requireSuperAdmin = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -4745,7 +4777,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json(data || []);
   });
 
-  app.post('/api/team-members', requireAuth, async (req, res) => {
+  app.post('/api/team-members', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const { name, email, color, permissions, password } = req.body;
@@ -4798,7 +4830,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json(data);
   });
 
-  app.put('/api/team-members/:id', requireAuth, async (req, res) => {
+  app.put('/api/team-members/:id', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const { name, email, color, permissions, password } = req.body;
@@ -4849,7 +4881,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ success: true });
   });
 
-  app.delete('/api/team-members/:id', requireAuth, async (req, res) => {
+  app.delete('/api/team-members/:id', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     // Desvincula jobs antes de excluir
@@ -5132,7 +5164,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Cria customer no Asaas + subscription. Retorna invoiceUrl pra pagamento.
   // Body: { planSlug: 'pro'|'business', billingType: 'PIX'|'CREDIT_CARD',
   //         cpfCnpj, mobilePhone, creditCard?, creditCardHolderInfo? }
-  app.post('/api/billing/subscribe', requireAuth, async (req, res) => {
+  app.post('/api/billing/subscribe', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
     const ownerId = (req as any).userId;
     if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
 
@@ -5200,7 +5232,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // Cancela assinatura corrente
-  app.post('/api/billing/cancel', requireAuth, async (req, res) => {
+  app.post('/api/billing/cancel', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
     const ownerId = (req as any).userId;
     if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
 
@@ -6414,6 +6446,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     await supabase.from('fin_despesas').update({ status: 'atrasado' })
       .eq('user_id', userId).eq('status', 'pendente').lt('data_vencimento', hoje);
   }
+
+  // ─── Mount global: TODAS as rotas /api/fin/* exigem requireAuth +
+  // permissão "finance" do membro. Dono e platform admin sempre passam.
+  // Isso é defesa-em-profundidade: o frontend já bloqueia a rota, mas
+  // sem isso um membro poderia chamar a API direto.
+  app.use('/api/fin', requireAuth, requirePermission('finance'));
 
   // ─── Categorias ────────────────────────────────────────────────────────────
   app.get('/api/fin/categorias', requireAuth, async (req, res) => {

@@ -1,17 +1,25 @@
 import React from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { Building2, CreditCard, Plug, Users, Shield, Target } from "lucide-react";
+import { useAuth } from "../../contexts/AuthContext";
 
 const SECTIONS = [
-  { to: "/configuracoes/empresa",       label: "Empresa",                    icon: Building2 },
-  { to: "/configuracoes/plano",         label: "Plano",                      icon: CreditCard },
-  { to: "/configuracoes/integracoes",   label: "Integrações",                icon: Plug },
-  { to: "/configuracoes/equipe",        label: "Equipe",                     icon: Users },
-  { to: "/configuracoes/permissoes",    label: "Permissões",                 icon: Shield },
-  { to: "/configuracoes/oportunidades", label: "Configurações de oportunidades", icon: Target },
+  { to: "/configuracoes/empresa",       label: "Empresa",                    icon: Building2, ownerOnly: false },
+  { to: "/configuracoes/plano",         label: "Plano",                      icon: CreditCard, ownerOnly: true },
+  { to: "/configuracoes/integracoes",   label: "Integrações",                icon: Plug, ownerOnly: false },
+  { to: "/configuracoes/equipe",        label: "Equipe",                     icon: Users, ownerOnly: true },
+  { to: "/configuracoes/permissoes",    label: "Permissões",                 icon: Shield, ownerOnly: true },
+  { to: "/configuracoes/oportunidades", label: "Configurações de oportunidades", icon: Target, ownerOnly: false },
 ];
 
 export default function SettingsLayout() {
+  const { isMember, isPlatformAdmin } = useAuth();
+  // Membro normal (sem ser platform admin) não vê seções owner-only no menu
+  const visibleSections = SECTIONS.filter(s => {
+    if (!s.ownerOnly) return true;
+    return !isMember || isPlatformAdmin;
+  });
+
   return (
     <div className="flex flex-col lg:flex-row gap-6 h-full">
       {/* Sidebar interna */}
@@ -21,7 +29,7 @@ export default function SettingsLayout() {
           Gerencie sua conta, equipe e integrações.
         </p>
         <nav className="flex lg:flex-col gap-1 overflow-x-auto lg:overflow-visible -mx-2 lg:mx-0 px-2 lg:px-0">
-          {SECTIONS.map(({ to, label, icon: Icon }) => (
+          {visibleSections.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
