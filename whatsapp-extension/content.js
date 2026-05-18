@@ -404,13 +404,19 @@
       const c = C(s.position ?? i);
       const sd = deals.filter(d => d.stage === s.id && matches(d));
       const total = sd.reduce((t, d) => t + (d.value || 0), 0);
+      const hasLeadsWithPhone = sd.some(d => d.contact_phone);
       return `
         <div class="fpc" data-stage-id="${s.id}">
           <div class="fpc-hd">
             <div class="fpc-title" style="color:${c.text}">
               <span class="fpc-dot" style="background:${c.dot}"></span>${esc(s.name)}
             </div>
-            <div class="fpc-meta">${sd.length} lead${sd.length !== 1 ? 's' : ''} · ${brl.format(total)}</div>
+            <div class="fpc-meta-row">
+              <span class="fpc-meta">${sd.length} lead${sd.length !== 1 ? 's' : ''} · ${brl.format(total)}</span>
+              ${hasLeadsWithPhone ? `<button class="fpc-blast" data-stage-id="${esc(s.id)}" title="Disparar follow-up em massa pra esta etapa">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
+              </button>` : ''}
+            </div>
           </div>
           <div class="fpc-body" id="fpb-${s.id}" data-stage-id="${s.id}">
             ${sd.length ? sd.map(d => card(d, c)).join('') : '<div class="fpc-empty">Nenhum lead aqui</div>'}
@@ -425,6 +431,14 @@
     b.querySelectorAll('.fpc-body[data-stage-id]').forEach(bindStageDropZone);
     b.querySelectorAll('.fpc-card[data-id]').forEach(bindCard);
     b.querySelectorAll('.fpc-inbox-card').forEach(bindInboxCard);
+    b.querySelectorAll('.fpc-blast[data-stage-id]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const sid = btn.getAttribute('data-stage-id');
+        const stage = stages.find(s => s.id === sid);
+        if (stage) openMassFollowUpModal(stage);
+      });
+    });
     bindInboxNewContact();
   }
 
@@ -1056,6 +1070,219 @@
       }
     }
     toast('Conversa aberta, mas não consegui colar a mensagem. Cole manualmente.', true);
+  }
+
+  // Estado da fila de follow-up em massa
+  let massQueue = null; // { deals: [], message: string, idx: 0 }
+
+  function openMassFollowUpModal(stage) {
+    document.getElementById('fp-mass-modal')?.remove();
+    const stageDeals = deals.filter(d => d.stage === stage.id && d.contact_phone);
+    if (!stageDeals.length) return toast('Nenhum lead com telefone nessa etapa', true);
+
+    const template = stage.follow_up_message || `Oi {nome}, tudo bem? Passando pra ver se você tem alguma dúvida 😊`;
+
+    const modal = document.createElement('div');
+    modal.id = 'fp-mass-modal';
+    modal.className = 'fp-info-overlay';
+    modal.innerHTML = `
+      <div class="fp-mass-box">
+        <div class="fp-mass-head">
+          <div>
+            <div class="fp-mass-title">Follow-up em massa</div>
+            <div class="fp-mass-sub">Etapa: <strong>${esc(stage.name)}</strong> · ${stageDeals.length} ${stageDeals.length === 1 ? 'lead' : 'leads'}</div>
+          </div>
+          <button class="fp-info-close" id="fp-mass-close">✕</button>
+        </div>
+
+        <div class="fp-mass-body">
+          <!-- Mensagem -->
+          <div class="fp-mass-section">
+            <label class="fp-mass-label">Mensagem</label>
+            <div class="fp-mass-toolbar">
+              <button class="fp-mass-chip" data-insert="{nome}" title="Insere o primeiro nome do contato">+ Nome</button>
+              <button class="fp-mass-chip" data-insert="Bom dia! " title="Inserir saudação no início">Bom dia</button>
+              <button class="fp-mass-chip" data-insert="Boa tarde! " title="Inserir saudação no início">Boa tarde</button>
+              <button class="fp-mass-chip" data-insert="Boa noite! " title="Inserir saudação no início">Boa noite</button>
+            </div>
+            <textarea id="fp-mass-text" class="fp-mass-textarea" rows="4" placeholder="Escreva a mensagem. Use {nome} pra personalizar.">${esc(template)}</textarea>
+            <div class="fp-mass-preview">
+              <span class="fp-mass-preview-label">Prévia pra <strong id="fp-mass-preview-name">${esc(firstNameOf(stageDeals[0]) || 'cliente')}</strong>:</span>
+              <div class="fp-mass-preview-box" id="fp-mass-preview-box"></div>
+            </div>
+          </div>
+
+          <!-- Lista de leads -->
+          <div class="fp-mass-section">
+            <div class="fp-mass-label-row">
+              <label class="fp-mass-label">Selecionar leads</label>
+              <button class="fp-mass-link" id="fp-mass-toggle-all">Marcar/desmarcar todos</button>
+            </div>
+            <div class="fp-mass-list">
+              ${stageDeals.map(d => {
+                const photo = getCachedContactPhoto(d.contact_phone);
+                const initialsTxt = initials(d.contact_name || d.title || '');
+                const avatar = photo
+                  ? `<img class="fp-mass-avt" src="${esc(photo)}" alt="" />`
+                  : `<div class="fp-mass-avt fp-mass-avt-ini">${esc(initialsTxt)}</div>`;
+                return `
+                  <label class="fp-mass-row" data-deal-id="${d.id}">
+                    <input type="checkbox" class="fp-mass-chk" checked data-deal-id="${d.id}" />
+                    ${avatar}
+                    <div class="fp-mass-row-info">
+                      <div class="fp-mass-row-name">${esc(d.contact_name || d.title || 'Sem nome')}</div>
+                      <div class="fp-mass-row-phone">${esc(d.contact_phone || '')}</div>
+                    </div>
+                  </label>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        </div>
+
+        <div class="fp-mass-foot">
+          <button class="fp-btn-w" id="fp-mass-cancel">Cancelar</button>
+          <button class="fp-btn-g" id="fp-mass-start">Iniciar fila <span id="fp-mass-count">(${stageDeals.length})</span></button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    const textarea = modal.querySelector('#fp-mass-text');
+    const previewBox = modal.querySelector('#fp-mass-preview-box');
+    const previewName = modal.querySelector('#fp-mass-preview-name');
+    const countSpan = modal.querySelector('#fp-mass-count');
+
+    const updatePreview = () => {
+      const tpl = textarea.value;
+      const first = firstNameOf(stageDeals[0]);
+      const rendered = tpl.replace(/\{nome\}/gi, first).replace(/\{primeiro_nome\}/gi, first).replace(/\{name\}/gi, first);
+      previewBox.textContent = rendered;
+      if (previewName) previewName.textContent = first || 'cliente';
+      // Destaca onde o {nome} aparece com fundo dourado
+      const escaped = rendered.replace(/[&<>"']/g, m => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[m]));
+      const highlighted = first ? escaped.replace(new RegExp(`(${first.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'), '<mark>$1</mark>') : escaped;
+      previewBox.innerHTML = highlighted;
+    };
+
+    const updateCount = () => {
+      const checked = modal.querySelectorAll('.fp-mass-chk:checked').length;
+      if (countSpan) countSpan.textContent = `(${checked})`;
+    };
+
+    updatePreview();
+    textarea.addEventListener('input', updatePreview);
+
+    modal.querySelectorAll('.fp-mass-chip[data-insert]').forEach((b) => {
+      b.addEventListener('click', () => {
+        const insert = b.getAttribute('data-insert');
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        textarea.value = textarea.value.slice(0, start) + insert + textarea.value.slice(end);
+        textarea.focus();
+        textarea.selectionStart = textarea.selectionEnd = start + insert.length;
+        updatePreview();
+      });
+    });
+
+    modal.querySelectorAll('.fp-mass-chk').forEach((c) => c.addEventListener('change', updateCount));
+
+    modal.querySelector('#fp-mass-toggle-all')?.addEventListener('click', () => {
+      const all = modal.querySelectorAll('.fp-mass-chk');
+      const allChecked = Array.from(all).every(c => c.checked);
+      all.forEach(c => { c.checked = !allChecked; });
+      updateCount();
+    });
+
+    const close = () => modal.remove();
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    modal.querySelector('#fp-mass-close')?.addEventListener('click', close);
+    modal.querySelector('#fp-mass-cancel')?.addEventListener('click', close);
+
+    modal.querySelector('#fp-mass-start')?.addEventListener('click', () => {
+      const selected = Array.from(modal.querySelectorAll('.fp-mass-chk:checked'))
+        .map((c) => stageDeals.find(d => String(d.id) === c.getAttribute('data-deal-id')))
+        .filter(Boolean);
+      if (!selected.length) return toast('Selecione pelo menos 1 lead', true);
+      const message = textarea.value.trim();
+      if (!message) return toast('Mensagem vazia', true);
+      close();
+      startMassFollowUpQueue(selected, message);
+    });
+  }
+
+  async function startMassFollowUpQueue(targetDeals, template) {
+    massQueue = { deals: targetDeals, message: template, idx: 0 };
+    showMassQueueWidget();
+    await openCurrentMassQueueLead();
+  }
+
+  function showMassQueueWidget() {
+    document.getElementById('fp-mass-widget')?.remove();
+    const w = document.createElement('div');
+    w.id = 'fp-mass-widget';
+    w.innerHTML = `
+      <div class="fp-mw-info">
+        <div class="fp-mw-title">Follow-up em massa</div>
+        <div class="fp-mw-prog" id="fp-mw-prog">—</div>
+      </div>
+      <button class="fp-mw-btn fp-mw-skip" id="fp-mw-skip">Pular</button>
+      <button class="fp-mw-btn fp-mw-next" id="fp-mw-next">Próximo →</button>
+      <button class="fp-mw-btn fp-mw-stop" id="fp-mw-stop" title="Encerrar fila">✕</button>
+    `;
+    document.body.appendChild(w);
+    w.querySelector('#fp-mw-next')?.addEventListener('click', () => advanceMassQueue(false));
+    w.querySelector('#fp-mw-skip')?.addEventListener('click', () => advanceMassQueue(true));
+    w.querySelector('#fp-mw-stop')?.addEventListener('click', stopMassQueue);
+  }
+
+  function updateMassWidget() {
+    const prog = document.getElementById('fp-mw-prog');
+    if (!prog || !massQueue) return;
+    const cur = massQueue.deals[massQueue.idx];
+    const name = cur ? (cur.contact_name || cur.title || cur.contact_phone) : '—';
+    prog.innerHTML = `${massQueue.idx + 1}/${massQueue.deals.length} · <strong>${esc(name)}</strong>`;
+  }
+
+  async function openCurrentMassQueueLead() {
+    if (!massQueue) return;
+    const deal = massQueue.deals[massQueue.idx];
+    if (!deal) { stopMassQueue(); return; }
+    updateMassWidget();
+
+    const first = firstNameOf(deal);
+    const msg = massQueue.message
+      .replace(/\{nome\}/gi, first)
+      .replace(/\{primeiro_nome\}/gi, first)
+      .replace(/\{name\}/gi, first);
+
+    const ok = await openByNumberInApp(deal.contact_phone, deal.contact_name || '');
+    if (!ok) return; // toast já mostrado pelo openByNumberInApp
+
+    for (let i = 0; i < 12; i++) {
+      await sleep(180);
+      if (setWhatsappComposer(msg)) {
+        toast('Revise e envie. Depois clique "Próximo →"');
+        return;
+      }
+    }
+    toast('Conversa aberta, cole a mensagem manualmente. Depois clique "Próximo →"', true);
+  }
+
+  async function advanceMassQueue(skipped) {
+    if (!massQueue) return;
+    massQueue.idx += 1;
+    if (massQueue.idx >= massQueue.deals.length) {
+      stopMassQueue();
+      toast('🎉 Fila concluída!');
+      return;
+    }
+    await openCurrentMassQueueLead();
+  }
+
+  function stopMassQueue() {
+    massQueue = null;
+    document.getElementById('fp-mass-widget')?.remove();
   }
 
   async function moveDealToStage(dealId, stageId) {
