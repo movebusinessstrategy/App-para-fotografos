@@ -262,18 +262,15 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
       </button>
     `;
-
     container.querySelector('#fp-rail-pipeline')?.addEventListener('click', showKanban);
     container.querySelector('#fp-rail-agenda')?.addEventListener('click', showAgenda);
 
-    // Procura o último divisor / "configurações" pra inserir antes dele,
-    // senão appenda no final
-    const settingsBtn = sidebar.querySelector('[aria-label*="onfigura" i], [aria-label*="ettings" i]');
-    if (settingsBtn?.parentElement) {
-      settingsBtn.parentElement.insertBefore(container, settingsBtn);
-    } else {
-      sidebar.appendChild(container);
-    }
+    // Estratégia: inserir DENTRO do mesmo container dos ícones do topo
+    // (Chats/Status/Channels/Communities/Meta AI), no FINAL dele — antes
+    // do divisor que separa do rodapé (onde mora "Configurações").
+    const chatBtn = sidebar.querySelector('[aria-label*="onversas" i], [aria-label*="hats" i], [aria-label*="hat" i]');
+    const topGroup = chatBtn?.closest('div, ul') || sidebar;
+    topGroup.appendChild(container);
   }
 
   // ===== KANBAN =====
