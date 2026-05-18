@@ -616,10 +616,20 @@
   }
 
   function setWhatsappSearchText(searchInput, text) {
+    if (!searchInput) return;
     searchInput.focus();
-    document.execCommand('selectAll', false, null);
-    document.execCommand('delete', false, null);
-    if (text) document.execCommand('insertText', false, text);
+    if (searchInput.tagName === 'INPUT') {
+      // Input controlado pelo React: precisa do setter nativo + evento "input"
+      const proto = window.HTMLInputElement?.prototype;
+      const setter = proto && Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      if (setter) setter.call(searchInput, text || '');
+      else searchInput.value = text || '';
+      searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    } else {
+      document.execCommand('selectAll', false, null);
+      document.execCommand('delete', false, null);
+      if (text) document.execCommand('insertText', false, text);
+    }
   }
 
   // Fallback para número NOVO (sem conversa prévia, não está na agenda):
@@ -778,8 +788,13 @@
       return true;
     }
 
-    // 2) Usa a busca interna do WhatsApp sem navegar/recarregar
+    // 2) Usa a busca interna do WhatsApp sem navegar/recarregar.
+    // WhatsApp Web 2026 mudou de contenteditable pra <input> — testamos ambos.
     const searchInput =
+      document.querySelector('#side input[aria-label*="esquisar" i]') ||
+      document.querySelector('input[aria-label*="esquisar" i]') ||
+      document.querySelector('input[placeholder*="esquisar" i]') ||
+      document.querySelector('input[aria-label*="search" i]') ||
       document.querySelector('#side div[contenteditable="true"][role="textbox"]') ||
       document.querySelector('div[role="textbox"][contenteditable="true"][title]') ||
       document.querySelector('[data-testid="chat-list-search"] div[contenteditable="true"]');
