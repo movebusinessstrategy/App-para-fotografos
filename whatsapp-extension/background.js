@@ -164,6 +164,20 @@ async function handleMessage(message) {
       const qs = params.toString();
       return apiFetch(`/api/extension/agenda${qs ? `?${qs}` : ''}`);
     }
+    case 'CREATE_JOB': {
+      return apiFetch('/api/jobs', {
+        method: 'POST',
+        body: JSON.stringify(message.data),
+      });
+    }
+    case 'CREATE_CLIENT_QUICK': {
+      // Cria um cliente "leve" só com nome (e telefone, se vier). Demais
+      // campos podem ser preenchidos depois pelo app.
+      return apiFetch('/api/clients', {
+        method: 'POST',
+        body: JSON.stringify(message.data),
+      });
+    }
     default:
       throw new Error(`Tipo de mensagem desconhecido: ${message.type}`);
   }
