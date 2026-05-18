@@ -3119,8 +3119,10 @@
   }
 
   function showTasks() {
-    // Tarefas NÃO esconde o chat ativo — o painel fica do lado direito
-    // pra você ler mensagens e olhar tarefas ao mesmo tempo.
+    // Desseleciona o chat ativo pra abrir Tarefas num estado "limpo".
+    // Se depois o usuário clicar num chat na sidebar, a função
+    // hideOverlaysForChatNav() fecha as Tarefas automaticamente.
+    deselectWhatsappChat();
     kanbanVisible = false;
     hideAllOverlays();
     buildTasksOverlay();
@@ -3130,6 +3132,27 @@
     setRailActive('fp-rail-tasks');
     loadTasks();
     setTimeout(adjustPosition, 200);
+  }
+
+  // Esconde Tarefas/Agenda/Produção quando o usuário clica num chat da
+  // sidebar do WhatsApp — assim ele consegue ler/responder sem que o
+  // overlay continue cobrindo o campo de mensagem.
+  // (Pipeline é tratado separadamente via hideKanban().)
+  function hideOverlaysForChatNav() {
+    const tasks = document.getElementById('fp-tasks');
+    if (tasks && !tasks.classList.contains('fp-hidden')) {
+      tasks.classList.add('fp-hidden');
+      document.body.classList.remove('fp-tasks-open');
+    }
+    const agenda = document.getElementById('fp-agenda');
+    if (agenda && !agenda.classList.contains('fp-hidden')) {
+      agenda.classList.add('fp-hidden');
+    }
+    const production = document.getElementById('fp-production');
+    if (production && !production.classList.contains('fp-hidden')) {
+      production.classList.add('fp-hidden');
+    }
+    setRailActive(null);
   }
 
   // ============================================================
@@ -5650,9 +5673,20 @@
   }
 
   let detectDebounce;
+  function isAnyOverlayVisible() {
+    if (kanbanVisible) return true;
+    const ids = ['fp-tasks', 'fp-agenda', 'fp-production'];
+    return ids.some((id) => {
+      const el = document.getElementById(id);
+      return el && !el.classList.contains('fp-hidden');
+    });
+  }
+
   function detectState() {
-    // Kanban visível = usuário está navegando o funil, não a conversa
-    if (kanbanVisible) return;
+    // Algum overlay (Pipeline/Tarefas/Agenda/Produção) aberto = não monta
+    // strip do chat. Quando o usuário fechar o overlay (clicando num chat
+    // ou indo pro logo do WA), o próximo detectState monta normalmente.
+    if (isAnyOverlayVisible()) return;
 
     if (isChatOpen()) {
       const phone = getWAChatPhone();
@@ -5686,8 +5720,12 @@
       const item = e.target.closest('[role="listitem"], [data-testid="cell-frame-container"]');
       if (item) {
         if (Date.now() < suppressChatListClickUntil) return;
-        // Usuário clicou na lista do WhatsApp → esconde o kanban pra liberar #main
+        // Usuário clicou na lista do WhatsApp → libera o #main em qualquer
+        // overlay aberto (Pipeline, Tarefas, Agenda, Produção). Sem isso
+        // o overlay continuaria cobrindo o campo de mensagem e o usuário
+        // não conseguiria responder.
         if (kanbanVisible) hideKanban();
+        hideOverlaysForChatNav();
         clearTimeout(detectDebounce);
         detectDebounce = setTimeout(detectState, 700);
       }
