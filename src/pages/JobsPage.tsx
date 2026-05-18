@@ -376,6 +376,22 @@ export default function JobsPage() {
               onStagesUpdate={(newStages) => mutateStages(newStages, { revalidate: false })}
               onAssigneeChange={handleAssigneeChange}
               onRemoveFromProduction={handleRemoveFromProduction}
+              onReorderInStage={async (stageId, orderedJobIds) => {
+                // Optimista: aplica nova ordem no cache local imediatamente
+                mutateJobs(prev => (prev || []).map(j => {
+                  const idx = orderedJobIds.indexOf(j.id);
+                  return idx >= 0 ? { ...j, position: idx } : j;
+                }), { revalidate: false });
+                try {
+                  await authFetch('/api/jobs/reorder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ stage_id: stageId, job_ids: orderedJobIds }),
+                  });
+                } catch (_) {
+                  mutateJobs(); // reverte buscando do servidor se der ruim
+                }
+              }}
             />
           ) : (
             <div className="flex flex-col items-center justify-center py-24 gap-3">

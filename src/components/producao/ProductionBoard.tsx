@@ -37,6 +37,7 @@ interface ProductionBoardProps {
   onStagesUpdate: (stages: ProductionStageV2[]) => void;
   onAssigneeChange: (jobId: number, assigneeId: string | null) => void;
   onRemoveFromProduction: (jobId: number) => void;
+  onReorderInStage?: (stageId: string, orderedJobIds: number[]) => void;
 }
 
 const formatCurrency = (value: number) =>
@@ -73,6 +74,7 @@ function StageColumn({
   stage, jobs, process, allStages, allProcesses, dragOverStage,
   onDragStart, onDragOver, onDragLeave, onDrop, onJobClick, onMoveClick,
   onNameSave, onHoursSave, teamMembers, onAssigneeChange, onRemoveFromProduction,
+  onReorder,
 }: {
   stage: ProductionStageV2;
   jobs: JobWithProduction[];
@@ -91,6 +93,7 @@ function StageColumn({
   teamMembers: TeamMember[];
   onAssigneeChange: (jobId: number, assigneeId: string | null) => void;
   onRemoveFromProduction: (jobId: number) => void;
+  onReorder?: (stageId: string, fromId: number, toId: number) => void;
 }) {
   const [editingName, setEditingName] = useState(false);
   const [editingHours, setEditingHours] = useState(false);
@@ -176,14 +179,34 @@ function StageColumn({
               key={job.id}
               draggable
               onDragStart={() => onDragStart(job.id)}
+              onDragOver={e => {
+                // Permite drop em cima de outro card (reorder dentro da stage)
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onDrop={e => {
+                e.preventDefault();
+                e.stopPropagation();
+                // Se o card alvo é da mesma stage que o card sendo arrastado, reorder
+                onReorder?.(stage.id, 0, job.id); // 0 = "use o draggingId atual do pai"
+              }}
               className={cn(
-                'rounded-xl border p-3 shadow-sm transition-all cursor-pointer hover:shadow-md group/card active:opacity-70',
+                'overflow-hidden rounded-xl border shadow-sm transition-all cursor-pointer hover:shadow-md group/card active:opacity-70',
                 staleness === 'urgent' ? 'border-red-500 animate-pulse-red bg-red-50/70 dark:bg-red-900/10' :
                 staleness === 'warning' ? 'border-amber-400 animate-pulse-amber bg-amber-50/70 dark:bg-amber-900/10' :
                 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900'
               )}
             >
-              <div onClick={() => onJobClick(job)}>
+              {/* Capa do card */}
+              {job.cover_image_url && (
+                <img
+                  src={job.cover_image_url}
+                  alt=""
+                  className="w-full h-28 object-cover border-b border-gray-200 dark:border-gray-700"
+                  loading="lazy"
+                />
+              )}
+              <div onClick={() => onJobClick(job)} className="p-3">
                 <div className="flex items-start justify-between gap-2 mb-1.5">
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">
@@ -259,7 +282,7 @@ function StageColumn({
                 )}
               </div>
 
-              <div className="mt-1 flex gap-1 opacity-0 group-hover/card:opacity-100 transition-opacity">
+              <div className="mt-1 px-3 pb-3 flex gap-1 opacity-0 group-hover/card:opacity-100 transition-opacity">
                 <button
                   onClick={e => { e.stopPropagation(); onMoveClick(job); }}
                   className="flex-1 flex items-center justify-center gap-1 py-1 rounded-lg text-[11px] font-medium text-gray-400 hover:bg-gold-50 dark:hover:bg-gold-900/20 hover:text-gold-600 dark:hover:text-gold-400 transition-colors"
@@ -368,7 +391,7 @@ function AssigneeAvatar({ assignee, teamMembers, onAssign }: { assignee: TeamMem
 // ── Kanban columns for a process ──────────────────────────────────────────────
 function ProcessKanban({
   process, stages, jobs, teamMembers, dragOverStage,
-  onDragStart, onDragOver, onDragLeave, onDrop,
+  onDragStart, onDragOver, onDragLeave, onDrop, onReorder,
   onJobClick, onMoveClick, onNameSave, onHoursSave, onAssigneeChange, onRemoveFromProduction, allProcesses,
 }: {
   process: ProductionProcess;
@@ -380,6 +403,7 @@ function ProcessKanban({
   onDragOver: (e: React.DragEvent, id: string) => void;
   onDragLeave: () => void;
   onDrop: (e: React.DragEvent, id: string) => void;
+  onReorder?: (stageId: string, fromId: number, toId: number) => void;
   onJobClick: (job: JobWithProduction) => void;
   onMoveClick: (job: JobWithProduction) => void;
   onNameSave: (stageId: string, name: string) => void;
@@ -396,7 +420,9 @@ function ProcessKanban({
         <React.Fragment key={stage.id}>
           <StageColumn
             stage={stage}
-            jobs={jobs.filter(j => j.production_stage === stage.id)}
+            jobs={jobs
+              .filter(j => j.production_stage === stage.id)
+              .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))}
             process={process}
             allStages={stages}
             allProcesses={allProcesses}
@@ -405,6 +431,7 @@ function ProcessKanban({
             onDragOver={onDragOver}
             onDragLeave={onDragLeave}
             onDrop={onDrop}
+            onReorder={onReorder}
             onJobClick={onJobClick}
             onMoveClick={onMoveClick}
             onNameSave={onNameSave}
@@ -431,10 +458,15 @@ type SortableProcessTabProps = {
   jobs: JobWithProduction[];
   stages: ProductionStageV2[];
   isDraggingThis: boolean;
+  jobDropOver: boolean;
   onSelect: () => void;
+  onJobDragOver: (e: React.DragEvent) => void;
+  onJobDragLeave: () => void;
+  onJobDrop: (e: React.DragEvent) => void;
 };
 const SortableProcessTab: React.FC<SortableProcessTabProps> = ({
-  process, isActive, jobs, stages, isDraggingThis, onSelect,
+  process, isActive, jobs, stages, isDraggingThis, jobDropOver, onSelect,
+  onJobDragOver, onJobDragLeave, onJobDrop,
 }) => {
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: process.id });
   const isSpecial = !!process.is_special;
@@ -453,9 +485,13 @@ const SortableProcessTab: React.FC<SortableProcessTabProps> = ({
       {...attributes}
       {...listeners}
       onClick={onSelect}
+      onDragOver={onJobDragOver}
+      onDragLeave={onJobDragLeave}
+      onDrop={onJobDrop}
       className={cn(
-        'flex items-center gap-2 rounded-t-xl border transition-colors flex-shrink-0 select-none cursor-pointer',
+        'flex items-center gap-2 rounded-t-xl border transition-all flex-shrink-0 select-none cursor-pointer',
         isDraggingThis && 'opacity-0',
+        jobDropOver && 'ring-2 ring-gold-400 scale-105',
         isActive
           ? 'px-5 py-2.5 text-sm font-bold border-b-white dark:border-b-gray-900 shadow-sm z-10 -mb-px text-gray-900 dark:text-white'
           : 'px-4 py-2 text-xs font-semibold border-b-0 text-white hover:brightness-110',
@@ -498,7 +534,7 @@ const SortableProcessTab: React.FC<SortableProcessTabProps> = ({
 }
 
 // ── Main board ────────────────────────────────────────────────────────────────
-export function ProductionBoard({ jobs, processes, stages, teamMembers, onChangeStage, onJobClick, onStagesUpdate, onAssigneeChange, onRemoveFromProduction }: ProductionBoardProps) {
+export function ProductionBoard({ jobs, processes, stages, teamMembers, onChangeStage, onJobClick, onStagesUpdate, onAssigneeChange, onRemoveFromProduction, onReorderInStage }: ProductionBoardProps) {
   const [orderedProcesses, setOrderedProcesses] = useState<ProductionProcess[]>(processes);
   useEffect(() => { setOrderedProcesses(processes); }, [processes]);
 
@@ -509,6 +545,7 @@ export function ProductionBoard({ jobs, processes, stages, teamMembers, onChange
   const [movingJob, setMovingJob] = useState<JobWithProduction | null>(null);
   const [dragOverStage, setDragOverStage] = useState<string | null>(null);
   const [draggingTab, setDraggingTab] = useState<ProductionProcess | null>(null);
+  const [jobDragOverProcess, setJobDragOverProcess] = useState<string | null>(null);
   const dragJobId = useRef<number | null>(null);
 
   const tabSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -555,6 +592,47 @@ export function ProductionBoard({ jobs, processes, stages, teamMembers, onChange
     }
   };
 
+  // Reorder dentro da mesma stage: usuário arrastou um card e soltou em
+  // cima de outro card da mesma stage. Calcula nova ordem e chama callback.
+  const handleReorder = (stageId: string, _from: number, toJobId: number) => {
+    const fromId = dragJobId.current;
+    if (fromId == null || fromId === toJobId) return;
+    const fromJob = jobs.find(j => j.id === fromId);
+    const toJob = jobs.find(j => j.id === toJobId);
+    if (!fromJob || !toJob) return;
+    // Só reordena se ambos na mesma stage. Se mudou de stage, o handleDrop
+    // da coluna já cuidou (priority de eventos).
+    if (fromJob.production_stage !== toJob.production_stage) return;
+    if (fromJob.production_stage !== stageId) return;
+
+    const inStage = jobs
+      .filter(j => j.production_stage === stageId)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const fromIdx = inStage.findIndex(j => j.id === fromId);
+    const toIdx = inStage.findIndex(j => j.id === toJobId);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const reordered = arrayMove(inStage, fromIdx, toIdx);
+    onReorderInStage?.(stageId, reordered.map(j => j.id));
+    dragJobId.current = null;
+  };
+
+  // Drop de card em cima de outra tab (pasta) → move pro 1º stage daquela pasta
+  const handleJobDropOnProcess = (processId: string) => {
+    const jobId = dragJobId.current;
+    if (jobId == null) return;
+    const firstStage = stages
+      .filter(s => s.process_id === processId)
+      .sort((a, b) => (a.position || 0) - (b.position || 0))[0];
+    if (!firstStage) return;
+    const job = jobs.find(j => j.id === jobId);
+    if (job && job.production_stage !== firstStage.id) {
+      onChangeStage(jobId, firstStage.id);
+    }
+    setOpenProcess(processId); // troca pra pasta de destino pra ver o resultado
+    dragJobId.current = null;
+    setJobDragOverProcess(null);
+  };
+
   const handleNameSave = async (stageId: string, name: string) => {
     try {
       await authFetch(`/api/production/stages/${stageId}/name`, { method: 'PATCH', body: JSON.stringify({ name }) });
@@ -572,6 +650,7 @@ export function ProductionBoard({ jobs, processes, stages, teamMembers, onChange
   const kanbanProps = {
     jobs, teamMembers, dragOverStage, allProcesses: processes,
     onDragStart: handleDragStart, onDragOver: handleDragOver, onDragLeave: handleDragLeave, onDrop: handleDrop,
+    onReorder: handleReorder,
     onJobClick, onMoveClick: (job: JobWithProduction) => setMovingJob(job),
     onNameSave: handleNameSave, onHoursSave: handleHoursSave, onAssigneeChange, onRemoveFromProduction,
   };
@@ -603,7 +682,20 @@ export function ProductionBoard({ jobs, processes, stages, teamMembers, onChange
                     jobs={jobs}
                     stages={stages}
                     isDraggingThis={draggingTab?.id === process.id}
+                    jobDropOver={jobDragOverProcess === process.id}
                     onSelect={() => setOpenProcess(process.id)}
+                    onJobDragOver={(e) => {
+                      if (dragJobId.current == null) return;
+                      e.preventDefault();
+                      setJobDragOverProcess(process.id);
+                    }}
+                    onJobDragLeave={() => {
+                      if (jobDragOverProcess === process.id) setJobDragOverProcess(null);
+                    }}
+                    onJobDrop={(e) => {
+                      e.preventDefault();
+                      handleJobDropOnProcess(process.id);
+                    }}
                   />
                 ))}
               </div>
