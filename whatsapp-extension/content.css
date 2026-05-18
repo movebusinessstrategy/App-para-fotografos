@@ -247,30 +247,22 @@
 /* FAB legado — removido. Substituído pela rail vertical (#fp-rail). */
 #fp-fab { display: none !important; }
 
-/* ─── Rail vertical flutuante (canto inferior esquerdo) — Pipeline + Agenda ─── */
-#fp-rail {
-  position: fixed;
-  left: 12px;
-  bottom: 14px;
-  z-index: 9100;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 4px;
-  padding: 6px;
-  background: #ffffff;
-  border-radius: 14px;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.18), 0 2px 6px rgba(0,0,0,0.08);
-  border: 1px solid #e9edef;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-}
-.fp-rail-btn {
-  width: 56px;
-  padding: 8px 4px;
+/* ─── Rail nativa — botões injetados DENTRO da sidebar do WhatsApp ───────── */
+/* Não usa background/border — herda do container do WA pra parecer nativo */
+.fp-rail-nat {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
+  padding: 4px 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.fp-rail-nat-btn {
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   border: none;
   border-radius: 10px;
@@ -279,12 +271,16 @@
   transition: background 0.12s, color 0.12s;
   font-family: inherit;
 }
-.fp-rail-btn svg { width: 20px; height: 20px; }
-.fp-rail-btn span { font-size: 10px; font-weight: 600; letter-spacing: 0.1px; }
-.fp-rail-btn:hover { background: #f0f2f5; color: #111b21; }
-.fp-rail-btn.fp-rail-active {
-  background: #d9fdd3;
-  color: #008069;
+.fp-rail-nat-btn svg { width: 22px; height: 22px; }
+.fp-rail-nat-btn:hover { background: rgba(134, 150, 160, 0.12); color: #111b21; }
+.fp-rail-nat-btn.fp-rail-active {
+  color: #00a884;
+}
+/* Dark mode do WhatsApp */
+@media (prefers-color-scheme: dark) {
+  .fp-rail-nat-btn { color: #aebac1; }
+  .fp-rail-nat-btn:hover { background: rgba(134, 150, 160, 0.18); color: #e9edef; }
+  .fp-rail-nat-btn.fp-rail-active { color: #00a884; }
 }
 
 /* Board */
