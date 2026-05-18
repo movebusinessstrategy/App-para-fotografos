@@ -1037,50 +1037,26 @@
     return true;
   }
 
-  // Abre o chat do contato e pré-preenche a mensagem de follow-up da etapa.
-  // O user revisa e envia — não dispara sozinho (evita spam acidental).
-  async function sendFollowUp(deal) {
-    const phone = deal?.contact_phone;
-    if (!phone) return toast('Lead sem telefone', true);
-
-    const stage = stages.find(s => s.id === deal.stage);
-    const template = stage?.follow_up_message?.trim();
-    if (!template) {
-      toast(`A etapa "${stage?.name || deal.stage}" não tem mensagem de follow-up configurada`, true);
-      return;
-    }
-
-    // Substitui {nome} e {primeiro_nome} pelo primeiro nome do contato
-    const first = firstNameOf(deal);
-    const message = template
-      .replace(/\{nome\}/gi, first)
-      .replace(/\{primeiro_nome\}/gi, first)
-      .replace(/\{name\}/gi, first);
-
-    toast('Abrindo conversa…');
-    const ok = await openByNumberInApp(phone, deal.contact_name || '');
-    if (!ok) return;
-
-    // Aguarda o WA renderizar o compositor e injeta a mensagem
-    for (let i = 0; i < 12; i++) {
-      await sleep(180);
-      if (setWhatsappComposer(message)) {
-        toast('Mensagem pronta — revise e envie 💬');
-        return;
-      }
-    }
-    toast('Conversa aberta, mas não consegui colar a mensagem. Cole manualmente.', true);
+  // Follow-up individual de 1 card: reaproveita o modal de massa pra dar UX
+  // consistente — user vê a mensagem, edita se quiser, e dispara. Se a etapa
+  // não tem template, o textarea abre vazio pra digitar na hora.
+  function sendFollowUp(deal) {
+    if (!deal?.contact_phone) return toast('Lead sem telefone', true);
+    const stage = stages.find(s => s.id === deal.stage) || { id: deal.stage, name: deal.stage, follow_up_message: '' };
+    openMassFollowUpModal(stage, [deal]);
   }
 
   // Estado da fila de follow-up em massa
   let massQueue = null; // { deals: [], message: string, idx: 0 }
 
-  function openMassFollowUpModal(stage) {
+  function openMassFollowUpModal(stage, customDeals = null) {
     document.getElementById('fp-mass-modal')?.remove();
-    const stageDeals = deals.filter(d => d.stage === stage.id && d.contact_phone);
-    if (!stageDeals.length) return toast('Nenhum lead com telefone nessa etapa', true);
+    const stageDeals = (customDeals || deals.filter(d => d.stage === stage.id))
+      .filter(d => d.contact_phone);
+    if (!stageDeals.length) return toast('Nenhum lead com telefone', true);
 
-    const template = stage.follow_up_message || `Oi {nome}, tudo bem? Passando pra ver se você tem alguma dúvida 😊`;
+    const template = stage.follow_up_message?.trim() || `Oi {nome}, tudo bem? Passando pra ver se você tem alguma dúvida 😊`;
+    const singleMode = stageDeals.length === 1;
 
     const modal = document.createElement('div');
     modal.id = 'fp-mass-modal';
@@ -1089,8 +1065,10 @@
       <div class="fp-mass-box">
         <div class="fp-mass-head">
           <div>
-            <div class="fp-mass-title">Follow-up em massa</div>
-            <div class="fp-mass-sub">Etapa: <strong>${esc(stage.name)}</strong> · ${stageDeals.length} ${stageDeals.length === 1 ? 'lead' : 'leads'}</div>
+            <div class="fp-mass-title">${singleMode ? 'Enviar follow-up' : 'Follow-up em massa'}</div>
+            <div class="fp-mass-sub">${singleMode
+              ? `Para <strong>${esc(stageDeals[0].contact_name || stageDeals[0].title || 'cliente')}</strong>`
+              : `Etapa: <strong>${esc(stage.name)}</strong> · ${stageDeals.length} leads`}</div>
           </div>
           <button class="fp-info-close" id="fp-mass-close">✕</button>
         </div>
@@ -1112,7 +1090,8 @@
             </div>
           </div>
 
-          <!-- Lista de leads -->
+          ${singleMode ? '' : `
+          <!-- Lista de leads (só no modo massa) -->
           <div class="fp-mass-section">
             <div class="fp-mass-label-row">
               <label class="fp-mass-label">Selecionar leads</label>
@@ -1138,11 +1117,14 @@
               }).join('')}
             </div>
           </div>
+          `}
         </div>
 
         <div class="fp-mass-foot">
           <button class="fp-btn-w" id="fp-mass-cancel">Cancelar</button>
-          <button class="fp-btn-g" id="fp-mass-start">Iniciar fila <span id="fp-mass-count">(${stageDeals.length})</span></button>
+          <button class="fp-btn-g" id="fp-mass-start">
+            ${singleMode ? 'Abrir conversa e colar' : `Iniciar fila <span id="fp-mass-count">(${stageDeals.length})</span>`}
+          </button>
         </div>
       </div>
     `;
@@ -1166,8 +1148,9 @@
     };
 
     const updateCount = () => {
+      if (singleMode || !countSpan) return;
       const checked = modal.querySelectorAll('.fp-mass-chk:checked').length;
-      if (countSpan) countSpan.textContent = `(${checked})`;
+      countSpan.textContent = `(${checked})`;
     };
 
     updatePreview();
@@ -1200,12 +1183,14 @@
     modal.querySelector('#fp-mass-cancel')?.addEventListener('click', close);
 
     modal.querySelector('#fp-mass-start')?.addEventListener('click', () => {
-      const selected = Array.from(modal.querySelectorAll('.fp-mass-chk:checked'))
-        .map((c) => stageDeals.find(d => String(d.id) === c.getAttribute('data-deal-id')))
-        .filter(Boolean);
-      if (!selected.length) return toast('Selecione pelo menos 1 lead', true);
       const message = textarea.value.trim();
       if (!message) return toast('Mensagem vazia', true);
+      const selected = singleMode
+        ? stageDeals
+        : Array.from(modal.querySelectorAll('.fp-mass-chk:checked'))
+            .map((c) => stageDeals.find(d => String(d.id) === c.getAttribute('data-deal-id')))
+            .filter(Boolean);
+      if (!selected.length) return toast('Selecione pelo menos 1 lead', true);
       close();
       startMassFollowUpQueue(selected, message);
     });
