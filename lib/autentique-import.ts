@@ -120,6 +120,29 @@ function detectJobType(text: string): string | null {
   return null;
 }
 
+// Verifica se 2 nomes batem o suficiente pra serem o mesmo cliente.
+// - Match exato (sem acentos / case) = sim
+// - Primeiro nome igual (3+ chars) = sim (cobre "Maria Silva" vs "Maria S.")
+// - Caso contrário = não (evita ligar contratos diferentes pelo email
+//   do responsável/marido/conjuge)
+export function namesAreCompatible(a: string | null, b: string | null): boolean {
+  if (!a || !b) return false;
+  const norm = (s: string) => s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z\s]/g, '')
+    .trim();
+  const na = norm(a), nb = norm(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  // Primeiro nome — proteção contra match falso por email compartilhado
+  const firstA = na.split(/\s+/)[0];
+  const firstB = nb.split(/\s+/)[0];
+  if (firstA && firstA === firstB && firstA.length >= 3) return true;
+  return false;
+}
+
 // Extrai nome do cliente a partir do nome do documento, removendo
 // prefixos como "Contrato -", "Pacote -" etc.
 function extractClientNameFromDocName(docName: string): string | null {

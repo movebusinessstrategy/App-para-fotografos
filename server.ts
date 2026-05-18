@@ -9411,7 +9411,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const items = (pageResult.docs || []).map((doc: any) => {
       const ext = lib.extractFromDoc(doc);
-      const existingClient = ext.client_email ? clientsByEmail.get(ext.client_email) : null;
+      // Mesma proteção do import: só conta como "vincula a existente" se
+      // email E nome batem. Senão vai criar cliente novo.
+      const emailMatch = ext.client_email ? clientsByEmail.get(ext.client_email) : null;
+      const existingClient =
+        emailMatch && lib.namesAreCompatible(emailMatch.name, ext.client_name)
+          ? emailMatch
+          : null;
       const wouldDuplicate = existingClient && jobKeys.has(jobKey(existingClient.id, ext.job_date));
       return {
         doc_id: doc.id,
@@ -9528,10 +9534,19 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           continue;
         }
 
-        // Match cliente: email → CPF
+        // Match cliente: tenta email primeiro, depois CPF.
+        // CRÍTICO: só vincula se o nome também bater (proteção contra
+        // contratos diferentes assinados pelo mesmo email — marido,
+        // responsável, etc — que viravam ensaios da pessoa errada).
         let client: any = null;
-        if (ext.client_email) client = clientsByEmail.get(ext.client_email);
-        if (!client && ext.client_cpf) client = clientsByCpf.get(ext.client_cpf);
+        if (ext.client_email) {
+          const cand = clientsByEmail.get(ext.client_email);
+          if (cand && lib.namesAreCompatible(cand.name, ext.client_name)) client = cand;
+        }
+        if (!client && ext.client_cpf) {
+          const cand = clientsByCpf.get(ext.client_cpf);
+          if (cand && lib.namesAreCompatible(cand.name, ext.client_name)) client = cand;
+        }
 
         if (!client) {
           const { data: newClient, error: ce } = await supabase
