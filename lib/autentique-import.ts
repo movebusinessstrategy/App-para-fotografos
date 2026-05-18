@@ -1,8 +1,8 @@
 // Biblioteca pra importar histórico de contratos do Autentique.
-// Lista documentos via GraphQL, baixa o PDF assinado, faz parse de texto
-// e devolve dados estruturados pra match/import na base.
-
-import { PDFParse } from 'pdf-parse';
+// Modo "leve": só usa metadados da API GraphQL (nome do doc, signatários,
+// data de criação). Não baixa PDFs — é instantâneo. Suficiente pra
+// vincular cliente e criar histórico de sessão; campos detalhados
+// (CPF, endereço, valor) ficam vazios e podem ser editados depois.
 
 const AUTENTIQUE_GQL = (sandbox: boolean) =>
   sandbox
@@ -79,42 +79,18 @@ export async function fetchAutentiqueDocsPage(
   };
 }
 
-export async function fetchAllAutentiqueDocs(
-  apiKey: string,
-  sandbox: boolean,
-): Promise<AutentiqueDoc[]> {
-  const all: AutentiqueDoc[] = [];
-  let page = 1;
-  let lastPage = 1;
-  do {
-    const res = await fetchAutentiqueDocsPage(apiKey, sandbox, page, 60);
-    all.push(...res.docs);
-    lastPage = res.last_page;
-    page++;
-    // Delay leve entre páginas pra não bater no rate limit
-    if (page <= lastPage) await new Promise((r) => setTimeout(r, 250));
-  } while (page <= lastPage);
-  return all;
+// ─── Extração de metadados ─────────────────────────────────────────────
+
+export interface ExtractedFromDoc {
+  client_name: string | null;
+  client_email: string | null;
+  job_type: string | null;
+  job_date: string;
+  doc_name: string;
 }
 
-// ─── PDF Parser ──────────────────────────────────────────────────────────
-
-export interface ParsedContract {
-  client_name?: string;
-  client_email?: string;
-  client_phone?: string;
-  client_cpf?: string;
-  client_address?: string;
-  client_cep?: string;
-  client_city?: string;
-  client_state?: string;
-  job_type?: string;
-  job_value?: number;
-  job_date?: string;
-  raw_text_preview?: string;
-}
-
-// Mapeamento de palavras-chave → tipo de ensaio
+// Tenta detectar tipo de ensaio no NOME do documento (sem PDF).
+// Convenção comum: "Contrato - Marina - Newborn", "Pacote Gestante - Júlia", etc.
 const SESSION_KEYWORDS: Array<[RegExp, string]> = [
   [/\bnewborn\b/i, 'Newborn'],
   [/\brec[ée]m[\s-]?nascido\b/i, 'Newborn'],
@@ -138,90 +114,37 @@ const SESSION_KEYWORDS: Array<[RegExp, string]> = [
   [/\bnatal\b/i, 'Natal'],
 ];
 
-export function parseContractText(text: string): ParsedContract {
-  const result: ParsedContract = {};
-  result.raw_text_preview = text.slice(0, 300);
-
-  // CPF
-  const cpfMatch = text.match(/(\d{3}[\.\s]?\d{3}[\.\s]?\d{3}[-\s]?\d{2})/);
-  if (cpfMatch) {
-    const digits = cpfMatch[1].replace(/\D/g, '');
-    if (digits.length === 11) result.client_cpf = digits;
-  }
-
-  // Email
-  const emailMatch = text.match(/([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/);
-  if (emailMatch) result.client_email = emailMatch[1].toLowerCase();
-
-  // Telefone — formato BR comum
-  const phoneMatch = text.match(/\(?(\d{2})\)?\s*9?\s*(\d{4,5})[-\s]?(\d{4})/);
-  if (phoneMatch) {
-    const all = phoneMatch[0].replace(/\D/g, '');
-    if (all.length >= 10 && all.length <= 11) result.client_phone = all;
-  }
-
-  // CEP
-  const cepMatch = text.match(/\b(\d{5})-?(\d{3})\b/);
-  if (cepMatch) result.client_cep = cepMatch[1] + cepMatch[2];
-
-  // Valor — primeiro R$ que aparece (geralmente o valor do contrato)
-  const valueMatch = text.match(/R\$\s*([\d\.]+,\d{2})/);
-  if (valueMatch) {
-    const n = parseFloat(valueMatch[1].replace(/\./g, '').replace(',', '.'));
-    if (!isNaN(n) && n > 0) result.job_value = n;
-  }
-
-  // Nome — após labels comuns OU primeiras palavras capitalizadas
-  const nameLabels = [
-    /(?:CONTRATANTE|Cliente|Nome\s+completo|Nome)\s*:?\s*([A-ZÀ-Ý][a-zà-ÿA-ZÀ-Ý]+(?:\s+[A-ZÀ-Ý][a-zà-ÿA-ZÀ-Ý]+){1,6})/,
-  ];
-  for (const re of nameLabels) {
-    const m = text.match(re);
-    if (m && m[1].trim().length > 4) { result.client_name = m[1].trim(); break; }
-  }
-
-  // Endereço — linha após "Endereço:"
-  const addrMatch = text.match(/endere[çc]o\s*:?\s*([^\n\r]{5,120})/i);
-  if (addrMatch) result.client_address = addrMatch[1].trim().replace(/\s+/g, ' ');
-
-  // Cidade
-  const cityMatch = text.match(/cidade\s*:?\s*([A-ZÀ-Ý][a-zà-ÿA-ZÀ-Ý\s]{2,40}?)(?:[\s\/,]+([A-Z]{2}))?(?:\s|$|\n)/i);
-  if (cityMatch) {
-    result.client_city = cityMatch[1].trim();
-    if (cityMatch[2]) result.client_state = cityMatch[2];
-  }
-
-  // Tipo de ensaio
+function detectJobType(text: string): string | null {
   for (const [re, type] of SESSION_KEYWORDS) {
-    if (re.test(text)) { result.job_type = type; break; }
+    if (re.test(text)) return type;
   }
-
-  // Data do ensaio — labels comuns
-  const dateLabels = [
-    /(?:data\s+do\s+ensaio|data\s+da\s+sess[ãa]o|dia\s+do\s+ensaio|agendado\s+para|data\s+do\s+evento|data\s+do\s+casamento)\s*:?\s*(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/i,
-  ];
-  for (const re of dateLabels) {
-    const m = text.match(re);
-    if (m) {
-      const yyyy = m[3].length === 2 ? `20${m[3]}` : m[3];
-      result.job_date = `${yyyy}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
-      break;
-    }
-  }
-
-  return result;
+  return null;
 }
 
-export async function downloadAndParsePdf(url: string): Promise<ParsedContract> {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`Download falhou: HTTP ${r.status}`);
-  const buf = Buffer.from(await r.arrayBuffer());
-  // API nova do pdf-parse v2 — classe PDFParse + getText()
-  const parser = new PDFParse({ data: new Uint8Array(buf) });
-  try {
-    const result = await parser.getText();
-    return parseContractText(result.text || '');
-  } finally {
-    await parser.destroy().catch(() => {});
-  }
+// Extrai nome do cliente a partir do nome do documento, removendo
+// prefixos como "Contrato -", "Pacote -" etc.
+function extractClientNameFromDocName(docName: string): string | null {
+  if (!docName) return null;
+  let cleaned = docName
+    .replace(/^(contrato|pacote|documento|sess[ãa]o|ensaio)\s*[-–—:]?\s*/i, '')
+    .replace(/\s*[-–—:]\s*(newborn|gestante|fam[íi]lia|smash|casamento|aniversário|aniversario|book|pet|natal|p[áa]scoa).*$/i, '')
+    .trim();
+  // Se sobrou pelo menos um nome próprio (palavra capitalizada), retorna
+  const match = cleaned.match(/^([A-ZÀ-Ý][a-zà-ÿA-ZÀ-Ý]+(?:\s+[A-ZÀ-Ý][a-zà-ÿA-ZÀ-Ý]+){0,5})/);
+  return match ? match[1].trim() : null;
+}
+
+export function extractFromDoc(doc: AutentiqueDoc): ExtractedFromDoc {
+  // Cliente: prioriza primeiro signatário (mais confiável que o nome do doc)
+  const firstSigner = doc.signers?.[0] || null;
+  const fromSigner = firstSigner?.name?.trim() || null;
+  const fromDocName = extractClientNameFromDocName(doc.name);
+
+  return {
+    client_name: fromSigner || fromDocName || null,
+    client_email: firstSigner?.email?.toLowerCase().trim() || null,
+    job_type: detectJobType(doc.name) || detectJobType(firstSigner?.name || ''),
+    job_date: (doc.created_at || '').slice(0, 10),
+    doc_name: doc.name,
+  };
 }

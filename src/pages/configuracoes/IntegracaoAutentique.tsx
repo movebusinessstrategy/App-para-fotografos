@@ -1,99 +1,168 @@
-import React, { useState, useRef } from "react";
-import { FileSignature, Download, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
+import { FileSignature, Download, AlertCircle, CheckCircle2, Loader2, Eye, ChevronLeft, ChevronRight } from "lucide-react";
 import { authFetch } from "../../utils/authFetch";
 
-interface PageResult {
+interface PreviewItem {
+  doc_id: string;
+  doc_name: string;
+  client_name: string | null;
+  client_email: string | null;
+  job_type: string | null;
+  job_date: string;
+  existing_client_id: number | null;
+  existing_client_name: string | null;
+  will_duplicate: boolean;
+  has_name: boolean;
+}
+
+interface PreviewPage {
   page: number;
-  processed: number;
-  imported: number;
-  skipped_duplicates: number;
-  failed: number;
-  errors: Array<{ doc_id: string; reason: string }>;
+  items: PreviewItem[];
   total: number;
   last_page: number;
   has_more: boolean;
   next_page: number | null;
 }
 
-interface Totals {
+interface ImportResult {
+  page: number;
   processed: number;
   imported: number;
   skipped_duplicates: number;
   failed: number;
   errors: Array<{ doc_id: string; reason: string }>;
-  pagesDone: number;
-  totalPages: number;
-  totalDocs: number;
 }
 
-const EMPTY_TOTALS: Totals = {
-  processed: 0, imported: 0, skipped_duplicates: 0, failed: 0,
-  errors: [], pagesDone: 0, totalPages: 0, totalDocs: 0,
+const formatDate = (iso: string) => {
+  if (!iso) return '—';
+  try { return new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR'); } catch { return iso; }
 };
 
 export default function IntegracaoAutentique() {
-  const [running, setRunning] = useState(false);
-  const [done, setDone] = useState(false);
-  const [totals, setTotals] = useState<Totals>(EMPTY_TOTALS);
-  const [currentPageLabel, setCurrentPageLabel] = useState<string>('');
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [preview, setPreview] = useState<PreviewPage | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const cancelRef = useRef(false);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [importing, setImporting] = useState(false);
+  const [results, setResults] = useState<ImportResult[]>([]);
 
-  async function runImport() {
-    setRunning(true);
-    setDone(false);
+  async function loadPage(p: number) {
+    setLoading(true);
     setError(null);
-    setTotals(EMPTY_TOTALS);
-    cancelRef.current = false;
-
-    let page = 1;
-    let agg = { ...EMPTY_TOTALS };
-
+    setChecked(new Set());
     try {
-      while (true) {
-        if (cancelRef.current) break;
-        setCurrentPageLabel(`Processando página ${page}...`);
-
-        const r = await authFetch('/api/contracts/autentique-import', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ page }),
-        });
-        if (!r.ok) {
-          const data = await r.json().catch(() => ({}));
-          throw new Error(data.error || `Erro HTTP ${r.status}`);
-        }
-        const result: PageResult = await r.json();
-
-        agg = {
-          processed: agg.processed + result.processed,
-          imported: agg.imported + result.imported,
-          skipped_duplicates: agg.skipped_duplicates + result.skipped_duplicates,
-          failed: agg.failed + result.failed,
-          errors: [...agg.errors, ...result.errors].slice(0, 100),
-          pagesDone: page,
-          totalPages: result.last_page,
-          totalDocs: result.total,
-        };
-        setTotals({ ...agg });
-
-        if (!result.has_more) break;
-        page = result.next_page || page + 1;
-        // Pequena pausa entre páginas pra UI respirar
-        await new Promise(r => setTimeout(r, 200));
+      const r = await authFetch(`/api/contracts/autentique-list?page=${p}`);
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${r.status}`);
       }
-
-      setDone(true);
-      setCurrentPageLabel('');
+      const data: PreviewPage = await r.json();
+      setPreview(data);
+      setPage(data.page);
+      // Pré-marca os que NÃO vão duplicar e têm nome
+      const auto = new Set<string>();
+      data.items.forEach(it => { if (it.has_name && !it.will_duplicate) auto.add(it.doc_id); });
+      setChecked(auto);
     } catch (err: any) {
-      setError(err.message || String(err));
+      setError(err.message);
+      setPreview(null);
     } finally {
-      setRunning(false);
+      setLoading(false);
     }
   }
 
+  useEffect(() => { loadPage(1); }, []);
+
+  const stats = useMemo(() => {
+    if (!preview) return { dup: 0, novo: 0, semNome: 0 };
+    return {
+      dup: preview.items.filter(i => i.will_duplicate).length,
+      novo: preview.items.filter(i => i.has_name && !i.will_duplicate).length,
+      semNome: preview.items.filter(i => !i.has_name).length,
+    };
+  }, [preview]);
+
+  function toggle(id: string) {
+    setChecked(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    if (!preview) return;
+    const eligible = preview.items.filter(i => i.has_name && !i.will_duplicate).map(i => i.doc_id);
+    if (eligible.every(id => checked.has(id))) {
+      setChecked(new Set());
+    } else {
+      setChecked(new Set(eligible));
+    }
+  }
+
+  async function importSelected() {
+    if (!preview || checked.size === 0) return;
+    setImporting(true);
+    setError(null);
+    try {
+      const r = await authFetch('/api/contracts/autentique-import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ page, doc_ids: Array.from(checked) }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.error || `HTTP ${r.status}`);
+      }
+      const result: ImportResult = await r.json();
+      setResults(prev => [...prev, result]);
+      // Recarrega a mesma página pra mostrar tudo como "duplicata" agora
+      await loadPage(page);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  async function importAllPages() {
+    if (!preview) return;
+    setImporting(true);
+    setError(null);
+    let curr = 1;
+    try {
+      const total = preview.last_page;
+      while (true) {
+        const r = await authFetch('/api/contracts/autentique-import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ page: curr }),
+        });
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          throw new Error(d.error || `HTTP ${r.status}`);
+        }
+        const result: ImportResult = await r.json();
+        setResults(prev => [...prev, result]);
+        if (!result.has_more) break;
+        curr = result.next_page || curr + 1;
+        await new Promise(r => setTimeout(r, 200));
+      }
+      await loadPage(1);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  const totalImported = results.reduce((a, r) => a + r.imported, 0);
+  const totalSkipped = results.reduce((a, r) => a + r.skipped_duplicates, 0);
+  const totalFailed = results.reduce((a, r) => a + r.failed, 0);
+
   return (
-    <div className="space-y-5 max-w-3xl">
+    <div className="space-y-5 max-w-5xl">
       {/* Header */}
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-5">
         <div className="flex items-start gap-3">
@@ -101,132 +170,199 @@ export default function IntegracaoAutentique() {
             <FileSignature className="w-5 h-5 text-gold-600 dark:text-gold-400" />
           </div>
           <div className="flex-1">
-            <h2 className="text-base font-bold text-gray-900 dark:text-white">Importar histórico do Autentique</h2>
+            <h2 className="text-base font-bold text-gray-900 dark:text-white">Importar do Autentique</h2>
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-              Puxa todos os contratos da sua conta Autentique e cria clientes + histórico de
-              sessões aqui no app. Detecta duplicatas (mesmo cliente + mesma data) e não puxa
-              pra produção.
+              Lista os contratos da sua conta Autentique e importa como histórico de cliente +
+              sessão. <strong>Não baixa PDFs</strong> — usa só metadados (instantâneo).
             </p>
           </div>
         </div>
       </div>
 
-      {/* Como funciona */}
-      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-4">
-        <p className="text-xs font-semibold text-blue-900 dark:text-blue-300 uppercase tracking-wider mb-2">Como funciona</p>
-        <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1.5 list-disc list-inside">
-          <li>Lista todos os contratos da sua conta Autentique (paginado, 60 por vez)</li>
-          <li>Baixa cada PDF assinado e extrai: <strong>nome, e-mail, CPF, telefone, endereço, tipo de ensaio, valor, data</strong></li>
-          <li>Match de cliente por <strong>e-mail OU CPF</strong>. Se não bater, cria cliente novo</li>
-          <li><strong>Dedup</strong>: pula se já tem ensaio do mesmo cliente naquela data</li>
-          <li>Jobs criados ficam <strong>fora da produção</strong> e marcados como pagos/concluídos (histórico)</li>
-        </ul>
-      </div>
-
-      {/* Pré-requisitos / aviso */}
-      <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-4 flex items-start gap-3">
-        <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
-        <div className="text-sm text-amber-900 dark:text-amber-200">
-          <strong>Antes de começar:</strong> tenha a <em>API key do Autentique</em> configurada em
-          Integrações. Esse processo pode levar vários minutos pra contas com 500+ contratos
-          (cada PDF é baixado e processado). Pode rodar quantas vezes quiser — duplicatas são
-          ignoradas.
+      {/* Status atual */}
+      {preview && (
+        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex gap-3 flex-wrap text-sm">
+              <span className="px-3 py-1.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 font-semibold">
+                Página {preview.page} de {preview.last_page}
+              </span>
+              <span className="px-3 py-1.5 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold">
+                Total Autentique: <strong>{preview.total}</strong>
+              </span>
+              <span className="px-3 py-1.5 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 font-semibold">
+                Novos: <strong>{stats.novo}</strong>
+              </span>
+              <span className="px-3 py-1.5 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 font-semibold">
+                Duplicatas: <strong>{stats.dup}</strong>
+              </span>
+              {stats.semNome > 0 && (
+                <span className="px-3 py-1.5 rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 font-semibold">
+                  Sem nome: <strong>{stats.semNome}</strong>
+                </span>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => loadPage(page - 1)} disabled={page <= 1 || loading || importing}
+                className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 disabled:opacity-40 hover:border-gold-400"
+              >
+                <ChevronLeft size={14} className="inline" />
+              </button>
+              <button
+                onClick={() => loadPage(page + 1)} disabled={page >= preview.last_page || loading || importing}
+                className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 disabled:opacity-40 hover:border-gold-400"
+              >
+                <ChevronRight size={14} className="inline" />
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Botão de ação */}
-      <div className="flex items-center gap-3">
-        <button
-          onClick={runImport}
-          disabled={running}
-          className="inline-flex items-center gap-2 px-5 py-2.5 bg-gold-600 hover:bg-gold-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold rounded-xl shadow-sm transition-colors"
-        >
-          {running ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-          {running ? 'Importando…' : done ? 'Rodar de novo' : 'Iniciar importação'}
-        </button>
-        {running && (
-          <button
-            onClick={() => { cancelRef.current = true; }}
-            className="px-4 py-2.5 text-sm font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-colors"
-          >
-            Parar
-          </button>
+      {/* Erros */}
+      {error && (
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-3 flex items-start gap-2">
+          <AlertCircle size={16} className="text-red-500 flex-shrink-0 mt-0.5" />
+          <p className="text-sm text-red-900 dark:text-red-200">{error}</p>
+        </div>
+      )}
+
+      {/* Resultado agregado */}
+      {results.length > 0 && (
+        <div className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <CheckCircle2 size={16} className="text-emerald-600 dark:text-emerald-400" />
+            <strong className="text-emerald-900 dark:text-emerald-200">Importação acumulada</strong>
+          </div>
+          <div className="flex gap-3 flex-wrap text-sm text-emerald-900 dark:text-emerald-200">
+            <span><strong>{totalImported}</strong> importados</span>
+            <span><strong>{totalSkipped}</strong> duplicatas puladas</span>
+            {totalFailed > 0 && <span className="text-red-700 dark:text-red-300"><strong>{totalFailed}</strong> falhas</span>}
+          </div>
+        </div>
+      )}
+
+      {/* Tabela */}
+      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
+        {loading ? (
+          <div className="py-16 text-center text-gray-400">
+            <Loader2 size={20} className="inline animate-spin text-gold-500 mr-2" />
+            Carregando contratos...
+          </div>
+        ) : !preview ? (
+          <div className="py-16 text-center text-gray-400 text-sm">Sem dados</div>
+        ) : preview.items.length === 0 ? (
+          <div className="py-16 text-center text-gray-400 text-sm">Nenhum contrato nessa página</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-800">
+                <tr className="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                  <th className="px-3 py-2.5 w-10">
+                    <input
+                      type="checkbox"
+                      checked={stats.novo > 0 && preview.items.filter(i => i.has_name && !i.will_duplicate).every(i => checked.has(i.doc_id))}
+                      onChange={toggleAll}
+                      className="accent-gold-600"
+                    />
+                  </th>
+                  <th className="px-3 py-2.5">Contrato (Autentique)</th>
+                  <th className="px-3 py-2.5">Cliente detectado</th>
+                  <th className="px-3 py-2.5">E-mail</th>
+                  <th className="px-3 py-2.5">Tipo</th>
+                  <th className="px-3 py-2.5">Data</th>
+                  <th className="px-3 py-2.5">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                {preview.items.map(it => {
+                  const canCheck = it.has_name && !it.will_duplicate;
+                  return (
+                    <tr key={it.doc_id} className={!canCheck ? 'opacity-60' : ''}>
+                      <td className="px-3 py-2">
+                        <input
+                          type="checkbox"
+                          checked={checked.has(it.doc_id)}
+                          onChange={() => toggle(it.doc_id)}
+                          disabled={!canCheck}
+                          className="accent-gold-600"
+                        />
+                      </td>
+                      <td className="px-3 py-2 text-gray-700 dark:text-gray-300 text-xs max-w-[220px] truncate" title={it.doc_name}>
+                        {it.doc_name || '—'}
+                      </td>
+                      <td className="px-3 py-2 text-gray-900 dark:text-white font-medium">
+                        {it.client_name || <span className="text-red-500 italic">sem nome</span>}
+                        {it.existing_client_name && it.existing_client_name !== it.client_name && (
+                          <div className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-0.5">
+                            ↳ já existe como "{it.existing_client_name}"
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-gray-500 dark:text-gray-400 text-xs">
+                        {it.client_email || '—'}
+                      </td>
+                      <td className="px-3 py-2 text-gray-500 dark:text-gray-400 text-xs">
+                        {it.job_type || <span className="opacity-50">Outro</span>}
+                      </td>
+                      <td className="px-3 py-2 text-gray-500 dark:text-gray-400 text-xs whitespace-nowrap">
+                        {formatDate(it.job_date)}
+                      </td>
+                      <td className="px-3 py-2">
+                        {!it.has_name ? (
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-900/30 text-red-600">
+                            sem nome
+                          </span>
+                        ) : it.will_duplicate ? (
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500">
+                            duplicata
+                          </span>
+                        ) : it.existing_client_id ? (
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
+                            vincula
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300">
+                            novo
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
-      {/* Progresso */}
-      {(running || done || totals.processed > 0) && (
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-5 space-y-4">
-          {running && currentPageLabel && (
-            <p className="text-sm text-gray-600 dark:text-gray-300 flex items-center gap-2">
-              <Loader2 size={14} className="animate-spin text-gold-500" />
-              {currentPageLabel}
-            </p>
-          )}
-
-          {totals.totalPages > 0 && (
-            <div>
-              <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1.5">
-                <span>{totals.pagesDone} de {totals.totalPages} páginas</span>
-                <span>{totals.processed} de {totals.totalDocs} contratos</span>
-              </div>
-              <div className="h-2 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-gold-500 transition-all"
-                  style={{ width: `${totals.totalPages > 0 ? (totals.pagesDone / totals.totalPages) * 100 : 0}%` }}
-                />
-              </div>
-            </div>
-          )}
-
-          <div className="grid grid-cols-3 gap-3">
-            <Stat label="Importados" value={totals.imported} color="text-emerald-600 dark:text-emerald-400" />
-            <Stat label="Duplicatas puladas" value={totals.skipped_duplicates} color="text-gray-500" />
-            <Stat label="Falhas" value={totals.failed} color={totals.failed > 0 ? "text-red-500" : "text-gray-500"} />
+      {/* Botões de ação */}
+      {preview && preview.items.length > 0 && (
+        <div className="flex justify-between items-center gap-3 flex-wrap">
+          <p className="text-sm text-gray-500">
+            <strong>{checked.size}</strong> selecionado(s) nessa página
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={importSelected}
+              disabled={checked.size === 0 || importing}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold rounded-xl text-sm transition-colors"
+            >
+              {importing ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+              Importar selecionados ({checked.size})
+            </button>
+            <button
+              onClick={importAllPages}
+              disabled={importing}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold rounded-xl text-sm transition-colors"
+            >
+              {importing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
+              Importar TODAS as páginas ({preview.total})
+            </button>
           </div>
-
-          {done && !error && (
-            <div className="flex items-start gap-2 p-3 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded-lg">
-              <CheckCircle2 size={16} className="text-emerald-600 dark:text-emerald-400 flex-shrink-0 mt-0.5" />
-              <p className="text-sm text-emerald-900 dark:text-emerald-200">
-                Importação concluída! <strong>{totals.imported}</strong> contratos viraram histórico
-                de cliente + sessão.
-              </p>
-            </div>
-          )}
-
-          {error && (
-            <div className="flex items-start gap-2 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-              <AlertCircle size={16} className="text-red-500 flex-shrink-0 mt-0.5" />
-              <p className="text-sm text-red-900 dark:text-red-200">{error}</p>
-            </div>
-          )}
-
-          {totals.errors.length > 0 && (
-            <details className="text-sm">
-              <summary className="cursor-pointer text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
-                Ver erros ({totals.errors.length})
-              </summary>
-              <div className="mt-2 max-h-60 overflow-y-auto space-y-1 text-xs font-mono bg-gray-50 dark:bg-gray-800 p-3 rounded-lg">
-                {totals.errors.map((e, i) => (
-                  <div key={i} className="text-gray-600 dark:text-gray-400">
-                    <span className="text-gray-400">{e.doc_id}:</span> {e.reason}
-                  </div>
-                ))}
-              </div>
-            </details>
-          )}
         </div>
       )}
-    </div>
-  );
-}
-
-function Stat({ label, value, color }: { label: string; value: number; color: string }) {
-  return (
-    <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-3">
-      <p className={`text-2xl font-bold ${color}`}>{value}</p>
-      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{label}</p>
     </div>
   );
 }
