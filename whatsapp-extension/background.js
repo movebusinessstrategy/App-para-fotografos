@@ -238,14 +238,17 @@ async function handleMessage(message) {
       });
     }
     case 'GET_PRODUCTION_DATA': {
-      // Stages de produção + jobs (filtra in-production no client) + clientes
-      // pra exibir nome no card. Tudo em paralelo.
-      const [stages, jobs, clients] = await Promise.all([
-        apiFetch('/api/production/stages'),
+      // Usa a estrutura v2 (mesma do app web): processes = "pastas", cada
+      // processo tem stages-v2 ordenados por position. Job.production_stage
+      // aponta pra um stage v2.
+      const [processes, stages, jobs, clients, members] = await Promise.all([
+        apiFetch('/api/production/processes').catch(() => []),
+        apiFetch('/api/production/stages-v2').catch(() => []),
         apiFetch('/api/jobs'),
         apiFetch('/api/clients').catch(() => []),
+        apiFetch('/api/team-members').catch(() => []),
       ]);
-      return { stages, jobs, clients };
+      return { processes, stages, jobs, clients, members };
     }
     case 'MOVE_JOB_PRODUCTION_STAGE': {
       return apiFetch(`/api/jobs/${message.jobId}`, {
