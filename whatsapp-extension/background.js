@@ -157,6 +157,13 @@ async function handleMessage(message) {
     case 'GET_ALL_DEALS': {
       return apiFetch('/api/deals');
     }
+    case 'GET_AGENDA': {
+      const params = new URLSearchParams();
+      if (message.year) params.set('year', String(message.year));
+      if (message.month) params.set('month', String(message.month));
+      const qs = params.toString();
+      return apiFetch(`/api/extension/agenda${qs ? `?${qs}` : ''}`);
+    }
     default:
       throw new Error(`Tipo de mensagem desconhecido: ${message.type}`);
   }

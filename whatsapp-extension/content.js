@@ -168,13 +168,22 @@
     `;
     document.body.appendChild(k);
 
-    // FAB — botão flutuante "Funil" sempre acessível quando o kanban está escondido
-    const fab = document.createElement('button');
-    fab.id = 'fp-fab';
-    fab.title = 'Abrir pipeline';
-    fab.innerHTML = '⬡ <span>Funil</span>';
-    fab.addEventListener('click', showKanban);
-    document.body.appendChild(fab);
+    // Rail vertical estreita à esquerda — substitui o FAB antigo
+    const rail = document.createElement('div');
+    rail.id = 'fp-rail';
+    rail.innerHTML = `
+      <button id="fp-rail-pipeline" class="fp-rail-btn" title="Pipeline de vendas">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="6" height="18" rx="1.5"/><rect x="10.5" y="3" width="6" height="13" rx="1.5"/><rect x="18" y="3" width="3" height="8" rx="1"/></svg>
+        <span>Pipeline</span>
+      </button>
+      <button id="fp-rail-agenda" class="fp-rail-btn" title="Agenda">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+        <span>Agenda</span>
+      </button>
+    `;
+    document.body.appendChild(rail);
+    rail.querySelector('#fp-rail-pipeline')?.addEventListener('click', showKanban);
+    rail.querySelector('#fp-rail-agenda')?.addEventListener('click', showAgenda);
 
     // Toast
     const t = document.createElement('div');
@@ -227,6 +236,8 @@
     document.getElementById('fp-kanban')?.style.setProperty('--fp-side-width', left + 'px');
     const k = document.getElementById('fp-kanban');
     if (k) k.style.left = left + 'px';
+    const ag = document.getElementById('fp-agenda');
+    if (ag) ag.style.left = left + 'px';
   }
 
   // ===== KANBAN =====
@@ -1108,10 +1119,28 @@
     await openByNumberInApp(phone, name);
   }
 
+  // Desselecciona o chat ativo no WhatsApp Web — devolve à tela inicial.
+  // Garante que notificações de mensagens novas continuem chegando normalmente
+  // e que a próxima abertura de chat reative `detectState`.
+  function deselectWhatsappChat() {
+    chatKey = null;
+    chatPhone = null;
+    chatDeal = null;
+    removeChatStrip();
+    // Tenta clicar no logo do WhatsApp ou disparar Esc duas vezes (fecha pesquisa+chat)
+    try { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); } catch {}
+    try { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); } catch {}
+  }
+
+  function setRailActive(id) {
+    document.querySelectorAll('#fp-rail .fp-rail-btn').forEach((b) => b.classList.remove('fp-rail-active'));
+    if (id) document.getElementById(id)?.classList.add('fp-rail-active');
+  }
+
   function hideKanban() {
     kanbanVisible = false;
     document.getElementById('fp-kanban')?.classList.add('fp-hidden');
-    document.getElementById('fp-fab')?.classList.add('fp-fab-on');
+    setRailActive(null);
     // Se voltamos a uma conversa que já estava aberta, restaura a faixa removida ao abrir o kanban
     if (document.getElementById('fp-chat-strip') || !chatKey) return;
     if (chatDeal) {
@@ -1122,13 +1151,171 @@
   }
 
   function showKanban() {
+    // Garante que a conversa ativa seja fechada — o user fica visualmente "na home"
+    // do WhatsApp ao alternar pro funil. Notificações continuam funcionando.
+    deselectWhatsappChat();
     kanbanVisible = true;
     adjustPosition();
+    hideAgenda();
     document.getElementById('fp-kanban')?.classList.remove('fp-hidden');
-    document.getElementById('fp-fab')?.classList.remove('fp-fab-on');
+    setRailActive('fp-rail-pipeline');
     // A faixa do chat tem z-index altíssimo e cobriria o cabeçalho do funil
     removeChatStrip();
     loadKanban();
+  }
+
+  // ===== AGENDA =====
+  let agendaState = { year: new Date().getFullYear(), month: new Date().getMonth() + 1, events: [] };
+
+  function buildAgendaOverlay() {
+    if (document.getElementById('fp-agenda')) return;
+    const el = document.createElement('div');
+    el.id = 'fp-agenda';
+    el.className = 'fp-hidden';
+    el.innerHTML = `
+      <div id="fp-ag-h">
+        <button id="fp-ag-prev" title="Mês anterior">‹</button>
+        <h3 id="fp-ag-title">—</h3>
+        <button id="fp-ag-next" title="Próximo mês">›</button>
+        <div style="flex:1"></div>
+        <button id="fp-ag-today">Hoje</button>
+      </div>
+      <div id="fp-ag-weekdays"></div>
+      <div id="fp-ag-grid"></div>
+      <div id="fp-ag-day-list"></div>
+    `;
+    document.body.appendChild(el);
+    el.querySelector('#fp-ag-prev')?.addEventListener('click', () => navigateAgenda(-1));
+    el.querySelector('#fp-ag-next')?.addEventListener('click', () => navigateAgenda(1));
+    el.querySelector('#fp-ag-today')?.addEventListener('click', () => {
+      const n = new Date();
+      agendaState.year = n.getFullYear();
+      agendaState.month = n.getMonth() + 1;
+      loadAgenda();
+    });
+  }
+
+  function navigateAgenda(delta) {
+    let m = agendaState.month + delta;
+    let y = agendaState.year;
+    if (m < 1) { m = 12; y -= 1; }
+    if (m > 12) { m = 1; y += 1; }
+    agendaState.year = y;
+    agendaState.month = m;
+    loadAgenda();
+  }
+
+  async function loadAgenda() {
+    buildAgendaOverlay();
+    const titleEl = document.getElementById('fp-ag-title');
+    const monthName = new Date(agendaState.year, agendaState.month - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+    if (titleEl) titleEl.textContent = monthName.charAt(0).toUpperCase() + monthName.slice(1);
+
+    try {
+      const res = await bg({ type: 'GET_AGENDA', year: agendaState.year, month: agendaState.month });
+      agendaState.events = res?.events || [];
+    } catch (err) {
+      agendaState.events = [];
+    }
+    renderAgendaGrid();
+  }
+
+  function renderAgendaGrid() {
+    const grid = document.getElementById('fp-ag-grid');
+    const wkd = document.getElementById('fp-ag-weekdays');
+    const dayList = document.getElementById('fp-ag-day-list');
+    if (!grid || !wkd || !dayList) return;
+
+    wkd.innerHTML = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(d => `<span>${d}</span>`).join('');
+
+    const { year, month, events } = agendaState;
+    const firstWeekday = new Date(year, month - 1, 1).getDay();
+    const lastDay = new Date(year, month, 0).getDate();
+    const today = new Date();
+    const isCurrentMonth = today.getFullYear() === year && (today.getMonth() + 1) === month;
+
+    // Agrupa eventos por dia
+    const byDay = new Map();
+    events.forEach((e) => {
+      const day = Number(String(e.date).slice(8, 10));
+      if (!byDay.has(day)) byDay.set(day, []);
+      byDay.get(day).push(e);
+    });
+
+    let html = '';
+    for (let i = 0; i < firstWeekday; i++) html += `<div class="fp-ag-cell fp-ag-empty"></div>`;
+    for (let d = 1; d <= lastDay; d++) {
+      const list = byDay.get(d) || [];
+      const isToday = isCurrentMonth && today.getDate() === d;
+      const hasEvents = list.length > 0;
+      html += `
+        <div class="fp-ag-cell ${isToday ? 'fp-ag-today-cell' : ''} ${hasEvents ? 'fp-ag-has' : ''}" data-day="${d}">
+          <span class="fp-ag-day-num">${d}</span>
+          ${hasEvents ? `<span class="fp-ag-dot-row">${list.slice(0, 3).map(() => '<span class="fp-ag-dot"></span>').join('')}${list.length > 3 ? `<span class="fp-ag-more">+${list.length - 3}</span>` : ''}</span>` : ''}
+        </div>
+      `;
+    }
+    grid.innerHTML = html;
+
+    grid.querySelectorAll('.fp-ag-cell[data-day]').forEach((cell) => {
+      cell.addEventListener('click', () => {
+        const day = Number(cell.getAttribute('data-day'));
+        renderAgendaDayList(day);
+        grid.querySelectorAll('.fp-ag-cell').forEach((c) => c.classList.remove('fp-ag-selected'));
+        cell.classList.add('fp-ag-selected');
+      });
+    });
+
+    // Por padrão mostra hoje (se está no mês atual) ou o primeiro dia com evento
+    const initialDay = isCurrentMonth ? today.getDate() : (Array.from(byDay.keys())[0] || 1);
+    renderAgendaDayList(initialDay);
+    grid.querySelector(`.fp-ag-cell[data-day="${initialDay}"]`)?.classList.add('fp-ag-selected');
+  }
+
+  function renderAgendaDayList(day) {
+    const list = document.getElementById('fp-ag-day-list');
+    if (!list) return;
+    const items = (agendaState.events || []).filter((e) => Number(String(e.date).slice(8, 10)) === day);
+    const dateStr = new Date(agendaState.year, agendaState.month - 1, day).toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' });
+
+    if (items.length === 0) {
+      list.innerHTML = `
+        <div class="fp-ag-day-header">${dateStr}</div>
+        <div class="fp-ag-empty-state">Nenhum trabalho marcado pra esse dia ✨</div>
+      `;
+      return;
+    }
+
+    list.innerHTML = `
+      <div class="fp-ag-day-header">${dateStr} — ${items.length} ${items.length === 1 ? 'compromisso' : 'compromissos'}</div>
+      ${items.map((e) => `
+        <div class="fp-ag-event">
+          <div class="fp-ag-event-time">${e.time ? e.time.slice(0, 5) : '—'}</div>
+          <div class="fp-ag-event-body">
+            <div class="fp-ag-event-title">${esc(e.title)}</div>
+            <div class="fp-ag-event-sub">${esc([e.type, e.client_name].filter(Boolean).join(' · ') || '')}</div>
+          </div>
+          ${e.status ? `<span class="fp-ag-event-status fp-ag-st-${esc(e.status)}">${esc(e.status)}</span>` : ''}
+        </div>
+      `).join('')}
+    `;
+  }
+
+  function showAgenda() {
+    deselectWhatsappChat();
+    if (kanbanVisible) {
+      kanbanVisible = false;
+      document.getElementById('fp-kanban')?.classList.add('fp-hidden');
+    }
+    removeChatStrip();
+    buildAgendaOverlay();
+    document.getElementById('fp-agenda')?.classList.remove('fp-hidden');
+    setRailActive('fp-rail-agenda');
+    loadAgenda();
+  }
+
+  function hideAgenda() {
+    document.getElementById('fp-agenda')?.classList.add('fp-hidden');
   }
 
   // ===== LOGOUT =====
