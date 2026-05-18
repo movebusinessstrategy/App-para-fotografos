@@ -9363,16 +9363,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Creates a document via Autentique GraphQL API using the tenant's API key.
   // Requires: contract has at least 1 signer with email.
   // ──────────────────────────────────────────────────────────────────
-  // Importar HISTÓRICO de contratos do Autentique pra dentro do app.
-  // Processa uma página de cada vez (60 docs) pra não dar timeout em
-  // contas grandes. Cliente match por email/CPF; sem match cria novo.
-  // Jobs criados NÃO vão pra produção (production_stage null).
-  // Dedup: skip se já existe job com mesmo client_id + job_date.
+  // PREVIEW: lista contratos do Autentique (1 página) com extração leve
+  // dos metadados (nome do signatário, email, data) — SEM baixar PDFs.
+  // Marca pra cada doc se: cliente já existe + se job duplicaria.
   // ──────────────────────────────────────────────────────────────────
-  app.post('/api/contracts/autentique-import', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
+  app.get('/api/contracts/autentique-list', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const page = Math.max(1, parseInt(String(req.body?.page ?? req.query?.page ?? '1'), 10) || 1);
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
 
     const { data: settings } = await supabase
       .from('studio_settings')
@@ -9385,52 +9383,110 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       });
     }
 
-    // Lazy import — pdf-parse é pesado e nem todo deploy precisa carregar
-    let fetchAutentiqueDocsPage: any, downloadAndParsePdf: any;
+    let lib;
     try {
-      const lib = await import('./lib/autentique-import.js');
-      fetchAutentiqueDocsPage = lib.fetchAutentiqueDocsPage;
-      downloadAndParsePdf = lib.downloadAndParsePdf;
+      lib = await import('./lib/autentique-import.js');
     } catch (err: any) {
-      return res.status(500).json({ error: `Lib de import indisponível: ${err.message}` });
+      return res.status(500).json({ error: `Lib indisponível: ${err.message}` });
     }
 
     let pageResult;
     try {
-      pageResult = await fetchAutentiqueDocsPage(
-        settings.autentique_api_key,
-        !!settings.autentique_sandbox,
-        page,
-        60,
+      pageResult = await lib.fetchAutentiqueDocsPage(
+        settings.autentique_api_key, !!settings.autentique_sandbox, page, 60,
       );
     } catch (err: any) {
       return res.status(502).json({ error: `Autentique: ${err.message}` });
     }
 
-    const docs: any[] = pageResult.docs || [];
-
-    // Cache de clientes existentes (pra match)
-    const { data: existingClients } = await supabase
-      .from('clients')
-      .select('id, name, email, cpf')
-      .eq('user_id', userId);
+    // Caches pra marcação de duplicata/existência
+    const { data: clients } = await supabase.from('clients').select('id, name, email').eq('user_id', userId);
     const clientsByEmail = new Map<string, any>();
-    const clientsByCpf = new Map<string, any>();
-    (existingClients || []).forEach((c: any) => {
-      if (c.email) clientsByEmail.set(String(c.email).toLowerCase().trim(), c);
-      if (c.cpf) clientsByCpf.set(String(c.cpf).replace(/\D/g, ''), c);
+    (clients || []).forEach((c: any) => { if (c.email) clientsByEmail.set(String(c.email).toLowerCase().trim(), c); });
+
+    const { data: jobs } = await supabase.from('jobs').select('client_id, job_date').eq('user_id', userId);
+    const jobKey = (cid: number | null, date: string | null) => `${cid}|${(date || '').slice(0, 10)}`;
+    const jobKeys = new Set((jobs || []).map((j: any) => jobKey(j.client_id, j.job_date)));
+
+    const items = (pageResult.docs || []).map((doc: any) => {
+      const ext = lib.extractFromDoc(doc);
+      const existingClient = ext.client_email ? clientsByEmail.get(ext.client_email) : null;
+      const wouldDuplicate = existingClient && jobKeys.has(jobKey(existingClient.id, ext.job_date));
+      return {
+        doc_id: doc.id,
+        doc_name: ext.doc_name,
+        client_name: ext.client_name,
+        client_email: ext.client_email,
+        job_type: ext.job_type,
+        job_date: ext.job_date,
+        existing_client_id: existingClient?.id || null,
+        existing_client_name: existingClient?.name || null,
+        will_duplicate: !!wouldDuplicate,
+        has_name: !!ext.client_name,
+      };
     });
 
-    // Cache de jobs existentes (pra dedup)
-    const { data: existingJobs } = await supabase
-      .from('jobs')
-      .select('client_id, job_date')
-      .eq('user_id', userId);
-    const jobKey = (cid: number | null, date: string | null) =>
-      `${cid}|${(date || '').slice(0, 10)}`;
-    const existingJobKeys = new Set(
-      (existingJobs || []).map((j: any) => jobKey(j.client_id, j.job_date)),
-    );
+    res.json({
+      page,
+      items,
+      total: pageResult.total,
+      last_page: pageResult.last_page,
+      has_more: page < pageResult.last_page,
+      next_page: page < pageResult.last_page ? page + 1 : null,
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // IMPORT: cria clientes + jobs em lote a partir de doc IDs selecionados
+  // OU de uma página inteira. SEM baixar PDFs — só metadados.
+  // Body: { doc_ids?: string[], page?: number }
+  // - Se vier doc_ids: importa só esses (refaz fetch da página com eles)
+  // - Se vier page: importa todos da página (skipping dups/sem nome)
+  // ──────────────────────────────────────────────────────────────────
+  app.post('/api/contracts/autentique-import', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const page = Math.max(1, parseInt(String(req.body?.page ?? req.query?.page ?? '1'), 10) || 1);
+    const docIdsFilter: Set<string> | null = Array.isArray(req.body?.doc_ids) && req.body.doc_ids.length
+      ? new Set(req.body.doc_ids.map(String))
+      : null;
+
+    const { data: settings } = await supabase
+      .from('studio_settings')
+      .select('autentique_api_key, autentique_sandbox')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!settings?.autentique_api_key) {
+      return res.status(400).json({ error: 'Configure a API key do Autentique primeiro' });
+    }
+
+    let lib;
+    try {
+      lib = await import('./lib/autentique-import.js');
+    } catch (err: any) {
+      return res.status(500).json({ error: `Lib indisponível: ${err.message}` });
+    }
+
+    let pageResult;
+    try {
+      pageResult = await lib.fetchAutentiqueDocsPage(
+        settings.autentique_api_key, !!settings.autentique_sandbox, page, 60,
+      );
+    } catch (err: any) {
+      return res.status(502).json({ error: `Autentique: ${err.message}` });
+    }
+
+    let docs: any[] = pageResult.docs || [];
+    if (docIdsFilter) docs = docs.filter((d) => docIdsFilter.has(d.id));
+
+    // Caches
+    const { data: clients } = await supabase.from('clients').select('id, name, email').eq('user_id', userId);
+    const clientsByEmail = new Map<string, any>();
+    (clients || []).forEach((c: any) => { if (c.email) clientsByEmail.set(String(c.email).toLowerCase().trim(), c); });
+
+    const { data: jobs } = await supabase.from('jobs').select('client_id, job_date').eq('user_id', userId);
+    const jobKey = (cid: number | null, date: string | null) => `${cid}|${(date || '').slice(0, 10)}`;
+    const existingJobKeys = new Set((jobs || []).map((j: any) => jobKey(j.client_id, j.job_date)));
 
     let imported = 0;
     let skippedDup = 0;
@@ -9439,102 +9495,63 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     for (const doc of docs) {
       try {
-        let parsed: any = {};
-        if (doc.pdf_url) {
-          try {
-            parsed = await downloadAndParsePdf(doc.pdf_url);
-          } catch (err: any) {
-            // Falhou parsear PDF — segue com os dados que vieram do GraphQL
-            console.warn(`[autentique-import] PDF parse falhou pra ${doc.id}: ${err.message}`);
-          }
-        }
-
-        // Fallback: pega nome/email do primeiro signatário se o parser não achou
-        const firstSigner = doc.signers?.[0];
-        if (!parsed.client_name && firstSigner?.name) parsed.client_name = firstSigner.name;
-        if (!parsed.client_email && firstSigner?.email) {
-          parsed.client_email = String(firstSigner.email).toLowerCase().trim();
-        }
-
-        if (!parsed.client_name) {
-          failed++;
-          errors.push({ doc_id: doc.id, reason: 'Sem nome de cliente identificável' });
+        const ext = lib.extractFromDoc(doc);
+        if (!ext.client_name) {
+          failed++; errors.push({ doc_id: doc.id, reason: 'Sem nome de cliente' });
           continue;
         }
 
-        // Match cliente
-        let client: any = null;
-        if (parsed.client_email) client = clientsByEmail.get(parsed.client_email);
-        if (!client && parsed.client_cpf) client = clientsByCpf.get(parsed.client_cpf);
+        // Match cliente por email
+        let client: any = ext.client_email ? clientsByEmail.get(ext.client_email) : null;
 
-        // Criar cliente se não bateu
         if (!client) {
-          const newClientPayload: any = {
-            user_id: userId,
-            name: parsed.client_name,
-            email: parsed.client_email || null,
-            cpf: parsed.client_cpf || null,
-            phone: parsed.client_phone || null,
-            address: parsed.client_address || null,
-            cep: parsed.client_cep || null,
-            city: parsed.client_city || null,
-            state: parsed.client_state || null,
-            status: 'active',
-            notes: `Importado do Autentique em ${new Date().toLocaleDateString('pt-BR')}`,
-          };
           const { data: newClient, error: ce } = await supabase
             .from('clients')
-            .insert(newClientPayload)
-            .select()
-            .single();
+            .insert({
+              user_id: userId,
+              name: ext.client_name,
+              email: ext.client_email || null,
+              status: 'active',
+              notes: `Importado do Autentique em ${new Date().toLocaleDateString('pt-BR')}`,
+            })
+            .select().single();
           if (ce || !newClient) {
-            failed++;
-            errors.push({ doc_id: doc.id, reason: `Erro criando cliente: ${ce?.message}` });
+            failed++; errors.push({ doc_id: doc.id, reason: `Cliente: ${ce?.message}` });
             continue;
           }
           client = newClient;
           if (client.email) clientsByEmail.set(String(client.email).toLowerCase(), client);
-          if (client.cpf) clientsByCpf.set(String(client.cpf).replace(/\D/g, ''), client);
         }
 
-        // Data do ensaio: do parsed, ou fallback pra created_at do Autentique
-        const jobDate = parsed.job_date || (doc.created_at ? String(doc.created_at).slice(0, 10) : null);
-
         // Dedup
-        if (jobDate && existingJobKeys.has(jobKey(client.id, jobDate))) {
+        if (ext.job_date && existingJobKeys.has(jobKey(client.id, ext.job_date))) {
           skippedDup++;
           continue;
         }
 
-        // Cria job — SEM production_stage (não vai pra produção)
-        const jobName = parsed.job_type
-          ? `${parsed.job_type} — ${client.name}`
-          : `Sessão (importado do Autentique)`;
-        const jobPayload: any = {
+        const jobName = ext.job_type ? `${ext.job_type} — ${client.name}` : `Sessão (Autentique) — ${client.name}`;
+        const { error: je } = await supabase.from('jobs').insert({
           user_id: userId,
           client_id: client.id,
           job_name: jobName,
-          job_type: parsed.job_type || 'Outro',
-          job_date: jobDate,
-          amount: parsed.job_value || 0,
+          job_type: ext.job_type || 'Outro',
+          job_date: ext.job_date || null,
+          amount: 0,
           payment_method: '',
           payment_status: 'paid',
           status: 'completed',
           production_stage: null,
-          notes: `Importado do Autentique (doc ${doc.id}) em ${new Date().toLocaleDateString('pt-BR')}`,
-        };
-        const { error: je } = await supabase.from('jobs').insert(jobPayload);
+          notes: `Importado do Autentique (doc ${doc.id}) — ${ext.doc_name}`,
+        });
         if (je) {
-          failed++;
-          errors.push({ doc_id: doc.id, reason: `Erro criando job: ${je.message}` });
+          failed++; errors.push({ doc_id: doc.id, reason: `Job: ${je.message}` });
           continue;
         }
 
-        if (jobDate) existingJobKeys.add(jobKey(client.id, jobDate));
+        if (ext.job_date) existingJobKeys.add(jobKey(client.id, ext.job_date));
         imported++;
       } catch (err: any) {
-        failed++;
-        errors.push({ doc_id: doc.id, reason: err.message || String(err) });
+        failed++; errors.push({ doc_id: doc.id, reason: err.message || String(err) });
       }
     }
 
