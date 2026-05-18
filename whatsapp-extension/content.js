@@ -3119,10 +3119,9 @@
   }
 
   function showTasks() {
-    // Desseleciona o chat ativo pra abrir Tarefas num estado "limpo".
-    // Se depois o usuário clicar num chat na sidebar, a função
-    // hideOverlaysForChatNav() fecha as Tarefas automaticamente.
-    deselectWhatsappChat();
+    // Tarefas é painel lateral à direita — NÃO esconde o chat ativo nem
+    // é fechado quando o usuário clica num chat. Fica do lado pra você
+    // ler mensagens e olhar tarefas ao mesmo tempo.
     kanbanVisible = false;
     hideAllOverlays();
     buildTasksOverlay();
@@ -3134,16 +3133,12 @@
     setTimeout(adjustPosition, 200);
   }
 
-  // Esconde Tarefas/Agenda/Produção quando o usuário clica num chat da
-  // sidebar do WhatsApp — assim ele consegue ler/responder sem que o
-  // overlay continue cobrindo o campo de mensagem.
+  // Esconde Agenda/Produção quando o usuário clica num chat da sidebar
+  // do WhatsApp — assim ele consegue ler/responder sem que o overlay
+  // continue cobrindo o campo de mensagem.
+  // Tarefas (painel lateral) NÃO é fechado — fica do lado, não atrapalha.
   // (Pipeline é tratado separadamente via hideKanban().)
   function hideOverlaysForChatNav() {
-    const tasks = document.getElementById('fp-tasks');
-    if (tasks && !tasks.classList.contains('fp-hidden')) {
-      tasks.classList.add('fp-hidden');
-      document.body.classList.remove('fp-tasks-open');
-    }
     const agenda = document.getElementById('fp-agenda');
     if (agenda && !agenda.classList.contains('fp-hidden')) {
       agenda.classList.add('fp-hidden');
@@ -3152,7 +3147,9 @@
     if (production && !production.classList.contains('fp-hidden')) {
       production.classList.add('fp-hidden');
     }
-    setRailActive(null);
+    // Só limpa rail se nada mais visível além de Tarefas (Tarefas tem própria sinalização)
+    const tasksOpen = !document.getElementById('fp-tasks')?.classList.contains('fp-hidden');
+    if (!tasksOpen) setRailActive(null);
   }
 
   // ============================================================
@@ -5673,9 +5670,10 @@
   }
 
   let detectDebounce;
-  function isAnyOverlayVisible() {
+  function isFullscreenOverlayVisible() {
     if (kanbanVisible) return true;
-    const ids = ['fp-tasks', 'fp-agenda', 'fp-production'];
+    // Tarefas é painel lateral — não conta, deixa o chat strip aparecer
+    const ids = ['fp-agenda', 'fp-production'];
     return ids.some((id) => {
       const el = document.getElementById(id);
       return el && !el.classList.contains('fp-hidden');
@@ -5683,10 +5681,9 @@
   }
 
   function detectState() {
-    // Algum overlay (Pipeline/Tarefas/Agenda/Produção) aberto = não monta
-    // strip do chat. Quando o usuário fechar o overlay (clicando num chat
-    // ou indo pro logo do WA), o próximo detectState monta normalmente.
-    if (isAnyOverlayVisible()) return;
+    // Algum overlay TELA-CHEIA (Pipeline/Agenda/Produção) aberto = não
+    // monta strip do chat. Tarefas (painel lateral) não bloqueia.
+    if (isFullscreenOverlayVisible()) return;
 
     if (isChatOpen()) {
       const phone = getWAChatPhone();
