@@ -203,6 +203,56 @@ async function handleMessage(message) {
         body: JSON.stringify(message.data),
       });
     }
+    case 'GET_TASKS_DATA': {
+      // Junta tasks + team-members + me numa chamada — a extensão precisa
+      // dos três pra montar a tela (filtrar "minhas", mostrar avatar do
+      // responsável, etc).
+      const [tasks, members, me] = await Promise.all([
+        apiFetch('/api/tasks'),
+        apiFetch('/api/team-members').catch(() => []),
+        apiFetch('/api/me').catch(() => null),
+      ]);
+      return { tasks, members, me };
+    }
+    case 'CREATE_TASK': {
+      return apiFetch('/api/tasks', {
+        method: 'POST',
+        body: JSON.stringify(message.data),
+      });
+    }
+    case 'UPDATE_TASK': {
+      return apiFetch(`/api/tasks/${message.taskId}`, {
+        method: 'PUT',
+        body: JSON.stringify(message.data),
+      });
+    }
+    case 'TOGGLE_TASK': {
+      return apiFetch(`/api/tasks/${message.taskId}/complete`, {
+        method: 'PATCH',
+        body: JSON.stringify({ completed: !!message.completed }),
+      });
+    }
+    case 'DELETE_TASK': {
+      return apiFetch(`/api/tasks/${message.taskId}`, {
+        method: 'DELETE',
+      });
+    }
+    case 'GET_PRODUCTION_DATA': {
+      // Stages de produção + jobs (filtra in-production no client) + clientes
+      // pra exibir nome no card. Tudo em paralelo.
+      const [stages, jobs, clients] = await Promise.all([
+        apiFetch('/api/production/stages'),
+        apiFetch('/api/jobs'),
+        apiFetch('/api/clients').catch(() => []),
+      ]);
+      return { stages, jobs, clients };
+    }
+    case 'MOVE_JOB_PRODUCTION_STAGE': {
+      return apiFetch(`/api/jobs/${message.jobId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ production_stage: message.stageId }),
+      });
+    }
     default:
       throw new Error(`Tipo de mensagem desconhecido: ${message.type}`);
   }

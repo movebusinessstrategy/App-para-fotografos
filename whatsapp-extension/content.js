@@ -461,11 +461,19 @@
       <button id="fp-rail-pipeline" class="fp-rail-nat-btn" title="Pipeline de vendas" aria-label="Pipeline de vendas">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="6" height="18" rx="1.5"/><rect x="10.5" y="3" width="6" height="13" rx="1.5"/><rect x="18" y="3" width="3" height="8" rx="1"/></svg>
       </button>
+      <button id="fp-rail-tasks" class="fp-rail-nat-btn" title="Tarefas" aria-label="Tarefas">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+      </button>
+      <button id="fp-rail-production" class="fp-rail-nat-btn" title="Produção" aria-label="Produção">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      </button>
       <button id="fp-rail-agenda" class="fp-rail-nat-btn" title="Agenda" aria-label="Agenda">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
       </button>
     `;
     container.querySelector('#fp-rail-pipeline')?.addEventListener('click', showKanban);
+    container.querySelector('#fp-rail-tasks')?.addEventListener('click', showTasks);
+    container.querySelector('#fp-rail-production')?.addEventListener('click', showProduction);
     container.querySelector('#fp-rail-agenda')?.addEventListener('click', showAgenda);
 
     // Posiciona DEPOIS do último wrapper de ícone do "grupo de cima",
@@ -1226,6 +1234,7 @@
       event.preventDefault();
       event.stopPropagation();
       if (kind === 'inbox') addInboxItemToStage(id, overZone.dataset.stageId);
+      else if (kind === 'job') moveJobToProductionStage(id, overZone.dataset.stageId);
       else moveDealToStage(id, overZone.dataset.stageId);
     }
 
@@ -1770,8 +1779,16 @@
   }
 
   function setRailActive(id) {
-    document.querySelectorAll('#fp-rail .fp-rail-btn').forEach((b) => b.classList.remove('fp-rail-active'));
+    document.querySelectorAll('.fp-rail-btn, .fp-rail-nat-btn').forEach((b) => b.classList.remove('fp-rail-active'));
     if (id) document.getElementById(id)?.classList.add('fp-rail-active');
+  }
+
+  // Esconde TODOS os overlays do app pra não ter dois aparecendo ao mesmo tempo
+  function hideAllOverlays() {
+    document.getElementById('fp-kanban')?.classList.add('fp-hidden');
+    document.getElementById('fp-agenda')?.classList.add('fp-hidden');
+    document.getElementById('fp-tasks')?.classList.add('fp-hidden');
+    document.getElementById('fp-production')?.classList.add('fp-hidden');
   }
 
   function hideKanban() {
@@ -1793,7 +1810,7 @@
     deselectWhatsappChat();
     kanbanVisible = true;
     adjustPosition();
-    hideAgenda();
+    hideAllOverlays();
     document.getElementById('fp-kanban')?.classList.remove('fp-hidden');
     setRailActive('fp-rail-pipeline');
     // A faixa do chat tem z-index altíssimo e cobriria o cabeçalho do funil
@@ -2581,10 +2598,8 @@
 
   function showAgenda() {
     deselectWhatsappChat();
-    if (kanbanVisible) {
-      kanbanVisible = false;
-      document.getElementById('fp-kanban')?.classList.add('fp-hidden');
-    }
+    kanbanVisible = false;
+    hideAllOverlays();
     removeChatStrip();
     buildAgendaOverlay();
     adjustPosition(); // garante que a agenda começa DEPOIS da lista de chats do WA
@@ -2598,6 +2613,450 @@
 
   function hideAgenda() {
     document.getElementById('fp-agenda')?.classList.add('fp-hidden');
+  }
+
+  // ============================================================
+  // ===== TAREFAS =====
+  // ============================================================
+  // Filtros: 'mine' (default — só atribuídas a mim), 'all' (equipe inteira),
+  // 'overdue' (vencidas), 'today' (vencem hoje). Sempre esconde concluídas
+  // a não ser que o toggle "Mostrar concluídas" esteja ligado.
+  let tasksState = {
+    filter: 'mine',
+    showCompleted: false,
+    tasks: [],
+    members: [],
+    me: null,
+    loading: false,
+  };
+
+  function buildTasksOverlay() {
+    if (document.getElementById('fp-tasks')) return;
+    const el = document.createElement('div');
+    el.id = 'fp-tasks';
+    el.className = 'fp-hidden';
+    el.innerHTML = `
+      <div id="fp-tk-h">
+        <h3 id="fp-tk-title">Tarefas</h3>
+        <div style="flex:1"></div>
+        <div id="fp-tk-filters">
+          <button class="fp-tk-filter-btn" data-filter="mine">Minhas</button>
+          <button class="fp-tk-filter-btn" data-filter="all">Equipe</button>
+          <button class="fp-tk-filter-btn" data-filter="overdue">Atrasadas</button>
+          <button class="fp-tk-filter-btn" data-filter="today">Hoje</button>
+        </div>
+        <label class="fp-tk-show-done">
+          <input type="checkbox" id="fp-tk-show-done" />
+          <span>Concluídas</span>
+        </label>
+        <button id="fp-tk-new" class="fp-btn-g">+ Nova tarefa</button>
+      </div>
+      <div id="fp-tk-list"></div>
+    `;
+    document.body.appendChild(el);
+
+    el.querySelectorAll('.fp-tk-filter-btn').forEach((b) => {
+      b.addEventListener('click', () => {
+        tasksState.filter = b.getAttribute('data-filter');
+        renderTasks();
+      });
+    });
+    el.querySelector('#fp-tk-show-done').addEventListener('change', (e) => {
+      tasksState.showCompleted = e.target.checked;
+      renderTasks();
+    });
+    el.querySelector('#fp-tk-new').addEventListener('click', () => openTaskModal(null));
+  }
+
+  async function loadTasks() {
+    tasksState.loading = true;
+    renderTasksLoading();
+    try {
+      const data = await bg({ type: 'GET_TASKS_DATA' });
+      tasksState.tasks = data.tasks || [];
+      tasksState.members = data.members || [];
+      tasksState.me = data.me || null;
+    } catch (err) {
+      console.error('[FocalPoint] erro carregando tarefas:', err);
+      tasksState.tasks = [];
+    }
+    tasksState.loading = false;
+    renderTasks();
+  }
+
+  function renderTasksLoading() {
+    const list = document.getElementById('fp-tk-list');
+    if (!list) return;
+    list.innerHTML = `<div class="fp-tk-loading"><div class="fp-spin"></div></div>`;
+  }
+
+  function renderTasks() {
+    const list = document.getElementById('fp-tk-list');
+    if (!list) return;
+
+    // Atualiza estado visual dos filtros
+    document.querySelectorAll('.fp-tk-filter-btn').forEach((b) => {
+      b.classList.toggle('fp-tk-filter-active', b.getAttribute('data-filter') === tasksState.filter);
+    });
+    document.getElementById('fp-tk-show-done').checked = tasksState.showCompleted;
+
+    const meId = tasksState.me?.team_member_id || tasksState.me?.id || null;
+    const memberById = new Map(tasksState.members.map((m) => [m.id, m]));
+    const todayStr = new Date().toISOString().slice(0, 10);
+
+    let items = tasksState.tasks.slice();
+    if (!tasksState.showCompleted) items = items.filter((t) => !t.completed_at);
+
+    if (tasksState.filter === 'mine') {
+      items = items.filter((t) => meId && t.assignee_id === meId);
+    } else if (tasksState.filter === 'overdue') {
+      items = items.filter((t) => !t.completed_at && t.due_date && t.due_date.slice(0, 10) < todayStr);
+    } else if (tasksState.filter === 'today') {
+      items = items.filter((t) => t.due_date && t.due_date.slice(0, 10) === todayStr);
+    }
+
+    items.sort((a, b) => {
+      const ad = a.due_date || '9999-12-31';
+      const bd = b.due_date || '9999-12-31';
+      return ad.localeCompare(bd);
+    });
+
+    if (items.length === 0) {
+      list.innerHTML = `
+        <div class="fp-tk-empty">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+          <p>Nenhuma tarefa por aqui.</p>
+        </div>
+      `;
+      return;
+    }
+
+    list.innerHTML = items.map((t) => {
+      const assignee = t.assignee_id ? memberById.get(t.assignee_id) : null;
+      const isMine = meId && t.assignee_id === meId;
+      const isDone = !!t.completed_at;
+      const dueStr = t.due_date ? t.due_date.slice(0, 10) : '';
+      const overdue = !isDone && dueStr && dueStr < todayStr;
+      const dueLabel = dueStr ? new Date(dueStr + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }) : 'sem prazo';
+      return `
+        <div class="fp-tk-item ${isDone ? 'fp-tk-done' : ''} ${overdue ? 'fp-tk-overdue' : ''} ${isMine ? 'fp-tk-mine' : ''}" data-id="${esc(t.id)}">
+          <button class="fp-tk-check" data-toggle title="${isDone ? 'Reabrir' : 'Concluir'}">
+            ${isDone
+              ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" width="14" height="14"><polyline points="20 6 9 17 4 12"/></svg>`
+              : ''}
+          </button>
+          <div class="fp-tk-body" data-edit>
+            <div class="fp-tk-title-line">${esc(t.title || 'Sem título')}</div>
+            ${t.description ? `<div class="fp-tk-desc">${esc(t.description)}</div>` : ''}
+            <div class="fp-tk-meta">
+              <span class="fp-tk-due ${overdue ? 'fp-tk-due-late' : ''}">📅 ${esc(dueLabel)}</span>
+              ${assignee ? `<span class="fp-tk-assignee">👤 ${esc(assignee.name)}</span>` : '<span class="fp-tk-assignee fp-tk-assignee-none">sem responsável</span>'}
+              ${isMine ? '<span class="fp-tk-pill-mine">Pra mim</span>' : ''}
+            </div>
+          </div>
+          <button class="fp-tk-delete" data-delete title="Excluir">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 01-2 2H9a2 2 0 01-2-2L5 6"/></svg>
+          </button>
+        </div>
+      `;
+    }).join('');
+
+    list.querySelectorAll('.fp-tk-item').forEach((row) => {
+      const id = row.getAttribute('data-id');
+      const task = tasksState.tasks.find((t) => String(t.id) === String(id));
+      row.querySelector('[data-toggle]').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        try {
+          await bg({ type: 'TOGGLE_TASK', taskId: id, completed: !task.completed_at });
+          task.completed_at = task.completed_at ? null : new Date().toISOString();
+          renderTasks();
+        } catch (err) {
+          toast(err?.message || 'Erro', true);
+        }
+      });
+      row.querySelector('[data-edit]').addEventListener('click', () => openTaskModal(task));
+      row.querySelector('[data-delete]').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const ok = await fpConfirm({
+          title: 'Excluir tarefa?',
+          message: `"${task.title || 'Sem título'}" será removida da equipe.`,
+          confirmLabel: 'Excluir',
+          danger: true,
+        });
+        if (!ok) return;
+        try {
+          await bg({ type: 'DELETE_TASK', taskId: id });
+          tasksState.tasks = tasksState.tasks.filter((t) => String(t.id) !== String(id));
+          renderTasks();
+          toast('Tarefa excluída.');
+        } catch (err) {
+          toast(err?.message || 'Erro', true);
+        }
+      });
+    });
+  }
+
+  // Modal de criar/editar tarefa
+  function openTaskModal(task) {
+    document.getElementById('fp-task-overlay')?.remove();
+    const isEdit = !!task;
+    const meId = tasksState.me?.team_member_id || tasksState.me?.id || null;
+    const today = new Date();
+    const defaultDue = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).toISOString().slice(0, 10);
+
+    const initTitle = task?.title || '';
+    const initDesc = task?.description || '';
+    const initDue = (task?.due_date || defaultDue).slice(0, 10);
+    const initAssignee = task?.assignee_id || meId || '';
+
+    const overlay = document.createElement('div');
+    overlay.id = 'fp-task-overlay';
+    overlay.className = 'fp-info-overlay';
+    overlay.innerHTML = `
+      <div class="fp-quickjob-box">
+        <div class="fp-quickjob-head">
+          <div>
+            <div class="fp-quickjob-kicker">${isEdit ? 'Editar tarefa' : 'Nova tarefa'}</div>
+            <div class="fp-quickjob-date">${isEdit ? esc(task.title || '') : 'Quem faz o quê?'}</div>
+          </div>
+          <button class="fp-info-close" data-tk-close>×</button>
+        </div>
+        <div class="fp-quickjob-body">
+          <div class="fp-mf">
+            <span class="fp-ml">Título</span>
+            <input class="fp-mi" id="fp-tk-input-title" placeholder="Ex: Editar fotos da Marina" value="${esc(initTitle)}" />
+          </div>
+          <div class="fp-mf">
+            <span class="fp-ml">Descrição (opcional)</span>
+            <textarea class="fp-mi" id="fp-tk-input-desc" rows="2" placeholder="Detalhes que ajudem quem vai executar">${esc(initDesc)}</textarea>
+          </div>
+          <div class="fp-mrow">
+            <div class="fp-mf" style="flex:1">
+              <span class="fp-ml">Prazo</span>
+              <input class="fp-mi" id="fp-tk-input-due" type="date" value="${esc(initDue)}" />
+            </div>
+            <div class="fp-mf" style="flex:1">
+              <span class="fp-ml">Responsável</span>
+              <div id="fp-tk-assignee-slot"></div>
+            </div>
+          </div>
+        </div>
+        <div class="fp-quickjob-foot">
+          ${isEdit ? `<button class="fp-btn-w fp-qj-delete" id="fp-tk-input-delete">Excluir</button>` : ''}
+          <div style="flex:1"></div>
+          <button class="fp-btn-w" data-tk-close>Cancelar</button>
+          <button class="fp-btn-g" id="fp-tk-input-save">${isEdit ? 'Salvar' : 'Criar'}</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const memberItems = [{ value: '', label: 'Sem responsável' }]
+      .concat((tasksState.members || []).map((m) => ({ value: m.id, label: m.name })));
+    const assigneeSelect = fpSelect({
+      items: memberItems,
+      value: initAssignee,
+      placeholder: 'Quem faz',
+      searchable: true,
+    });
+    overlay.querySelector('#fp-tk-assignee-slot').appendChild(assigneeSelect.element);
+
+    const close = () => overlay.remove();
+    overlay.querySelectorAll('[data-tk-close]').forEach((b) => b.addEventListener('click', close));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+    overlay.querySelector('#fp-tk-input-save').addEventListener('click', async () => {
+      const title = overlay.querySelector('#fp-tk-input-title').value.trim();
+      const description = overlay.querySelector('#fp-tk-input-desc').value.trim();
+      const due_date = overlay.querySelector('#fp-tk-input-due').value;
+      const assignee_id = assigneeSelect.getValue() || null;
+      if (!title) return toast('Coloca um título.', true);
+      if (!due_date) return toast('Define um prazo.', true);
+      const btn = overlay.querySelector('#fp-tk-input-save');
+      btn.disabled = true; btn.textContent = 'Salvando…';
+      try {
+        if (isEdit) {
+          await bg({ type: 'UPDATE_TASK', taskId: task.id, data: { title, description, due_date, assignee_id, job_id: task.job_id, stage_id: task.stage_id } });
+          toast('Tarefa atualizada.');
+        } else {
+          await bg({ type: 'CREATE_TASK', data: { title, description, due_date, assignee_id } });
+          toast('Tarefa criada.');
+        }
+        close();
+        loadTasks();
+      } catch (err) {
+        btn.disabled = false; btn.textContent = isEdit ? 'Salvar' : 'Criar';
+        toast(err?.message || 'Erro ao salvar', true);
+      }
+    });
+
+    overlay.querySelector('#fp-tk-input-delete')?.addEventListener('click', async () => {
+      const ok = await fpConfirm({ title: 'Excluir tarefa?', confirmLabel: 'Excluir', danger: true });
+      if (!ok) return;
+      try {
+        await bg({ type: 'DELETE_TASK', taskId: task.id });
+        toast('Tarefa excluída.');
+        close();
+        loadTasks();
+      } catch (err) {
+        toast(err?.message || 'Erro', true);
+      }
+    });
+
+    setTimeout(() => overlay.querySelector('#fp-tk-input-title')?.focus(), 80);
+  }
+
+  function showTasks() {
+    deselectWhatsappChat();
+    kanbanVisible = false;
+    hideAllOverlays();
+    removeChatStrip();
+    buildTasksOverlay();
+    adjustPosition();
+    document.getElementById('fp-tasks')?.classList.remove('fp-hidden');
+    setRailActive('fp-rail-tasks');
+    loadTasks();
+    setTimeout(adjustPosition, 200);
+  }
+
+  // ============================================================
+  // ===== PRODUÇÃO =====
+  // ============================================================
+  let productionState = {
+    stages: [],
+    jobs: [],
+    clients: [],
+    loading: false,
+  };
+
+  function buildProductionOverlay() {
+    if (document.getElementById('fp-production')) return;
+    const el = document.createElement('div');
+    el.id = 'fp-production';
+    el.className = 'fp-hidden';
+    el.innerHTML = `
+      <div id="fp-pr-h">
+        <h3 id="fp-pr-title">Produção</h3>
+        <div style="flex:1"></div>
+        <button id="fp-pr-refresh" class="fp-btn-w" title="Atualizar">↻</button>
+      </div>
+      <div id="fp-pr-board"></div>
+    `;
+    document.body.appendChild(el);
+    el.querySelector('#fp-pr-refresh').addEventListener('click', loadProduction);
+  }
+
+  async function loadProduction() {
+    productionState.loading = true;
+    const board = document.getElementById('fp-pr-board');
+    if (board) board.innerHTML = `<div class="fp-tk-loading"><div class="fp-spin"></div></div>`;
+    try {
+      const data = await bg({ type: 'GET_PRODUCTION_DATA' });
+      productionState.stages = (data.stages || []).filter((s) => !s.is_final && !s.is_won);
+      productionState.jobs = data.jobs || [];
+      productionState.clients = data.clients || [];
+    } catch (err) {
+      console.error('[FocalPoint] erro produção:', err);
+      productionState.stages = [];
+      productionState.jobs = [];
+    }
+    productionState.loading = false;
+    renderProduction();
+  }
+
+  function renderProduction() {
+    const board = document.getElementById('fp-pr-board');
+    if (!board) return;
+
+    const clientById = new Map(productionState.clients.map((c) => [c.id, c]));
+    // Só jobs que estão em produção (production_stage não-nulo)
+    const inProd = productionState.jobs.filter((j) => j.production_stage);
+    const byStage = new Map();
+    productionState.stages.forEach((s) => byStage.set(s.id, []));
+    inProd.forEach((j) => {
+      if (byStage.has(j.production_stage)) byStage.get(j.production_stage).push(j);
+    });
+
+    if (productionState.stages.length === 0) {
+      board.innerHTML = `<div class="fp-board-state"><p>Sem etapas de produção configuradas.<br/>Crie etapas no app web.</p></div>`;
+      return;
+    }
+
+    board.innerHTML = productionState.stages.map((stage) => {
+      const jobs = byStage.get(stage.id) || [];
+      return `
+        <div class="fpc" data-stage-id="${esc(stage.id)}">
+          <div class="fpc-hd" style="background:${esc(stage.color || '#e9edef')}40">
+            <div class="fpc-title">
+              <span class="fpc-dot" style="background:${esc(stage.color || '#94a3b8')}"></span>
+              ${esc(stage.name)}
+            </div>
+            <div class="fpc-meta">${jobs.length} ${jobs.length === 1 ? 'trabalho' : 'trabalhos'}</div>
+          </div>
+          <div class="fpc-body" data-stage-id="${esc(stage.id)}">
+            ${jobs.length === 0
+              ? '<div class="fpc-empty">Arraste aqui</div>'
+              : jobs.map((j) => productionCardHtml(j, clientById)).join('')}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // Wire drag-drop pra cada card (reusa pointer drag existente, kind='job')
+    board.querySelectorAll('.fpc-card[data-job-id]').forEach((el) => {
+      const jobId = el.getAttribute('data-job-id');
+      el.addEventListener('pointerdown', (e) => startPointerCardDrag(e, el, jobId, 'job'));
+    });
+  }
+
+  function productionCardHtml(job, clientById) {
+    const client = job.client_id ? clientById.get(job.client_id) : null;
+    const dateLabel = job.job_date
+      ? new Date(String(job.job_date).slice(0, 10) + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
+      : '';
+    return `
+      <div class="fpc-card" data-job-id="${esc(job.id)}">
+        <div class="fpc-card-top">
+          <div class="fpc-info">
+            <div class="fpc-name">${esc(job.job_name || job.job_type || 'Trabalho')}</div>
+            <div class="fpc-sub">${esc((job.job_type || '') + (client ? ' · ' + client.name : ''))}</div>
+          </div>
+        </div>
+        <div class="fpc-card-bot">
+          <span class="fpc-val">${dateLabel ? '📅 ' + dateLabel : ''}</span>
+          <span class="fpc-sub" style="font-size:10px">${esc(prettyStatus(job.status) || '')}</span>
+        </div>
+      </div>
+    `;
+  }
+
+  async function moveJobToProductionStage(jobId, stageId) {
+    const job = productionState.jobs.find((j) => String(j.id) === String(jobId));
+    if (!job || job.production_stage === stageId) return;
+    const prev = job.production_stage;
+    job.production_stage = stageId; // otimista
+    renderProduction();
+    try {
+      await bg({ type: 'MOVE_JOB_PRODUCTION_STAGE', jobId, stageId });
+      toast('Movido.');
+    } catch (err) {
+      job.production_stage = prev;
+      renderProduction();
+      toast(err?.message || 'Erro ao mover', true);
+    }
+  }
+
+  function showProduction() {
+    deselectWhatsappChat();
+    kanbanVisible = false;
+    hideAllOverlays();
+    removeChatStrip();
+    buildProductionOverlay();
+    adjustPosition();
+    document.getElementById('fp-production')?.classList.remove('fp-hidden');
+    setRailActive('fp-rail-production');
+    loadProduction();
+    setTimeout(adjustPosition, 200);
   }
 
   // ===== LOGOUT =====
