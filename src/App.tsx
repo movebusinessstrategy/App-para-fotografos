@@ -5,6 +5,7 @@ import { SWRConfig } from "swr";
 
 import AppLayout from "./components/layout/AppLayout";
 import ProtectedRoute from "./components/ProtectedRoute";
+import PermissionRoute from "./components/PermissionRoute";
 import PlatformAdminRoute from "./components/PlatformAdminRoute";
 import { AuthProvider } from "./contexts/AuthContext";
 import { ThemeProvider } from "./contexts/ThemeContext"; // 👈 Adiciona isso
@@ -98,34 +99,36 @@ export default function App() {
                   </ProtectedRoute>
                 }
               >
-                <Route path="dashboard" element={<DashboardPage />} />
-                <Route path="clients" element={<ClientsPage />} />
-                <Route path="jobs" element={<JobsPage />} />
-                <Route path="tarefas" element={<TasksPage />} />
-                <Route path="vendas" element={<VendasPage />} />
-                <Route path="calendar" element={<CalendarPage />} />
+                <Route path="dashboard" element={<PermissionRoute module="dashboard"><DashboardPage /></PermissionRoute>} />
+                <Route path="clients" element={<PermissionRoute module="clients"><ClientsPage /></PermissionRoute>} />
+                <Route path="jobs" element={<PermissionRoute module="jobs"><JobsPage /></PermissionRoute>} />
+                <Route path="tarefas" element={<PermissionRoute module="jobs"><TasksPage /></PermissionRoute>} />
+                <Route path="vendas" element={<PermissionRoute module="vendas"><VendasPage /></PermissionRoute>} />
+                <Route path="calendar" element={<PermissionRoute module="calendar"><CalendarPage /></PermissionRoute>} />
                 <Route path="settings" element={<SettingsPage />} />
-                <Route path="finance" element={<FinancePage />} />
+                <Route path="finance" element={<PermissionRoute module="finance"><FinancePage /></PermissionRoute>} />
                 <Route
                   path="pipeline-settings"
-                  element={<PipelineSettings />}
+                  element={<PermissionRoute module="vendas"><PipelineSettings /></PermissionRoute>}
                 />
-                <Route path="oportunidades" element={<OportunidadesPage />} />
-                <Route path="contratos" element={<ContractsPage />} />
-                <Route path="catalogo" element={<CatalogoPage />} />
-                <Route path="planos" element={<PlanosPage />} />
+                <Route path="oportunidades" element={<PermissionRoute module="oportunidades"><OportunidadesPage /></PermissionRoute>} />
+                <Route path="contratos" element={<PermissionRoute module="contratos"><ContractsPage /></PermissionRoute>} />
+                <Route path="catalogo" element={<PermissionRoute module="catalogo"><CatalogoPage /></PermissionRoute>} />
+                <Route path="planos" element={<PermissionRoute ownerOnly><PlanosPage /></PermissionRoute>} />
 
-                {/* Central de Configurações — sidebar interna com sub-rotas */}
+                {/* Central de Configurações — sidebar interna com sub-rotas.
+                    Equipe, Permissões e Plano são owner-only (membros nem
+                    pelo URL direto). Demais sub-rotas seguem permissões. */}
                 <Route path="configuracoes" element={<SettingsLayout />}>
                   <Route index element={<Navigate to="empresa" replace />} />
                   <Route path="empresa" element={<EmpresaTab />} />
-                  <Route path="plano" element={<PlanoTab />} />
+                  <Route path="plano" element={<PermissionRoute ownerOnly><PlanoTab /></PermissionRoute>} />
                   <Route path="integracoes" element={<IntegracoesTab />} />
                   <Route path="integracoes/calendar" element={<IntegracaoCalendar />} />
                   <Route path="integracoes/whatsapp" element={<IntegracaoWhatsApp />} />
                   <Route path="integracoes/extensao" element={<IntegracaoExtensao />} />
-                  <Route path="equipe" element={<EquipeTab />} />
-                  <Route path="permissoes" element={<PermissoesTab />} />
+                  <Route path="equipe" element={<PermissionRoute ownerOnly><EquipeTab /></PermissionRoute>} />
+                  <Route path="permissoes" element={<PermissionRoute ownerOnly><PermissoesTab /></PermissionRoute>} />
                   <Route path="oportunidades" element={<OportunidadesConfigTab />} />
                   <Route path="automacoes"    element={<Navigate to="/configuracoes/oportunidades" replace />} />
                 </Route>
