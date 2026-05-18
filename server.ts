@@ -7202,18 +7202,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const year = Number(req.query.year) || now.getFullYear();
     const month = Number(req.query.month) || (now.getMonth() + 1);
 
-    // Início e fim do mês (inclusive)
+    // Range do mês: [primeiro dia, primeiro dia do mês seguinte) — pega job_date
+    // tanto como "YYYY-MM-DD" quanto "YYYY-MM-DDTHH:mm:ss" (timestamp).
     const start = `${year}-${String(month).padStart(2, '0')}-01`;
-    const lastDay = new Date(year, month, 0).getDate();
-    const end = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    const nextMonth = month === 12 ? 1 : month + 1;
+    const nextYear = month === 12 ? year + 1 : year;
+    const end = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
 
-    const { data: jobs } = await supabase
+    const { data: jobs, error: jobsError } = await supabase
       .from('jobs')
       .select('id, job_name, job_type, job_date, job_time, job_end_time, status, client_id')
       .eq('user_id', userId)
       .gte('job_date', start)
-      .lte('job_date', end)
+      .lt('job_date', end)
       .order('job_date');
+    if (jobsError) console.warn('[extension/agenda]', jobsError.message);
 
     const clientIds = Array.from(new Set((jobs || []).map(j => j.client_id).filter(Boolean) as number[]));
     let clientsMap = new Map<number, string>();
@@ -7228,7 +7231,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const events = (jobs || []).map(j => ({
       id: `job-${j.id}`,
       kind: 'job',
-      date: j.job_date,
+      date: String(j.job_date || '').slice(0, 10), // garante "YYYY-MM-DD" mesmo se vier timestamp
       time: j.job_time || null,
       end_time: j.job_end_time || null,
       title: j.job_name || j.job_type || 'Trabalho',
@@ -7237,7 +7240,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       client_name: j.client_id ? (clientsMap.get(j.client_id) || null) : null,
     }));
 
-    res.json({ year, month, events });
+    res.json({ year, month, events, count: events.length });
   });
 
   app.get('/api/extension/deal-by-phone', requireAuth, async (req, res) => {
