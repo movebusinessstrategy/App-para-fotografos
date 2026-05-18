@@ -2,8 +2,7 @@
 // Lista documentos via GraphQL, baixa o PDF assinado, faz parse de texto
 // e devolve dados estruturados pra match/import na base.
 
-// @ts-ignore - pdf-parse não tem types oficiais
-import pdfParse from 'pdf-parse';
+import { PDFParse } from 'pdf-parse';
 
 const AUTENTIQUE_GQL = (sandbox: boolean) =>
   sandbox
@@ -217,6 +216,12 @@ export async function downloadAndParsePdf(url: string): Promise<ParsedContract> 
   const r = await fetch(url);
   if (!r.ok) throw new Error(`Download falhou: HTTP ${r.status}`);
   const buf = Buffer.from(await r.arrayBuffer());
-  const parsed = await pdfParse(buf);
-  return parseContractText(parsed.text || '');
+  // API nova do pdf-parse v2 — classe PDFParse + getText()
+  const parser = new PDFParse({ data: new Uint8Array(buf) });
+  try {
+    const result = await parser.getText();
+    return parseContractText(result.text || '');
+  } finally {
+    await parser.destroy().catch(() => {});
+  }
 }
