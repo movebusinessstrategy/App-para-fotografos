@@ -22,12 +22,11 @@ async function checkApiHealth(apiBase) {
 }
 
 function renderLogin(errorMsg, currentApiBase) {
+  // Hardcoda o servidor padrão. O bloco "Avançado" só fica visível pra dev/debug
+  // (auto-aberto quando há erro de conexão).
+  const apiBase = currentApiBase || DEFAULT_API_BASE;
+  const showAdvanced = !!errorMsg && /servidor|conex/i.test(errorMsg);
   body.innerHTML = `
-    <div class="field">
-      <label>URL do servidor</label>
-      <input type="text" id="api-base-input" placeholder="${DEFAULT_API_BASE}" value="${escHtml(currentApiBase || DEFAULT_API_BASE)}" autocomplete="off" />
-      <span class="hint">Onde seu backend está hospedado (Render, Vercel ou http://localhost:3000)</span>
-    </div>
     <div class="field">
       <label>E-mail</label>
       <input type="email" id="email-input" placeholder="seu@email.com" autocomplete="email" />
@@ -38,6 +37,14 @@ function renderLogin(errorMsg, currentApiBase) {
     </div>
     <button class="btn-primary" id="login-btn">Entrar</button>
     ${errorMsg ? `<div class="status error">${escHtml(errorMsg)}</div>` : ''}
+    <details id="advanced-toggle" ${showAdvanced ? 'open' : ''} style="margin-top:6px;">
+      <summary style="font-size:11px;color:#94a3b8;cursor:pointer;user-select:none;">Avançado</summary>
+      <div class="field" style="margin-top:8px;">
+        <label>URL do servidor</label>
+        <input type="text" id="api-base-input" placeholder="${DEFAULT_API_BASE}" value="${escHtml(apiBase)}" autocomplete="off" />
+        <span class="hint">Use o padrão. Só altere pra apontar pra outro backend (debug).</span>
+      </div>
+    </details>
   `;
 
   const loginBtn = document.getElementById('login-btn');

@@ -5062,6 +5062,48 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json(data || []);
   });
 
+  // Serve a extensão do Chrome como .zip pronto pra instalar.
+  // Não precisa de auth — é o "executável" do produto. Atualiza junto com cada deploy.
+  app.get('/api/public/extension.zip', async (_req, res) => {
+    try {
+      // @ts-ignore — opcional, instalado via `npm install`
+      const archiverModule = await import('archiver');
+      const archiver = archiverModule.default;
+      const extensionDir = path.join(__dirname, 'whatsapp-extension');
+
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', 'attachment; filename="focalpoint-extension.zip"');
+
+      const archive = archiver('zip', { zlib: { level: 9 } });
+      archive.on('error', (err: Error) => {
+        console.error('[extension-zip] erro:', err);
+        if (!res.headersSent) res.status(500).json({ error: err.message });
+      });
+      archive.pipe(res);
+      archive.directory(extensionDir, false);
+      await archive.finalize();
+    } catch (err: any) {
+      console.error('[extension-zip] falha:', err);
+      if (!res.headersSent) res.status(500).json({ error: err.message || 'Falha ao gerar zip' });
+    }
+  });
+
+  // Versão atual da extensão (timestamp do manifest) — pra UI mostrar "Atualizado em XX"
+  app.get('/api/public/extension-version', async (_req, res) => {
+    try {
+      const fs = await import('fs/promises');
+      const manifestPath = path.join(__dirname, 'whatsapp-extension', 'manifest.json');
+      const [contents, stat] = await Promise.all([
+        fs.readFile(manifestPath, 'utf-8'),
+        fs.stat(manifestPath),
+      ]);
+      const manifest = JSON.parse(contents);
+      res.json({ version: manifest.version || 'dev', updated_at: stat.mtime.toISOString() });
+    } catch (err: any) {
+      res.json({ version: 'dev', updated_at: null });
+    }
+  });
+
   // Lista de planos acessível sem autenticação — usada pela landing pública.
   // Retorna só campos comerciais (slug, name, price_cents, limits) — nada sensível.
   app.get('/api/public/plans', async (_req, res) => {
