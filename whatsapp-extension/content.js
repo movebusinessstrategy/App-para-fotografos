@@ -1849,6 +1849,9 @@
           <button class="fp-ag-view-btn" data-view="week">Semana</button>
           <button class="fp-ag-view-btn" data-view="day">Dia</button>
         </div>
+        <button id="fp-ag-refresh" class="fp-icon-btn" title="Atualizar">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+        </button>
         <button id="fp-ag-back-pipeline" title="Voltar pro Pipeline">⬡ Pipeline</button>
       </div>
       <div id="fp-ag-content"></div>
@@ -1869,6 +1872,7 @@
         loadAgenda();
       });
     });
+    el.querySelector('#fp-ag-refresh')?.addEventListener('click', loadAgenda);
     el.querySelector('#fp-ag-back-pipeline')?.addEventListener('click', showKanban);
   }
 
@@ -2656,6 +2660,9 @@
           <input type="checkbox" id="fp-tk-show-done" />
           <span>Concluídas</span>
         </label>
+        <button id="fp-tk-refresh" class="fp-icon-btn" title="Atualizar">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+        </button>
         <button id="fp-tk-new" class="fp-btn-g">+ Nova tarefa</button>
       </div>
       <div id="fp-tk-list"></div>
@@ -2672,6 +2679,7 @@
       tasksState.showCompleted = e.target.checked;
       renderTasks();
     });
+    el.querySelector('#fp-tk-refresh').addEventListener('click', loadTasks);
     el.querySelector('#fp-tk-new').addEventListener('click', () => openTaskModal(null));
   }
 
@@ -2928,12 +2936,15 @@
   }
 
   // ============================================================
-  // ===== PRODUÇÃO =====
+  // ===== PRODUÇÃO — estrutura v2 (processes = pastas) =========
   // ============================================================
   let productionState = {
-    stages: [],
+    processes: [],     // "pastas" — cada uma é uma aba no topo
+    stages: [],        // stages v2 — pertencem a um process_id
     jobs: [],
     clients: [],
+    members: [],
+    openProcessId: null,
     loading: false,
   };
 
@@ -2946,8 +2957,11 @@
       <div id="fp-pr-h">
         <h3 id="fp-pr-title">Produção</h3>
         <div style="flex:1"></div>
-        <button id="fp-pr-refresh" class="fp-btn-w" title="Atualizar">↻</button>
+        <button id="fp-pr-refresh" class="fp-icon-btn" title="Atualizar">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+        </button>
       </div>
+      <div id="fp-pr-tabs"></div>
       <div id="fp-pr-board"></div>
     `;
     document.body.appendChild(el);
@@ -2958,13 +2972,21 @@
     productionState.loading = true;
     const board = document.getElementById('fp-pr-board');
     if (board) board.innerHTML = `<div class="fp-tk-loading"><div class="fp-spin"></div></div>`;
+    const tabs = document.getElementById('fp-pr-tabs');
+    if (tabs) tabs.innerHTML = '';
     try {
       const data = await bg({ type: 'GET_PRODUCTION_DATA' });
-      productionState.stages = (data.stages || []).filter((s) => !s.is_final && !s.is_won);
+      productionState.processes = (data.processes || []).slice().sort((a, b) => (a.position || 0) - (b.position || 0));
+      productionState.stages = data.stages || [];
       productionState.jobs = data.jobs || [];
       productionState.clients = data.clients || [];
+      productionState.members = data.members || [];
+      // Mantém a pasta aberta se ainda existir; senão pega a primeira
+      const stillExists = productionState.processes.find((p) => p.id === productionState.openProcessId);
+      if (!stillExists) productionState.openProcessId = productionState.processes[0]?.id || null;
     } catch (err) {
       console.error('[FocalPoint] erro produção:', err);
+      productionState.processes = [];
       productionState.stages = [];
       productionState.jobs = [];
     }
@@ -2973,66 +2995,165 @@
   }
 
   function renderProduction() {
-    const board = document.getElementById('fp-pr-board');
-    if (!board) return;
+    const tabsEl = document.getElementById('fp-pr-tabs');
+    const boardEl = document.getElementById('fp-pr-board');
+    if (!tabsEl || !boardEl) return;
 
-    const clientById = new Map(productionState.clients.map((c) => [c.id, c]));
-    // Só jobs que estão em produção (production_stage não-nulo)
-    const inProd = productionState.jobs.filter((j) => j.production_stage);
-    const byStage = new Map();
-    productionState.stages.forEach((s) => byStage.set(s.id, []));
-    inProd.forEach((j) => {
-      if (byStage.has(j.production_stage)) byStage.get(j.production_stage).push(j);
-    });
-
-    if (productionState.stages.length === 0) {
-      board.innerHTML = `<div class="fp-board-state"><p>Sem etapas de produção configuradas.<br/>Crie etapas no app web.</p></div>`;
+    if (productionState.processes.length === 0) {
+      tabsEl.innerHTML = '';
+      boardEl.innerHTML = `<div class="fp-board-state"><p>Sem pastas de produção configuradas.<br/>Crie no app web em Produção → Configurar.</p></div>`;
       return;
     }
 
-    board.innerHTML = productionState.stages.map((stage) => {
-      const jobs = byStage.get(stage.id) || [];
+    // ─── Renderiza as abas (pastas) ───────────────────────────────────
+    const jobCountByProcess = new Map();
+    productionState.processes.forEach((p) => jobCountByProcess.set(p.id, 0));
+    const stagesByProcess = new Map();
+    productionState.processes.forEach((p) => stagesByProcess.set(p.id, []));
+    productionState.stages.forEach((s) => {
+      if (stagesByProcess.has(s.process_id)) stagesByProcess.get(s.process_id).push(s);
+    });
+    productionState.jobs.forEach((j) => {
+      if (!j.production_stage) return;
+      const stage = productionState.stages.find((s) => s.id === j.production_stage);
+      if (stage && jobCountByProcess.has(stage.process_id)) {
+        jobCountByProcess.set(stage.process_id, jobCountByProcess.get(stage.process_id) + 1);
+      }
+    });
+
+    tabsEl.innerHTML = productionState.processes.map((p) => {
+      const isActive = p.id === productionState.openProcessId;
+      const count = jobCountByProcess.get(p.id) || 0;
+      const isSpecial = !!p.is_special;
+      const color = p.color || '#94a3b8';
+      const bgInactive = isSpecial ? '#D4A94A' : color;
       return `
-        <div class="fpc" data-stage-id="${esc(stage.id)}">
-          <div class="fpc-hd" style="background:${esc(stage.color || '#e9edef')}40">
-            <div class="fpc-title">
-              <span class="fpc-dot" style="background:${esc(stage.color || '#94a3b8')}"></span>
-              ${esc(stage.name)}
+        <button class="fp-pr-tab ${isActive ? 'fp-pr-tab-active' : ''} ${isSpecial ? 'fp-pr-tab-special' : ''}"
+                data-pid="${esc(p.id)}"
+                style="${isActive ? '' : `background:${bgInactive};color:#fff;border-color:transparent`}">
+          ${isSpecial ? '<span class="fp-pr-tab-star">★</span>' : ''}
+          <span class="fp-pr-tab-name">${esc(p.name)}</span>
+          ${count > 0 ? `<span class="fp-pr-tab-count">${count}</span>` : ''}
+        </button>
+      `;
+    }).join('');
+    tabsEl.querySelectorAll('.fp-pr-tab').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        productionState.openProcessId = btn.getAttribute('data-pid');
+        renderProduction();
+      });
+    });
+
+    // ─── Renderiza o kanban da pasta ativa ────────────────────────────
+    const activeProcess = productionState.processes.find((p) => p.id === productionState.openProcessId);
+    if (!activeProcess) {
+      boardEl.innerHTML = `<div class="fp-board-state"><p>Selecione uma pasta acima.</p></div>`;
+      return;
+    }
+
+    const procStages = (stagesByProcess.get(activeProcess.id) || [])
+      .slice()
+      .sort((a, b) => (a.position || 0) - (b.position || 0));
+
+    boardEl.className = activeProcess.is_special ? 'fp-pr-board-special' : '';
+
+    if (procStages.length === 0) {
+      boardEl.innerHTML = `<div class="fp-board-state"><p>Nenhuma etapa nesta pasta.<br/>Configure no app web.</p></div>`;
+      return;
+    }
+
+    const clientById = new Map(productionState.clients.map((c) => [c.id, c]));
+    const memberById = new Map(productionState.members.map((m) => [m.id, m]));
+    const jobsByStage = new Map();
+    procStages.forEach((s) => jobsByStage.set(s.id, []));
+    productionState.jobs.forEach((j) => {
+      if (j.production_stage && jobsByStage.has(j.production_stage)) {
+        jobsByStage.get(j.production_stage).push(j);
+      }
+    });
+
+    boardEl.innerHTML = procStages.map((stage) => {
+      const jobs = jobsByStage.get(stage.id) || [];
+      const expectedH = Number(stage.expected_hours) || 0;
+      return `
+        <div class="fp-pr-col" data-stage-id="${esc(stage.id)}">
+          <div class="fp-pr-col-hd">
+            <div class="fp-pr-col-title">
+              <span class="fp-pr-col-name">${esc(stage.name)}</span>
+              <span class="fp-pr-col-badge">${jobs.length}</span>
             </div>
-            <div class="fpc-meta">${jobs.length} ${jobs.length === 1 ? 'trabalho' : 'trabalhos'}</div>
+            <div class="fp-pr-col-meta">
+              ${expectedH > 0 ? `⏱ ${expectedH}h previsto` : 'sem tempo previsto'}
+            </div>
           </div>
-          <div class="fpc-body" data-stage-id="${esc(stage.id)}">
+          <div class="fpc-body fp-pr-col-body" data-stage-id="${esc(stage.id)}">
             ${jobs.length === 0
-              ? '<div class="fpc-empty">Arraste aqui</div>'
-              : jobs.map((j) => productionCardHtml(j, clientById)).join('')}
+              ? '<div class="fp-pr-empty">Vazio</div>'
+              : jobs.map((j) => productionCardHtml(j, clientById, memberById, stage)).join('')}
           </div>
         </div>
       `;
     }).join('');
 
     // Wire drag-drop pra cada card (reusa pointer drag existente, kind='job')
-    board.querySelectorAll('.fpc-card[data-job-id]').forEach((el) => {
+    boardEl.querySelectorAll('.fp-pr-card[data-job-id]').forEach((el) => {
       const jobId = el.getAttribute('data-job-id');
       el.addEventListener('pointerdown', (e) => startPointerCardDrag(e, el, jobId, 'job'));
     });
   }
 
-  function productionCardHtml(job, clientById) {
+  function productionCardHtml(job, clientById, memberById, stage) {
     const client = job.client_id ? clientById.get(job.client_id) : null;
+    const assignee = job.assignee_id ? memberById?.get(job.assignee_id) : null;
+    const clientName = job.client_name || (client ? client.name : '');
     const dateLabel = job.job_date
       ? new Date(String(job.job_date).slice(0, 10) + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
       : '';
+
+    // Cálculo de staleness (atrasado/atenção) igual o app web
+    let stalenessClass = '';
+    let stalenessTag = '';
+    let elapsedTag = '';
+    const enteredAt = job.production_stage_entered_at;
+    const expectedH = Number(stage?.expected_hours) || 0;
+    if (enteredAt && expectedH > 0) {
+      const elapsedH = (Date.now() - new Date(enteredAt).getTime()) / 3_600_000;
+      const progress = elapsedH / expectedH;
+      if (progress >= 1.0) { stalenessClass = 'fp-pr-card-urgent'; stalenessTag = '<span class="fp-pr-tag-urgent">ATRASADO</span>'; }
+      else if (progress >= 0.5) { stalenessClass = 'fp-pr-card-warning'; stalenessTag = '<span class="fp-pr-tag-warning">ATENÇÃO</span>'; }
+      const elapsedLabel = elapsedH < 1 ? `${Math.floor(elapsedH * 60)}min` : elapsedH < 24 ? `${Math.floor(elapsedH)}h` : `${Math.floor(elapsedH / 24)}d`;
+      elapsedTag = `<span class="fp-pr-elapsed ${stalenessClass}">⏱ ${esc(elapsedLabel)}</span>`;
+    }
+
+    const paymentTag = job.payment_status === 'paid'
+      ? '<span class="fp-pr-tag-paid">Pago</span>'
+      : (job.amount > 0 ? '<span class="fp-pr-tag-pending">Pendente</span>' : '');
+
+    const assigneeChip = assignee
+      ? `<div class="fp-pr-assignee" style="background:${esc(assignee.color || '#64748b')}">
+           <span class="fp-pr-assignee-ini">${esc((assignee.name || '').split(/\s+/).slice(0, 2).map((w) => w[0] || '').join('').toUpperCase())}</span>
+           <span class="fp-pr-assignee-name">${esc(assignee.name)}</span>
+         </div>`
+      : '';
+
     return `
-      <div class="fpc-card" data-job-id="${esc(job.id)}">
-        <div class="fpc-card-top">
-          <div class="fpc-info">
-            <div class="fpc-name">${esc(job.job_name || job.job_type || 'Trabalho')}</div>
-            <div class="fpc-sub">${esc((job.job_type || '') + (client ? ' · ' + client.name : ''))}</div>
+      <div class="fp-pr-card ${stalenessClass}" data-job-id="${esc(job.id)}">
+        <div class="fp-pr-card-top">
+          <div class="fp-pr-card-info">
+            <div class="fp-pr-card-name">${esc(clientName || job.job_name || 'Trabalho')}</div>
+            <div class="fp-pr-card-type">📷 ${esc(job.job_type || 'Sessão')}</div>
           </div>
         </div>
-        <div class="fpc-card-bot">
-          <span class="fpc-val">${dateLabel ? '📅 ' + dateLabel : ''}</span>
-          <span class="fpc-sub" style="font-size:10px">${esc(prettyStatus(job.status) || '')}</span>
+        ${assigneeChip}
+        <div class="fp-pr-card-bot">
+          <div class="fp-pr-card-bot-left">
+            ${dateLabel ? `<span class="fp-pr-date">📅 ${esc(dateLabel)}</span>` : ''}
+            ${paymentTag}
+          </div>
+          <div class="fp-pr-card-bot-right">
+            ${stalenessTag}
+            ${elapsedTag}
+          </div>
         </div>
       </div>
     `;
