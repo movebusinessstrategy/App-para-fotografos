@@ -1159,6 +1159,14 @@
           `}
         </div>
 
+        <div class="fp-mass-auto-row">
+          <label class="fp-mass-auto-label">
+            <input type="checkbox" id="fp-mass-auto" />
+            <span>Enviar automaticamente</span>
+            <span class="fp-mass-auto-hint">(${singleMode ? 'envia direto sem pedir confirmação' : 'manda pra todos com intervalo de 4s entre cada'})</span>
+          </label>
+        </div>
+
         <div class="fp-mass-foot">
           <button class="fp-btn-w" id="fp-mass-cancel">Cancelar</button>
           <button class="fp-btn-g" id="fp-mass-start">
@@ -1230,34 +1238,63 @@
             .map((c) => stageDeals.find(d => String(d.id) === c.getAttribute('data-deal-id')))
             .filter(Boolean);
       if (!selected.length) return toast('Selecione pelo menos 1 lead', true);
+      const autoSend = modal.querySelector('#fp-mass-auto')?.checked || false;
       close();
-      startMassFollowUpQueue(selected, message);
+      startMassFollowUpQueue(selected, message, autoSend);
     });
   }
 
-  async function startMassFollowUpQueue(targetDeals, template) {
-    massQueue = { deals: targetDeals, message: template, idx: 0 };
-    showMassQueueWidget();
+  async function startMassFollowUpQueue(targetDeals, template, autoSend = false) {
+    massQueue = { deals: targetDeals, message: template, idx: 0, autoSend };
+    showMassQueueWidget(autoSend);
     await openCurrentMassQueueLead();
   }
 
-  function showMassQueueWidget() {
+  function showMassQueueWidget(autoSend) {
     document.getElementById('fp-mass-widget')?.remove();
     const w = document.createElement('div');
     w.id = 'fp-mass-widget';
     w.innerHTML = `
       <div class="fp-mw-info">
-        <div class="fp-mw-title">Follow-up em massa</div>
+        <div class="fp-mw-title">${autoSend ? 'Enviando automaticamente' : 'Follow-up em massa'}</div>
         <div class="fp-mw-prog" id="fp-mw-prog">—</div>
       </div>
-      <button class="fp-mw-btn fp-mw-skip" id="fp-mw-skip">Pular</button>
-      <button class="fp-mw-btn fp-mw-next" id="fp-mw-next">Próximo →</button>
-      <button class="fp-mw-btn fp-mw-stop" id="fp-mw-stop" title="Encerrar fila">✕</button>
+      ${autoSend ? '' : '<button class="fp-mw-btn fp-mw-skip" id="fp-mw-skip">Pular</button>'}
+      ${autoSend ? '' : '<button class="fp-mw-btn fp-mw-next" id="fp-mw-next">Próximo →</button>'}
+      <button class="fp-mw-btn fp-mw-stop" id="fp-mw-stop" title="Parar fila">✕ Parar</button>
     `;
     document.body.appendChild(w);
     w.querySelector('#fp-mw-next')?.addEventListener('click', () => advanceMassQueue(false));
     w.querySelector('#fp-mw-skip')?.addEventListener('click', () => advanceMassQueue(true));
     w.querySelector('#fp-mw-stop')?.addEventListener('click', stopMassQueue);
+  }
+
+  // Tenta clicar no botão "Enviar" do WhatsApp Web. Cobre versões com
+  // aria-label "Enviar", ícone data-icon="send" e fallback de Enter no composer.
+  function clickWhatsappSendButton() {
+    const candidates = [
+      '#main footer [aria-label*="Enviar" i]',
+      '#main footer [aria-label*="Send" i]',
+      '#main footer [data-icon="send"]',
+      '#main footer [data-tab="11"]',
+      '#main [data-testid="compose-btn-send"]',
+    ];
+    for (const sel of candidates) {
+      const btn = document.querySelector(sel);
+      const real = btn?.closest('button, [role="button"]') || btn;
+      if (real) { simulateRealClick(real); return true; }
+    }
+    // Fallback: dispara Enter no composer
+    const composer =
+      document.querySelector('#main footer div[contenteditable="true"]') ||
+      document.querySelector('footer [contenteditable="true"]');
+    if (composer) {
+      composer.focus();
+      const ev = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
+      composer.dispatchEvent(ev);
+      return true;
+    }
+    return false;
   }
 
   function updateMassWidget() {
@@ -1281,16 +1318,48 @@
       .replace(/\{name\}/gi, first);
 
     const ok = await openByNumberInApp(deal.contact_phone, deal.contact_name || '');
-    if (!ok) return; // toast já mostrado pelo openByNumberInApp
+    if (!ok) {
+      // Falhou em abrir o chat — em modo auto, pula pro próximo
+      if (massQueue?.autoSend) {
+        await sleep(800);
+        advanceMassQueue(true);
+      }
+      return;
+    }
 
+    let composed = false;
     for (let i = 0; i < 12; i++) {
       await sleep(180);
-      if (setWhatsappComposer(msg)) {
-        toast('Revise e envie. Depois clique "Próximo →"');
+      if (setWhatsappComposer(msg)) { composed = true; break; }
+    }
+    if (!composed) {
+      toast('Não consegui colar a mensagem — pulando…', true);
+      if (massQueue?.autoSend) {
+        await sleep(800);
+        advanceMassQueue(true);
+      }
+      return;
+    }
+
+    if (massQueue?.autoSend) {
+      // Pequeno delay pro user ver a mensagem antes de disparar
+      await sleep(1200);
+      if (!massQueue) return; // user pode ter parado
+      const sent = clickWhatsappSendButton();
+      if (sent) {
+        toast(`✓ Enviado pra ${first || deal.contact_phone}`);
+      } else {
+        toast('Não consegui clicar em Enviar — pare a fila e veja', true);
+        stopMassQueue();
         return;
       }
+      // Aguarda antes de pular pro próximo (anti-spam do WhatsApp)
+      await sleep(4000);
+      if (!massQueue) return;
+      advanceMassQueue(false);
+    } else {
+      toast('Revise e envie. Depois clique "Próximo →"');
     }
-    toast('Conversa aberta, cole a mensagem manualmente. Depois clique "Próximo →"', true);
   }
 
   async function advanceMassQueue(skipped) {
