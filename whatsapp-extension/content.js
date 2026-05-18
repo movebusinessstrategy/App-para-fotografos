@@ -739,11 +739,35 @@
     return false;
   }
 
+  // Localiza o painel da lista de chats do WhatsApp Web em várias versões
+  function findChatListPanel() {
+    return (
+      document.querySelector('#pane-side') ||
+      document.querySelector('#side') ||
+      document.querySelector('[data-testid="chat-list"]') ||
+      document.querySelector('[aria-label*="Lista de conversas" i]') ||
+      document.querySelector('[aria-label*="Chat list" i]') ||
+      null
+    );
+  }
+
   // Abre conversa do WhatsApp Web na mesma aba, sem recarregar.
   async function openByNumberInApp(phoneFull, contactName = '') {
     phoneFull = normalizeWhatsappPhone(phoneFull);
-    const sideEl = document.querySelector('#pane-side') || document.querySelector('#side');
-    if (!sideEl) { toast('Lista do WhatsApp não encontrada', true); return; }
+
+    // Esconde kanban/agenda primeiro — eles cobrem o WhatsApp e impedem
+    // que cliques na lista/busca funcionem.
+    if (kanbanVisible) hideKanban();
+    hideAgenda();
+
+    // Espera um tick pro WA reagir ao Esc/scroll antes de procurar a sidebar
+    await sleep(120);
+
+    const sideEl = findChatListPanel();
+    if (!sideEl) {
+      toast('Lista do WhatsApp não encontrada. Recarregue a página do WhatsApp.', true);
+      return;
+    }
 
     // 1) Busca direta no DOM já carregado
     const visibleItem = findChatItem(phoneFull, contactName);
