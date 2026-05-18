@@ -2415,12 +2415,15 @@
   // ───── Mini-modal de criação/edição rápida de agendamento ─────
   // POST /api/jobs (novo) ou PUT /api/jobs/:id (edição). Suporta DELETE.
   // Args: { date, time } pra criação, ou { existing } pra edição.
-  function openQuickJobModal({ date, time, existing } = {}) {
+  function openQuickJobModal({ date, time, existing, onSaved } = {}) {
     // Remove qualquer instância anterior
     document.getElementById('fp-quickjob-overlay')?.remove();
 
     const isEdit = !!existing;
     const jobId = existing?.job_id;
+    // Callback de pós-save/delete: default recarrega Agenda; chamador pode
+    // sobrescrever pra recarregar outra tela (Produção, etc).
+    const reload = onSaved || loadAgenda;
 
     const types = ['Newborn', 'Gestante', 'Família', 'Smash the Cake', 'Aniversário', 'Acompanhamento', 'Casamento', 'Outro'];
 
@@ -2641,7 +2644,7 @@
           toast('Agendamento criado!');
         }
         close();
-        loadAgenda();
+        reload();
       } catch (err) {
         console.error('[FocalPoint] erro ao salvar job:', err);
         btn.disabled = false;
@@ -2666,7 +2669,7 @@
         await bg({ type: 'DELETE_JOB', jobId });
         toast('Agendamento excluído.');
         close();
-        loadAgenda();
+        reload();
       } catch (err) {
         btn.disabled = false;
         btn.textContent = 'Excluir';
@@ -3339,10 +3342,38 @@
       `;
     }).join('');
 
-    // Wire drag-drop pra cada card (reusa pointer drag existente, kind='job')
+    // Wire drag-drop + click pra editar pra cada card
     boardEl.querySelectorAll('.fp-pr-card[data-job-id]').forEach((el) => {
       const jobId = el.getAttribute('data-job-id');
       el.addEventListener('pointerdown', (e) => startPointerCardDrag(e, el, jobId, 'job'));
+      el.addEventListener('click', (e) => {
+        if (dragMoved) return; // foi drag, não conta como click
+        const job = productionState.jobs.find((j) => String(j.id) === jobId);
+        if (job) openProductionJobEditor(job);
+      });
+    });
+  }
+
+  // Reaproveita o modal de criar/editar agendamento (openQuickJobModal) pra
+  // editar o job clicado no kanban de Produção. Cobre tipo, nome, data,
+  // hora, cliente, status — e tem botão de excluir. Após salvar, recarrega
+  // o board de Produção (em vez do default que recarrega a Agenda).
+  function openProductionJobEditor(job) {
+    const clientById = new Map((productionState.clients || []).map((c) => [c.id, c]));
+    const client = job.client_id ? clientById.get(job.client_id) : null;
+    openQuickJobModal({
+      existing: {
+        job_id: job.id,
+        title: job.job_name,
+        type: job.job_type,
+        date: String(job.job_date || '').slice(0, 10),
+        time: job.job_time,
+        end_time: job.job_end_time,
+        client_id: job.client_id,
+        client_name: client?.name || '',
+        status: job.status,
+      },
+      onSaved: () => loadProduction(),
     });
   }
 
