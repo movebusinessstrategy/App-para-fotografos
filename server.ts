@@ -7194,6 +7194,52 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // ============ EXTENSÃO CHROME — endpoints ============
 
   // Buscar deal por telefone (extensão usa ?phone=5511...)
+  // Agenda do mês pra extensão WhatsApp — agrega jobs e (futuro) Google events
+  app.get('/api/extension/agenda', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const now = new Date();
+    const year = Number(req.query.year) || now.getFullYear();
+    const month = Number(req.query.month) || (now.getMonth() + 1);
+
+    // Início e fim do mês (inclusive)
+    const start = `${year}-${String(month).padStart(2, '0')}-01`;
+    const lastDay = new Date(year, month, 0).getDate();
+    const end = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+    const { data: jobs } = await supabase
+      .from('jobs')
+      .select('id, job_name, job_type, job_date, job_time, job_end_time, status, client_id')
+      .eq('user_id', userId)
+      .gte('job_date', start)
+      .lte('job_date', end)
+      .order('job_date');
+
+    const clientIds = Array.from(new Set((jobs || []).map(j => j.client_id).filter(Boolean) as number[]));
+    let clientsMap = new Map<number, string>();
+    if (clientIds.length) {
+      const { data: clients } = await supabase
+        .from('clients')
+        .select('id, name')
+        .in('id', clientIds);
+      (clients || []).forEach(c => clientsMap.set(c.id, c.name));
+    }
+
+    const events = (jobs || []).map(j => ({
+      id: `job-${j.id}`,
+      kind: 'job',
+      date: j.job_date,
+      time: j.job_time || null,
+      end_time: j.job_end_time || null,
+      title: j.job_name || j.job_type || 'Trabalho',
+      type: j.job_type || null,
+      status: j.status || null,
+      client_name: j.client_id ? (clientsMap.get(j.client_id) || null) : null,
+    }));
+
+    res.json({ year, month, events });
+  });
+
   app.get('/api/extension/deal-by-phone', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;

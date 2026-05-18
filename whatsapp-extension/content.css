@@ -18,6 +18,164 @@
 #fp-kanban.fp-hidden { display: none !important; }
 .fp-hidden { display: none !important; }
 
+/* ---- Agenda (overlay no mesmo lugar que o kanban) ---- */
+#fp-agenda {
+  position: fixed;
+  top: 0;
+  left: var(--fp-side-width, 380px);
+  right: 0;
+  bottom: 0;
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  background: #f0f2f5;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  color: #111b21;
+}
+#fp-ag-h {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 20px;
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+  flex-shrink: 0;
+}
+#fp-ag-h h3 {
+  font-size: 17px;
+  font-weight: 700;
+  color: #111b21;
+  min-width: 200px;
+  text-align: center;
+}
+#fp-ag-prev, #fp-ag-next {
+  width: 32px; height: 32px;
+  border: none; background: #f0f2f5;
+  border-radius: 8px;
+  font-size: 18px; font-weight: 700;
+  color: #54656f;
+  cursor: pointer;
+}
+#fp-ag-prev:hover, #fp-ag-next:hover { background: #e9edef; color: #111b21; }
+#fp-ag-today {
+  padding: 6px 14px;
+  background: #00a884;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+}
+#fp-ag-today:hover { background: #008069; }
+
+#fp-ag-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  background: #fff;
+  padding: 8px 16px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #667781;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  text-align: center;
+  border-bottom: 1px solid #f0f2f5;
+}
+#fp-ag-weekdays span { padding: 4px 0; }
+
+#fp-ag-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  padding: 12px 16px;
+  background: #f0f2f5;
+}
+.fp-ag-cell {
+  background: #fff;
+  border-radius: 8px;
+  min-height: 64px;
+  padding: 6px 6px 4px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  transition: background 0.12s, transform 0.12s;
+  border: 1.5px solid transparent;
+}
+.fp-ag-cell:hover { background: #f9fafb; transform: translateY(-1px); }
+.fp-ag-empty { background: transparent; cursor: default; pointer-events: none; }
+.fp-ag-empty:hover { background: transparent; transform: none; }
+.fp-ag-day-num { font-size: 13px; font-weight: 600; color: #111b21; }
+.fp-ag-today-cell .fp-ag-day-num {
+  background: #00a884;
+  color: #fff;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+}
+.fp-ag-selected { border-color: #00a884; }
+.fp-ag-has { background: #f0fdf4; }
+.fp-ag-has:hover { background: #dcfce7; }
+.fp-ag-dot-row { display: flex; gap: 2px; align-items: center; }
+.fp-ag-dot { width: 5px; height: 5px; border-radius: 50%; background: #00a884; }
+.fp-ag-more { font-size: 9px; color: #54656f; margin-left: 2px; font-weight: 700; }
+
+#fp-ag-day-list {
+  background: #fff;
+  border-top: 1px solid #e5e7eb;
+  padding: 14px 20px 20px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+.fp-ag-day-header {
+  font-size: 14px;
+  font-weight: 700;
+  color: #111b21;
+  margin-bottom: 12px;
+}
+.fp-ag-empty-state {
+  text-align: center;
+  font-size: 13px;
+  color: #54656f;
+  padding: 32px 0;
+}
+.fp-ag-event {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #f0f2f5;
+  background: #fafafa;
+  margin-bottom: 8px;
+}
+.fp-ag-event-time {
+  font-size: 12px;
+  font-weight: 700;
+  color: #00a884;
+  flex-shrink: 0;
+  width: 48px;
+}
+.fp-ag-event-body { flex: 1; min-width: 0; }
+.fp-ag-event-title { font-size: 13px; font-weight: 600; color: #111b21; }
+.fp-ag-event-sub { font-size: 11px; color: #667781; margin-top: 2px; }
+.fp-ag-event-status {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 99px;
+  background: #e5e7eb;
+  color: #54656f;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.fp-ag-st-completed { background: #d1fae5; color: #065f46; }
+.fp-ag-st-cancelled { background: #fee2e2; color: #991b1b; }
+.fp-ag-st-in_progress { background: #fef3c7; color: #92400e; }
+
 /* Header kanban */
 #fp-kh {
   display: flex;
@@ -86,30 +244,48 @@
 #fp-kh-refresh:hover { background: #e9edef; }
 #fp-kh-logout:hover { background: #fee2e2; color: #b91c1c; }
 
-/* FAB — botão "Funil" sempre acessível quando o kanban está escondido */
-#fp-fab {
+/* FAB legado — removido. Substituído pela rail vertical (#fp-rail). */
+#fp-fab { display: none !important; }
+
+/* ─── Rail vertical flutuante (canto inferior esquerdo) — Pipeline + Agenda ─── */
+#fp-rail {
   position: fixed;
-  bottom: 22px;
-  right: 22px;
-  background: #111b21;
-  color: #fff;
-  border: none;
-  border-radius: 999px;
-  padding: 12px 20px;
-  font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
+  left: 12px;
+  bottom: 14px;
+  z-index: 9100;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 6px;
+  background: #ffffff;
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.18), 0 2px 6px rgba(0,0,0,0.08);
+  border: 1px solid #e9edef;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.25);
-  z-index: 9000;
-  display: none;
-  align-items: center;
-  gap: 8px;
-  transition: transform 0.15s, background 0.15s;
 }
-#fp-fab.fp-fab-on { display: inline-flex; }
-#fp-fab:hover { transform: translateY(-2px); background: #1f2937; }
-#fp-fab span { font-weight: 700; }
+.fp-rail-btn {
+  width: 56px;
+  padding: 8px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  background: transparent;
+  border: none;
+  border-radius: 10px;
+  color: #54656f;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  font-family: inherit;
+}
+.fp-rail-btn svg { width: 20px; height: 20px; }
+.fp-rail-btn span { font-size: 10px; font-weight: 600; letter-spacing: 0.1px; }
+.fp-rail-btn:hover { background: #f0f2f5; color: #111b21; }
+.fp-rail-btn.fp-rail-active {
+  background: #d9fdd3;
+  color: #008069;
+}
 
 /* Board */
 #fp-board {
