@@ -251,7 +251,29 @@
     const sidebar = findWaSidebar();
     if (!sidebar) return; // tenta de novo no próximo MutationObserver tick
 
-    const container = document.createElement('div');
+    // Acha o botão de Conversas, depois sobe pela árvore até achar o WRAPPER
+    // que é IRMÃO direto dos wrappers dos outros ícones (Status, Communities…).
+    const chatBtn = sidebar.querySelector('[aria-label*="onversas" i], [aria-label*="hats" i]');
+    if (!chatBtn) return;
+
+    let wrapper = chatBtn;
+    let parent = wrapper.parentElement;
+    for (let depth = 0; depth < 8 && parent; depth++) {
+      const siblings = Array.from(parent.children);
+      const buttonish = siblings.filter(s =>
+        s !== wrapper && (s.matches('button, [role="button"], a') || s.querySelector('button, [role="button"], a'))
+      );
+      if (buttonish.length >= 2 && parent !== sidebar) {
+        // parent é o "grupo de cima" — wrapper é o irmão Chats, buttonish são os outros
+        break;
+      }
+      wrapper = parent;
+      parent = wrapper.parentElement;
+    }
+    if (!parent) return;
+
+    // Cria o container — mesma estrutura visual dos wrappers nativos
+    const container = document.createElement(wrapper.tagName.toLowerCase() === 'div' ? 'div' : 'div');
     container.id = 'fp-rail-mounted';
     container.className = 'fp-rail-nat';
     container.innerHTML = `
@@ -265,12 +287,28 @@
     container.querySelector('#fp-rail-pipeline')?.addEventListener('click', showKanban);
     container.querySelector('#fp-rail-agenda')?.addEventListener('click', showAgenda);
 
-    // Estratégia: inserir DENTRO do mesmo container dos ícones do topo
-    // (Chats/Status/Channels/Communities/Meta AI), no FINAL dele — antes
-    // do divisor que separa do rodapé (onde mora "Configurações").
-    const chatBtn = sidebar.querySelector('[aria-label*="onversas" i], [aria-label*="hats" i], [aria-label*="hat" i]');
-    const topGroup = chatBtn?.closest('div, ul') || sidebar;
-    topGroup.appendChild(container);
+    // Posiciona DEPOIS do último wrapper de ícone do "grupo de cima",
+    // ANTES de qualquer divisor/espaço/rodapé que vier em seguida.
+    const siblings = Array.from(parent.children);
+    const buttonWrappers = siblings.filter(s =>
+      s.matches('button, [role="button"], a') || s.querySelector('button, [role="button"], a')
+    );
+    const lastButtonWrapper = buttonWrappers[buttonWrappers.length - 1];
+    if (lastButtonWrapper) {
+      // Acha primeiro irmão NÃO-botão depois do último (geralmente o divisor)
+      const lastIdx = siblings.indexOf(lastButtonWrapper);
+      const divider = siblings.slice(lastIdx + 1).find(s =>
+        !s.matches('button, [role="button"], a') && !s.querySelector('button, [role="button"], a')
+      );
+      if (divider) {
+        parent.insertBefore(container, divider);
+      } else {
+        lastButtonWrapper.insertAdjacentElement('afterend', container);
+      }
+      console.log('[FocalPoint] rail montada — pai:', parent.tagName, 'siblings:', siblings.length, 'lastWrapper:', lastButtonWrapper);
+    } else {
+      parent.appendChild(container);
+    }
   }
 
   // ===== KANBAN =====
