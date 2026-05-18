@@ -9501,16 +9501,23 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       if (c.cpf) clientsByCpf.set(String(c.cpf).replace(/\D/g, ''), c);
     });
 
+    let pdfIndex = 0;
     for (const doc of docs) {
       try {
         const base = lib.extractFromDoc(doc);
 
-        // Baixa + parseia o PDF assinado pra ter CPF/telefone/endereço/valor
-        // Se falhar (sem PDF assinado, timeout, etc), segue só com metadados
+        // Baixa + parseia o PDF assinado pra ter CPF/telefone/endereço/valor.
+        // Throttle: 600ms entre downloads pra respeitar o rate limit do Autentique
+        // (~100 req/min). Se falhar (sem PDF, 429 persistente, timeout), segue
+        // com os metadados básicos do GraphQL.
         let ext: any = base;
         if (doc.pdf_url) {
+          if (pdfIndex > 0) {
+            await new Promise((res) => setTimeout(res, 600));
+          }
+          pdfIndex++;
           try {
-            ext = await lib.downloadAndParsePdf(doc.pdf_url, base, 15_000);
+            ext = await lib.downloadAndParsePdf(doc.pdf_url, base, 20_000);
           } catch (pdfErr: any) {
             console.warn(`[autentique-import] PDF parse falhou pra ${doc.id}: ${pdfErr.message} — seguindo só com metadados`);
           }
