@@ -7231,12 +7231,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const events = (jobs || []).map(j => ({
       id: `job-${j.id}`,
       kind: 'job',
+      job_id: j.id, // id "cru" do job — facilita PUT/DELETE pela extensão
       date: String(j.job_date || '').slice(0, 10), // garante "YYYY-MM-DD" mesmo se vier timestamp
       time: j.job_time || null,
       end_time: j.job_end_time || null,
       title: j.job_name || j.job_type || 'Trabalho',
       type: j.job_type || null,
       status: j.status || null,
+      client_id: j.client_id || null,
       client_name: j.client_id ? (clientsMap.get(j.client_id) || null) : null,
     }));
 

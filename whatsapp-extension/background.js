@@ -170,6 +170,17 @@ async function handleMessage(message) {
         body: JSON.stringify(message.data),
       });
     }
+    case 'UPDATE_JOB': {
+      return apiFetch(`/api/jobs/${message.jobId}`, {
+        method: 'PUT',
+        body: JSON.stringify(message.data),
+      });
+    }
+    case 'DELETE_JOB': {
+      return apiFetch(`/api/jobs/${message.jobId}`, {
+        method: 'DELETE',
+      });
+    }
     case 'CREATE_CLIENT_QUICK': {
       // Cria um cliente "leve" só com nome (e telefone, se vier). Demais
       // campos podem ser preenchidos depois pelo app.

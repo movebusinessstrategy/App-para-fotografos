@@ -2011,7 +2011,7 @@
   }
 
   function wireTimeGridInteractions(content) {
-    // Hover em slot mostra "+" pra agendar — clique abre modal inline
+    // Clique num slot vazio: cria novo agendamento
     content.querySelectorAll('.fp-ag-tg-slot').forEach((slot) => {
       slot.addEventListener('click', (e) => {
         // Não dispara se clicou em cima de um evento (eventos têm z-index maior)
@@ -2019,22 +2019,53 @@
         const date = slot.getAttribute('data-date');
         const hour = slot.getAttribute('data-hour');
         const time = `${String(hour).padStart(2, '0')}:00`;
-        openQuickJobModal(date, time);
+        openQuickJobModal({ date, time });
+      });
+    });
+    // Clique num evento: abre o modal em modo edição
+    content.querySelectorAll('.fp-ag-tg-event').forEach((block) => {
+      block.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const eventId = block.getAttribute('data-event-id');
+        const event = (agendaState.events || []).find((ev) => String(ev.id) === eventId);
+        if (event) openQuickJobModal({ existing: event });
       });
     });
   }
 
-  // ───── Mini-modal de criação rápida de agendamento ─────
-  // Cria o job direto pelo backend; depois fecha e recarrega a agenda.
-  function openQuickJobModal(date, time) {
+  // ───── Mini-modal de criação/edição rápida de agendamento ─────
+  // POST /api/jobs (novo) ou PUT /api/jobs/:id (edição). Suporta DELETE.
+  // Args: { date, time } pra criação, ou { existing } pra edição.
+  function openQuickJobModal({ date, time, existing } = {}) {
     // Remove qualquer instância anterior
     document.getElementById('fp-quickjob-overlay')?.remove();
 
+    const isEdit = !!existing;
+    const jobId = existing?.job_id;
+
     const types = ['Newborn', 'Gestante', 'Família', 'Smash the Cake', 'Aniversário', 'Acompanhamento', 'Casamento', 'Outro'];
-    const [h, m] = (time || '09:00').split(':').map(Number);
-    const endH = Math.min(h + 1, 23);
-    const endTime = `${String(endH).padStart(2, '0')}:${String(m || 0).padStart(2, '0')}`;
-    const dateLabel = new Date(date + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' });
+
+    // Valores iniciais — vêm do evento existente OU do slot clicado
+    const initType = existing?.type && types.includes(existing.type) ? existing.type : (existing?.type || 'Outro');
+    const initName = existing?.title || 'Sessão';
+    const initDate = existing?.date || date;
+    const initStart = (existing?.time || time || '09:00').slice(0, 5);
+    const initEnd = existing?.end_time
+      ? existing.end_time.slice(0, 5)
+      : (() => {
+          const [h, m] = initStart.split(':').map(Number);
+          return `${String(Math.min(h + 1, 23)).padStart(2, '0')}:${String(m || 0).padStart(2, '0')}`;
+        })();
+    const initClientName = existing?.client_name || '';
+    const initClientId = existing?.client_id || null;
+    const initStatus = existing?.status || 'scheduled';
+
+    const dateLabel = new Date(initDate + 'T00:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' });
+
+    // Garantir que o "tipo" atual está no select mesmo se for customizado
+    const typeOptions = types.includes(initType)
+      ? types
+      : [initType, ...types];
 
     const overlay = document.createElement('div');
     overlay.id = 'fp-quickjob-overlay';
@@ -2043,7 +2074,7 @@
       <div class="fp-quickjob-box">
         <div class="fp-quickjob-head">
           <div>
-            <div class="fp-quickjob-kicker">Novo agendamento</div>
+            <div class="fp-quickjob-kicker">${isEdit ? 'Editar agendamento' : 'Novo agendamento'}</div>
             <div class="fp-quickjob-date">${esc(dateLabel)}</div>
           </div>
           <button class="fp-info-close" data-qj-close>×</button>
@@ -2052,36 +2083,54 @@
           <div class="fp-mf">
             <span class="fp-ml">Tipo</span>
             <select class="fp-mi" id="fp-qj-type">
-              ${types.map((t) => `<option value="${esc(t)}">${esc(t)}</option>`).join('')}
+              ${typeOptions.map((t) => `<option value="${esc(t)}" ${t === initType ? 'selected' : ''}>${esc(t)}</option>`).join('')}
             </select>
           </div>
           <div class="fp-mf">
             <span class="fp-ml">Nome / título</span>
-            <input class="fp-mi" id="fp-qj-name" placeholder="Ex: Sessão newborn — Marina" value="Sessão" />
+            <input class="fp-mi" id="fp-qj-name" placeholder="Ex: Sessão newborn — Marina" value="${esc(initName)}" />
           </div>
           <div class="fp-mrow">
             <div class="fp-mf" style="flex:1">
+              <span class="fp-ml">Data</span>
+              <input class="fp-mi" id="fp-qj-date" type="date" value="${esc(initDate)}" />
+            </div>
+            <div class="fp-mf" style="flex:1">
               <span class="fp-ml">Início</span>
-              <input class="fp-mi" id="fp-qj-start" type="time" value="${esc(time)}" />
+              <input class="fp-mi" id="fp-qj-start" type="time" value="${esc(initStart)}" />
             </div>
             <div class="fp-mf" style="flex:1">
               <span class="fp-ml">Fim</span>
-              <input class="fp-mi" id="fp-qj-end" type="time" value="${esc(endTime)}" />
+              <input class="fp-mi" id="fp-qj-end" type="time" value="${esc(initEnd)}" />
             </div>
           </div>
           <div class="fp-mf">
             <span class="fp-ml">Cliente <span style="opacity:0.6;font-weight:500">(opcional — busca ou cria novo)</span></span>
-            <input class="fp-mi" id="fp-qj-client" placeholder="Digite o nome do cliente" autocomplete="off" />
+            <input class="fp-mi ${initClientId ? 'fp-qj-client-picked' : ''}" id="fp-qj-client" placeholder="Digite o nome do cliente" autocomplete="off" value="${esc(initClientName)}" />
             <div id="fp-qj-client-results" class="fp-qj-results"></div>
           </div>
-          <div class="fp-mf">
-            <span class="fp-ml">Valor (opcional)</span>
-            <input class="fp-mi" id="fp-qj-amount" type="number" min="0" step="50" placeholder="0" />
-          </div>
+          ${isEdit ? `
+            <div class="fp-mf">
+              <span class="fp-ml">Status</span>
+              <select class="fp-mi" id="fp-qj-status">
+                <option value="scheduled" ${initStatus === 'scheduled' ? 'selected' : ''}>Agendado</option>
+                <option value="in_progress" ${initStatus === 'in_progress' ? 'selected' : ''}>Em andamento</option>
+                <option value="completed" ${initStatus === 'completed' ? 'selected' : ''}>Concluído</option>
+                <option value="cancelled" ${initStatus === 'cancelled' ? 'selected' : ''}>Cancelado</option>
+              </select>
+            </div>
+          ` : `
+            <div class="fp-mf">
+              <span class="fp-ml">Valor (opcional)</span>
+              <input class="fp-mi" id="fp-qj-amount" type="number" min="0" step="50" placeholder="0" />
+            </div>
+          `}
         </div>
         <div class="fp-quickjob-foot">
+          ${isEdit ? `<button class="fp-btn-w fp-qj-delete" id="fp-qj-delete">Excluir</button>` : ''}
+          <div style="flex:1"></div>
           <button class="fp-btn-w" data-qj-close>Cancelar</button>
-          <button class="fp-btn-g" id="fp-qj-save">Agendar</button>
+          <button class="fp-btn-g" id="fp-qj-save">${isEdit ? 'Salvar' : 'Agendar'}</button>
         </div>
       </div>
     `;
@@ -2092,10 +2141,10 @@
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
     overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
 
-    // Busca de cliente (debounced, mostra sugestões abaixo do input)
+    // Busca de cliente (debounced)
     const clientInput = overlay.querySelector('#fp-qj-client');
     const clientResults = overlay.querySelector('#fp-qj-client-results');
-    let selectedClientId = null;
+    let selectedClientId = initClientId;
     let clientCache = null;
     let searchTimer;
 
@@ -2149,40 +2198,63 @@
       const typed = clientInput.value.trim();
       let clientId = selectedClientId;
 
-      // Se digitou um nome mas não selecionou nenhum existente, cria cliente "leve"
-      if (typed && !clientId) {
+      // Se digitou um nome mas não selecionou nenhum (e não é o cliente original), cria leve
+      if (typed && !clientId && typed !== initClientName) {
         try {
           const created = await bg({ type: 'CREATE_CLIENT_QUICK', data: { name: typed } });
           clientId = created?.id || null;
-        } catch {
-          // Se falhar, segue sem cliente; o agendamento ainda é criado.
-        }
+        } catch {}
+      } else if (!typed) {
+        clientId = null; // limpou o campo: desvincula cliente
       }
 
       const payload = {
         job_type: overlay.querySelector('#fp-qj-type').value,
         job_name: overlay.querySelector('#fp-qj-name').value || 'Sessão',
-        job_date: date,
-        job_time: overlay.querySelector('#fp-qj-start').value || time,
+        job_date: overlay.querySelector('#fp-qj-date').value || initDate,
+        job_time: overlay.querySelector('#fp-qj-start').value || null,
         job_end_time: overlay.querySelector('#fp-qj-end').value || null,
-        status: 'scheduled',
         client_id: clientId,
-        amount: Number(overlay.querySelector('#fp-qj-amount').value) || 0,
-        payment_method: '',
-        payment_status: 'pending',
-        notes: '',
       };
 
       try {
-        await bg({ type: 'CREATE_JOB', data: payload });
-        toast('Agendamento criado!');
+        if (isEdit) {
+          payload.status = overlay.querySelector('#fp-qj-status').value;
+          await bg({ type: 'UPDATE_JOB', jobId, data: payload });
+          toast('Agendamento atualizado!');
+        } else {
+          payload.status = 'scheduled';
+          payload.amount = Number(overlay.querySelector('#fp-qj-amount')?.value) || 0;
+          payload.payment_method = '';
+          payload.payment_status = 'pending';
+          payload.notes = '';
+          await bg({ type: 'CREATE_JOB', data: payload });
+          toast('Agendamento criado!');
+        }
         close();
         loadAgenda();
       } catch (err) {
-        console.error('[FocalPoint] erro ao criar job:', err);
+        console.error('[FocalPoint] erro ao salvar job:', err);
         btn.disabled = false;
-        btn.textContent = 'Agendar';
-        toast(err?.message || 'Erro ao criar agendamento', true);
+        btn.textContent = isEdit ? 'Salvar' : 'Agendar';
+        toast(err?.message || 'Erro ao salvar agendamento', true);
+      }
+    });
+
+    overlay.querySelector('#fp-qj-delete')?.addEventListener('click', async () => {
+      if (!confirm('Excluir esse agendamento? Não dá pra desfazer.')) return;
+      const btn = overlay.querySelector('#fp-qj-delete');
+      btn.disabled = true;
+      btn.textContent = 'Excluindo…';
+      try {
+        await bg({ type: 'DELETE_JOB', jobId });
+        toast('Agendamento excluído.');
+        close();
+        loadAgenda();
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Excluir';
+        toast(err?.message || 'Erro ao excluir', true);
       }
     });
 
@@ -2267,7 +2339,7 @@
           ? (e.end_time ? `${e.time.slice(0, 5)} – ${e.end_time.slice(0, 5)}` : e.time.slice(0, 5))
           : 'Dia inteiro';
         return `
-          <div class="fp-ag-event" style="border-left:3px solid ${c.dot}">
+          <div class="fp-ag-event" data-event-id="${esc(e.id || '')}" style="border-left:3px solid ${c.dot}; cursor:pointer">
             <div class="fp-ag-event-time">${timeStr}</div>
             <div class="fp-ag-event-body">
               <div class="fp-ag-event-title">${esc(e.title)}</div>
@@ -2278,6 +2350,15 @@
         `;
       }).join('')}
     `;
+
+    // Clique num item: abre o modal em modo edição
+    list.querySelectorAll('.fp-ag-event[data-event-id]').forEach((row) => {
+      row.addEventListener('click', () => {
+        const eventId = row.getAttribute('data-event-id');
+        const event = (agendaState.events || []).find((ev) => String(ev.id) === eventId);
+        if (event) openQuickJobModal({ existing: event });
+      });
+    });
   }
 
   function showAgenda() {

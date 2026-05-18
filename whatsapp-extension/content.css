@@ -1751,11 +1751,19 @@
 }
 .fp-quickjob-foot {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
   gap: 8px;
   padding: 12px 18px;
   border-top: 1px solid #f0f2f5;
   background: #fafafa;
+}
+.fp-qj-delete {
+  background: #fef2f2 !important;
+  color: #b91c1c !important;
+  flex: 0 0 auto !important;
+}
+.fp-qj-delete:hover {
+  background: #fee2e2 !important;
 }
 
 /* Resultados da busca de cliente */
