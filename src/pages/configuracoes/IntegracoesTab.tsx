@@ -1,19 +1,21 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Calendar, MessageCircle, CheckCircle2, ChevronRight, Circle } from "lucide-react";
+import { Calendar, MessageCircle, CheckCircle2, ChevronRight, Circle, Chrome } from "lucide-react";
 import { authFetch } from "../../utils/authFetch";
 
 interface IntegrationCardProps {
   to: string;
   title: string;
   description: string;
-  connected: boolean;
+  connected?: boolean;
   loading?: boolean;
+  badge?: string;
   icon: React.ReactNode;
   iconBg: string;
 }
 
-function IntegrationCard({ to, title, description, connected, loading, icon, iconBg }: IntegrationCardProps) {
+function IntegrationCard({ to, title, description, connected, loading, badge, icon, iconBg }: IntegrationCardProps) {
+  const hasConnectionState = connected !== undefined || loading;
   return (
     <Link
       to={to}
@@ -25,19 +27,25 @@ function IntegrationCard({ to, title, description, connected, loading, icon, ico
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-0.5">
           <h3 className="font-semibold text-gray-900 dark:text-white">{title}</h3>
-          {loading ? (
-            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500">
-              Verificando…
+          {badge ? (
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gold-100 dark:bg-gold-900/30 text-gold-700 dark:text-gold-300">
+              {badge}
             </span>
-          ) : connected ? (
-            <span className="flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300">
-              <CheckCircle2 size={10} /> Conectado
-            </span>
-          ) : (
-            <span className="flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">
-              <Circle size={9} /> Não conectado
-            </span>
-          )}
+          ) : hasConnectionState ? (
+            loading ? (
+              <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500">
+                Verificando…
+              </span>
+            ) : connected ? (
+              <span className="flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300">
+                <CheckCircle2 size={10} /> Conectado
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">
+                <Circle size={9} /> Não conectado
+              </span>
+            )
+          ) : null}
         </div>
         <p className="text-xs text-gray-500 dark:text-gray-400">{description}</p>
       </div>
@@ -85,6 +93,14 @@ export default function IntegracoesTab() {
           loading={loading}
           icon={<Calendar size={22} className="text-gold-600 dark:text-gold-400" />}
           iconBg="bg-gold-50 dark:bg-gold-900/20"
+        />
+        <IntegrationCard
+          to="/configuracoes/integracoes/extensao"
+          title="Extensão Chrome"
+          description="Crie leads e veja o pipeline direto no WhatsApp Web."
+          badge="Download"
+          icon={<Chrome size={22} className="text-blue-600 dark:text-blue-400" />}
+          iconBg="bg-blue-50 dark:bg-blue-900/20"
         />
       </div>
     </div>
