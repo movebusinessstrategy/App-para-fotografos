@@ -81,6 +81,13 @@ export default function LandingPage() {
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
+  // Pré-aquece o backend já na landing — assim quando o visitante for
+  // fazer cadastro/login, o Render free tier não estará dormindo.
+  useEffect(() => {
+    const base = (import.meta.env.VITE_API_BASE_URL as string) || '';
+    fetch(`${base}/api/health`, { method: 'GET', cache: 'no-store' }).catch(() => {});
+  }, []);
+
   return (
     <div
       ref={scrollRef}

@@ -59,14 +59,19 @@ export default function App() {
     <BrowserRouter>
       <SWRConfig
         value={{
-          // Não refaz a mesma request em 30s — chave do ganho ao navegar entre páginas
-          dedupingInterval: 30_000,
+          // Cache 60s — navegar entre páginas vira instantâneo (não refetch)
+          dedupingInterval: 60_000,
           // Sem revalidar ao trocar de aba (chato e desnecessário)
           revalidateOnFocus: false,
+          // Sem revalidar ao montar se já tem dado cache válido (instant load)
+          revalidateIfStale: false,
           // Mas revalida ao recuperar conexão
           revalidateOnReconnect: true,
-          // 1 retry se falhar
+          // Sem retry agressivo — 1 só, e com delay maior pra não martelar
           errorRetryCount: 1,
+          errorRetryInterval: 3000,
+          // Mantém dados antigos enquanto revalida (sem "Carregando..." flash)
+          keepPreviousData: true,
         }}
       >
       <ThemeProvider> {/* 👈 Envolve tudo */}

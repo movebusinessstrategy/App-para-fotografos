@@ -1,5 +1,5 @@
 import type React from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "../integrations/supabase/client";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
@@ -11,6 +11,14 @@ const Login = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const navigate = useNavigate();
+
+  // Pré-aquece o backend: dispara um ping no momento que a tela de login
+  // carrega. Assim, quando o usuário termina de digitar e clica em Entrar,
+  // o servidor já tá acordado (Render free tier dorme após 15min).
+  useEffect(() => {
+    const base = (import.meta.env.VITE_API_BASE_URL as string) || '';
+    fetch(`${base}/api/health`, { method: 'GET', cache: 'no-store' }).catch(() => {});
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
