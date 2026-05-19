@@ -1,4 +1,4 @@
-import React, { Suspense, useMemo, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 
 import Sidebar from "./Sidebar";
@@ -10,6 +10,22 @@ import BillingGate from "../BillingGate";
 import { useAuth } from "../../contexts/AuthContext";
 import { authFetch } from "../../utils/authFetch";
 import { Client, Opportunity } from "../../types";
+
+// Render free tier dorme após 15min sem requests; o primeiro hit depois
+// disso leva 30s+ pra acordar. Esse ping a cada 12min mantém quente
+// enquanto o usuário tem a aba aberta. Faz GET /api/health, leve.
+function useKeepAlive() {
+  useEffect(() => {
+    const ping = () => {
+      // fetch direto sem authFetch pra não envolver supabase auth no caminho
+      const base = (import.meta.env.VITE_API_BASE_URL as string) || '';
+      fetch(`${base}/api/health`, { method: 'GET', cache: 'no-store' }).catch(() => {});
+    };
+    ping(); // primeiro ping ao montar
+    const id = window.setInterval(ping, 12 * 60 * 1000); // 12min
+    return () => clearInterval(id);
+  }, []);
+}
 
 export type ContactModalPayload = {
   opportunity: Opportunity;
@@ -40,6 +56,9 @@ export default function AppLayout() {
   const location = useLocation();
   const [contactModal, setContactModal] = useState<ContactModalPayload | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Mantém o backend acordado (Render free tier dorme após 15min)
+  useKeepAlive();
 
   const pageTitle = useMemo(() => {
     return TITLE_MAP[location.pathname] || "Dashboard";
