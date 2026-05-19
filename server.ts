@@ -973,6 +973,32 @@ async function startServer() {
   };
 
   // ============ AUTH MIDDLEWARE ============
+  // ─── Auth cache ────────────────────────────────────────────────────
+  // requireAuth fazia 3-5 queries Supabase em CADA request (validar token,
+  // checar membro, checar super-admin, checar platform_account). Página
+  // fazendo 5 requests = 25 queries só de auth. Cache de 30s por token
+  // corta isso pra 1x.
+  // Key: token bearer. Value: req fields setados + impersonação?
+  // Invalidate: header de impersonação muda → cache key inclui header.
+  type AuthCacheEntry = {
+    userId: string;
+    realUserId: string;
+    isMember: boolean;
+    isPlatformAdmin: boolean;
+    isImpersonating: boolean;
+    memberPermissions: any;
+    useAdmin: boolean; // se true, usa supabaseAdmin como client
+    // Account status snapshot (pra bloqueio billing)
+    acctStatus: 'active' | 'suspended' | 'deleted' | null;
+    payBlocked: boolean;
+    payReason: string | null;
+    subscriptionStatus: string | null;
+    trialEndsAt: string | null;
+    cachedAt: number;
+  };
+  const authCache = new Map<string, AuthCacheEntry>();
+  const AUTH_CACHE_TTL_MS = 30_000;
+
   const requireAuth = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
@@ -980,7 +1006,52 @@ async function startServer() {
     }
 
     const token = authHeader.substring(7);
+    const impersonateMemberHeader = (req.headers['x-impersonate-member-id'] as string | undefined)?.trim();
+    const impersonateOwnerHeader  = (req.headers['x-impersonate-owner-id']  as string | undefined)?.trim();
+    // Cache key inclui impersonação pra não vazar contexto entre modos
+    const cacheKey = `${token}|m:${impersonateMemberHeader || ''}|o:${impersonateOwnerHeader || ''}`;
+
+    // Cache hit: pula validação + 4 queries
+    const cached = authCache.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt < AUTH_CACHE_TTL_MS) {
+      // Re-checa bloqueios billing rapidamente (snapshot do cache)
+      if (cached.acctStatus && cached.acctStatus !== 'active' && !cached.isPlatformAdmin) {
+        return res.status(403).json({
+          error: cached.acctStatus === 'suspended' ? 'Conta suspensa' : 'Conta excluída',
+          account_status: cached.acctStatus,
+        });
+      }
+      if (!cached.isPlatformAdmin && req.method !== 'GET' && !isBillingExemptPath(req.path) && cached.payBlocked) {
+        return res.status(402).json({
+          error: 'Assinatura necessária pra continuar',
+          subscription_status: cached.subscriptionStatus,
+          reason: cached.payReason,
+          trial_ends_at: cached.trialEndsAt,
+        });
+      }
+      (req as any).userId = cached.userId;
+      (req as any).realUserId = cached.realUserId;
+      (req as any).isMember = cached.isMember;
+      (req as any).isPlatformAdmin = cached.isPlatformAdmin;
+      (req as any).isImpersonating = cached.isImpersonating;
+      (req as any).memberPermissions = cached.memberPermissions;
+      (req as any).supabase = cached.useAdmin && supabaseAdmin ? supabaseAdmin : createSupabaseClient(authHeader);
+      return next();
+    }
+
     const userClient = createSupabaseClient(authHeader);
+
+    // Helper local pra salvar resultado do auth no cache
+    const cacheAuth = (entry: Omit<AuthCacheEntry, 'cachedAt'>) => {
+      authCache.set(cacheKey, { ...entry, cachedAt: Date.now() });
+      // Limpa cache antigo periodicamente pra não vazar memória
+      if (authCache.size > 500) {
+        const cutoff = Date.now() - AUTH_CACHE_TTL_MS;
+        for (const [k, v] of authCache.entries()) {
+          if (v.cachedAt < cutoff) authCache.delete(k);
+        }
+      }
+    };
 
     try {
       const { data: { user }, error } = await userClient.auth.getUser(token);
@@ -993,9 +1064,7 @@ async function startServer() {
       //  - X-Impersonate-Member-Id  → vê como aquele membro (com as permissões dele)
       //  - X-Impersonate-Owner-Id   → vê como o dono da empresa (acesso total)
       // Membro tem prioridade — só um header é enviado por vez.
-      const impersonateMemberHeader = (req.headers['x-impersonate-member-id'] as string | undefined)?.trim();
-      const impersonateOwnerHeader  = (req.headers['x-impersonate-owner-id']  as string | undefined)?.trim();
-
+      // (já lidos antes do cache check)
       if ((impersonateMemberHeader || impersonateOwnerHeader) && supabaseAdmin) {
         const allowed = await isSuperAdmin(user.id);
         if (!allowed) {
@@ -1066,6 +1135,20 @@ async function startServer() {
           (req as any).isMember = true;
           (req as any).isPlatformAdmin = platformAdmin;
           (req as any).supabase = supabaseAdmin;
+          cacheAuth({
+            userId: memberById.owner_user_id,
+            realUserId: user.id,
+            isMember: true,
+            isPlatformAdmin: platformAdmin,
+            isImpersonating: false,
+            memberPermissions: memberById.permissions,
+            useAdmin: true,
+            acctStatus: (acct?.status as any) ?? null,
+            payBlocked: !!accountRequiresPayment(acct)?.blocked,
+            payReason: accountRequiresPayment(acct)?.reason ?? null,
+            subscriptionStatus: (acct as any)?.subscription_status ?? null,
+            trialEndsAt: (acct as any)?.trial_ends_at ?? null,
+          });
           return next();
         }
 
@@ -1110,6 +1193,20 @@ async function startServer() {
             (req as any).isMember = true;
             (req as any).isPlatformAdmin = platformAdmin;
             (req as any).supabase = supabaseAdmin;
+            cacheAuth({
+              userId: memberByEmail.owner_user_id,
+              realUserId: user.id,
+              isMember: true,
+              isPlatformAdmin: platformAdmin,
+              isImpersonating: false,
+              memberPermissions: memberByEmail.permissions,
+              useAdmin: true,
+              acctStatus: (acct?.status as any) ?? null,
+              payBlocked: !!accountRequiresPayment(acct)?.blocked,
+              payReason: accountRequiresPayment(acct)?.reason ?? null,
+              subscriptionStatus: (acct as any)?.subscription_status ?? null,
+              trialEndsAt: (acct as any)?.trial_ends_at ?? null,
+            });
             return next();
           }
         }
@@ -1146,6 +1243,20 @@ async function startServer() {
       (req as any).isMember = false;
       (req as any).isPlatformAdmin = platformAdmin;
       (req as any).supabase = userClient;
+      cacheAuth({
+        userId: user.id,
+        realUserId: user.id,
+        isMember: false,
+        isPlatformAdmin: platformAdmin,
+        isImpersonating: false,
+        memberPermissions: null,
+        useAdmin: false,
+        acctStatus: (acct?.status as any) ?? null,
+        payBlocked: !!accountRequiresPayment(acct)?.blocked,
+        payReason: accountRequiresPayment(acct)?.reason ?? null,
+        subscriptionStatus: (acct as any)?.subscription_status ?? null,
+        trialEndsAt: (acct as any)?.trial_ends_at ?? null,
+      });
       next();
     } catch (err) {
       console.error('Erro ao validar token:', err);
