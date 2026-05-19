@@ -70,12 +70,7 @@ function getLabelColor(label: string): string {
 }
 
 // ── Stage column ──────────────────────────────────────────────────────────────
-function StageColumn({
-  stage, jobs, process, allStages, allProcesses, dragOverStage,
-  onDragStart, onDragOver, onDragLeave, onDrop, onJobClick, onMoveClick,
-  onNameSave, onHoursSave, teamMembers, onAssigneeChange, onRemoveFromProduction,
-  onReorder,
-}: {
+function StageColumn(props: {
   stage: ProductionStageV2;
   jobs: JobWithProduction[];
   process: ProductionProcess | undefined;
@@ -95,6 +90,16 @@ function StageColumn({
   onRemoveFromProduction: (jobId: number) => void;
   onReorder?: (stageId: string, fromId: number, toId: number) => void;
 }) {
+  const {
+    stage, jobs, process, allStages, allProcesses, dragOverStage,
+    onDragStart, onDragOver, onDragLeave, onDrop, onJobClick, onMoveClick,
+    onNameSave, onHoursSave, teamMembers, onAssigneeChange, onRemoveFromProduction,
+    onReorder,
+  } = props;
+  // Placeholder visual: id do card sobre o qual o usuário está hovering
+  // durante drag. Mostra uma "barra dourada" em cima desse card pra
+  // indicar onde o drop vai cair.
+  const [hoverCardId, setHoverCardId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [editingHours, setEditingHours] = useState(false);
   const [nameVal, setNameVal] = useState(stage.name);
@@ -174,19 +179,32 @@ function StageColumn({
           const elapsed = formatElapsed(job.production_stage_entered_at);
           const assignee = teamMembers.find(m => m.id === job.assignee_id);
 
+          const isHoverTarget = hoverCardId === job.id;
           return (
+            <React.Fragment key={job.id}>
+              {/* Placeholder visual acima do card: abre quando o usuário
+                  arrasta outro card e está hovering sobre este. Indica
+                  visualmente onde o drop vai pousar. */}
+              {isHoverTarget && (
+                <div className="h-16 rounded-xl border-2 border-dashed border-gold-400 bg-gold-50 dark:bg-gold-900/20 transition-all" />
+              )}
             <div
-              key={job.id}
               draggable
               onDragStart={() => onDragStart(job.id)}
+              onDragEnd={() => setHoverCardId(null)}
               onDragOver={e => {
                 // Permite drop em cima de outro card (reorder dentro da stage)
                 e.preventDefault();
                 e.stopPropagation();
+                if (hoverCardId !== job.id) setHoverCardId(job.id);
+              }}
+              onDragLeave={() => {
+                if (hoverCardId === job.id) setHoverCardId(null);
               }}
               onDrop={e => {
                 e.preventDefault();
                 e.stopPropagation();
+                setHoverCardId(null);
                 // Se o card alvo é da mesma stage que o card sendo arrastado, reorder
                 onReorder?.(stage.id, 0, job.id); // 0 = "use o draggingId atual do pai"
               }}
@@ -298,6 +316,7 @@ function StageColumn({
                 </button>
               </div>
             </div>
+            </React.Fragment>
           );
         })}
 
@@ -617,20 +636,25 @@ export function ProductionBoard({ jobs, processes, stages, teamMembers, onChange
   };
 
   // Drop de card em cima de outra tab (pasta) → move pro 1º stage daquela pasta
+  // E TROCA A VIEW pra pasta de destino imediatamente.
   const handleJobDropOnProcess = (processId: string) => {
     const jobId = dragJobId.current;
     if (jobId == null) return;
+    // Troca de aba ANTES de mexer no job — assim o usuário já vê a pasta
+    // certa enquanto o update do backend vai rolando.
+    setOpenProcess(processId);
+    setJobDragOverProcess(null);
+
     const firstStage = stages
       .filter(s => s.process_id === processId)
       .sort((a, b) => (a.position || 0) - (b.position || 0))[0];
-    if (!firstStage) return;
-    const job = jobs.find(j => j.id === jobId);
-    if (job && job.production_stage !== firstStage.id) {
-      onChangeStage(jobId, firstStage.id);
+    if (firstStage) {
+      const job = jobs.find(j => j.id === jobId);
+      if (job && job.production_stage !== firstStage.id) {
+        onChangeStage(jobId, firstStage.id);
+      }
     }
-    setOpenProcess(processId); // troca pra pasta de destino pra ver o resultado
     dragJobId.current = null;
-    setJobDragOverProcess(null);
   };
 
   const handleNameSave = async (stageId: string, name: string) => {
@@ -675,28 +699,42 @@ export function ProductionBoard({ jobs, processes, stages, teamMembers, onChange
             <SortableContext items={orderedProcesses.map(p => p.id)} strategy={horizontalListSortingStrategy}>
               <div className="flex items-end gap-1.5 overflow-x-auto flex-shrink-0 pb-0">
                 {orderedProcesses.map(process => (
-                  <SortableProcessTab
+                  // Wrapper externo segura os native drag events (HTML5) pra
+                  // não brigar com os listeners do @dnd-kit que ficam no botão
+                  // interno (esse só lida com pointer events do tab-reorder).
+                  <div
                     key={process.id}
-                    process={process}
-                    isActive={openProcess === process.id}
-                    jobs={jobs}
-                    stages={stages}
-                    isDraggingThis={draggingTab?.id === process.id}
-                    jobDropOver={jobDragOverProcess === process.id}
-                    onSelect={() => setOpenProcess(process.id)}
-                    onJobDragOver={(e) => {
+                    onDragOver={(e) => {
                       if (dragJobId.current == null) return;
                       e.preventDefault();
+                      e.stopPropagation();
                       setJobDragOverProcess(process.id);
                     }}
-                    onJobDragLeave={() => {
+                    onDragLeave={() => {
                       if (jobDragOverProcess === process.id) setJobDragOverProcess(null);
                     }}
-                    onJobDrop={(e) => {
+                    onDrop={(e) => {
+                      if (dragJobId.current == null) return;
                       e.preventDefault();
+                      e.stopPropagation();
                       handleJobDropOnProcess(process.id);
                     }}
-                  />
+                    className="flex"
+                  >
+                    <SortableProcessTab
+                      process={process}
+                      isActive={openProcess === process.id}
+                      jobs={jobs}
+                      stages={stages}
+                      isDraggingThis={draggingTab?.id === process.id}
+                      jobDropOver={jobDragOverProcess === process.id}
+                      onSelect={() => setOpenProcess(process.id)}
+                      // Native drag/drop é cuidado pelo wrapper externo
+                      onJobDragOver={() => {}}
+                      onJobDragLeave={() => {}}
+                      onJobDrop={() => {}}
+                    />
+                  </div>
                 ))}
               </div>
             </SortableContext>
