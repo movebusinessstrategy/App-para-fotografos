@@ -181,14 +181,8 @@ function StageColumn(props: {
 
           const isHoverTarget = hoverCardId === job.id;
           return (
-            <React.Fragment key={job.id}>
-              {/* Placeholder visual acima do card: abre quando o usuário
-                  arrasta outro card e está hovering sobre este. Indica
-                  visualmente onde o drop vai pousar. */}
-              {isHoverTarget && (
-                <div className="h-16 rounded-xl border-2 border-dashed border-gold-400 bg-gold-50 dark:bg-gold-900/20 transition-all" />
-              )}
             <div
+              key={job.id}
               draggable
               onDragStart={() => onDragStart(job.id)}
               onDragEnd={() => setHoverCardId(null)}
@@ -198,20 +192,25 @@ function StageColumn(props: {
                 e.stopPropagation();
                 if (hoverCardId !== job.id) setHoverCardId(job.id);
               }}
-              onDragLeave={() => {
-                if (hoverCardId === job.id) setHoverCardId(null);
-              }}
+              // Não setamos null no leave do CARD pra evitar flicker — o
+              // hoverCardId só muda quando outro card recebe o dragOver,
+              // ou no dragEnd/drop. (Antes: leave → null → mouse de volta
+              // no card → over → set → leave → null → loop infinito).
               onDrop={e => {
                 e.preventDefault();
                 e.stopPropagation();
                 setHoverCardId(null);
-                // Se o card alvo é da mesma stage que o card sendo arrastado, reorder
-                onReorder?.(stage.id, 0, job.id); // 0 = "use o draggingId atual do pai"
+                onReorder?.(stage.id, 0, job.id);
               }}
+              // box-shadow indica drop target SEM inserir div extra (não
+              // empurra os outros cards, então não tem flicker). Inset
+              // top em dourado dá um "anel" no topo do card.
+              style={isHoverTarget ? { boxShadow: 'inset 0 6px 0 0 #f1c665, 0 2px 8px rgba(0,0,0,0.08)' } : undefined}
               className={cn(
-                'overflow-hidden rounded-xl border shadow-sm transition-all cursor-pointer hover:shadow-md group/card active:opacity-70',
+                'overflow-hidden rounded-xl border shadow-sm transition-shadow cursor-pointer hover:shadow-md group/card active:opacity-70',
                 staleness === 'urgent' ? 'border-red-500 animate-pulse-red bg-red-50/70 dark:bg-red-900/10' :
                 staleness === 'warning' ? 'border-amber-400 animate-pulse-amber bg-amber-50/70 dark:bg-amber-900/10' :
+                isHoverTarget ? 'border-gold-400 bg-gold-50/40 dark:border-gold-500 dark:bg-gold-900/10' :
                 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900'
               )}
             >
@@ -316,7 +315,6 @@ function StageColumn(props: {
                 </button>
               </div>
             </div>
-            </React.Fragment>
           );
         })}
 
@@ -566,6 +564,8 @@ export function ProductionBoard({ jobs, processes, stages, teamMembers, onChange
   const [draggingTab, setDraggingTab] = useState<ProductionProcess | null>(null);
   const [jobDragOverProcess, setJobDragOverProcess] = useState<string | null>(null);
   const dragJobId = useRef<number | null>(null);
+  // Timer pra "peek" — trocar de pasta após hover por 250ms durante drag
+  const tabPeekTimer = useRef<number | null>(null);
 
   const tabSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
@@ -699,9 +699,11 @@ export function ProductionBoard({ jobs, processes, stages, teamMembers, onChange
             <SortableContext items={orderedProcesses.map(p => p.id)} strategy={horizontalListSortingStrategy}>
               <div className="flex items-end gap-1.5 overflow-x-auto flex-shrink-0 pb-0">
                 {orderedProcesses.map(process => (
-                  // Wrapper externo segura os native drag events (HTML5) pra
-                  // não brigar com os listeners do @dnd-kit que ficam no botão
-                  // interno (esse só lida com pointer events do tab-reorder).
+                  // Wrapper externo segura os native drag events (HTML5).
+                  // Comportamento: hover por ~250ms sobre uma aba enquanto
+                  // arrasta um card → troca pra aquela pasta (peek), assim
+                  // o usuário consegue ver as etapas e soltar onde quiser.
+                  // Drop direto na aba também funciona (vai pra 1ª etapa).
                   <div
                     key={process.id}
                     onDragOver={(e) => {
@@ -709,14 +711,29 @@ export function ProductionBoard({ jobs, processes, stages, teamMembers, onChange
                       e.preventDefault();
                       e.stopPropagation();
                       setJobDragOverProcess(process.id);
+                      // Peek: troca pra essa pasta após 250ms hovering
+                      if (openProcess !== process.id && tabPeekTimer.current == null) {
+                        tabPeekTimer.current = window.setTimeout(() => {
+                          setOpenProcess(process.id);
+                          tabPeekTimer.current = null;
+                        }, 250);
+                      }
                     }}
                     onDragLeave={() => {
                       if (jobDragOverProcess === process.id) setJobDragOverProcess(null);
+                      if (tabPeekTimer.current != null) {
+                        clearTimeout(tabPeekTimer.current);
+                        tabPeekTimer.current = null;
+                      }
                     }}
                     onDrop={(e) => {
                       if (dragJobId.current == null) return;
                       e.preventDefault();
                       e.stopPropagation();
+                      if (tabPeekTimer.current != null) {
+                        clearTimeout(tabPeekTimer.current);
+                        tabPeekTimer.current = null;
+                      }
                       handleJobDropOnProcess(process.id);
                     }}
                     className="flex"
@@ -729,7 +746,6 @@ export function ProductionBoard({ jobs, processes, stages, teamMembers, onChange
                       isDraggingThis={draggingTab?.id === process.id}
                       jobDropOver={jobDragOverProcess === process.id}
                       onSelect={() => setOpenProcess(process.id)}
-                      // Native drag/drop é cuidado pelo wrapper externo
                       onJobDragOver={() => {}}
                       onJobDragLeave={() => {}}
                       onJobDrop={() => {}}
