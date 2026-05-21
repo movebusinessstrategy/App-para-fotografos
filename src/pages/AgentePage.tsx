@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { authFetch } from "../utils/authFetch";
 import { cn } from "../utils/cn";
+import AgenteMateriais from "../components/agente/AgenteMateriais";
 
 type Tab = "config" | "test";
 interface ChatMsg {
@@ -288,6 +289,8 @@ export default function AgentePage() {
             rows={16}
             mono
           />
+
+          <AgenteMateriais />
 
           <ConfigSection
             icon={ShieldAlert}
