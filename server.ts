@@ -18,6 +18,7 @@ import { initSentry } from './sentry-server.js';
 const sentryReady = initSentry();
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createSupabaseClient, supabaseAdmin } from './supabase.js';
+import { getAgentReply, DEFAULT_PERSONA, DEFAULT_KNOWLEDGE } from './ai-agent.js';
 import {
   DEFAULT_STAGES,
   DEFAULT_PRODUCTION_STAGES,
@@ -5212,6 +5213,86 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
+  });
+
+  // ============ AGENTE IA ============
+
+  // Lê a config do agente. Se a tabela ainda não existe (migration 009 não
+  // rodada), devolve os padrões + table_missing pra UI avisar.
+  app.get('/api/agent/config', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase
+      .from('ai_agent_config')
+      .select('enabled, persona, knowledge')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) {
+      if (error.code === '42P01') {
+        return res.json({
+          enabled: false,
+          persona: DEFAULT_PERSONA,
+          knowledge: DEFAULT_KNOWLEDGE,
+          table_missing: true,
+        });
+      }
+      return res.status(500).json({ error: error.message });
+    }
+    res.json({
+      enabled: data?.enabled ?? false,
+      persona: data?.persona || DEFAULT_PERSONA,
+      knowledge: data?.knowledge || DEFAULT_KNOWLEDGE,
+    });
+  });
+
+  app.put('/api/agent/config', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { enabled, persona, knowledge } = req.body;
+    const { error } = await supabase
+      .from('ai_agent_config')
+      .upsert(
+        {
+          user_id: userId,
+          enabled: !!enabled,
+          persona: typeof persona === 'string' ? persona : null,
+          knowledge: typeof knowledge === 'string' ? knowledge : null,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id' },
+      );
+    if (error) {
+      if (error.code === '42P01') {
+        return res.status(400).json({
+          error: 'Tabela ai_agent_config não existe. Rode a migration 009_ai_agent_config.sql no Supabase.',
+        });
+      }
+      return res.status(500).json({ error: error.message });
+    }
+    res.json({ success: true });
+  });
+
+  // Playground de teste: gera uma resposta do agente sem enviar nada a
+  // ninguém. Usa a persona/conhecimento do corpo (edição ao vivo na tela).
+  app.post('/api/agent/test', requireAuth, async (req, res) => {
+    const { messages, persona, knowledge } = req.body;
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'Envie ao menos uma mensagem.' });
+    }
+    try {
+      const reply = await getAgentReply(
+        {
+          enabled: true,
+          persona: typeof persona === 'string' ? persona : '',
+          knowledge: typeof knowledge === 'string' ? knowledge : '',
+        },
+        messages,
+      );
+      res.json({ reply });
+    } catch (e: any) {
+      console.error('[Agent test] erro:', e?.message || e);
+      res.status(500).json({ error: e?.message || 'Erro ao gerar resposta do agente.' });
+    }
   });
 
   app.get('/api/me', requireAuth, async (req, res) => {

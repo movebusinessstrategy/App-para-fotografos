@@ -20,6 +20,7 @@ import {
   X,
   Briefcase,
   BookOpen,
+  Bot,
 } from "lucide-react";
 
 import { cn } from "../../utils/cn";
@@ -31,6 +32,7 @@ const ALL_NAV_ITEMS = [
   { to: "/jobs",          label: "Produção",         icon: Camera,          module: "jobs" },
   { to: "/tarefas",       label: "Tarefas",          icon: ListChecks,      module: "jobs" },
   { to: "/vendas",        label: "Vendas",           icon: Trello,          module: "vendas" },
+  { to: "/agente",        label: "Agente IA",        icon: Bot,             module: "agente" },
   { to: "/calendar",      label: "Agenda",           icon: Calendar,        module: "calendar" },
   { to: "/finance",       label: "Financeiro",       icon: DollarSign,      module: "finance" },
   { to: "/oportunidades", label: "Oportunidades",    icon: TrendingUp,      module: "oportunidades" },
