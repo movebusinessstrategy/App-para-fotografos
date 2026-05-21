@@ -1436,10 +1436,10 @@
     composer.focus();
     document.execCommand('selectAll', false, null);
     document.execCommand('delete', false, null);
-    // insertLineBreak preserva as quebras de linha (Shift+Enter); o
-    // insertText sozinho perdia os \n da mensagem.
+    // insertParagraph cria a quebra de linha de verdade (insertLineBreak
+    // não é reconhecido pelo compositor; insertText sozinho perde os \n).
     String(text).replace(/\r/g, '').split('\n').forEach((line, i) => {
-      if (i > 0) document.execCommand('insertLineBreak');
+      if (i > 0) document.execCommand('insertParagraph');
       if (line) document.execCommand('insertText', false, line);
     });
     return true;

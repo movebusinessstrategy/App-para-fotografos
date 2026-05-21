@@ -170,8 +170,8 @@
   }
 
   // Insere o texto no compositor preservando as quebras de linha.
-  // insertLineBreak = quebra "leve" (Shift+Enter): fica DENTRO da mesma
-  // mensagem, sem virar Enter (que enviaria) nem dividir em várias.
+  // insertParagraph cria a quebra de verdade (insertLineBreak não é
+  // reconhecido pelo compositor; insertText sozinho perde os \n).
   function insertIntoComposer(text) {
     const composer = getComposer();
     if (!composer) return false;
@@ -180,7 +180,7 @@
     document.execCommand('delete', false, null);
     const lines = String(text).replace(/\r/g, '').split('\n');
     lines.forEach((line, i) => {
-      if (i > 0) document.execCommand('insertLineBreak');
+      if (i > 0) document.execCommand('insertParagraph');
       if (line) document.execCommand('insertText', false, line);
     });
     return true;
