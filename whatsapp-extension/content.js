@@ -2881,7 +2881,7 @@
       b.classList.toggle('fp-tk-filter-active', b.getAttribute('data-filter') === tasksState.filter);
     });
 
-    const meId = tasksState.me?.team_member_id || tasksState.me?.id || null;
+    const meId = tasksState.me?.currentMember?.id || null;
     const memberById = new Map(tasksState.members.map((m) => [m.id, m]));
     const clientById = new Map((tasksState.clients || []).map((c) => [c.id, c]));
     const todayStr = new Date().toISOString().slice(0, 10);
@@ -2989,7 +2989,7 @@
   function openTaskModal(task, opts = {}) {
     document.getElementById('fp-task-overlay')?.remove();
     const isEdit = !!task;
-    const meId = tasksState.me?.team_member_id || tasksState.me?.id || null;
+    const meId = tasksState.me?.currentMember?.id || null;
     const today = new Date();
     const defaultDue = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).toISOString().slice(0, 10);
 
