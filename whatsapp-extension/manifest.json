@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FocalPoint para WhatsApp",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Pipeline de vendas integrado ao WhatsApp Web",
   "permissions": ["storage", "activeTab", "tabs"],
   "host_permissions": [

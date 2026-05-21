@@ -1,7 +1,6 @@
-// Agente IA — widget isolado no WhatsApp Web.
-// Lê a conversa aberta, pede uma sugestão de resposta ao backend e
-// (se o usuário aprovar) insere no compositor. O envio é sempre manual.
-// Mantido separado do content.js de propósito, pra não acoplar nada.
+// Lia — assistente de atendimento. Widget isolado no WhatsApp Web.
+// Lê a conversa aberta, pede uma sugestão ao backend e (se o usuário
+// aprovar) insere/envia no compositor. Mantido separado do content.js.
 
 (function () {
   'use strict';
@@ -14,7 +13,9 @@
     #fpa-fab {
       position: fixed; right: 24px; bottom: 104px;
       width: 54px; height: 54px; border-radius: 50%;
-      background: #D4A94A; color: #fff; font-size: 25px;
+      background: #D4A94A; color: #fff;
+      font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+      font-size: 23px; font-weight: 600;
       border: none; cursor: pointer; z-index: 2147483000;
       box-shadow: 0 4px 16px rgba(0,0,0,.28);
       display: flex; align-items: center; justify-content: center;
@@ -30,11 +31,19 @@
     }
     #fpa-panel.fpa-open { display: flex; }
     .fpa-head {
-      background: #D4A94A; color: #fff; padding: 12px 14px;
+      background: #D4A94A; color: #fff; padding: 11px 14px;
       display: flex; align-items: center; justify-content: space-between;
     }
-    .fpa-head b { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 7px; }
-    #fpa-fab svg { display: block; }
+    .fpa-head-id { display: flex; align-items: center; gap: 10px; }
+    .fpa-avatar {
+      width: 32px; height: 32px; border-radius: 50%;
+      background: rgba(255,255,255,.22);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 15px;
+    }
+    .fpa-head-txt { display: flex; flex-direction: column; line-height: 1.15; }
+    .fpa-name { font-size: 15px; font-weight: 700; }
+    .fpa-sub { font-size: 11px; opacity: .85; }
     .fpa-x {
       background: none; border: none; color: #fff; font-size: 17px;
       cursor: pointer; line-height: 1; padding: 2px 4px;
@@ -51,6 +60,7 @@
     .fpa-btn-primary:hover:not(:disabled) { background: #c39b3f; }
     .fpa-btn-ghost { background: #f0f0f0; color: #333; }
     .fpa-btn-ghost:hover:not(:disabled) { background: #e6e6e6; }
+    #fpa-insert { margin-top: 8px; }
     .fpa-textarea {
       width: 100%; box-sizing: border-box; border: 1px solid #ddd;
       border-radius: 10px; padding: 10px; font-size: 13.5px;
@@ -63,7 +73,7 @@
       background: #fdecea; color: #c0392b; font-size: 12.5px;
       padding: 9px 10px; border-radius: 8px; margin-top: 10px; line-height: 1.4;
     }
-    .fpa-ok { color: #2e7d32; font-size: 12.5px; margin-top: 8px; text-align: center; }
+    .fpa-ok { color: #2e7d32; font-size: 12.5px; margin-top: 10px; text-align: center; }
   `;
   document.documentElement.appendChild(style);
 
@@ -103,8 +113,6 @@
     const main = document.querySelector('#main');
     if (!main) return null;
 
-    // Centro do painel — pra classificar enviada/recebida pela posição
-    // da bolha quando as classes message-in/message-out não existirem.
     const mainRect = main.getBoundingClientRect();
     const mid = mainRect.left + mainRect.width / 2;
 
@@ -116,9 +124,7 @@
       return r.left + r.width / 2 > mid ? 'assistant' : 'user';
     }
 
-    // 1ª: divs com data-pre-plain-text (atributo estável do "copiar mensagem")
     let nodes = [...main.querySelectorAll('[data-pre-plain-text]')];
-    // 2ª: spans de texto selecionável
     if (nodes.length === 0) {
       nodes = [...main.querySelectorAll('span.selectable-text')];
     }
@@ -129,7 +135,6 @@
       if (text) msgs.push({ role: classify(node), content: text });
     }
 
-    // 3ª (último recurso): texto bruto de cada linha da conversa
     if (msgs.length === 0) {
       main.querySelectorAll('div[role="row"]').forEach((row) => {
         const t = (row.innerText || '').trim();
@@ -153,44 +158,99 @@
     return msgs.slice(-limit);
   }
 
-  // ── Escrita no compositor do WhatsApp Web ─────────────────────────
-  function insertIntoComposer(text) {
-    const composer =
+  // ── Escrita / envio no compositor do WhatsApp Web ─────────────────
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function getComposer() {
+    return (
       document.querySelector('#main footer div[contenteditable="true"]') ||
       document.querySelector('div[role="textbox"][contenteditable="true"][data-tab]') ||
-      document.querySelector('footer [contenteditable="true"]');
+      document.querySelector('footer [contenteditable="true"]')
+    );
+  }
+
+  // Insere o texto no compositor preservando espaços e quebras de linha.
+  // Simula uma colagem — o WhatsApp trata o evento 'paste' corretamente
+  // (o insertText antigo perdia as quebras de linha).
+  function insertIntoComposer(text) {
+    const composer = getComposer();
     if (!composer) return false;
     composer.focus();
     document.execCommand('selectAll', false, null);
     document.execCommand('delete', false, null);
-    document.execCommand('insertText', false, text);
+
+    let pasted = false;
+    try {
+      const dt = new DataTransfer();
+      dt.setData('text/plain', text);
+      const evt = new ClipboardEvent('paste', {
+        clipboardData: dt,
+        bubbles: true,
+        cancelable: true,
+      });
+      if (!evt.clipboardData) {
+        Object.defineProperty(evt, 'clipboardData', { value: dt });
+      }
+      composer.dispatchEvent(evt);
+      pasted = true;
+    } catch (e) {
+      pasted = false;
+    }
+
+    // Se a colagem não escreveu nada, escreve linha a linha.
+    if (!pasted || !(composer.textContent || '').trim()) {
+      text.split('\n').forEach((line, i) => {
+        if (i > 0) document.execCommand('insertParagraph');
+        if (line) document.execCommand('insertText', false, line);
+      });
+    }
+    return true;
+  }
+
+  function clickSendButton() {
+    const icon = document.querySelector(
+      '#main footer [data-icon="send"], #main footer [data-icon="wds-ic-send-filled"], ' +
+        '#main footer button[aria-label="Enviar"], #main footer button[aria-label="Send"]',
+    );
+    if (icon) {
+      (icon.closest('button') || icon).click();
+      return true;
+    }
+    return false;
+  }
+
+  // Insere e envia. Lança erro se não conseguiu enviar (o texto fica no campo).
+  async function sendSuggestion(text) {
+    if (!insertIntoComposer(text)) {
+      throw new Error('Não achei o campo de mensagem. Clique na conversa e tente de novo.');
+    }
+    await sleep(240); // espera o WhatsApp renderizar o botão de enviar
+    clickSendButton();
+    await sleep(420);
+    const composer = getComposer();
+    if (composer && (composer.textContent || '').trim()) {
+      throw new Error('Inseri a mensagem, mas não consegui enviar sozinho. Revise e clique enviar no WhatsApp.');
+    }
     return true;
   }
 
   // ── UI ────────────────────────────────────────────────────────────
-  // Ícone "sparkles" (estilo Apple Intelligence): uma estrela de 4 pontas
-  // grande + uma pequena. fill=currentColor herda a cor branca.
-  function sparkleSvg(size) {
-    return (
-      `<svg width="${size}" height="${size}" viewBox="0 0 24 24" ` +
-      `fill="currentColor" aria-hidden="true">` +
-      `<path d="M10 4 Q10 13 19 13 Q10 13 10 22 Q10 13 1 13 Q10 13 10 4 Z"/>` +
-      `<path d="M18.5 1.5 Q18.5 5.5 22.5 5.5 Q18.5 5.5 18.5 9.5 ` +
-      `Q18.5 5.5 14.5 5.5 Q18.5 5.5 18.5 1.5 Z"/>` +
-      `</svg>`
-    );
-  }
-
   const fab = document.createElement('button');
   fab.id = 'fpa-fab';
-  fab.title = 'Agente IA — sugerir resposta';
-  fab.innerHTML = sparkleSvg(26);
+  fab.title = 'Lia — assistente de atendimento';
+  fab.textContent = 'L';
 
   const panel = document.createElement('div');
   panel.id = 'fpa-panel';
   panel.innerHTML = `
     <div class="fpa-head">
-      <b>${sparkleSvg(16)} Agente IA</b>
+      <div class="fpa-head-id">
+        <span class="fpa-avatar">L</span>
+        <div class="fpa-head-txt">
+          <span class="fpa-name">Lia</span>
+          <span class="fpa-sub">Assistente de atendimento</span>
+        </div>
+      </div>
       <button class="fpa-x" id="fpa-close" title="Fechar">✕</button>
     </div>
     <div class="fpa-body">
@@ -199,8 +259,9 @@
       <div id="fpa-spin" class="fpa-spin" style="display:none;">Gerando sugestão…</div>
       <div id="fpa-result" style="display:none;">
         <textarea class="fpa-textarea" id="fpa-text" placeholder="A sugestão aparece aqui…"></textarea>
-        <button class="fpa-btn fpa-btn-primary" id="fpa-insert">Inserir no WhatsApp</button>
-        <div id="fpa-ok" class="fpa-ok" style="display:none;">✓ Inserido — revise e envie pelo WhatsApp.</div>
+        <button class="fpa-btn fpa-btn-primary" id="fpa-send">Enviar resposta</button>
+        <button class="fpa-btn fpa-btn-ghost" id="fpa-insert">Inserir sem enviar</button>
+        <div id="fpa-ok" class="fpa-ok" style="display:none;"></div>
       </div>
       <div id="fpa-err" class="fpa-err" style="display:none;"></div>
     </div>
@@ -214,6 +275,7 @@
   const elSpin = $('#fpa-spin');
   const elResult = $('#fpa-result');
   const elText = $('#fpa-text');
+  const elSend = $('#fpa-send');
   const elInsert = $('#fpa-insert');
   const elErr = $('#fpa-err');
   const elOk = $('#fpa-ok');
@@ -225,13 +287,14 @@
   function clearError() {
     elErr.style.display = 'none';
   }
+  function clearSuggestion() {
+    elText.value = '';
+    elResult.style.display = 'none';
+    elGen.textContent = 'Gerar sugestão';
+  }
 
-  fab.addEventListener('click', () => {
-    panel.classList.toggle('fpa-open');
-  });
-  $('#fpa-close').addEventListener('click', () => {
-    panel.classList.remove('fpa-open');
-  });
+  fab.addEventListener('click', () => panel.classList.toggle('fpa-open'));
+  $('#fpa-close').addEventListener('click', () => panel.classList.remove('fpa-open'));
 
   async function generate() {
     clearError();
@@ -255,8 +318,7 @@
     elResult.style.display = 'none';
     try {
       const resp = await bg({ type: 'AGENT_SUGGEST', messages: msgs });
-      const reply = (resp && resp.reply) || '';
-      elText.value = reply;
+      elText.value = (resp && resp.reply) || '';
       elResult.style.display = 'block';
       elGen.textContent = 'Gerar de novo';
     } catch (e) {
@@ -266,18 +328,48 @@
       elSpin.style.display = 'none';
     }
   }
-
   elGen.addEventListener('click', generate);
 
-  elInsert.addEventListener('click', () => {
+  // Enviar: insere no compositor e envia; some com a sugestão ao concluir.
+  elSend.addEventListener('click', async () => {
     clearError();
+    elOk.style.display = 'none';
     const text = elText.value.trim();
     if (!text) {
       showError('A sugestão está vazia.');
       return;
     }
-    const ok = insertIntoComposer(text);
-    if (ok) {
+    elSend.disabled = true;
+    elInsert.disabled = true;
+    elSend.textContent = 'Enviando…';
+    try {
+      await sendSuggestion(text);
+      elOk.textContent = '✓ Enviado!';
+      elOk.style.display = 'block';
+      setTimeout(() => {
+        elOk.style.display = 'none';
+        clearSuggestion();
+      }, 1500);
+    } catch (e) {
+      showError(e && e.message ? e.message : 'Erro ao enviar.');
+    } finally {
+      elSend.disabled = false;
+      elInsert.disabled = false;
+      elSend.textContent = 'Enviar resposta';
+    }
+  });
+
+  // Inserir sem enviar: só joga no campo, pra você ajustar no WhatsApp.
+  elInsert.addEventListener('click', () => {
+    clearError();
+    elOk.style.display = 'none';
+    const text = elText.value.trim();
+    if (!text) {
+      showError('A sugestão está vazia.');
+      return;
+    }
+    if (insertIntoComposer(text)) {
+      elOk.textContent = '✓ Inserido — revise e envie pelo WhatsApp.';
       elOk.style.display = 'block';
       setTimeout(() => {
         elOk.style.display = 'none';
