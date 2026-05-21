@@ -169,20 +169,17 @@
     );
   }
 
-  // Insere o texto no compositor preservando as quebras de linha.
-  // insertParagraph cria a quebra de verdade (insertLineBreak não é
-  // reconhecido pelo compositor; insertText sozinho perde os \n).
+  // O compositor do WhatsApp Web não aceita quebra de linha injetada por
+  // script de forma confiável — insere em um parágrafo só (as quebras
+  // viram espaço, sem deixar o texto grudado).
   function insertIntoComposer(text) {
     const composer = getComposer();
     if (!composer) return false;
     composer.focus();
     document.execCommand('selectAll', false, null);
     document.execCommand('delete', false, null);
-    const lines = String(text).replace(/\r/g, '').split('\n');
-    lines.forEach((line, i) => {
-      if (i > 0) document.execCommand('insertParagraph');
-      if (line) document.execCommand('insertText', false, line);
-    });
+    const oneLine = String(text).replace(/\s*\n+\s*/g, ' ').trim();
+    document.execCommand('insertText', false, oneLine);
     return true;
   }
 
