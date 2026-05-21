@@ -2,13 +2,16 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Bot,
+  BookOpen,
   Check,
   Loader2,
   MessageCircle,
   Save,
   Send,
   Settings2,
+  ShieldAlert,
   Sparkles,
+  Target,
   Trash2,
 } from "lucide-react";
 import { authFetch } from "../utils/authFetch";
@@ -20,13 +23,53 @@ interface ChatMsg {
   content: string;
 }
 
+// Bloco de configuração reutilizável (ícone + título + ajuda + textarea).
+function ConfigSection({
+  icon: Icon,
+  title,
+  help,
+  value,
+  onChange,
+  rows,
+  mono,
+}: {
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  title: string;
+  help: string;
+  value: string;
+  onChange: (v: string) => void;
+  rows: number;
+  mono?: boolean;
+}) {
+  return (
+    <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800">
+      <div className="flex items-center gap-2 mb-1">
+        <Icon size={17} className="text-gold-600 dark:text-gold-400" />
+        <h3 className="font-semibold text-gray-900 dark:text-white">{title}</h3>
+      </div>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">{help}</p>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={rows}
+        className={cn(
+          "w-full px-3 py-2.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-gold-500/40 resize-y",
+          mono && "font-mono",
+        )}
+      />
+    </div>
+  );
+}
+
 export default function AgentePage() {
   const [tab, setTab] = useState<Tab>("config");
 
   // ── Configuração ──────────────────────────────────────────────
   const [enabled, setEnabled] = useState(false);
   const [persona, setPersona] = useState("");
+  const [objective, setObjective] = useState("");
   const [knowledge, setKnowledge] = useState("");
+  const [rules, setRules] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -57,7 +100,9 @@ export default function AgentePage() {
       if (res.ok) {
         setEnabled(!!data.enabled);
         setPersona(data.persona || "");
+        setObjective(data.objective || "");
         setKnowledge(data.knowledge || "");
+        setRules(data.rules || "");
         setTableMissing(!!data.table_missing);
       } else {
         setError(data.error || "Erro ao carregar a configuração.");
@@ -76,7 +121,7 @@ export default function AgentePage() {
     try {
       const res = await authFetch("/api/agent/config", {
         method: "PUT",
-        body: JSON.stringify({ enabled, persona, knowledge }),
+        body: JSON.stringify({ enabled, persona, objective, knowledge, rules }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
@@ -104,7 +149,13 @@ export default function AgentePage() {
     try {
       const res = await authFetch("/api/agent/test", {
         method: "POST",
-        body: JSON.stringify({ messages: next, persona, knowledge }),
+        body: JSON.stringify({
+          messages: next,
+          persona,
+          objective,
+          knowledge,
+          rules,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.reply) {
@@ -174,9 +225,10 @@ export default function AgentePage() {
             <div className="flex gap-3 p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
               <AlertTriangle size={20} className="text-amber-500 flex-shrink-0 mt-0.5" />
               <div className="text-sm text-amber-800 dark:text-amber-300">
-                <strong>Banco ainda não preparado.</strong> Rode a migration{" "}
-                <code className="font-mono">009_ai_agent_config.sql</code> no Supabase
-                (SQL Editor) para conseguir salvar a configuração.
+                <strong>Banco ainda não preparado.</strong> Rode as migrations{" "}
+                <code className="font-mono">009</code> e{" "}
+                <code className="font-mono">010</code> no Supabase (SQL Editor)
+                para conseguir salvar a configuração.
               </div>
             </div>
           )}
@@ -209,37 +261,42 @@ export default function AgentePage() {
             </button>
           </div>
 
-          {/* Persona */}
-          <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800">
-            <label className="block font-semibold text-gray-900 dark:text-white mb-1">
-              Personalidade e tom de voz
-            </label>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
-              Como o agente fala — o jeitinho da sua marca. Quanto mais específico, mais parecido com você.
-            </p>
-            <textarea
-              value={persona}
-              onChange={(e) => setPersona(e.target.value)}
-              rows={9}
-              className="w-full px-3 py-2.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-gold-500/40 resize-y"
-            />
-          </div>
+          <ConfigSection
+            icon={Sparkles}
+            title="Personalidade e tom de voz"
+            help="Como o agente fala — o jeitinho da sua marca. Quanto mais específico, mais parecido com você."
+            value={persona}
+            onChange={setPersona}
+            rows={9}
+          />
 
-          {/* Base de conhecimento */}
-          <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800">
-            <label className="block font-semibold text-gray-900 dark:text-white mb-1">
-              Base de conhecimento
-            </label>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
-              Pacotes, preços, horários e políticas. O agente nunca inventa nada fora daqui — preencha os campos entre colchetes.
-            </p>
-            <textarea
-              value={knowledge}
-              onChange={(e) => setKnowledge(e.target.value)}
-              rows={16}
-              className="w-full px-3 py-2.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-gold-500/40 resize-y font-mono"
-            />
-          </div>
+          <ConfigSection
+            icon={Target}
+            title="Objetivo e fluxo do atendimento"
+            help="O que o agente tem que fazer, em que ordem, e o que conta como atendimento bem fechado."
+            value={objective}
+            onChange={setObjective}
+            rows={11}
+          />
+
+          <ConfigSection
+            icon={BookOpen}
+            title="Base de conhecimento"
+            help="Pacotes, preços, horários e políticas. O agente nunca inventa nada fora daqui — preencha os campos entre colchetes."
+            value={knowledge}
+            onChange={setKnowledge}
+            rows={16}
+            mono
+          />
+
+          <ConfigSection
+            icon={ShieldAlert}
+            title="Regras e limites"
+            help="O que o agente NUNCA pode fazer ou falar. É aqui que você o deixa fechadinho — sem elogio vazio, sem enrolação, sem fugir do assunto."
+            value={rules}
+            onChange={setRules}
+            rows={15}
+          />
 
           {error && (
             <div className="text-sm text-red-600 dark:text-red-400">{error}</div>
@@ -273,8 +330,7 @@ export default function AgentePage() {
             <Sparkles size={20} className="text-blue-500 flex-shrink-0 mt-0.5" />
             <div className="text-sm text-blue-800 dark:text-blue-300">
               <strong>Modo teste.</strong> Converse como se fosse um cliente — nada é
-              enviado para ninguém. Usa a persona e a base de conhecimento da aba
-              Configuração (mesmo sem salvar).
+              enviado para ninguém. Usa a configuração da aba ao lado (mesmo sem salvar).
             </div>
           </div>
 
