@@ -261,6 +261,13 @@ async function handleMessage(message) {
       const days = Number(message.days) || 7;
       return apiFetch(`/api/extension/sales-overview?days=${days}`);
     }
+    case 'AGENT_SUGGEST': {
+      // Recebe a conversa lida do WhatsApp Web e devolve a resposta sugerida.
+      return apiFetch('/api/agent/suggest', {
+        method: 'POST',
+        body: JSON.stringify({ messages: message.messages || [] }),
+      });
+    }
     default:
       throw new Error(`Tipo de mensagem desconhecido: ${message.type}`);
   }
