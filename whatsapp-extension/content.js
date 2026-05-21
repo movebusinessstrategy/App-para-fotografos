@@ -1436,12 +1436,14 @@
     composer.focus();
     document.execCommand('selectAll', false, null);
     document.execCommand('delete', false, null);
-    // insertParagraph cria a quebra de linha de verdade (insertLineBreak
-    // não é reconhecido pelo compositor; insertText sozinho perde os \n).
-    String(text).replace(/\r/g, '').split('\n').forEach((line, i) => {
-      if (i > 0) document.execCommand('insertParagraph');
-      if (line) document.execCommand('insertText', false, line);
-    });
+    // O compositor do WhatsApp Web não aceita quebra de linha injetada
+    // por script de forma confiável — manda em um parágrafo só
+    // (quebras de linha viram espaço, sem deixar o texto grudado).
+    document.execCommand(
+      'insertText',
+      false,
+      String(text).replace(/\s*\n+\s*/g, ' ').trim(),
+    );
     return true;
   }
 
