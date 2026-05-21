@@ -7,24 +7,26 @@
   if (window.__fpAgenteLoaded) return;
   window.__fpAgenteLoaded = true;
 
-  // Foto da Lia (arquivo lia.png na pasta da extensão).
-  const LIA_IMG = chrome.runtime.getURL('lia.png');
-
   // ── Estilos ──────────────────────────────────────────────────────
   const style = document.createElement('style');
   style.textContent = `
+    @keyframes fpa-twinkle {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(.78); opacity: .5; }
+    }
     #fpa-fab {
-      position: fixed; right: 20px; bottom: 92px;
-      width: 76px; height: 76px;
-      background: none; border: none; padding: 0;
-      cursor: pointer; z-index: 2147483000;
-      filter: drop-shadow(0 3px 7px rgba(0,0,0,.4));
+      position: fixed; right: 24px; bottom: 104px;
+      width: 54px; height: 54px; border-radius: 50%;
+      background: #D4A94A; color: #fff;
+      border: none; cursor: pointer; z-index: 2147483000;
+      box-shadow: 0 4px 16px rgba(0,0,0,.28);
+      display: flex; align-items: center; justify-content: center;
       transition: transform .15s ease;
     }
-    #fpa-fab img { width: 100%; height: 100%; object-fit: contain; display: block; }
     #fpa-fab:hover { transform: scale(1.08); }
+    #fpa-fab svg { animation: fpa-twinkle 1.8s ease-in-out infinite; }
     #fpa-panel {
-      position: fixed; right: 24px; bottom: 182px; width: 340px;
+      position: fixed; right: 24px; bottom: 170px; width: 340px;
       max-height: 72vh; background: #fff; border-radius: 16px;
       box-shadow: 0 10px 40px rgba(0,0,0,.30); z-index: 2147483000;
       display: none; flex-direction: column; overflow: hidden;
@@ -36,8 +38,11 @@
       display: flex; align-items: center; justify-content: space-between;
     }
     .fpa-head-id { display: flex; align-items: center; gap: 10px; }
-    .fpa-avatar { width: 40px; height: 40px; }
-    .fpa-avatar img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .fpa-avatar {
+      width: 32px; height: 32px; border-radius: 50%;
+      background: rgba(255,255,255,.22);
+      display: flex; align-items: center; justify-content: center;
+    }
     .fpa-head-txt { display: flex; flex-direction: column; line-height: 1.15; }
     .fpa-name { font-size: 15px; font-weight: 700; }
     .fpa-sub { font-size: 11px; opacity: .85; }
@@ -92,7 +97,6 @@
   }
 
   // ── Leitura da conversa aberta no WhatsApp Web ────────────────────
-  // Extrai texto preservando emojis (alt das imagens) e quebras de linha.
   function extractText(el) {
     let out = '';
     el.childNodes.forEach((n) => {
@@ -105,7 +109,6 @@
   }
 
   // Retorna null se não há conversa aberta; [] se aberta mas sem mensagens.
-  // Usa várias estratégias porque o WhatsApp Web muda a estrutura do DOM.
   function readConversation(limit) {
     const main = document.querySelector('#main');
     if (!main) return null;
@@ -208,17 +211,29 @@
   }
 
   // ── UI ────────────────────────────────────────────────────────────
+  // Ícone "sparkles": estrela de 4 pontas grande + uma pequena.
+  function sparkleSvg(size) {
+    return (
+      `<svg width="${size}" height="${size}" viewBox="0 0 24 24" ` +
+      `fill="currentColor" aria-hidden="true">` +
+      `<path d="M10 4 Q10 13 19 13 Q10 13 10 22 Q10 13 1 13 Q10 13 10 4 Z"/>` +
+      `<path d="M18.5 1.5 Q18.5 5.5 22.5 5.5 Q18.5 5.5 18.5 9.5 ` +
+      `Q18.5 5.5 14.5 5.5 Q18.5 5.5 18.5 1.5 Z"/>` +
+      `</svg>`
+    );
+  }
+
   const fab = document.createElement('button');
   fab.id = 'fpa-fab';
   fab.title = 'Lia — assistente de atendimento';
-  fab.innerHTML = `<img src="${LIA_IMG}" alt="Lia">`;
+  fab.innerHTML = sparkleSvg(26);
 
   const panel = document.createElement('div');
   panel.id = 'fpa-panel';
   panel.innerHTML = `
     <div class="fpa-head">
       <div class="fpa-head-id">
-        <span class="fpa-avatar"><img src="${LIA_IMG}" alt="Lia"></span>
+        <span class="fpa-avatar">${sparkleSvg(18)}</span>
         <div class="fpa-head-txt">
           <span class="fpa-name">Lia</span>
           <span class="fpa-sub">Assistente de atendimento</span>
@@ -283,6 +298,10 @@
     }
     if (!msgs.some((m) => m.role === 'user')) {
       showError('A conversa não tem nenhuma mensagem do cliente para responder.');
+      return;
+    }
+    if (msgs[msgs.length - 1].role !== 'user') {
+      showError('A última mensagem da conversa é sua — espere o cliente responder.');
       return;
     }
 
