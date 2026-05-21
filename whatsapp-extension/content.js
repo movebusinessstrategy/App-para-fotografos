@@ -1270,30 +1270,42 @@
     const st = document.createElement('style');
     st.id = 'fp-chatpop-style';
     st.textContent =
+      '.fp-popup-flat{transform:none!important;will-change:auto!important;' +
+      'filter:none!important;perspective:none!important;contain:none!important;}' +
       '#main.fp-chat-popup{position:fixed!important;border-radius:14px!important;' +
-      'overflow:hidden!important;z-index:2147483646!important;' +
-      'box-shadow:0 24px 80px rgba(0,0,0,.6)!important;}';
+      'overflow:hidden!important;z-index:2147483647!important;' +
+      'box-shadow:0 24px 80px rgba(0,0,0,.65)!important;}';
     document.documentElement.appendChild(st);
+  }
+
+  // Esc fecha o popup (e impede o WhatsApp de reagir ao Esc).
+  function popupEsc(e) {
+    if (e.key === 'Escape' && chatPopupState) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeChatPopup();
+    }
   }
 
   function closeChatPopup() {
     if (!chatPopupState) return;
-    const { main, parent, next, guard } = chatPopupState;
+    const { main, flattened, root } = chatPopupState;
     chatPopupState = null;
-    try { guard.disconnect(); } catch {}
+    document.removeEventListener('keydown', popupEsc, true);
     main.classList.remove('fp-chat-popup');
     ['left', 'top', 'width', 'height'].forEach((p) => main.style.removeProperty(p));
-    try {
-      if (next && next.parentNode === parent) parent.insertBefore(main, next);
-      else if (parent) parent.appendChild(main);
-    } catch {}
+    (flattened || []).forEach((el) => el.classList.remove('fp-popup-flat'));
+    if (root) {
+      root.style.removeProperty('z-index');
+      root.style.removeProperty('position');
+    }
     document.getElementById('fp-chatpop-backdrop')?.remove();
     document.getElementById('fp-chatpop-close')?.remove();
   }
 
-  // Abre a conversa do WhatsApp num popup central, com a pipeline atrás.
-  // Move o #main pra fora da árvore do WhatsApp (direto no body) — assim o
-  // position:fixed fica relativo à janela e o z-index volta a valer.
+  // Abre a conversa do WhatsApp num popup central. O #main NÃO sai da
+  // árvore do WhatsApp (assim os botões e o envio continuam funcionando) —
+  // em vez disso "achatamos" os ancestrais que prendiam o position:fixed.
   async function openCardPopup(deal) {
     const phone = deal.contact_phone || '';
     const name = deal.contact_name || deal.title || 'Lead';
@@ -1302,13 +1314,12 @@
     closeChatPopup();
     ensureChatPopupStyle();
 
-    // O backdrop sobe ANTES de abrir a conversa — cobre a troca de tela
-    // do WhatsApp, pra o usuário não ver o "flash" da conversa.
+    // O backdrop sobe ANTES de abrir a conversa — cobre a troca de tela.
     document.getElementById('fp-chatpop-backdrop')?.remove();
     const backdrop = document.createElement('div');
     backdrop.id = 'fp-chatpop-backdrop';
     backdrop.style.cssText =
-      'position:fixed;inset:0;z-index:2147483645;background:rgba(0,0,0,.5);' +
+      'position:fixed;inset:0;z-index:2147483646;background:rgba(0,0,0,.55);' +
       'backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);' +
       'display:flex;align-items:center;justify-content:center;';
     backdrop.innerHTML =
@@ -1320,20 +1331,33 @@
 
     const main = document.querySelector('#main');
     if (!main) { backdrop.remove(); return; }
-
+    backdrop.innerHTML = '';
     document.getElementById('fp-kanban')?.classList.remove('fp-hidden');
-    backdrop.innerHTML = ''; // tira o "Abrindo conversa…"
 
-    // Se o WhatsApp tentar recolocar o #main na árvore dele, traz de volta.
-    const guard = new MutationObserver(() => {
-      if (chatPopupState && main.parentNode !== document.body) {
-        document.body.appendChild(main);
+    // Achata os ancestrais do #main que criam "containing block"
+    // (transform/filter/will-change/contain) — sem isso o position:fixed
+    // não vale pela janela. Acha também o container raiz (filho do body).
+    const flattened = [];
+    let root = null;
+    for (let el = main.parentElement; el && el !== document.body; el = el.parentElement) {
+      const cs = getComputedStyle(el);
+      if (cs.transform !== 'none' || cs.perspective !== 'none' || cs.filter !== 'none' ||
+          /transform/.test(cs.willChange) ||
+          (cs.contain && cs.contain !== 'none' && cs.contain !== 'normal')) {
+        el.classList.add('fp-popup-flat');
+        flattened.push(el);
       }
-    });
-    chatPopupState = { main, parent: main.parentNode, next: main.nextSibling, guard };
-    document.body.appendChild(main);
-    guard.observe(document.body, { childList: true });
+      if (el.parentElement === document.body) root = el;
+    }
+    // Sobe o container do WhatsApp acima do funil; o backdrop entra nele
+    // pra embaçar a interface do WhatsApp atrás do popup.
+    if (root) {
+      root.style.setProperty('position', 'relative', 'important');
+      root.style.setProperty('z-index', '2147483647', 'important');
+      root.appendChild(backdrop);
+    }
 
+    chatPopupState = { main, flattened, root };
     main.classList.add('fp-chat-popup');
     const w = Math.round(window.innerWidth * 0.67);
     const h = Math.round(window.innerHeight * 0.86);
@@ -1347,17 +1371,18 @@
     const closeBtn = document.createElement('button');
     closeBtn.id = 'fp-chatpop-close';
     closeBtn.textContent = '✕';
-    closeBtn.title = 'Fechar';
+    closeBtn.title = 'Fechar (Esc)';
     closeBtn.style.cssText =
       'position:fixed;z-index:2147483647;width:36px;height:36px;border-radius:50%;' +
       'border:none;background:#fff;color:#333;font-size:15px;cursor:pointer;' +
-      'box-shadow:0 4px 14px rgba(0,0,0,.45);';
+      'box-shadow:0 4px 14px rgba(0,0,0,.5);';
     closeBtn.style.left = x + w - 18 + 'px';
     closeBtn.style.top = y - 18 + 'px';
     document.body.appendChild(closeBtn);
 
     backdrop.addEventListener('click', closeChatPopup);
     closeBtn.addEventListener('click', closeChatPopup);
+    document.addEventListener('keydown', popupEsc, true);
   }
 
   function bindCard(el) {
