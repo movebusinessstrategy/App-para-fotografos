@@ -17,6 +17,7 @@ import {
 import { authFetch } from "../utils/authFetch";
 import { cn } from "../utils/cn";
 import AgenteMateriais from "../components/agente/AgenteMateriais";
+import AgenteAudios from "../components/agente/AgenteAudios";
 
 type Tab = "config" | "test";
 interface ChatMsg {
@@ -291,6 +292,8 @@ export default function AgentePage() {
           />
 
           <AgenteMateriais />
+
+          <AgenteAudios />
 
           <ConfigSection
             icon={ShieldAlert}

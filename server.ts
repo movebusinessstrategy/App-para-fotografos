@@ -5463,6 +5463,128 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ success: true });
   });
 
+  // ── Áudios do agente — bucket privado no Storage ────────────────────
+  let agenteAudiosBucketReady = false;
+  async function ensureAgenteAudiosBucket() {
+    if (agenteAudiosBucketReady || !supabaseAdmin) return;
+    try {
+      const { data: buckets } = await supabaseAdmin.storage.listBuckets();
+      const exists = (buckets || []).some((b: any) => b.name === 'agente-audios');
+      if (!exists) {
+        await supabaseAdmin.storage.createBucket('agente-audios', {
+          public: false,
+          fileSizeLimit: 20_971_520,
+        });
+      }
+      agenteAudiosBucketReady = true;
+    } catch (e: any) {
+      console.error('[agente/audios] erro criando bucket:', e?.message);
+    }
+  }
+
+  function audioExt(mime: string): string {
+    const m = (mime || '').toLowerCase();
+    if (m.includes('ogg')) return 'ogg';
+    if (m.includes('mpeg') || m.includes('mp3')) return 'mp3';
+    if (m.includes('mp4') || m.includes('m4a') || m.includes('aac')) return 'm4a';
+    if (m.includes('webm')) return 'webm';
+    if (m.includes('wav')) return 'wav';
+    return 'audio';
+  }
+
+  app.get('/api/agent/audios', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase
+      .from('agente_audios')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+    if (error) {
+      if (error.code === '42P01') return res.json({ audios: [], table_missing: true });
+      return res.status(500).json({ error: error.message });
+    }
+    const audios = [];
+    for (const a of data || []) {
+      let url: string | null = null;
+      if (supabaseAdmin) {
+        const { data: signed } = await supabaseAdmin.storage
+          .from('agente-audios')
+          .createSignedUrl(a.path, 3600);
+        url = signed?.signedUrl || null;
+      }
+      audios.push({ ...a, url });
+    }
+    res.json({ audios });
+  });
+
+  app.post('/api/agent/audios', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Storage indisponível.' });
+    const { titulo, mimetype, duracao, dataUrl } = req.body || {};
+    if (!titulo || typeof titulo !== 'string' || !titulo.trim()) {
+      return res.status(400).json({ error: 'Dê um nome ao áudio.' });
+    }
+    const match = String(dataUrl || '').match(/^data:(audio\/[a-z0-9.+-]+);base64,(.+)$/i);
+    if (!match) return res.status(400).json({ error: 'Envie um arquivo de áudio válido.' });
+    const mime = match[1];
+    const buffer = Buffer.from(match[2], 'base64');
+    if (buffer.length > 20_971_520) {
+      return res.status(400).json({ error: 'Áudio muito grande (máximo 20MB).' });
+    }
+
+    await ensureAgenteAudiosBucket();
+    const path = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${audioExt(mime)}`;
+    const { error: upErr } = await supabaseAdmin.storage
+      .from('agente-audios')
+      .upload(path, buffer, { contentType: mime, upsert: false });
+    if (upErr) return res.status(500).json({ error: `Upload falhou: ${upErr.message}` });
+
+    const { data: row, error } = await supabase
+      .from('agente_audios')
+      .insert({
+        user_id: userId,
+        titulo: titulo.trim(),
+        path,
+        duracao: Number.isFinite(Number(duracao)) ? Math.round(Number(duracao)) : null,
+        tamanho: buffer.length,
+        mimetype: typeof mimetype === 'string' ? mimetype : mime,
+      })
+      .select()
+      .single();
+    if (error) {
+      if (error.code === '42P01') {
+        return res.status(400).json({
+          error: 'Tabela agente_audios não existe. Rode a migration 012_agente_audios.sql no Supabase.',
+        });
+      }
+      return res.status(500).json({ error: error.message });
+    }
+    res.json(row);
+  });
+
+  app.delete('/api/agent/audios/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data: row } = await supabase
+      .from('agente_audios')
+      .select('path')
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (row?.path && supabaseAdmin) {
+      await supabaseAdmin.storage.from('agente-audios').remove([row.path]);
+    }
+    const { error } = await supabase
+      .from('agente_audios')
+      .delete()
+      .eq('id', req.params.id)
+      .eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
   app.get('/api/me', requireAuth, async (req, res) => {
     const realUserId = (req as any).realUserId || (req as any).userId;
     const ownerId = (req as any).userId;
