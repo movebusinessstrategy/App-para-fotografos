@@ -1262,6 +1262,97 @@
       </div>`;
   }
 
+  // ===== Popup da conversa (com a pipeline atrás) =====
+  let chatPopupState = null;
+
+  function ensureChatPopupStyle() {
+    if (document.getElementById('fp-chatpop-style')) return;
+    const st = document.createElement('style');
+    st.id = 'fp-chatpop-style';
+    st.textContent =
+      '#main.fp-chat-popup{position:fixed!important;border-radius:14px!important;' +
+      'overflow:hidden!important;z-index:2147483646!important;' +
+      'box-shadow:0 24px 80px rgba(0,0,0,.6)!important;}';
+    document.documentElement.appendChild(st);
+  }
+
+  function closeChatPopup() {
+    if (!chatPopupState) return;
+    const { main, parent, next, guard } = chatPopupState;
+    chatPopupState = null;
+    try { guard.disconnect(); } catch {}
+    main.classList.remove('fp-chat-popup');
+    ['left', 'top', 'width', 'height'].forEach((p) => main.style.removeProperty(p));
+    try {
+      if (next && next.parentNode === parent) parent.insertBefore(main, next);
+      else if (parent) parent.appendChild(main);
+    } catch {}
+    document.getElementById('fp-chatpop-backdrop')?.remove();
+    document.getElementById('fp-chatpop-close')?.remove();
+  }
+
+  // Abre a conversa do WhatsApp num popup central, com a pipeline atrás.
+  // Move o #main pra fora da árvore do WhatsApp (direto no body) — assim o
+  // position:fixed fica relativo à janela e o z-index volta a valer.
+  async function openCardPopup(deal) {
+    const phone = deal.contact_phone || '';
+    const name = deal.contact_name || deal.title || 'Lead';
+    if (!phone) { toast('Lead sem telefone', true); return; }
+
+    closeChatPopup();
+    ensureChatPopupStyle();
+    await openChat(phone, name);
+    await sleep(260);
+
+    const main = document.querySelector('#main');
+    if (!main) return;
+
+    document.getElementById('fp-kanban')?.classList.remove('fp-hidden');
+
+    document.getElementById('fp-chatpop-backdrop')?.remove();
+    const backdrop = document.createElement('div');
+    backdrop.id = 'fp-chatpop-backdrop';
+    backdrop.style.cssText =
+      'position:fixed;inset:0;z-index:2147483645;background:rgba(0,0,0,.5);' +
+      'backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);';
+    document.body.appendChild(backdrop);
+
+    // Se o WhatsApp tentar recolocar o #main na árvore dele, traz de volta.
+    const guard = new MutationObserver(() => {
+      if (chatPopupState && main.parentNode !== document.body) {
+        document.body.appendChild(main);
+      }
+    });
+    chatPopupState = { main, parent: main.parentNode, next: main.nextSibling, guard };
+    document.body.appendChild(main);
+    guard.observe(document.body, { childList: true });
+
+    main.classList.add('fp-chat-popup');
+    const w = Math.round(window.innerWidth * 0.56);
+    const h = Math.round(window.innerHeight * 0.86);
+    const x = Math.round((window.innerWidth - w) / 2);
+    const y = Math.round((window.innerHeight - h) / 2);
+    main.style.setProperty('width', w + 'px', 'important');
+    main.style.setProperty('height', h + 'px', 'important');
+    main.style.setProperty('left', x + 'px', 'important');
+    main.style.setProperty('top', y + 'px', 'important');
+
+    const closeBtn = document.createElement('button');
+    closeBtn.id = 'fp-chatpop-close';
+    closeBtn.textContent = '✕';
+    closeBtn.title = 'Fechar';
+    closeBtn.style.cssText =
+      'position:fixed;z-index:2147483647;width:36px;height:36px;border-radius:50%;' +
+      'border:none;background:#fff;color:#333;font-size:15px;cursor:pointer;' +
+      'box-shadow:0 4px 14px rgba(0,0,0,.45);';
+    closeBtn.style.left = x + w - 18 + 'px';
+    closeBtn.style.top = y - 18 + 'px';
+    document.body.appendChild(closeBtn);
+
+    backdrop.addEventListener('click', closeChatPopup);
+    closeBtn.addEventListener('click', closeChatPopup);
+  }
+
   function bindCard(el) {
     const id = Number(el.dataset.id);
     const phone = el.dataset.phone;
@@ -1319,8 +1410,8 @@
         e.stopPropagation();
         return;
       }
-      openChat(phone, name);
-      fastDetect();
+      if (deal) openCardPopup(deal);
+      else { openChat(phone, name); fastDetect(); }
     });
   }
 
