@@ -553,8 +553,9 @@
   }
 
   // ===== KANBAN =====
-  async function loadKanban() {
-    showBoardState('<div class="fp-spin"></div><span>Carregando pipeline...</span>');
+  async function loadKanban(opts) {
+    const silent = !!(opts && opts.silent === true);
+    if (!silent) showBoardState('<div class="fp-spin"></div><span>Carregando pipeline...</span>');
     try {
       const [dr, sr, tm, me] = await Promise.all([
         bg({ type: 'GET_ALL_DEALS' }),
@@ -568,6 +569,7 @@
       currentMemberId = me?.currentMember?.id || null;
       renderBoard();
     } catch (err) {
+      if (silent) return; // refresh em segundo plano falhou — mantém o board atual
       if (/autenticado|login/i.test(err.message)) {
         showBoardState(`
           <svg width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
@@ -2022,7 +2024,13 @@
     setRailActive('fp-rail-pipeline');
     // A faixa do chat tem z-index altíssimo e cobriria o cabeçalho do funil
     removeChatStrip();
-    loadKanban();
+    // Abre o funil INSTANTÂNEO com o cache, e atualiza em segundo plano.
+    if (deals.length || stages.length) {
+      renderBoard();
+      loadKanban({ silent: true });
+    } else {
+      loadKanban();
+    }
   }
 
   // ===== AGENDA =====
@@ -4095,7 +4103,24 @@
     }
 
     try {
+      // Mostra a faixa NA HORA a partir do cache (o deal já veio do funil).
+      const stgsNow = chatStages.length ? chatStages : stages;
+      const pd = digits(cleanPhone);
+      const cachedDeal = stgsNow.length
+        ? deals.find((d) => {
+            const dd = digits(d.contact_phone || '');
+            return dd && pd && (dd === pd || dd.slice(-8) === pd.slice(-8));
+          })
+        : null;
+      if (cachedDeal) {
+        chatDeal = cachedDeal;
+        chatStages = stgsNow;
+        injectChatStrip(chatDeal, chatStages);
+      }
+
+      // Busca a versão completa (deal + etapas + tarefas) e atualiza.
       const result = await bg({ type: 'GET_DEAL_BY_PHONE', phone: cleanPhone });
+      if (chatPhone !== cleanPhone) return; // trocou de chat enquanto carregava
       chatStages = result.stages || stages;
       chatDeal = result.deal;
       chatPendingTasks = result.pending_tasks || [];
