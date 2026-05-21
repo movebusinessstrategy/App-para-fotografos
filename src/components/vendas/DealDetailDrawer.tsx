@@ -580,11 +580,10 @@ export function DealDetailDrawer({
 
   return (
     <>
-      {/* Modal — bottom-sheet popup no mobile (estilo WhatsApp), centralizado a partir de sm: */}
-      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
-        <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-
-        <div className="relative bg-white dark:bg-gray-900 rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden w-full h-[92vh] sm:h-[90vh] sm:w-[92vw] lg:w-[75vw] xl:w-[65vw] animate-slide-up sm:animate-none">
+      {/* Painel lateral — popup da conversa ocupando ~50% da tela à direita.
+          Sem fundo escuro: a pipeline continua visível e clicável atrás. */}
+      <div className="fixed inset-y-0 right-0 z-50 w-full lg:w-[50vw] flex">
+        <div className="relative bg-white dark:bg-gray-900 shadow-2xl flex flex-col overflow-hidden w-full h-full border-l border-gray-200 dark:border-gray-800 animate-slide-up sm:animate-none">
           {/* Header */}
           <div className={`border-b border-gray-200 dark:border-gray-800 px-3 sm:px-5 pt-3 sm:pt-4 pb-0 flex-shrink-0 ${
             isWon ? "bg-emerald-50 dark:bg-emerald-950/30" :
