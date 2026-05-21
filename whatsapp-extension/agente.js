@@ -14,19 +14,17 @@
   const style = document.createElement('style');
   style.textContent = `
     #fpa-fab {
-      position: fixed; right: 24px; bottom: 104px;
-      width: 54px; height: 54px; border-radius: 50%;
-      background-color: #D4A94A;
-      background-size: 160%; background-position: 50% 13%;
-      background-repeat: no-repeat;
-      border: none; cursor: pointer; z-index: 2147483000;
-      box-shadow: 0 4px 16px rgba(0,0,0,.28);
-      overflow: hidden;
+      position: fixed; right: 20px; bottom: 92px;
+      width: 76px; height: 76px;
+      background: none; border: none; padding: 0;
+      cursor: pointer; z-index: 2147483000;
+      filter: drop-shadow(0 3px 7px rgba(0,0,0,.4));
       transition: transform .15s ease;
     }
+    #fpa-fab img { width: 100%; height: 100%; object-fit: contain; display: block; }
     #fpa-fab:hover { transform: scale(1.08); }
     #fpa-panel {
-      position: fixed; right: 24px; bottom: 170px; width: 340px;
+      position: fixed; right: 24px; bottom: 182px; width: 340px;
       max-height: 72vh; background: #fff; border-radius: 16px;
       box-shadow: 0 10px 40px rgba(0,0,0,.30); z-index: 2147483000;
       display: none; flex-direction: column; overflow: hidden;
@@ -38,12 +36,8 @@
       display: flex; align-items: center; justify-content: space-between;
     }
     .fpa-head-id { display: flex; align-items: center; gap: 10px; }
-    .fpa-avatar {
-      width: 32px; height: 32px; border-radius: 50%;
-      background-color: rgba(255,255,255,.25);
-      background-size: 160%; background-position: 50% 13%;
-      background-repeat: no-repeat;
-    }
+    .fpa-avatar { width: 40px; height: 40px; }
+    .fpa-avatar img { width: 100%; height: 100%; object-fit: contain; display: block; }
     .fpa-head-txt { display: flex; flex-direction: column; line-height: 1.15; }
     .fpa-name { font-size: 15px; font-weight: 700; }
     .fpa-sub { font-size: 11px; opacity: .85; }
@@ -172,19 +166,17 @@
     );
   }
 
-  // Insere o texto no compositor preservando as quebras de linha.
-  // Escreve UMA vez só, linha por linha: insertParagraph cria a quebra
-  // dentro da mesma mensagem, insertText escreve o conteúdo.
+  // Insere o texto no compositor numa tacada só. Sem insertParagraph
+  // (ele podia virar Enter e enviar/quebrar a mensagem em várias).
+  // Quebras de linha viram espaço — o agente responde em um parágrafo.
   function insertIntoComposer(text) {
     const composer = getComposer();
     if (!composer) return false;
     composer.focus();
     document.execCommand('selectAll', false, null);
     document.execCommand('delete', false, null);
-    String(text).split('\n').forEach((line, i) => {
-      if (i > 0) document.execCommand('insertParagraph');
-      if (line) document.execCommand('insertText', false, line);
-    });
+    const oneLine = String(text).replace(/\s*\n+\s*/g, ' ').trim();
+    document.execCommand('insertText', false, oneLine);
     return true;
   }
 
@@ -219,14 +211,14 @@
   const fab = document.createElement('button');
   fab.id = 'fpa-fab';
   fab.title = 'Lia — assistente de atendimento';
-  fab.style.backgroundImage = `url("${LIA_IMG}")`;
+  fab.innerHTML = `<img src="${LIA_IMG}" alt="Lia">`;
 
   const panel = document.createElement('div');
   panel.id = 'fpa-panel';
   panel.innerHTML = `
     <div class="fpa-head">
       <div class="fpa-head-id">
-        <span class="fpa-avatar" style="background-image:url('${LIA_IMG}')"></span>
+        <span class="fpa-avatar"><img src="${LIA_IMG}" alt="Lia"></span>
         <div class="fpa-head-txt">
           <span class="fpa-name">Lia</span>
           <span class="fpa-sub">Assistente de atendimento</span>
