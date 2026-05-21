@@ -88,6 +88,18 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
     filteredDeals.forEach((d) => {
       if (map[d.stage]) map[d.stage].push(d);
     });
+    // Ordena cada etapa pelo tempo parado nela: quem entrou há mais
+    // tempo fica no topo (lead "travado" aparece primeiro).
+    const enteredAt = (d: Deal) =>
+      new Date(
+        (d as any).current_stage_entered_at ||
+          (d as any).stage_entered_at ||
+          d.created_at ||
+          0,
+      ).getTime();
+    Object.values(map).forEach((arr) =>
+      arr.sort((a, b) => enteredAt(a) - enteredAt(b)),
+    );
     return map;
   }, [filteredDeals, activeStages]);
 
