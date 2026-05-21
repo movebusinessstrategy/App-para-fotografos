@@ -1260,75 +1260,67 @@
       </div>`;
   }
 
-  // Popup central com os detalhes do lead — abre ao clicar no card do
-  // funil, sem fechar a pipeline. Fecha no X ou clicando fora.
-  function openCardPopup(deal) {
-    document.getElementById('fp-card-popup')?.remove();
+  // Injeta (uma vez) o CSS que enquadra a conversa do WhatsApp como popup.
+  function ensureChatPopupStyle() {
+    if (document.getElementById('fp-chatpop-style')) return;
+    const st = document.createElement('style');
+    st.id = 'fp-chatpop-style';
+    st.textContent =
+      '#main.fp-chat-popup{position:fixed!important;top:7vh!important;' +
+      'left:19vw!important;width:62vw!important;height:86vh!important;' +
+      'z-index:2147483036!important;border-radius:14px!important;' +
+      'box-shadow:0 24px 70px rgba(0,0,0,.55)!important;overflow:hidden!important;}';
+    document.documentElement.appendChild(st);
+  }
+
+  // Abre a conversa do WhatsApp num popup central (enquadra o #main),
+  // sem perder o funil. Fecha no X ou clicando fora e volta pra pipeline.
+  async function openCardPopup(deal) {
     const phone = deal.contact_phone || '';
     const name = deal.contact_name || deal.title || 'Lead';
-    const stageName = stages.find((s) => s.id === deal.stage)?.name || '';
-    const valueStr = deal.value ? brl.format(deal.value) : '';
-    const notes = stripDealMetaFromNotes(deal.notes) || '';
-    const phoneLabel = phone ? '+' + digits(phone) : '';
+    if (!phone) { toast('Lead sem telefone', true); return; }
 
-    const btnBase =
-      'flex:1;min-width:120px;padding:9px 10px;border:none;border-radius:9px;' +
-      'cursor:pointer;font-size:13px;font-weight:600;font-family:inherit;';
-    const btnPrimary = btnBase + 'background:#D4A94A;color:#fff;';
-    const btnGhost = btnBase + 'background:#f0f0f0;color:#333;';
+    ensureChatPopupStyle();
+    await openChat(phone, name);   // carrega a conversa no #main
+    await sleep(200);              // espera o WhatsApp renderizar
 
-    const overlay = document.createElement('div');
-    overlay.id = 'fp-card-popup';
-    overlay.style.cssText =
-      'position:fixed;inset:0;z-index:2147483030;display:flex;align-items:center;' +
-      'justify-content:center;background:rgba(0,0,0,.45);' +
+    const main = document.querySelector('#main');
+    if (!main) return;
+
+    // Esconde o funil enquanto o popup está aberto; volta ao fechar.
+    const kanban = document.getElementById('fp-kanban');
+    kanban?.classList.add('fp-hidden');
+
+    document.getElementById('fp-chatpop-backdrop')?.remove();
+    document.getElementById('fp-chatpop-close')?.remove();
+
+    const backdrop = document.createElement('div');
+    backdrop.id = 'fp-chatpop-backdrop';
+    backdrop.style.cssText =
+      'position:fixed;inset:0;z-index:2147483034;background:rgba(0,0,0,.5);' +
       'backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);';
 
-    overlay.innerHTML = `
-      <div style="background:#fff;width:430px;max-width:92vw;max-height:82vh;border-radius:16px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.4);font-family:-apple-system,'Segoe UI',Roboto,sans-serif;">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 16px;background:#D4A94A;color:#fff;">
-          <b style="font-size:15px;font-weight:700;">${esc(name)}</b>
-          <button id="fp-cardpop-x" title="Fechar" style="background:none;border:none;color:#fff;font-size:18px;cursor:pointer;line-height:1;padding:2px 4px;">✕</button>
-        </div>
-        <div style="padding:16px;overflow-y:auto;">
-          ${phoneLabel ? `<div style="font-size:13px;color:#555;margin-bottom:7px;">📱 ${esc(phoneLabel)}</div>` : ''}
-          ${stageName ? `<div style="font-size:13px;color:#555;margin-bottom:7px;">📊 ${esc(stageName)}</div>` : ''}
-          ${valueStr ? `<div style="font-size:13px;color:#555;margin-bottom:7px;">💰 ${esc(valueStr)}</div>` : ''}
-          ${notes
-            ? `<div style="font-size:13px;color:#333;margin-top:10px;white-space:pre-wrap;background:#f6f6f6;border-radius:9px;padding:10px;line-height:1.45;">${esc(notes)}</div>`
-            : '<div style="font-size:13px;color:#999;margin-top:6px;">Sem observações.</div>'}
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px;border-top:1px solid #eee;">
-          ${phone ? `<button id="fp-cardpop-chat" style="${btnPrimary}">Abrir conversa</button>` : ''}
-          ${phone ? `<button id="fp-cardpop-followup" style="${btnGhost}">Follow-up</button>` : ''}
-          <button id="fp-cardpop-edit" style="${btnGhost}">Editar</button>
-          <button id="fp-cardpop-move" style="${btnGhost}">Mover etapa</button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(overlay);
+    const closeBtn = document.createElement('button');
+    closeBtn.id = 'fp-chatpop-close';
+    closeBtn.textContent = '✕';
+    closeBtn.title = 'Fechar';
+    closeBtn.style.cssText =
+      'position:fixed;z-index:2147483037;top:calc(7vh - 18px);right:calc(19vw - 18px);' +
+      'width:36px;height:36px;border-radius:50%;border:none;background:#fff;color:#333;' +
+      'font-size:15px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.45);';
 
-    const close = () => overlay.remove();
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-    overlay.querySelector('#fp-cardpop-x').addEventListener('click', close);
-    overlay.querySelector('#fp-cardpop-chat')?.addEventListener('click', () => {
-      close();
-      openChat(phone, name);
-    });
-    overlay.querySelector('#fp-cardpop-followup')?.addEventListener('click', () => {
-      close();
-      sendFollowUp(deal);
-    });
-    overlay.querySelector('#fp-cardpop-edit')?.addEventListener('click', () => {
-      close();
-      openDealEditModal(deal);
-    });
-    overlay.querySelector('#fp-cardpop-move')?.addEventListener('click', (e) => {
-      openStageMenu(e.currentTarget, stages, deal.stage, (sid) => {
-        moveDealToStage(deal.id, sid);
-        close();
-      }, 'Mover card para');
-    });
+    document.body.appendChild(backdrop);
+    document.body.appendChild(closeBtn);
+    main.classList.add('fp-chat-popup');
+
+    const close = () => {
+      main.classList.remove('fp-chat-popup');
+      backdrop.remove();
+      closeBtn.remove();
+      kanban?.classList.remove('fp-hidden'); // volta pro funil
+    };
+    backdrop.addEventListener('click', close);
+    closeBtn.addEventListener('click', close);
   }
 
   function bindCard(el) {
