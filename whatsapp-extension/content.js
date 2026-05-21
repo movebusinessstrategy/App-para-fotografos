@@ -1260,6 +1260,77 @@
       </div>`;
   }
 
+  // Popup central com os detalhes do lead — abre ao clicar no card do
+  // funil, sem fechar a pipeline. Fecha no X ou clicando fora.
+  function openCardPopup(deal) {
+    document.getElementById('fp-card-popup')?.remove();
+    const phone = deal.contact_phone || '';
+    const name = deal.contact_name || deal.title || 'Lead';
+    const stageName = stages.find((s) => s.id === deal.stage)?.name || '';
+    const valueStr = deal.value ? brl.format(deal.value) : '';
+    const notes = stripDealMetaFromNotes(deal.notes) || '';
+    const phoneLabel = phone ? '+' + digits(phone) : '';
+
+    const btnBase =
+      'flex:1;min-width:120px;padding:9px 10px;border:none;border-radius:9px;' +
+      'cursor:pointer;font-size:13px;font-weight:600;font-family:inherit;';
+    const btnPrimary = btnBase + 'background:#D4A94A;color:#fff;';
+    const btnGhost = btnBase + 'background:#f0f0f0;color:#333;';
+
+    const overlay = document.createElement('div');
+    overlay.id = 'fp-card-popup';
+    overlay.style.cssText =
+      'position:fixed;inset:0;z-index:2147483030;display:flex;align-items:center;' +
+      'justify-content:center;background:rgba(0,0,0,.45);' +
+      'backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);';
+
+    overlay.innerHTML = `
+      <div style="background:#fff;width:430px;max-width:92vw;max-height:82vh;border-radius:16px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.4);font-family:-apple-system,'Segoe UI',Roboto,sans-serif;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 16px;background:#D4A94A;color:#fff;">
+          <b style="font-size:15px;font-weight:700;">${esc(name)}</b>
+          <button id="fp-cardpop-x" title="Fechar" style="background:none;border:none;color:#fff;font-size:18px;cursor:pointer;line-height:1;padding:2px 4px;">✕</button>
+        </div>
+        <div style="padding:16px;overflow-y:auto;">
+          ${phoneLabel ? `<div style="font-size:13px;color:#555;margin-bottom:7px;">📱 ${esc(phoneLabel)}</div>` : ''}
+          ${stageName ? `<div style="font-size:13px;color:#555;margin-bottom:7px;">📊 ${esc(stageName)}</div>` : ''}
+          ${valueStr ? `<div style="font-size:13px;color:#555;margin-bottom:7px;">💰 ${esc(valueStr)}</div>` : ''}
+          ${notes
+            ? `<div style="font-size:13px;color:#333;margin-top:10px;white-space:pre-wrap;background:#f6f6f6;border-radius:9px;padding:10px;line-height:1.45;">${esc(notes)}</div>`
+            : '<div style="font-size:13px;color:#999;margin-top:6px;">Sem observações.</div>'}
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px;border-top:1px solid #eee;">
+          ${phone ? `<button id="fp-cardpop-chat" style="${btnPrimary}">Abrir conversa</button>` : ''}
+          ${phone ? `<button id="fp-cardpop-followup" style="${btnGhost}">Follow-up</button>` : ''}
+          <button id="fp-cardpop-edit" style="${btnGhost}">Editar</button>
+          <button id="fp-cardpop-move" style="${btnGhost}">Mover etapa</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.querySelector('#fp-cardpop-x').addEventListener('click', close);
+    overlay.querySelector('#fp-cardpop-chat')?.addEventListener('click', () => {
+      close();
+      openChat(phone, name);
+    });
+    overlay.querySelector('#fp-cardpop-followup')?.addEventListener('click', () => {
+      close();
+      sendFollowUp(deal);
+    });
+    overlay.querySelector('#fp-cardpop-edit')?.addEventListener('click', () => {
+      close();
+      openDealEditModal(deal);
+    });
+    overlay.querySelector('#fp-cardpop-move')?.addEventListener('click', (e) => {
+      openStageMenu(e.currentTarget, stages, deal.stage, (sid) => {
+        moveDealToStage(deal.id, sid);
+        close();
+      }, 'Mover card para');
+    });
+  }
+
   function bindCard(el) {
     const id = Number(el.dataset.id);
     const phone = el.dataset.phone;
@@ -1317,7 +1388,8 @@
         e.stopPropagation();
         return;
       }
-      openChat(phone, name);
+      if (deal) openCardPopup(deal);
+      else openChat(phone, name);
     });
   }
 
