@@ -1436,7 +1436,12 @@
     composer.focus();
     document.execCommand('selectAll', false, null);
     document.execCommand('delete', false, null);
-    document.execCommand('insertText', false, text);
+    // insertLineBreak preserva as quebras de linha (Shift+Enter); o
+    // insertText sozinho perdia os \n da mensagem.
+    String(text).replace(/\r/g, '').split('\n').forEach((line, i) => {
+      if (i > 0) document.execCommand('insertLineBreak');
+      if (line) document.execCommand('insertText', false, line);
+    });
     return true;
   }
 
@@ -1479,7 +1484,10 @@
         <div class="fp-mass-body">
           <!-- Mensagem -->
           <div class="fp-mass-section">
-            <label class="fp-mass-label">Mensagem</label>
+            <div class="fp-mass-label-row">
+              <label class="fp-mass-label">Mensagem</label>
+              <button type="button" class="fp-mass-link" id="fp-mass-save-default">Salvar como padrão da etapa</button>
+            </div>
             <div class="fp-mass-toolbar">
               <button class="fp-mass-chip" data-insert="{nome}" title="Insere o primeiro nome do contato">+ Nome</button>
               <button class="fp-mass-chip" data-insert="Bom dia! " title="Inserir saudação no início">Bom dia</button>
@@ -1592,6 +1600,26 @@
     modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
     modal.querySelector('#fp-mass-close')?.addEventListener('click', close);
     modal.querySelector('#fp-mass-cancel')?.addEventListener('click', close);
+
+    // Salva o texto atual como mensagem padrão de follow-up da etapa.
+    modal.querySelector('#fp-mass-save-default')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const msg = textarea.value.trim();
+      if (!msg) return toast('Mensagem vazia', true);
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Salvando…';
+      try {
+        await bg({ type: 'SAVE_STAGE_FOLLOWUP', stageId: stage.id, text: msg });
+        stage.follow_up_message = msg;
+        btn.textContent = '✓ Salvo como padrão';
+        setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2500);
+      } catch (err) {
+        toast(err?.message || 'Erro ao salvar', true);
+        btn.textContent = original;
+        btn.disabled = false;
+      }
+    });
 
     modal.querySelector('#fp-mass-start')?.addEventListener('click', () => {
       const message = textarea.value.trim();
