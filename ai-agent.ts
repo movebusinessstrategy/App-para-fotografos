@@ -134,8 +134,13 @@ export async function getAgentReply(
   if (cleaned.length === 0) {
     throw new Error('Envie pelo menos uma mensagem.');
   }
-  if (cleaned[0].role !== 'user') {
-    throw new Error('A conversa precisa começar com uma mensagem do cliente.');
+  // A API exige que a conversa comece com o cliente. Ao ler do WhatsApp Web,
+  // as primeiras mensagens visíveis podem ser do estúdio — descarta-as.
+  while (cleaned.length && cleaned[0].role !== 'user') {
+    cleaned.shift();
+  }
+  if (cleaned.length === 0) {
+    throw new Error('A conversa precisa ter uma mensagem do cliente.');
   }
 
   const response = await anthropic.messages.create({

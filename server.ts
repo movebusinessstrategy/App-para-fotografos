@@ -5310,6 +5310,38 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
   });
 
+  // Sugestão de resposta para a extensão: recebe a conversa lida do
+  // WhatsApp Web e devolve a resposta sugerida (usa a config salva).
+  app.post('/api/agent/suggest', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { messages } = req.body || {};
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'Conversa vazia.' });
+    }
+    const { data } = await supabase
+      .from('ai_agent_config')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+    try {
+      const reply = await getAgentReply(
+        {
+          enabled: true,
+          persona: data?.persona || '',
+          objective: data?.objective || '',
+          knowledge: data?.knowledge || '',
+          rules: data?.rules || '',
+        },
+        messages,
+      );
+      res.json({ reply });
+    } catch (e: any) {
+      console.error('[Agent suggest] erro:', e?.message || e);
+      res.status(500).json({ error: e?.message || 'Erro ao gerar a sugestão.' });
+    }
+  });
+
   // ── Materiais (PDFs) do agente — bucket privado no Storage ──────────
   let agenteMateriaisBucketReady = false;
   async function ensureAgenteMateriaisBucket() {
