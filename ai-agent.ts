@@ -142,6 +142,11 @@ export async function getAgentReply(
   if (cleaned.length === 0) {
     throw new Error('A conversa precisa ter uma mensagem do cliente.');
   }
+  // A API exige que a conversa termine com o cliente (não há "prefill").
+  // Se a última mensagem é do estúdio, não há o que responder ainda.
+  if (cleaned[cleaned.length - 1].role !== 'user') {
+    throw new Error('A última mensagem da conversa é sua — espere o cliente responder para gerar uma sugestão.');
+  }
 
   const response = await anthropic.messages.create({
     model: MODEL,
