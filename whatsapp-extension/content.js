@@ -1301,21 +1301,28 @@
 
     closeChatPopup();
     ensureChatPopupStyle();
-    await openChat(phone, name);
-    await sleep(260);
 
-    const main = document.querySelector('#main');
-    if (!main) return;
-
-    document.getElementById('fp-kanban')?.classList.remove('fp-hidden');
-
+    // O backdrop sobe ANTES de abrir a conversa — cobre a troca de tela
+    // do WhatsApp, pra o usuário não ver o "flash" da conversa.
     document.getElementById('fp-chatpop-backdrop')?.remove();
     const backdrop = document.createElement('div');
     backdrop.id = 'fp-chatpop-backdrop';
     backdrop.style.cssText =
       'position:fixed;inset:0;z-index:2147483645;background:rgba(0,0,0,.5);' +
-      'backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);';
+      'backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);' +
+      'display:flex;align-items:center;justify-content:center;';
+    backdrop.innerHTML =
+      "<div style=\"color:#fff;font:600 14px -apple-system,'Segoe UI',Roboto,sans-serif;\">Abrindo conversa…</div>";
     document.body.appendChild(backdrop);
+
+    await openChat(phone, name);
+    await sleep(260);
+
+    const main = document.querySelector('#main');
+    if (!main) { backdrop.remove(); return; }
+
+    document.getElementById('fp-kanban')?.classList.remove('fp-hidden');
+    backdrop.innerHTML = ''; // tira o "Abrindo conversa…"
 
     // Se o WhatsApp tentar recolocar o #main na árvore dele, traz de volta.
     const guard = new MutationObserver(() => {
@@ -1328,7 +1335,7 @@
     guard.observe(document.body, { childList: true });
 
     main.classList.add('fp-chat-popup');
-    const w = Math.round(window.innerWidth * 0.56);
+    const w = Math.round(window.innerWidth * 0.67);
     const h = Math.round(window.innerHeight * 0.86);
     const x = Math.round((window.innerWidth - w) / 2);
     const y = Math.round((window.innerHeight - h) / 2);
