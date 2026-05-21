@@ -1320,6 +1320,7 @@
         return;
       }
       openChat(phone, name);
+      fastDetect();
     });
   }
 
@@ -5795,6 +5796,20 @@
     }
   }
 
+  // Varre rápido (a cada 80ms por ~3s) pra montar a faixa do lead assim
+  // que o WhatsApp renderiza o chat — sem o atraso fixo do debounce.
+  let detectPoll = null;
+  function fastDetect() {
+    clearTimeout(detectDebounce);
+    if (detectPoll) clearInterval(detectPoll);
+    let n = 0;
+    detectState();
+    detectPoll = setInterval(() => {
+      detectState();
+      if (++n >= 38) { clearInterval(detectPoll); detectPoll = null; }
+    }, 80);
+  }
+
   function startObserver() {
     document.addEventListener('click', (e) => {
       // Ignora clicks dentro do próprio kanban (cards, botões etc.)
@@ -5809,8 +5824,7 @@
         // não conseguiria responder.
         if (kanbanVisible) hideKanban();
         hideOverlaysForChatNav();
-        clearTimeout(detectDebounce);
-        detectDebounce = setTimeout(detectState, 700);
+        fastDetect();
       }
     }, true);
 
