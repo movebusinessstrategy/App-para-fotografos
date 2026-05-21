@@ -169,41 +169,19 @@
     );
   }
 
-  // Insere o texto no compositor preservando espaços e quebras de linha.
-  // Simula uma colagem — o WhatsApp trata o evento 'paste' corretamente
-  // (o insertText antigo perdia as quebras de linha).
+  // Insere o texto no compositor preservando as quebras de linha.
+  // Escreve UMA vez só, linha por linha: insertParagraph cria a quebra
+  // dentro da mesma mensagem, insertText escreve o conteúdo.
   function insertIntoComposer(text) {
     const composer = getComposer();
     if (!composer) return false;
     composer.focus();
     document.execCommand('selectAll', false, null);
     document.execCommand('delete', false, null);
-
-    let pasted = false;
-    try {
-      const dt = new DataTransfer();
-      dt.setData('text/plain', text);
-      const evt = new ClipboardEvent('paste', {
-        clipboardData: dt,
-        bubbles: true,
-        cancelable: true,
-      });
-      if (!evt.clipboardData) {
-        Object.defineProperty(evt, 'clipboardData', { value: dt });
-      }
-      composer.dispatchEvent(evt);
-      pasted = true;
-    } catch (e) {
-      pasted = false;
-    }
-
-    // Se a colagem não escreveu nada, escreve linha a linha.
-    if (!pasted || !(composer.textContent || '').trim()) {
-      text.split('\n').forEach((line, i) => {
-        if (i > 0) document.execCommand('insertParagraph');
-        if (line) document.execCommand('insertText', false, line);
-      });
-    }
+    String(text).split('\n').forEach((line, i) => {
+      if (i > 0) document.execCommand('insertParagraph');
+      if (line) document.execCommand('insertText', false, line);
+    });
     return true;
   }
 
