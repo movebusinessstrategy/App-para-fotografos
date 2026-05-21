@@ -33,7 +33,8 @@
       background: #D4A94A; color: #fff; padding: 12px 14px;
       display: flex; align-items: center; justify-content: space-between;
     }
-    .fpa-head b { font-size: 15px; font-weight: 700; }
+    .fpa-head b { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 7px; }
+    #fpa-fab svg { display: block; }
     .fpa-x {
       background: none; border: none; color: #fff; font-size: 17px;
       cursor: pointer; line-height: 1; padding: 2px 4px;
@@ -167,16 +168,29 @@
   }
 
   // ── UI ────────────────────────────────────────────────────────────
+  // Ícone "sparkles" (estilo Apple Intelligence): uma estrela de 4 pontas
+  // grande + uma pequena. fill=currentColor herda a cor branca.
+  function sparkleSvg(size) {
+    return (
+      `<svg width="${size}" height="${size}" viewBox="0 0 24 24" ` +
+      `fill="currentColor" aria-hidden="true">` +
+      `<path d="M10 4 Q10 13 19 13 Q10 13 10 22 Q10 13 1 13 Q10 13 10 4 Z"/>` +
+      `<path d="M18.5 1.5 Q18.5 5.5 22.5 5.5 Q18.5 5.5 18.5 9.5 ` +
+      `Q18.5 5.5 14.5 5.5 Q18.5 5.5 18.5 1.5 Z"/>` +
+      `</svg>`
+    );
+  }
+
   const fab = document.createElement('button');
   fab.id = 'fpa-fab';
   fab.title = 'Agente IA — sugerir resposta';
-  fab.textContent = '🤖';
+  fab.innerHTML = sparkleSvg(26);
 
   const panel = document.createElement('div');
   panel.id = 'fpa-panel';
   panel.innerHTML = `
     <div class="fpa-head">
-      <b>🤖 Agente IA</b>
+      <b>${sparkleSvg(16)} Agente IA</b>
       <button class="fpa-x" id="fpa-close" title="Fechar">✕</button>
     </div>
     <div class="fpa-body">
