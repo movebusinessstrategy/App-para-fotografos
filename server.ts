@@ -5310,6 +5310,127 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
   });
 
+  // ── Materiais (PDFs) do agente — bucket privado no Storage ──────────
+  let agenteMateriaisBucketReady = false;
+  async function ensureAgenteMateriaisBucket() {
+    if (agenteMateriaisBucketReady || !supabaseAdmin) return;
+    try {
+      const { data: buckets } = await supabaseAdmin.storage.listBuckets();
+      const exists = (buckets || []).some((b: any) => b.name === 'agente-materiais');
+      if (!exists) {
+        await supabaseAdmin.storage.createBucket('agente-materiais', {
+          public: false,
+          fileSizeLimit: 20_971_520, // 20MB
+        });
+      }
+      agenteMateriaisBucketReady = true;
+    } catch (e: any) {
+      console.error('[agente/materiais] erro criando bucket:', e?.message);
+    }
+  }
+
+  // Lista os materiais do agente com uma URL assinada (1h) por arquivo.
+  app.get('/api/agent/materiais', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase
+      .from('agente_materiais')
+      .select('*')
+      .eq('user_id', userId)
+      .order('nicho', { ascending: true });
+    if (error) {
+      if (error.code === '42P01') return res.json({ materiais: [], table_missing: true });
+      return res.status(500).json({ error: error.message });
+    }
+    const materiais = [];
+    for (const m of data || []) {
+      let url: string | null = null;
+      if (supabaseAdmin) {
+        const { data: signed } = await supabaseAdmin.storage
+          .from('agente-materiais')
+          .createSignedUrl(m.path, 3600);
+        url = signed?.signedUrl || null;
+      }
+      materiais.push({ ...m, url });
+    }
+    res.json({ materiais });
+  });
+
+  // Envia (ou substitui) um PDF. Body: { nicho, tipo, nome_arquivo, dataUrl }.
+  app.post('/api/agent/materiais', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Storage indisponível.' });
+    const { nicho, tipo, nome_arquivo, dataUrl } = req.body || {};
+    if (!nicho || typeof nicho !== 'string') {
+      return res.status(400).json({ error: 'Informe o nicho.' });
+    }
+    if (tipo !== 'pacote' && tipo !== 'dicas') {
+      return res.status(400).json({ error: 'Tipo inválido (use pacote ou dicas).' });
+    }
+    const match = String(dataUrl || '').match(/^data:application\/pdf;base64,(.+)$/i);
+    if (!match) return res.status(400).json({ error: 'Envie um arquivo PDF válido.' });
+    const buffer = Buffer.from(match[1], 'base64');
+    if (buffer.length > 20_971_520) {
+      return res.status(400).json({ error: 'PDF muito grande (máximo 20MB).' });
+    }
+
+    await ensureAgenteMateriaisBucket();
+    // Caminho determinístico: substituir reescreve o mesmo arquivo.
+    const path = `${userId}/${nicho}-${tipo}.pdf`;
+    const { error: upErr } = await supabaseAdmin.storage
+      .from('agente-materiais')
+      .upload(path, buffer, { contentType: 'application/pdf', upsert: true });
+    if (upErr) return res.status(500).json({ error: `Upload falhou: ${upErr.message}` });
+
+    const { data: row, error } = await supabase
+      .from('agente_materiais')
+      .upsert(
+        {
+          user_id: userId,
+          nicho,
+          tipo,
+          nome_arquivo: String(nome_arquivo || 'arquivo.pdf'),
+          path,
+          tamanho: buffer.length,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,nicho,tipo' },
+      )
+      .select()
+      .single();
+    if (error) {
+      if (error.code === '42P01') {
+        return res.status(400).json({
+          error: 'Tabela agente_materiais não existe. Rode a migration 011_agente_materiais.sql no Supabase.',
+        });
+      }
+      return res.status(500).json({ error: error.message });
+    }
+    res.json(row);
+  });
+
+  app.delete('/api/agent/materiais/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data: row } = await supabase
+      .from('agente_materiais')
+      .select('path')
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (row?.path && supabaseAdmin) {
+      await supabaseAdmin.storage.from('agente-materiais').remove([row.path]);
+    }
+    const { error } = await supabase
+      .from('agente_materiais')
+      .delete()
+      .eq('id', req.params.id)
+      .eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
   app.get('/api/me', requireAuth, async (req, res) => {
     const realUserId = (req as any).realUserId || (req as any).userId;
     const ownerId = (req as any).userId;
