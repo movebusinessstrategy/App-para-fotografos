@@ -7,18 +7,21 @@
   if (window.__fpAgenteLoaded) return;
   window.__fpAgenteLoaded = true;
 
+  // Foto da Lia (arquivo lia.png na pasta da extensão).
+  const LIA_IMG = chrome.runtime.getURL('lia.png');
+
   // ── Estilos ──────────────────────────────────────────────────────
   const style = document.createElement('style');
   style.textContent = `
     #fpa-fab {
       position: fixed; right: 24px; bottom: 104px;
       width: 54px; height: 54px; border-radius: 50%;
-      background: #D4A94A; color: #fff;
-      font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
-      font-size: 23px; font-weight: 600;
+      background-color: #D4A94A;
+      background-size: 160%; background-position: 50% 13%;
+      background-repeat: no-repeat;
       border: none; cursor: pointer; z-index: 2147483000;
       box-shadow: 0 4px 16px rgba(0,0,0,.28);
-      display: flex; align-items: center; justify-content: center;
+      overflow: hidden;
       transition: transform .15s ease;
     }
     #fpa-fab:hover { transform: scale(1.08); }
@@ -37,9 +40,9 @@
     .fpa-head-id { display: flex; align-items: center; gap: 10px; }
     .fpa-avatar {
       width: 32px; height: 32px; border-radius: 50%;
-      background: rgba(255,255,255,.22);
-      display: flex; align-items: center; justify-content: center;
-      font-weight: 700; font-size: 15px;
+      background-color: rgba(255,255,255,.25);
+      background-size: 160%; background-position: 50% 13%;
+      background-repeat: no-repeat;
     }
     .fpa-head-txt { display: flex; flex-direction: column; line-height: 1.15; }
     .fpa-name { font-size: 15px; font-weight: 700; }
@@ -216,14 +219,14 @@
   const fab = document.createElement('button');
   fab.id = 'fpa-fab';
   fab.title = 'Lia — assistente de atendimento';
-  fab.textContent = 'L';
+  fab.style.backgroundImage = `url("${LIA_IMG}")`;
 
   const panel = document.createElement('div');
   panel.id = 'fpa-panel';
   panel.innerHTML = `
     <div class="fpa-head">
       <div class="fpa-head-id">
-        <span class="fpa-avatar">L</span>
+        <span class="fpa-avatar" style="background-image:url('${LIA_IMG}')"></span>
         <div class="fpa-head-txt">
           <span class="fpa-name">Lia</span>
           <span class="fpa-sub">Assistente de atendimento</span>
