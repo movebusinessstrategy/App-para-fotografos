@@ -582,7 +582,7 @@ export function DealDetailDrawer({
     <>
       {/* Painel lateral — popup da conversa ocupando ~50% da tela à direita.
           Sem fundo escuro: a pipeline continua visível e clicável atrás. */}
-      <div className="fixed inset-y-0 right-0 z-50 w-full lg:w-[50vw] flex">
+      <div className="fixed inset-y-0 right-0 z-50 w-full lg:w-[30vw] flex">
         <div className="relative bg-white dark:bg-gray-900 shadow-2xl flex flex-col overflow-hidden w-full h-full border-l border-gray-200 dark:border-gray-800 animate-slide-up sm:animate-none">
           {/* Header */}
           <div className={`border-b border-gray-200 dark:border-gray-800 px-3 sm:px-5 pt-3 sm:pt-4 pb-0 flex-shrink-0 ${
