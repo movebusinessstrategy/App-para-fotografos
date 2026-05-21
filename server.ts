@@ -18,7 +18,7 @@ import { initSentry } from './sentry-server.js';
 const sentryReady = initSentry();
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createSupabaseClient, supabaseAdmin } from './supabase.js';
-import { getAgentReply, DEFAULT_PERSONA, DEFAULT_KNOWLEDGE } from './ai-agent.js';
+import { getAgentReply, DEFAULT_PERSONA, DEFAULT_OBJECTIVE, DEFAULT_KNOWLEDGE, DEFAULT_RULES } from './ai-agent.js';
 import {
   DEFAULT_STAGES,
   DEFAULT_PRODUCTION_STAGES,
@@ -5222,9 +5222,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.get('/api/agent/config', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
+    // select('*') é resiliente: se a migration 010 ainda não rodou, as
+    // colunas objective/rules só não vêm — e caímos nos padrões.
     const { data, error } = await supabase
       .from('ai_agent_config')
-      .select('enabled, persona, knowledge')
+      .select('*')
       .eq('user_id', userId)
       .maybeSingle();
     if (error) {
@@ -5232,7 +5234,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         return res.json({
           enabled: false,
           persona: DEFAULT_PERSONA,
+          objective: DEFAULT_OBJECTIVE,
           knowledge: DEFAULT_KNOWLEDGE,
+          rules: DEFAULT_RULES,
           table_missing: true,
         });
       }
@@ -5241,14 +5245,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({
       enabled: data?.enabled ?? false,
       persona: data?.persona || DEFAULT_PERSONA,
+      objective: data?.objective || DEFAULT_OBJECTIVE,
       knowledge: data?.knowledge || DEFAULT_KNOWLEDGE,
+      rules: data?.rules || DEFAULT_RULES,
     });
   });
 
   app.put('/api/agent/config', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { enabled, persona, knowledge } = req.body;
+    const { enabled, persona, objective, knowledge, rules } = req.body;
     const { error } = await supabase
       .from('ai_agent_config')
       .upsert(
@@ -5256,7 +5262,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           user_id: userId,
           enabled: !!enabled,
           persona: typeof persona === 'string' ? persona : null,
+          objective: typeof objective === 'string' ? objective : null,
           knowledge: typeof knowledge === 'string' ? knowledge : null,
+          rules: typeof rules === 'string' ? rules : null,
           updated_at: new Date().toISOString(),
         },
         { onConflict: 'user_id' },
@@ -5267,6 +5275,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           error: 'Tabela ai_agent_config não existe. Rode a migration 009_ai_agent_config.sql no Supabase.',
         });
       }
+      if (error.code === '42703') {
+        return res.status(400).json({
+          error: 'Colunas novas ainda não existem. Rode a migration 010_ai_agent_config_rules.sql no Supabase.',
+        });
+      }
       return res.status(500).json({ error: error.message });
     }
     res.json({ success: true });
@@ -5275,7 +5288,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Playground de teste: gera uma resposta do agente sem enviar nada a
   // ninguém. Usa a persona/conhecimento do corpo (edição ao vivo na tela).
   app.post('/api/agent/test', requireAuth, async (req, res) => {
-    const { messages, persona, knowledge } = req.body;
+    const { messages, persona, objective, knowledge, rules } = req.body;
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'Envie ao menos uma mensagem.' });
     }
@@ -5284,7 +5297,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         {
           enabled: true,
           persona: typeof persona === 'string' ? persona : '',
+          objective: typeof objective === 'string' ? objective : '',
           knowledge: typeof knowledge === 'string' ? knowledge : '',
+          rules: typeof rules === 'string' ? rules : '',
         },
         messages,
       );
