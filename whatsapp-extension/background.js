@@ -268,6 +268,13 @@ async function handleMessage(message) {
         body: JSON.stringify({ messages: message.messages || [] }),
       });
     }
+    case 'SAVE_STAGE_FOLLOWUP': {
+      // Salva a mensagem padrão de follow-up de uma etapa do funil.
+      return apiFetch(`/api/pipeline/stages/${message.stageId}/follow-up`, {
+        method: 'PATCH',
+        body: JSON.stringify({ message: message.text }),
+      });
+    }
     default:
       throw new Error(`Tipo de mensagem desconhecido: ${message.type}`);
   }
