@@ -97,21 +97,58 @@
   }
 
   // Retorna null se não há conversa aberta; [] se aberta mas sem mensagens.
+  // Usa várias estratégias porque o WhatsApp Web muda a estrutura do DOM.
   function readConversation(limit) {
     const main = document.querySelector('#main');
     if (!main) return null;
-    const nodes = main.querySelectorAll('div.message-in, div.message-out');
-    const msgs = [];
-    nodes.forEach((node) => {
-      const span = node.querySelector('span.selectable-text');
-      if (!span) return; // mídia, áudio, etc — sem texto
-      const text = extractText(span).trim();
-      if (!text) return;
-      msgs.push({
-        role: node.classList.contains('message-in') ? 'user' : 'assistant',
-        content: text,
+
+    // Centro do painel — pra classificar enviada/recebida pela posição
+    // da bolha quando as classes message-in/message-out não existirem.
+    const mainRect = main.getBoundingClientRect();
+    const mid = mainRect.left + mainRect.width / 2;
+
+    function classify(node) {
+      if (node.closest && node.closest('.message-out')) return 'assistant';
+      if (node.closest && node.closest('.message-in')) return 'user';
+      const r = node.getBoundingClientRect();
+      if (!r.width) return 'user';
+      return r.left + r.width / 2 > mid ? 'assistant' : 'user';
+    }
+
+    // 1ª: divs com data-pre-plain-text (atributo estável do "copiar mensagem")
+    let nodes = [...main.querySelectorAll('[data-pre-plain-text]')];
+    // 2ª: spans de texto selecionável
+    if (nodes.length === 0) {
+      nodes = [...main.querySelectorAll('span.selectable-text')];
+    }
+
+    let msgs = [];
+    for (const node of nodes) {
+      const text = extractText(node).trim();
+      if (text) msgs.push({ role: classify(node), content: text });
+    }
+
+    // 3ª (último recurso): texto bruto de cada linha da conversa
+    if (msgs.length === 0) {
+      main.querySelectorAll('div[role="row"]').forEach((row) => {
+        const t = (row.innerText || '').trim();
+        if (t && t.length > 1) msgs.push({ role: classify(row), content: t });
       });
-    });
+    }
+
+    if (msgs.length === 0) {
+      console.warn(
+        '[AgenteIA] Nenhuma mensagem extraída. Diagnóstico —',
+        'data-pre-plain-text:', main.querySelectorAll('[data-pre-plain-text]').length,
+        '| selectable-text:', main.querySelectorAll('span.selectable-text').length,
+        '| message-in:', main.querySelectorAll('.message-in').length,
+        '| message-out:', main.querySelectorAll('.message-out').length,
+        '| role=row:', main.querySelectorAll('div[role="row"]').length,
+      );
+    } else {
+      console.log('[AgenteIA] mensagens lidas:', msgs.length);
+    }
+
     return msgs.slice(-limit);
   }
 
