@@ -1260,84 +1260,6 @@
       </div>`;
   }
 
-  // Injeta (uma vez) o CSS base do popup da conversa. Posição/tamanho
-  // são calculados em JS (o #main pode estar num contêiner transformado).
-  function ensureChatPopupStyle() {
-    if (document.getElementById('fp-chatpop-style')) return;
-    const st = document.createElement('style');
-    st.id = 'fp-chatpop-style';
-    st.textContent =
-      '#main.fp-chat-popup{position:fixed!important;z-index:2147483036!important;' +
-      'border-radius:14px!important;box-shadow:0 24px 70px rgba(0,0,0,.6)!important;' +
-      'overflow:hidden!important;}';
-    document.documentElement.appendChild(st);
-  }
-
-  // Abre a conversa do WhatsApp num popup central (enquadra o #main),
-  // sem perder o funil. Fecha no X ou clicando fora e volta pra pipeline.
-  async function openCardPopup(deal) {
-    const phone = deal.contact_phone || '';
-    const name = deal.contact_name || deal.title || 'Lead';
-    if (!phone) { toast('Lead sem telefone', true); return; }
-
-    ensureChatPopupStyle();
-    await openChat(phone, name);   // carrega a conversa no #main
-    await sleep(220);              // espera o WhatsApp renderizar
-
-    const main = document.querySelector('#main');
-    if (!main) return;
-
-    const kanban = document.getElementById('fp-kanban');
-    kanban?.classList.add('fp-hidden');
-
-    document.getElementById('fp-chatpop-backdrop')?.remove();
-    document.getElementById('fp-chatpop-close')?.remove();
-
-    const backdrop = document.createElement('div');
-    backdrop.id = 'fp-chatpop-backdrop';
-    backdrop.style.cssText =
-      'position:fixed;inset:0;z-index:2147483035;background:rgba(0,0,0,.55);' +
-      'backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);';
-    document.body.appendChild(backdrop);
-
-    // Enquadra o #main. O position:fixed dele pode ser relativo a um
-    // ancestral transformado — então medimos a origem real e compensamos.
-    main.classList.add('fp-chat-popup');
-    main.style.setProperty('left', '0', 'important');
-    main.style.setProperty('top', '0', 'important');
-    const origin = main.getBoundingClientRect();
-    const w = Math.round(window.innerWidth * 0.64);
-    const h = Math.round(window.innerHeight * 0.86);
-    const vx = Math.round((window.innerWidth - w) / 2);
-    const vy = Math.round((window.innerHeight - h) / 2);
-    main.style.setProperty('left', vx - origin.left + 'px', 'important');
-    main.style.setProperty('top', vy - origin.top + 'px', 'important');
-    main.style.setProperty('width', w + 'px', 'important');
-    main.style.setProperty('height', h + 'px', 'important');
-
-    const closeBtn = document.createElement('button');
-    closeBtn.id = 'fp-chatpop-close';
-    closeBtn.textContent = '✕';
-    closeBtn.title = 'Fechar';
-    closeBtn.style.cssText =
-      'position:fixed;z-index:2147483038;width:36px;height:36px;border-radius:50%;' +
-      'border:none;background:#fff;color:#333;font-size:15px;cursor:pointer;' +
-      'box-shadow:0 4px 14px rgba(0,0,0,.45);';
-    closeBtn.style.left = vx + w - 18 + 'px';
-    closeBtn.style.top = vy - 18 + 'px';
-    document.body.appendChild(closeBtn);
-
-    const close = () => {
-      main.classList.remove('fp-chat-popup');
-      ['left', 'top', 'width', 'height'].forEach((p) => main.style.removeProperty(p));
-      backdrop.remove();
-      closeBtn.remove();
-      kanban?.classList.remove('fp-hidden'); // volta pro funil
-    };
-    backdrop.addEventListener('click', close);
-    closeBtn.addEventListener('click', close);
-  }
-
   function bindCard(el) {
     const id = Number(el.dataset.id);
     const phone = el.dataset.phone;
@@ -1395,8 +1317,7 @@
         e.stopPropagation();
         return;
       }
-      if (deal) openCardPopup(deal);
-      else openChat(phone, name);
+      openChat(phone, name);
     });
   }
 
