@@ -169,17 +169,20 @@
     );
   }
 
-  // Insere o texto no compositor numa tacada só. Sem insertParagraph
-  // (ele podia virar Enter e enviar/quebrar a mensagem em várias).
-  // Quebras de linha viram espaço — o agente responde em um parágrafo.
+  // Insere o texto no compositor preservando as quebras de linha.
+  // insertLineBreak = quebra "leve" (Shift+Enter): fica DENTRO da mesma
+  // mensagem, sem virar Enter (que enviaria) nem dividir em várias.
   function insertIntoComposer(text) {
     const composer = getComposer();
     if (!composer) return false;
     composer.focus();
     document.execCommand('selectAll', false, null);
     document.execCommand('delete', false, null);
-    const oneLine = String(text).replace(/\s*\n+\s*/g, ' ').trim();
-    document.execCommand('insertText', false, oneLine);
+    const lines = String(text).replace(/\r/g, '').split('\n');
+    lines.forEach((line, i) => {
+      if (i > 0) document.execCommand('insertLineBreak');
+      if (line) document.execCommand('insertText', false, line);
+    });
     return true;
   }
 
