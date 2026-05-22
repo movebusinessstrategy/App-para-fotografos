@@ -52,6 +52,8 @@ export default function ContasReceber() {
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [editando, setEditando] = useState<Receita | null>(null);
+  const [receberFor, setReceberFor] = useState<Receita | null>(null);
+  const [dataReceb, setDataReceb] = useState('');
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -80,18 +82,18 @@ export default function ContasReceber() {
     })();
   }, [load]);
 
-  const marcarRecebido = async (id: string) => {
-    const hoje = new Date().toISOString().split('T')[0];
+  const marcarRecebido = async (id: string, data: string) => {
     const res = await authFetch(`/api/fin/receitas/${id}/receber`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data_pagamento: hoje }),
+      body: JSON.stringify({ data_pagamento: data }),
     });
     if (res.ok) {
       setReceitas(prev => prev.map(r =>
-        r.id === id ? { ...r, status: 'recebido', data_recebimento: hoje } : r
+        r.id === id ? { ...r, status: 'recebido', data_recebimento: data } : r
       ));
     }
+    setReceberFor(null);
   };
 
   const deletar = async () => {
@@ -320,7 +322,7 @@ export default function ContasReceber() {
                       <div className="flex items-center gap-1 justify-end">
                         {(r.status === 'pendente' || r.status === 'atrasado') && (
                           <button
-                            onClick={() => marcarRecebido(r.id)}
+                            onClick={() => { setReceberFor(r); setDataReceb(new Date().toISOString().split('T')[0]); }}
                             title="Marcar como recebido"
                             className="p-1 rounded-md text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
                           >
@@ -348,6 +350,34 @@ export default function ContasReceber() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Modal: marcar como recebido (escolher a data real) */}
+      {receberFor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setReceberFor(null)}>
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-700">
+              <h3 className="font-semibold text-gray-900 dark:text-white">Marcar como recebido</h3>
+              <button onClick={() => setReceberFor(null)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <div>
+                <p className="text-xs text-gray-400 mb-0.5">Lançamento</p>
+                <p className="font-medium text-gray-900 dark:text-white">{receberFor.cliente_nome || receberFor.descricao}</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{fmtBRL(receberFor.valor_bruto)}</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Data do recebimento</label>
+                <DatePicker value={dataReceb} onChange={setDataReceb} />
+              </div>
+              <p className="text-xs text-gray-400">Coloque a data real em que o dinheiro entrou — assim o faturamento conta no mês certo.</p>
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100 dark:border-gray-700">
+              <button onClick={() => setReceberFor(null)} className="px-4 py-2 text-sm font-medium rounded-lg text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">Cancelar</button>
+              <button onClick={() => { if (dataReceb) marcarRecebido(receberFor.id, dataReceb); }} className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">Confirmar</button>
+            </div>
+          </div>
         </div>
       )}
 
