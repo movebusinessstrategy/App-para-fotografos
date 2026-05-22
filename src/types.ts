@@ -404,6 +404,8 @@ export interface Compra {
   job_id?: number | null;
   job_item_id?: string | null;
   cliente_nome?: string | null;
+  valor_pago?: number | null;
+  fin_despesa_id?: string | null;
   created_at: string;
   updated_at?: string;
 }

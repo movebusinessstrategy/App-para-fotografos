@@ -4246,6 +4246,66 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ success: true });
   });
 
+  // Helper: lança uma despesa no Financeiro a partir de um pedido comprado.
+  async function createExpenseFromCompra(
+    adminClient: SupabaseClient, userId: string, compra: any, valorPago: number,
+  ): Promise<string | null> {
+    try {
+      // Categoria "Produtos e Insumos" (cria se ainda não existir)
+      let categoriaId: string | null = null;
+      const { data: cat } = await adminClient
+        .from('fin_categorias')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('tipo', 'despesa')
+        .eq('nome', 'Produtos e Insumos')
+        .maybeSingle();
+      if (cat) {
+        categoriaId = (cat as any).id;
+      } else {
+        const { data: novaCat } = await adminClient
+          .from('fin_categorias')
+          .insert({ user_id: userId, nome: 'Produtos e Insumos', tipo: 'despesa', cor: '#8b5cf6', ordem: 99, ativo: true })
+          .select('id')
+          .single();
+        categoriaId = (novaCat as any)?.id || null;
+      }
+
+      // Fornecedor do produto (se houver)
+      let fornecedor: string | null = null;
+      if (compra.produto_id) {
+        const { data: prod } = await adminClient
+          .from('produtos')
+          .select('fornecedor_id, fornecedores(nome)')
+          .eq('id', compra.produto_id)
+          .maybeSingle();
+        fornecedor = ((prod as any)?.fornecedores?.nome) || null;
+      }
+
+      const hoje = new Date().toISOString().slice(0, 10);
+      const descricao = compra.cliente_nome
+        ? `Compra: ${compra.produto_nome} — ${compra.cliente_nome}`
+        : `Compra: ${compra.produto_nome}`;
+      const { data: desp } = await adminClient
+        .from('fin_despesas')
+        .insert({
+          user_id: userId,
+          descricao,
+          fornecedor,
+          valor: valorPago,
+          data_vencimento: hoje,
+          data_pagamento: hoje,
+          status: 'pago',
+          categoria_id: categoriaId,
+        })
+        .select('id')
+        .single();
+      return (desp as any)?.id || null;
+    } catch {
+      return null; // tabelas do Financeiro ausentes/incompatíveis — ignora
+    }
+  }
+
   // ============ COMPRAS (reposição de estoque) ============
 
   // GET /api/compras — lista os pedidos de compra
@@ -4318,6 +4378,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const patch: any = {};
     if (req.body.quantidade !== undefined) patch.quantidade = Math.max(1, Number(req.body.quantidade) || 1);
     if (req.body.observacao !== undefined) patch.observacao = req.body.observacao || null;
+    if (req.body.valor_pago !== undefined) patch.valor_pago = Math.max(0, Number(req.body.valor_pago) || 0);
     if (req.body.status !== undefined) {
       const allowed = ['analise', 'aprovado', 'comprado', 'cancelado'];
       if (!allowed.includes(req.body.status)) return res.status(400).json({ error: 'status inválido' });
@@ -4335,18 +4396,31 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .single();
     if (error) return res.status(500).json({ error: error.message });
 
-    // Transição para "comprado" → repõe o estoque do produto (uma vez só).
-    // Só vale pra produto que controla estoque; sob encomenda não tem estoque.
-    if (patch.status === 'comprado' && (current as any).status !== 'comprado' && (current as any).produto_id) {
+    // Transição para "comprado" (uma vez só)
+    if (patch.status === 'comprado' && (current as any).status !== 'comprado') {
       const qtd = patch.quantidade !== undefined ? patch.quantidade : (current as any).quantidade;
-      const { data: prod } = await adminClient
-        .from('produtos')
-        .select('id, estoque, controla_estoque')
-        .eq('id', (current as any).produto_id)
-        .maybeSingle();
-      if (prod && (prod as any).controla_estoque) {
-        const novo = (Number((prod as any).estoque) || 0) + (Number(qtd) || 0);
-        await adminClient.from('produtos').update({ estoque: novo }).eq('id', (current as any).produto_id);
+
+      // Repõe o estoque — só vale pra produto que controla estoque
+      if ((current as any).produto_id) {
+        const { data: prod } = await adminClient
+          .from('produtos')
+          .select('id, estoque, controla_estoque')
+          .eq('id', (current as any).produto_id)
+          .maybeSingle();
+        if (prod && (prod as any).controla_estoque) {
+          const novo = (Number((prod as any).estoque) || 0) + (Number(qtd) || 0);
+          await adminClient.from('produtos').update({ estoque: novo }).eq('id', (current as any).produto_id);
+        }
+      }
+
+      // Lança a despesa no Financeiro com o valor real pago
+      const valorPago = Number(req.body.valor_pago) || 0;
+      if (valorPago > 0 && !(current as any).fin_despesa_id) {
+        const despId = await createExpenseFromCompra(adminClient, userId, { ...current, ...patch }, valorPago);
+        if (despId) {
+          await adminClient.from('compras').update({ fin_despesa_id: despId }).eq('id', req.params.id);
+          (data as any).fin_despesa_id = despId;
+        }
       }
     }
     res.json(data);
@@ -4483,7 +4557,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     try {
       const { data } = await supabase
         .from('compras')
-        .select('produto_id, quantidade, status')
+        .select('produto_id, quantidade, status, valor_pago')
         .eq('user_id', userId)
         .gte('created_at', inicio)
         .lt('created_at', fim);
@@ -4501,7 +4575,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const st = (c as any).status || 'analise';
       if (!compras[st]) continue;
       compras[st].qtd += 1;
-      compras[st].custo += (custoMap.get(String((c as any).produto_id)) || 0) * (Number((c as any).quantidade) || 0);
+      // Comprado: usa o valor real pago; outros: estima pelo preço de custo
+      const custo = (c as any).valor_pago != null
+        ? Number((c as any).valor_pago) || 0
+        : (custoMap.get(String((c as any).produto_id)) || 0) * (Number((c as any).quantidade) || 0);
+      compras[st].custo += custo;
     }
 
     res.json({ periodo: { ano, mes }, resumo: { totalVendido, numTrabalhos, ticketMedio }, produtos, compras });

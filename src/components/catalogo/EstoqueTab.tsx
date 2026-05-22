@@ -12,6 +12,9 @@ const STATUS_CFG: Record<CompraStatus, { label: string; cls: string }> = {
   cancelado: { label: "Cancelado",  cls: "bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400" },
 };
 
+const fmtBRL = (v: number) =>
+  (v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: 0 });
+
 export function EstoqueTab({ produtos, onChanged }: { produtos: Produto[]; onChanged: () => void }) {
   const [compras, setCompras] = useState<Compra[]>([]);
   const [loading, setLoading] = useState(true);
@@ -21,6 +24,9 @@ export function EstoqueTab({ produtos, onChanged }: { produtos: Produto[]; onCha
   const [busy, setBusy] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
   const [backfillMsg, setBackfillMsg] = useState("");
+  const [comprarFor, setComprarFor] = useState<Compra | null>(null);
+  const [valorPago, setValorPago] = useState("");
+  const [busyComprar, setBusyComprar] = useState(false);
 
   const loadCompras = async () => {
     try { setCompras(await catalogoApi.getCompras()); }
@@ -52,7 +58,30 @@ export function EstoqueTab({ produtos, onChanged }: { produtos: Produto[]; onCha
   async function mudarStatus(c: Compra, status: CompraStatus) {
     await catalogoApi.updateCompra(c.id, { status });
     await loadCompras();
-    if (status === "comprado") onChanged(); // o estoque do produto mudou
+  }
+
+  // Abre o modal de "marcar comprado" — pede o valor real pago
+  function abrirComprar(c: Compra) {
+    setComprarFor(c);
+    const prod = produtos.find((p) => p.id === c.produto_id);
+    const sugestao = prod?.preco_custo ? prod.preco_custo * c.quantidade : 0;
+    setValorPago(sugestao > 0 ? String(sugestao) : "");
+  }
+
+  async function confirmarComprado() {
+    if (!comprarFor) return;
+    setBusyComprar(true);
+    try {
+      await catalogoApi.updateCompra(comprarFor.id, {
+        status: "comprado",
+        valor_pago: Number(valorPago.replace(",", ".")) || 0,
+      });
+      setComprarFor(null);
+      await loadCompras();
+      onChanged(); // estoque pode ter mudado
+    } finally {
+      setBusyComprar(false);
+    }
   }
 
   async function excluir(c: Compra) {
@@ -186,6 +215,9 @@ export function EstoqueTab({ produtos, onChanged }: { produtos: Produto[]; onCha
                     </div>
                     {c.cliente_nome && <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">Cliente: {c.cliente_nome}</p>}
                     {c.observacao && <p className="text-xs text-gray-400 truncate mt-0.5">{c.observacao}</p>}
+                    {c.status === "comprado" && c.valor_pago != null && (
+                      <p className="text-xs text-green-600 dark:text-green-400 mt-0.5">Pago: {fmtBRL(c.valor_pago)} · lançado no Financeiro</p>
+                    )}
                   </div>
                   <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${cfg.cls}`}>{cfg.label}</span>
                   <div className="flex items-center gap-1 flex-shrink-0">
@@ -193,7 +225,7 @@ export function EstoqueTab({ produtos, onChanged }: { produtos: Produto[]; onCha
                       <button onClick={() => mudarStatus(c, "aprovado")} className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700">Aprovar</button>
                     )}
                     {c.status === "aprovado" && (
-                      <button onClick={() => mudarStatus(c, "comprado")} className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-green-600 text-white hover:bg-green-700">Marcar comprado</button>
+                      <button onClick={() => abrirComprar(c)} className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-green-600 text-white hover:bg-green-700">Marcar comprado</button>
                     )}
                     {(c.status === "analise" || c.status === "aprovado") && (
                       <button onClick={() => mudarStatus(c, "cancelado")} title="Cancelar pedido" className="p-1.5 rounded-lg text-gray-400 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20"><X size={14} /></button>
@@ -243,6 +275,43 @@ export function EstoqueTab({ produtos, onChanged }: { produtos: Produto[]; onCha
               <button onClick={() => setPedirFor(null)} disabled={busy} className="px-4 py-2 text-sm font-medium rounded-xl text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800">Cancelar</button>
               <button onClick={criarCompra} disabled={busy} className="px-4 py-2 text-sm font-semibold rounded-xl bg-gold-600 text-white hover:bg-gold-700 disabled:opacity-50 flex items-center gap-1.5">
                 {busy && <Loader2 size={14} className="animate-spin" />} Enviar pra análise
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: marcar comprado (valor pago → despesa no Financeiro) ── */}
+      {comprarFor && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => !busyComprar && setComprarFor(null)}>
+          <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-sm shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800">
+              <h3 className="font-bold text-gray-900 dark:text-white">Marcar como comprado</h3>
+              <button onClick={() => setComprarFor(null)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400"><X size={18} /></button>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <div>
+                <p className="text-xs text-gray-400 mb-0.5">Pedido</p>
+                <p className="font-medium text-gray-900 dark:text-white">{comprarFor.produto_nome} <span className="text-gray-400 font-normal">× {comprarFor.quantidade}</span></p>
+                {comprarFor.cliente_nome && <p className="text-xs text-gray-400 mt-0.5">Cliente: {comprarFor.cliente_nome}</p>}
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Valor pago (R$)</label>
+                <input
+                  type="number" min={0} step="0.01" value={valorPago} autoFocus
+                  onChange={(e) => setValorPago(e.target.value)}
+                  placeholder="0,00"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400"
+                />
+              </div>
+              <p className="text-xs text-gray-400">
+                Isso lança uma despesa <strong>já paga</strong> no Financeiro (categoria "Produtos e Insumos").
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100 dark:border-gray-800">
+              <button onClick={() => setComprarFor(null)} disabled={busyComprar} className="px-4 py-2 text-sm font-medium rounded-xl text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800">Cancelar</button>
+              <button onClick={confirmarComprado} disabled={busyComprar} className="px-4 py-2 text-sm font-semibold rounded-xl bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 flex items-center gap-1.5">
+                {busyComprar && <Loader2 size={14} className="animate-spin" />} Confirmar compra
               </button>
             </div>
           </div>
