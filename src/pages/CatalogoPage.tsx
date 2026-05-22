@@ -12,6 +12,7 @@ import {
 } from "../types";
 import { SearchableSelect } from "../components/ui/SearchableSelect";
 import { EstoqueTab } from "../components/catalogo/EstoqueTab";
+import { RelatorioVendas } from "../components/catalogo/RelatorioVendas";
 
 // ═══════════════════════════════════════════════════════════
 // HELPERS
@@ -21,7 +22,7 @@ const LABEL = "block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1";
 const UNIDADES: UnidadeProduto[] = ["un", "cx", "pct", "par", "kit"];
 
 type Aba = "produtos" | "servicos" | "combos";
-type SubProdutos = "produtos" | "categorias" | "fornecedores" | "estoque";
+type SubProdutos = "produtos" | "categorias" | "fornecedores" | "estoque" | "relatorio";
 type SubServicos = "servicos" | "tipos";
 
 /** Controlled number input: shows empty while editing, resets to 0 on blur if empty */
@@ -1107,7 +1108,7 @@ export default function CatalogoPage() {
           <h3 className="text-2xl font-bold text-gray-800 dark:text-white">Catálogo</h3>
           <p className="text-gray-500 dark:text-gray-400 text-sm">Produtos, serviços e combos do seu estúdio.</p>
         </div>
-        {!(aba === "produtos" && subP === "estoque") && (
+        {!(aba === "produtos" && (subP === "estoque" || subP === "relatorio")) && (
           <button onClick={handleNovo}
             className="flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white text-sm font-medium rounded-xl transition-colors">
             <Plus size={16} />{novoLabel}
@@ -1143,7 +1144,7 @@ export default function CatalogoPage() {
           {aba === "produtos" && (
             <div>
               <SubTabBar
-                tabs={[{ id: "produtos", label: "Produtos" }, { id: "categorias", label: "Categorias" }, { id: "fornecedores", label: "Fornecedores" }, { id: "estoque", label: "Estoque" }]}
+                tabs={[{ id: "produtos", label: "Produtos" }, { id: "categorias", label: "Categorias" }, { id: "fornecedores", label: "Fornecedores" }, { id: "estoque", label: "Estoque" }, { id: "relatorio", label: "Relatório" }]}
                 active={subP}
                 onChange={(s) => setSubP(s as SubProdutos)}
               />
@@ -1152,6 +1153,9 @@ export default function CatalogoPage() {
               {subP === "estoque" && (
                 <EstoqueTab produtos={produtos} onChanged={() => load(true)} />
               )}
+
+              {/* Sub: Relatório */}
+              {subP === "relatorio" && <RelatorioVendas />}
 
               {/* Sub: Produtos */}
               {subP === "produtos" && (

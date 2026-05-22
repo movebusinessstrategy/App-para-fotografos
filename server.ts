@@ -4430,6 +4430,83 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ created: novas.length });
   });
 
+  // GET /api/relatorios/vendas?mes=YYYY-MM — relatório mensal de vendas
+  app.get('/api/relatorios/vendas', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+
+    const mesParam = String(req.query.mes || '');
+    const now = new Date();
+    const mm = mesParam.match(/^(\d{4})-(\d{2})$/);
+    const ano = mm ? Number(mm[1]) : now.getFullYear();
+    const mes = mm ? Number(mm[2]) : now.getMonth() + 1;
+    const inicio = new Date(Date.UTC(ano, mes - 1, 1)).toISOString();
+    const fim = new Date(Date.UTC(ano, mes, 1)).toISOString();
+
+    // Resumo: trabalhos criados (vendidos) no mês
+    const { data: jobsMes } = await supabase
+      .from('jobs')
+      .select('id, amount')
+      .eq('user_id', userId)
+      .gte('created_at', inicio)
+      .lt('created_at', fim);
+    const numTrabalhos = (jobsMes || []).length;
+    const totalVendido = (jobsMes || []).reduce((s: number, j: any) => s + (Number(j.amount) || 0), 0);
+    const ticketMedio = numTrabalhos > 0 ? totalVendido / numTrabalhos : 0;
+
+    // Todos os trabalhos do usuário — pra filtrar job_items por dono
+    const { data: allJobs } = await supabase.from('jobs').select('id').eq('user_id', userId);
+    const jobIds = new Set((allJobs || []).map((j: any) => j.id));
+
+    // Produtos vendidos: itens de trabalho criados no mês, agrupados por nome
+    const { data: items } = await adminClient
+      .from('job_items')
+      .select('catalog_name, catalog_type, catalog_value, quantidade, discount_value, job_id')
+      .gte('created_at', inicio)
+      .lt('created_at', fim);
+    const prodMap = new Map<string, any>();
+    for (const it of items || []) {
+      if (!jobIds.has((it as any).job_id)) continue;
+      const nome = (it as any).catalog_name || 'Item';
+      const qtd = Number((it as any).quantidade) || 1;
+      const valor = Math.max(0, (Number((it as any).catalog_value) || 0) * qtd - (Number((it as any).discount_value) || 0));
+      const cur = prodMap.get(nome) || { nome, tipo: (it as any).catalog_type || 'produto', quantidade: 0, valor: 0 };
+      cur.quantidade += qtd;
+      cur.valor += valor;
+      prodMap.set(nome, cur);
+    }
+    const produtos = Array.from(prodMap.values()).sort((a, b) => b.valor - a.valor);
+
+    // Pedidos de compra criados no mês, por status (custo estimado)
+    let comprasMes: any[] = [];
+    try {
+      const { data } = await supabase
+        .from('compras')
+        .select('produto_id, quantidade, status')
+        .eq('user_id', userId)
+        .gte('created_at', inicio)
+        .lt('created_at', fim);
+      comprasMes = data || [];
+    } catch { comprasMes = []; }
+    const { data: prods } = await supabase.from('produtos').select('id, preco_custo').eq('user_id', userId);
+    const custoMap = new Map((prods || []).map((p: any) => [String(p.id), Number(p.preco_custo) || 0]));
+    const compras: any = {
+      analise: { qtd: 0, custo: 0 },
+      aprovado: { qtd: 0, custo: 0 },
+      comprado: { qtd: 0, custo: 0 },
+      cancelado: { qtd: 0, custo: 0 },
+    };
+    for (const c of comprasMes) {
+      const st = (c as any).status || 'analise';
+      if (!compras[st]) continue;
+      compras[st].qtd += 1;
+      compras[st].custo += (custoMap.get(String((c as any).produto_id)) || 0) * (Number((c as any).quantidade) || 0);
+    }
+
+    res.json({ periodo: { ano, mes }, resumo: { totalVendido, numTrabalhos, ticketMedio }, produtos, compras });
+  });
+
   // ============ CATÁLOGO: SERVIÇOS ============
 
   app.get('/api/servicos', requireAuth, async (req, res) => {
