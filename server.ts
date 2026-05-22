@@ -4821,6 +4821,52 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json(data);
   });
 
+  // PUT /api/jobs/labels/:id — edita nome e/ou cor de uma etiqueta padrão.
+  // Se o nome mudar, renomeia a etiqueta em todos os trabalhos que a usam.
+  app.put('/api/jobs/labels/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { name, color } = req.body;
+
+    const { data: current } = await supabase
+      .from('job_labels')
+      .select('id, name, color')
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .single();
+    if (!current) return res.status(404).json({ error: 'Etiqueta não encontrada' });
+
+    const newName = name !== undefined ? String(name).trim() : current.name;
+    const newColor = color !== undefined ? color : current.color;
+    if (!newName) return res.status(400).json({ error: 'name é obrigatório' });
+
+    const { data, error } = await supabase
+      .from('job_labels')
+      .update({ name: newName, color: newColor })
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Nome mudou → propaga pra todos os trabalhos que usam a etiqueta antiga
+    if (newName !== current.name) {
+      const { data: jobsWithLabels } = await supabase
+        .from('jobs')
+        .select('id, labels')
+        .eq('user_id', userId)
+        .not('labels', 'is', null);
+      for (const j of jobsWithLabels || []) {
+        const arr = Array.isArray((j as any).labels) ? (j as any).labels : [];
+        if (arr.includes(current.name)) {
+          const updated = arr.map((l: string) => (l === current.name ? newName : l));
+          await supabase.from('jobs').update({ labels: updated }).eq('id', (j as any).id).eq('user_id', userId);
+        }
+      }
+    }
+    res.json(data);
+  });
+
   app.delete('/api/jobs/labels/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;

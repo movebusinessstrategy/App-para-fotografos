@@ -35,7 +35,12 @@ function ContractStatusPill({ status, signers }: { status: 'draft' | 'pending_si
   );
 }
 
-const LABEL_COLORS = ['#6366f1','#ec4899','#f59e0b','#10b981','#0ea5e9','#f43f5e','#8b5cf6','#22c55e'];
+const LABEL_COLORS = [
+  '#ef4444', '#f97316', '#f59e0b', '#eab308',
+  '#84cc16', '#22c55e', '#10b981', '#14b8a6',
+  '#06b6d4', '#0ea5e9', '#3b82f6', '#6366f1',
+  '#8b5cf6', '#a855f7', '#ec4899', '#f43f5e',
+];
 function getLabelColor(label: string) {
   let hash = 0;
   for (let i = 0; i < label.length; i++) hash = label.charCodeAt(i) + ((hash << 5) - hash);
@@ -138,6 +143,10 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [labels, setLabels] = useState<string[]>([]);
   const [labelMenuOpen, setLabelMenuOpen] = useState(false);
+  const labelMenuRef = useRef<HTMLDivElement>(null);
+  const [editingLabelId, setEditingLabelId] = useState<string | null>(null);
+  const [editLabelName, setEditLabelName] = useState("");
+  const [editLabelColor, setEditLabelColor] = useState("#6366f1");
   const [labelPalette, setLabelPalette] = useState<{ id: string; name: string; color: string }[]>([]);
   const [newLabelName, setNewLabelName] = useState("");
   const [newLabelColor, setNewLabelColor] = useState("#6366f1");
@@ -153,6 +162,19 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
       .then((d) => setLabelPalette(Array.isArray(d) ? d : []))
       .catch(() => {});
   }, []);
+
+  // Fecha o menu de etiquetas ao clicar fora dele.
+  useEffect(() => {
+    if (!labelMenuOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (labelMenuRef.current && !labelMenuRef.current.contains(e.target as Node)) {
+        setLabelMenuOpen(false);
+        setEditingLabelId(null);
+      }
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [labelMenuOpen]);
 
   // Load existing contract for this job (if any) so we can show status + reuse instead of duplicating.
   useEffect(() => {
@@ -554,6 +576,36 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
     await authFetch(`/api/jobs/labels/${id}`, { method: 'DELETE' });
   };
 
+  // Abre o editor inline de uma etiqueta da paleta.
+  const startEditLabel = (pl: { id: string; name: string; color: string }) => {
+    setEditingLabelId(pl.id);
+    setEditLabelName(pl.name);
+    setEditLabelColor(pl.color);
+  };
+
+  // Salva nome/cor de uma etiqueta padrão; renomeia também neste trabalho.
+  const updatePaletteLabel = async (id: string) => {
+    const name = editLabelName.trim();
+    const current = labelPalette.find(l => l.id === id);
+    if (!name || !current) { setEditingLabelId(null); return; }
+    const renamed = current.name !== name;
+    setLabelPalette(prev =>
+      prev.map(l => (l.id === id ? { ...l, name, color: editLabelColor } : l))
+          .sort((a, b) => a.name.localeCompare(b.name))
+    );
+    if (renamed && labels.includes(current.name)) {
+      const nextLabels = labels.map(l => (l === current.name ? name : l));
+      setLabels(nextLabels);
+      onLabelsChange?.(job!.id, nextLabels);
+    }
+    setEditingLabelId(null);
+    await authFetch(`/api/jobs/labels/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, color: editLabelColor }),
+    });
+  };
+
   const done = checklist.filter(i => i.done).length;
 
   return (
@@ -737,69 +789,140 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                     <span className="text-xs text-gray-400 dark:text-gray-500">Nenhuma etiqueta neste trabalho.</span>
                   )}
                 </div>
-                <div className="relative">
+                <div className="relative" ref={labelMenuRef}>
                   <button
-                    onClick={() => setLabelMenuOpen(v => !v)}
+                    onClick={() => { setLabelMenuOpen(v => !v); setEditingLabelId(null); }}
                     className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 text-xs font-medium hover:bg-gray-200 dark:hover:bg-gray-700"
                   >
                     <Plus size={13} /> Etiqueta
                   </button>
                   {labelMenuOpen && (
-                    <div className="absolute z-20 mt-1 w-60 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl p-2">
-                      <div className="max-h-44 overflow-y-auto">
+                    <div className="absolute z-20 mt-1.5 w-72 rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-2xl overflow-hidden">
+                      {/* Etiquetas padrão */}
+                      <div className="px-3 pt-3 pb-1">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                          Etiquetas padrão
+                        </p>
+                      </div>
+                      <div className="max-h-60 overflow-y-auto px-2 pb-2 space-y-0.5">
                         {labelPalette.map(pl => {
                           const active = labels.includes(pl.name);
+                          if (editingLabelId === pl.id) {
+                            return (
+                              <div key={pl.id} className="rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900/60 p-2.5 space-y-2">
+                                <input
+                                  autoFocus
+                                  value={editLabelName}
+                                  onChange={e => setEditLabelName(e.target.value)}
+                                  onKeyDown={e => {
+                                    if (e.key === 'Enter') updatePaletteLabel(pl.id);
+                                    if (e.key === 'Escape') setEditingLabelId(null);
+                                  }}
+                                  className="w-full rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 px-2.5 py-1.5 text-xs text-gray-700 dark:text-gray-200 focus:border-gold-500 focus:outline-none"
+                                />
+                                <div className="grid grid-cols-8 gap-1.5">
+                                  {LABEL_COLORS.map(c => (
+                                    <button
+                                      key={c}
+                                      onClick={() => setEditLabelColor(c)}
+                                      className={cn(
+                                        "w-6 h-6 rounded-lg flex items-center justify-center transition-transform hover:scale-110",
+                                        editLabelColor === c && "ring-2 ring-offset-1 ring-gray-500 dark:ring-offset-gray-900",
+                                      )}
+                                      style={{ backgroundColor: c }}
+                                    >
+                                      {editLabelColor === c && <Check size={12} className="text-white" />}
+                                    </button>
+                                  ))}
+                                </div>
+                                <div className="flex justify-end gap-1.5">
+                                  <button
+                                    onClick={() => setEditingLabelId(null)}
+                                    className="px-2.5 py-1 rounded-lg text-xs font-semibold text-gray-500 hover:bg-gray-200 dark:text-gray-300 dark:hover:bg-gray-700"
+                                  >Cancelar</button>
+                                  <button
+                                    onClick={() => updatePaletteLabel(pl.id)}
+                                    className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-gold-600 text-white hover:bg-gold-700"
+                                  >Salvar</button>
+                                </div>
+                              </div>
+                            );
+                          }
                           return (
                             <div
                               key={pl.id}
-                              onClick={() => toggleLabel(pl.name)}
-                              className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer"
+                              className="group flex items-center gap-1 pr-1.5 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700/60"
                             >
-                              <span className="w-3.5 h-3.5 rounded-full flex-shrink-0" style={{ backgroundColor: pl.color }} />
-                              <span className="flex-1 text-xs text-gray-700 dark:text-gray-200 truncate">{pl.name}</span>
-                              {active && <Check size={13} className="text-gold-600 dark:text-gold-400 flex-shrink-0" />}
                               <button
-                                onClick={e => { e.stopPropagation(); deletePaletteLabel(pl.id); }}
-                                title="Remover da paleta"
-                                className="text-gray-300 hover:text-red-500 flex-shrink-0"
+                                onClick={() => toggleLabel(pl.name)}
+                                className="flex items-center gap-2 flex-1 min-w-0 text-left py-1.5 pl-2"
                               >
-                                <Trash2 size={11} />
+                                <span
+                                  className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 text-white shadow-sm"
+                                  style={{ backgroundColor: pl.color }}
+                                >
+                                  {active ? <Check size={14} /> : <Tag size={12} />}
+                                </span>
+                                <span className="flex-1 text-xs font-medium text-gray-700 dark:text-gray-200 truncate">{pl.name}</span>
+                              </button>
+                              <button
+                                onClick={() => startEditLabel(pl)}
+                                title="Editar etiqueta"
+                                className="opacity-0 group-hover:opacity-100 p-1 text-gray-300 hover:text-gold-600 dark:text-gray-500 dark:hover:text-gold-400 transition-opacity flex-shrink-0"
+                              >
+                                <Pencil size={12} />
+                              </button>
+                              <button
+                                onClick={() => deletePaletteLabel(pl.id)}
+                                title="Excluir etiqueta"
+                                className="opacity-0 group-hover:opacity-100 p-1 text-gray-300 hover:text-red-500 dark:text-gray-500 transition-opacity flex-shrink-0"
+                              >
+                                <Trash2 size={12} />
                               </button>
                             </div>
                           );
                         })}
                         {labelPalette.length === 0 && (
-                          <div className="px-2 py-2 text-xs text-gray-400">Crie sua primeira etiqueta abaixo.</div>
+                          <p className="px-2 py-3 text-xs text-gray-400 text-center leading-relaxed">
+                            Nenhuma etiqueta padrão ainda.<br />Crie a primeira logo abaixo.
+                          </p>
                         )}
                       </div>
-                      <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700">
+                      {/* Nova etiqueta */}
+                      <div className="border-t border-gray-100 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-900/40 p-3 space-y-2">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                          Nova etiqueta
+                        </p>
                         <input
                           type="text"
                           value={newLabelName}
                           onChange={e => setNewLabelName(e.target.value)}
                           onKeyDown={e => e.key === 'Enter' && createPaletteLabel()}
-                          placeholder="Nova etiqueta..."
+                          placeholder="Nome da etiqueta..."
                           className="w-full rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 px-2.5 py-1.5 text-xs text-gray-700 dark:text-gray-200 focus:border-gold-500 focus:outline-none placeholder-gray-400"
                         />
-                        <div className="flex items-center gap-1.5 mt-1.5">
+                        <div className="grid grid-cols-8 gap-1.5">
                           {LABEL_COLORS.map(c => (
                             <button
                               key={c}
                               onClick={() => setNewLabelColor(c)}
                               className={cn(
-                                "w-5 h-5 rounded-full transition-transform",
-                                newLabelColor === c && "ring-2 ring-offset-1 ring-gray-400 dark:ring-offset-gray-800 scale-110",
+                                "w-6 h-6 rounded-lg flex items-center justify-center transition-transform hover:scale-110",
+                                newLabelColor === c && "ring-2 ring-offset-1 ring-gray-500 dark:ring-offset-gray-900",
                               )}
                               style={{ backgroundColor: c }}
-                            />
+                            >
+                              {newLabelColor === c && <Check size={12} className="text-white" />}
+                            </button>
                           ))}
-                          <button
-                            onClick={createPaletteLabel}
-                            className="ml-auto px-2.5 py-1 rounded-lg bg-gold-600 text-white text-xs hover:bg-gold-700"
-                          >
-                            Criar
-                          </button>
                         </div>
+                        <button
+                          onClick={createPaletteLabel}
+                          disabled={!newLabelName.trim()}
+                          className="w-full py-1.5 rounded-lg bg-gold-600 text-white text-xs font-semibold hover:bg-gold-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          Criar etiqueta
+                        </button>
                       </div>
                     </div>
                   )}
