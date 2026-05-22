@@ -53,8 +53,8 @@ export default function ContasReceber() {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [editando, setEditando] = useState<Receita | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [rRes, cRes, mRes] = await Promise.all([
         authFetch('/api/fin/receitas'),
@@ -65,11 +65,20 @@ export default function ContasReceber() {
       if (cRes.ok) setCategorias(await cRes.json());
       if (mRes.ok) setMeios(await mRes.json());
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    // Sincroniza com a Produção em segundo plano — limpa o que está fora dela
+    (async () => {
+      try {
+        await authFetch('/api/fin/sync-jobs', { method: 'POST' });
+        load(true);
+      } catch { /* segue com os dados atuais */ }
+    })();
+  }, [load]);
 
   const marcarRecebido = async (id: string) => {
     const hoje = new Date().toISOString().split('T')[0];
