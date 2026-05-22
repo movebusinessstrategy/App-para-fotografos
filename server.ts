@@ -3280,6 +3280,69 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ id: data.id });
   });
 
+  // POST /api/jobs/pacote-acompanhamento — gera os trabalhos (sessões) de um
+  // pacote de acompanhamento de uma vez. O dinheiro entra como UMA receita só.
+  app.post('/api/jobs/pacote-acompanhamento', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { client_id, identificacao, sessoes, production_stage, valor, data_pagamento } = req.body;
+    if (!client_id || !Array.isArray(sessoes) || sessoes.length === 0) {
+      return res.status(400).json({ error: 'client_id e sessoes são obrigatórios' });
+    }
+
+    const nomeBase = String(identificacao || '').trim();
+    let criados = 0;
+    for (const raw of sessoes) {
+      const sessao = String(raw || '').trim();
+      if (!sessao) continue;
+      const job_name = nomeBase ? `${nomeBase} — ${sessao}` : `Acompanhamento — ${sessao}`;
+      const { data: job } = await supabase.from('jobs').insert({
+        user_id: userId,
+        client_id,
+        job_type: 'Acompanhamento',
+        job_name,
+        amount: 0,
+        payment_status: 'paid',
+        status: 'scheduled',
+        production_stage: production_stage || null,
+        labels: [sessao],
+        fin_synced: true,
+      }).select('id').single();
+      if (job) criados++;
+      // Garante a etiqueta da sessão na paleta da Produção
+      try {
+        const { data: existe } = await supabase
+          .from('job_labels').select('id')
+          .eq('user_id', userId).eq('name', sessao).maybeSingle();
+        if (!existe) {
+          await supabase.from('job_labels').insert({ user_id: userId, name: sessao, color: '#8b5cf6' });
+        }
+      } catch { /* tabela job_labels ausente — ignora */ }
+    }
+
+    // Receita única do pacote — o dinheiro entra uma vez só
+    if (valor && Number(valor) > 0) {
+      try {
+        const hoje = new Date().toISOString().slice(0, 10);
+        const { data: cli } = await supabase.from('clients').select('name').eq('id', client_id).maybeSingle();
+        await supabase.from('fin_receitas').insert({
+          user_id: userId,
+          cliente_id: client_id,
+          cliente_nome: (cli as any)?.name || nomeBase || null,
+          descricao: `Pacote Acompanhamento${nomeBase ? ' — ' + nomeBase : ''}`,
+          valor_bruto: Number(valor), taxa_meio: 0, valor_liquido: Number(valor),
+          data_vencimento: data_pagamento || hoje,
+          data_pagamento: data_pagamento || hoje,
+          status: 'recebido', parcela: 1, total_parcelas: 1,
+          origem_automatica: false,
+          updated_at: new Date().toISOString(),
+        });
+      } catch { /* tabelas do Financeiro ausentes — ignora */ }
+    }
+
+    res.json({ criados });
+  });
+
   app.put('/api/jobs/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
@@ -8043,14 +8106,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       } else {
         // ── Job já existente: reconciliar com estado atual ────────────────────
         if (job.payment_status === 'paid') {
-          // Marca TODA receita pendente/atrasada como recebido
-          // Também atualiza cliente_nome se estava errado
+          // Marca TODA receita pendente/atrasada como recebido.
+          // Usa a data do último pagamento real (não "hoje") pra o
+          // faturamento cair no mês certo, não misturar com o atual.
+          const dataRecebida = paymentsArr.length > 0
+            ? (paymentsArr[paymentsArr.length - 1].payment_date || dataVencimento || hoje)
+            : (dataVencimento || hoje);
           const pendentes = receitasExistentes.filter((r: any) =>
             r.status === 'pendente' || r.status === 'atrasado'
           );
           for (const r of pendentes) {
             await supabase.from('fin_receitas')
-              .update({ status: 'recebido', data_pagamento: hoje, cliente_nome: clienteNome, updated_at: new Date().toISOString() })
+              .update({ status: 'recebido', data_pagamento: dataRecebida, cliente_nome: clienteNome, updated_at: new Date().toISOString() })
               .eq('id', r.id).eq('user_id', userId);
             atualizadas++;
           }

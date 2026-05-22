@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { BarChart2, Workflow, Edit2, Inbox, LayoutGrid, List, ListChecks, Plus, Search, Settings, Tag, Trash2, X } from "lucide-react";
+import { BarChart2, Workflow, Edit2, Inbox, LayoutGrid, Layers, List, ListChecks, Plus, Search, Settings, Tag, Trash2, X } from "lucide-react";
 import GerenciaPage from "./GerenciaPage";
 import TasksPage from "./TasksPage";
 import { SearchableSelect } from "../components/ui/SearchableSelect";
@@ -12,6 +12,7 @@ import { ProductionBoard, JobWithProduction } from "../components/producao/Produ
 import { ProductionCustomizer } from "../components/producao/ProductionCustomizer";
 import { JobDetailDrawer } from "../components/producao/JobDetailDrawer";
 import { SalesOverviewPanel } from "../components/producao/SalesOverviewPanel";
+import { PacoteAcompanhamentoModal } from "../components/producao/PacoteAcompanhamentoModal";
 import { authFetch } from "../utils/authFetch";
 import { useApi, refreshApi } from "../utils/useApi";
 import { cn } from "../utils/cn";
@@ -53,6 +54,7 @@ export default function JobsPage() {
   const [activeTab, setActiveTab] = useState<"funil" | "lista" | "vendas" | "gerencia" | "tarefas">("funil");
   const [customizerOpen, setCustomizerOpen] = useState(false);
   const [showModal, setShowModal] = useState(false);
+  const [showPacoteModal, setShowPacoteModal] = useState(false);
   const [editingJob, setEditingJob] = useState<Job | null>(null);
   const [filters, setFilters] = useState({ type: "all" });
   const [searchQuery, setSearchQuery] = useState("");
@@ -258,13 +260,22 @@ export default function JobsPage() {
             </div>
 
             {activeTab !== "gerencia" && activeTab !== "tarefas" && activeTab !== "vendas" && (
-              <button
-                onClick={() => { setEditingJob(null); setShowModal(true); }}
-                className="flex items-center gap-2 px-4 py-2 bg-gold-600 dark:bg-gold-500 text-white rounded-xl font-semibold hover:bg-gold-700 dark:hover:bg-gold-600 shadow-md shadow-gold-100 dark:shadow-gold-500/20 transition-all text-sm"
-              >
-                <Plus size={16} />
-                Novo trabalho
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowPacoteModal(true)}
+                  className="flex items-center gap-2 px-3 py-2 border border-gold-300 dark:border-gold-500/40 text-gold-700 dark:text-gold-300 rounded-xl font-semibold hover:bg-gold-50 dark:hover:bg-gold-500/10 transition-all text-sm"
+                >
+                  <Layers size={16} />
+                  Pacote
+                </button>
+                <button
+                  onClick={() => { setEditingJob(null); setShowModal(true); }}
+                  className="flex items-center gap-2 px-4 py-2 bg-gold-600 dark:bg-gold-500 text-white rounded-xl font-semibold hover:bg-gold-700 dark:hover:bg-gold-600 shadow-md shadow-gold-100 dark:shadow-gold-500/20 transition-all text-sm"
+                >
+                  <Plus size={16} />
+                  Novo trabalho
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -495,6 +506,16 @@ export default function JobsPage() {
           job={editingJob}
           onClose={() => { setShowModal(false); setEditingJob(null); }}
           onSave={() => { setShowModal(false); setEditingJob(null); mutateJobs(); }}
+        />
+      )}
+
+      {/* Pacote de acompanhamento — gera vários trabalhos de uma vez */}
+      {showPacoteModal && (
+        <PacoteAcompanhamentoModal
+          clients={clients.map((c) => ({ id: c.id, name: c.name }))}
+          stageId={stages[0]?.id ?? null}
+          onClose={() => setShowPacoteModal(false)}
+          onCreated={() => mutateJobs()}
         />
       )}
 
