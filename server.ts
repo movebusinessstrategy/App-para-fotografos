@@ -3627,7 +3627,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Busca deal vinculado (converted_job_id = jobId)
     const { data: deal } = await supabase
       .from('deals')
-      .select('id, value, title')
+      .select('id, value, title, discount')
       .eq('converted_job_id', jobId)
       .eq('user_id', userId)
       .maybeSingle();
@@ -3681,7 +3681,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const jobItemsTotal = jobItems.reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
     // Deal jobs: total = deal_items (se houver) ou deal.value (fallback) + job_items
     // Non-deal jobs: total = job.amount (base manual) + job_items (extras), never overwrite job.amount
-    const dealBase = dealItems.length > 0 ? dealItemsTotal : (deal?.value || job.amount || 0);
+    // Desconto do pacote (deal.discount) abate só quando o pacote é sintético (sem deal_items)
+    const dealDiscount = Math.max(0, Number((deal as any)?.discount) || 0);
+    const packageGross = deal?.value || job.amount || 0;
+    const dealBase = dealItems.length > 0 ? dealItemsTotal : Math.max(0, packageGross - dealDiscount);
     const realTotal = deal?.id
       ? dealBase + jobItemsTotal
       : job.amount + jobItemsTotal;
@@ -3701,12 +3704,52 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Item sintético do pacote vendido: quando o job veio de uma venda mas o
     // deal não tem deal_items detalhados, o pacote precisa aparecer como item
     // (e não só como valor total). Estilo Trello — visível para a equipe.
-    const packageBase = realTotal - jobItemsTotal;
-    const packageItem = (deal?.id && dealItems.length === 0 && packageBase > 0)
-      ? { name: (deal as any)?.title || (job as any).job_name || (job as any).job_type || 'Pacote', value: packageBase }
+    const packageItem = (deal?.id && dealItems.length === 0 && packageGross > 0)
+      ? {
+          name: (deal as any)?.title || (job as any).job_name || (job as any).job_type || 'Pacote',
+          value: packageGross,
+          discount: dealDiscount,
+        }
       : null;
 
     res.json({ dealItems, jobItems, payments, totalPago, jobAmount: realTotal, payment_status: correctStatus, packageItem });
+  });
+
+  // PUT /api/jobs/:id/package — edita o pacote vendido (nome, valor, desconto)
+  // ou troca por outro do catálogo. Só vale para jobs vindos de uma venda
+  // cujo negócio ainda não tem deal_items detalhados (pacote sintético).
+  app.put('/api/jobs/:id/package', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+    const jobId = Number(req.params.id);
+
+    const { data: job } = await supabase.from('jobs').select('id').eq('id', jobId).eq('user_id', userId).single();
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+
+    const { data: deal } = await supabase
+      .from('deals')
+      .select('id')
+      .eq('converted_job_id', jobId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!deal?.id) return res.status(400).json({ error: 'Job sem negócio vinculado' });
+
+    // Se o negócio já tem itens detalhados, o pacote não é editável por aqui
+    const { data: existingItems } = await adminClient.from('deal_items').select('id').eq('deal_id', deal.id).limit(1);
+    if (existingItems && existingItems.length > 0) {
+      return res.status(400).json({ error: 'Negócio tem itens detalhados — edite pelos itens.' });
+    }
+
+    const upd: any = {};
+    if (req.body.name !== undefined) upd.title = String(req.body.name).trim() || 'Pacote';
+    if (req.body.value !== undefined) upd.value = Math.max(0, Number(req.body.value) || 0);
+    if (req.body.discount !== undefined) upd.discount = Math.max(0, Number(req.body.discount) || 0);
+    if (Object.keys(upd).length === 0) return res.json({ ok: true });
+
+    const { error } = await supabase.from('deals').update(upd).eq('id', deal.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
   });
 
   // POST /api/jobs/:id/payments — registrar um pagamento

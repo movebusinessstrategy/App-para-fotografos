@@ -236,15 +236,6 @@ function StageColumn(props: {
                   <AssigneeAvatar assignee={assignee} teamMembers={teamMembers} onAssign={id => onAssigneeChange(job.id, id)} />
                 </div>
 
-                {assignee && (
-                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg mb-2 text-white text-[11px] font-semibold" style={{ backgroundColor: assignee.color }}>
-                    <span className="w-4 h-4 rounded-full bg-white/30 flex items-center justify-center text-[9px] font-bold flex-shrink-0">
-                      {getMemberInitials(assignee.name)}
-                    </span>
-                    <span className="truncate">{assignee.name}</span>
-                  </div>
-                )}
-
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2 flex-wrap">
                     {jobDate && (
