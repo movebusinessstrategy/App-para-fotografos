@@ -3621,13 +3621,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const jobId = Number(req.params.id);
 
     // Verifica ownership do job
-    const { data: job } = await supabase.from('jobs').select('id, amount, notes, payment_method, payment_status').eq('id', jobId).eq('user_id', userId).single();
+    const { data: job } = await supabase.from('jobs').select('id, amount, notes, payment_method, payment_status, job_type, job_name').eq('id', jobId).eq('user_id', userId).single();
     if (!job) return res.status(404).json({ error: 'Job not found' });
 
     // Busca deal vinculado (converted_job_id = jobId)
     const { data: deal } = await supabase
       .from('deals')
-      .select('id, value')
+      .select('id, value, title')
       .eq('converted_job_id', jobId)
       .eq('user_id', userId)
       .maybeSingle();
@@ -3698,7 +3698,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       await supabase.from('jobs').update(upd).eq('id', jobId).eq('user_id', userId);
     }
 
-    res.json({ dealItems, jobItems, payments, totalPago, jobAmount: realTotal, payment_status: correctStatus });
+    // Item sintético do pacote vendido: quando o job veio de uma venda mas o
+    // deal não tem deal_items detalhados, o pacote precisa aparecer como item
+    // (e não só como valor total). Estilo Trello — visível para a equipe.
+    const packageBase = realTotal - jobItemsTotal;
+    const packageItem = (deal?.id && dealItems.length === 0 && packageBase > 0)
+      ? { name: (deal as any)?.title || (job as any).job_name || (job as any).job_type || 'Pacote', value: packageBase }
+      : null;
+
+    res.json({ dealItems, jobItems, payments, totalPago, jobAmount: realTotal, payment_status: correctStatus, packageItem });
   });
 
   // POST /api/jobs/:id/payments — registrar um pagamento
