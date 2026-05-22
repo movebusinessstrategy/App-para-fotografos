@@ -3851,6 +3851,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     if (error) return res.status(500).json({ error: error.message });
 
+    // Dá baixa no estoque do produto (se ele controla estoque)
+    await adjustProductStock(adminClient, catalog_type, catalog_id, -(Number(quantidade) || 1));
+
     // Auto-label "Álbum" se o produto adicionado tem "álbum" / "album" no nome.
     // Não usa \b porque em JS o word boundary não funciona com chars
     // não-ASCII (á), então normaliza acentos antes do match.
@@ -3913,13 +3916,29 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return { newAmount: realTotal, payment_status: newStatus };
   }
 
+  // Helper: ajusta o estoque de um produto do catálogo (delta +/-).
+  // Só mexe se o item é um produto e o produto controla estoque.
+  async function adjustProductStock(adminClient: SupabaseClient, catalogType: string, catalogId: string, delta: number) {
+    if (catalogType !== 'produto' || !catalogId || !delta) return;
+    try {
+      const { data: prod } = await adminClient
+        .from('produtos')
+        .select('id, controla_estoque, estoque')
+        .eq('id', catalogId)
+        .maybeSingle();
+      if (!prod || !(prod as any).controla_estoque) return;
+      const novo = (Number((prod as any).estoque) || 0) + delta;
+      await adminClient.from('produtos').update({ estoque: novo }).eq('id', catalogId);
+    } catch { /* coluna controla_estoque ainda não existe — ignora */ }
+  }
+
   // PATCH /api/job-items/:id — atualizar quantidade
   app.patch('/api/job-items/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
 
-    const { data: item } = await adminClient.from('job_items').select('id, job_id, catalog_value, quantidade').eq('id', req.params.id).single();
+    const { data: item } = await adminClient.from('job_items').select('id, job_id, catalog_type, catalog_id, catalog_value, quantidade').eq('id', req.params.id).single();
     if (!item) return res.status(404).json({ error: 'Not found' });
 
     const { data: job } = await supabase.from('jobs').select('id').eq('id', item.job_id).eq('user_id', userId).single();
@@ -3941,6 +3960,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     await adminClient.from('job_items').update(patch).eq('id', req.params.id);
 
+    // Mudou a quantidade → ajusta o estoque pela diferença
+    if (patch.quantidade !== undefined && patch.quantidade !== item.quantidade) {
+      await adjustProductStock(adminClient, item.catalog_type, item.catalog_id, -(patch.quantidade - item.quantidade));
+    }
+
     const result = await recalcJobFinancials(supabase, adminClient, item.job_id, userId);
     res.json({ success: true, ...result });
   });
@@ -3951,13 +3975,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
 
-    const { data: item } = await adminClient.from('job_items').select('id, job_id, catalog_value, quantidade').eq('id', req.params.id).single();
+    const { data: item } = await adminClient.from('job_items').select('id, job_id, catalog_type, catalog_id, catalog_value, quantidade').eq('id', req.params.id).single();
     if (!item) return res.status(404).json({ error: 'Not found' });
 
     const { data: job } = await supabase.from('jobs').select('id').eq('id', item.job_id).eq('user_id', userId).single();
     if (!job) return res.status(403).json({ error: 'Forbidden' });
 
     await adminClient.from('job_items').delete().eq('id', req.params.id);
+
+    // Item removido → devolve a quantidade ao estoque do produto
+    await adjustProductStock(adminClient, item.catalog_type, item.catalog_id, Number(item.quantidade) || 1);
 
     const result = await recalcJobFinancials(supabase, adminClient, item.job_id, userId);
     res.json({ success: true, ...result });
@@ -4168,6 +4195,120 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const { error } = await supabase.from('produtos').delete().eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  // ============ COMPRAS (reposição de estoque) ============
+
+  // GET /api/compras — lista os pedidos de compra
+  app.get('/api/compras', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase
+      .from('compras')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+    if (error) {
+      if (error.code === '42P01') return res.json([]);
+      return res.status(500).json({ error: error.message });
+    }
+    res.json(data || []);
+  });
+
+  // POST /api/compras — cria um pedido de compra (entra em "análise")
+  app.post('/api/compras', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { produto_id, quantidade, observacao } = req.body;
+    if (!produto_id) return res.status(400).json({ error: 'produto_id é obrigatório' });
+
+    const { data: prod } = await supabase
+      .from('produtos')
+      .select('id, nome')
+      .eq('id', produto_id)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!prod) return res.status(404).json({ error: 'Produto não encontrado' });
+
+    const { data, error } = await supabase
+      .from('compras')
+      .insert({
+        user_id: userId,
+        produto_id,
+        produto_nome: (prod as any).nome,
+        quantidade: Math.max(1, Number(quantidade) || 1),
+        status: 'analise',
+        observacao: observacao || null,
+      })
+      .select()
+      .single();
+    if (error) {
+      if (error.code === '42P01') {
+        return res.status(400).json({ error: 'Tabela compras não existe. Rode a migration 016_compras.sql no Supabase.' });
+      }
+      return res.status(500).json({ error: error.message });
+    }
+    res.json(data);
+  });
+
+  // PATCH /api/compras/:id — muda status/quantidade. Ao virar "comprado",
+  // o estoque do produto sobe pela quantidade do pedido.
+  app.patch('/api/compras/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+
+    const { data: current } = await supabase
+      .from('compras')
+      .select('*')
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .single();
+    if (!current) return res.status(404).json({ error: 'Pedido não encontrado' });
+
+    const patch: any = {};
+    if (req.body.quantidade !== undefined) patch.quantidade = Math.max(1, Number(req.body.quantidade) || 1);
+    if (req.body.observacao !== undefined) patch.observacao = req.body.observacao || null;
+    if (req.body.status !== undefined) {
+      const allowed = ['analise', 'aprovado', 'comprado', 'cancelado'];
+      if (!allowed.includes(req.body.status)) return res.status(400).json({ error: 'status inválido' });
+      patch.status = req.body.status;
+    }
+    if (Object.keys(patch).length === 0) return res.json(current);
+    patch.updated_at = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from('compras')
+      .update(patch)
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Transição para "comprado" → repõe o estoque do produto (uma vez só)
+    if (patch.status === 'comprado' && (current as any).status !== 'comprado' && (current as any).produto_id) {
+      const qtd = patch.quantidade !== undefined ? patch.quantidade : (current as any).quantidade;
+      const { data: prod } = await adminClient
+        .from('produtos')
+        .select('id, estoque')
+        .eq('id', (current as any).produto_id)
+        .maybeSingle();
+      if (prod) {
+        const novo = (Number((prod as any).estoque) || 0) + (Number(qtd) || 0);
+        await adminClient.from('produtos').update({ estoque: novo }).eq('id', (current as any).produto_id);
+      }
+    }
+    res.json(data);
+  });
+
+  // DELETE /api/compras/:id
+  app.delete('/api/compras/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { error } = await supabase.from('compras').delete().eq('id', req.params.id).eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
   });

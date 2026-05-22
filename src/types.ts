@@ -379,11 +379,27 @@ export interface Produto {
   margem_lucro?: number;
   unidade: UnidadeProduto;
   estoque?: number;
+  controla_estoque?: boolean;
+  estoque_minimo?: number;
   prazo_entrega?: number;
   ncm?: string;
   cfop?: string;
   origem?: string;
   ativo: boolean;
+  created_at: string;
+  updated_at?: string;
+}
+
+export type CompraStatus = 'analise' | 'aprovado' | 'comprado' | 'cancelado';
+
+export interface Compra {
+  id: string;
+  user_id?: string;
+  produto_id: string | null;
+  produto_nome: string;
+  quantidade: number;
+  status: CompraStatus;
+  observacao?: string | null;
   created_at: string;
   updated_at?: string;
 }

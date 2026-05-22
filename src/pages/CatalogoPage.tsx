@@ -11,6 +11,7 @@ import {
   CategoriaCatalogo, TipoEnsaio, UnidadeProduto,
 } from "../types";
 import { SearchableSelect } from "../components/ui/SearchableSelect";
+import { EstoqueTab } from "../components/catalogo/EstoqueTab";
 
 // ═══════════════════════════════════════════════════════════
 // HELPERS
@@ -20,7 +21,7 @@ const LABEL = "block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1";
 const UNIDADES: UnidadeProduto[] = ["un", "cx", "pct", "par", "kit"];
 
 type Aba = "produtos" | "servicos" | "combos";
-type SubProdutos = "produtos" | "categorias" | "fornecedores";
+type SubProdutos = "produtos" | "categorias" | "fornecedores" | "estoque";
 type SubServicos = "servicos" | "tipos";
 
 /** Controlled number input: shows empty while editing, resets to 0 on blur if empty */
@@ -466,9 +467,9 @@ function ProdutoModal({ item, fornecedores, categorias, onSave, onClose }: {
             </div>
           </div>
 
-          {/* Fornecedor + Estoque + Prazo */}
-          <div className="grid grid-cols-3 gap-3">
-            <div className="col-span-1">
+          {/* Fornecedor + Prazo */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
               <FieldLabel>Fornecedor</FieldLabel>
               <SearchableSelect
                 value={form.fornecedor_id ?? ""}
@@ -478,13 +479,30 @@ function ProdutoModal({ item, fornecedores, categorias, onSave, onClose }: {
               />
             </div>
             <div>
-              <FieldLabel>Estoque</FieldLabel>
-              <NumInput value={form.estoque ?? 0} onChange={(n) => set("estoque", n)} />
-            </div>
-            <div>
               <FieldLabel>Prazo entrega (dias)</FieldLabel>
               <NumInput value={form.prazo_entrega ?? 0} onChange={(n) => set("prazo_entrega", n || undefined)} />
             </div>
+          </div>
+
+          {/* Controle de estoque */}
+          <div className="border-t border-gray-100 dark:border-gray-800 pt-4">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={form.controla_estoque ?? false} onChange={(e) => set("controla_estoque", e.target.checked)} className="w-4 h-4 accent-gold-500" />
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Controlar estoque deste produto</span>
+            </label>
+            <p className="text-xs text-gray-400 mt-1 ml-6">Dá baixa automática quando o produto é adicionado a um trabalho.</p>
+            {form.controla_estoque && (
+              <div className="grid grid-cols-2 gap-3 mt-3">
+                <div>
+                  <FieldLabel>Estoque atual</FieldLabel>
+                  <NumInput value={form.estoque ?? 0} onChange={(n) => set("estoque", n)} />
+                </div>
+                <div>
+                  <FieldLabel>Estoque mínimo (alerta)</FieldLabel>
+                  <NumInput value={form.estoque_minimo ?? 0} onChange={(n) => set("estoque_minimo", n)} />
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Descrição */}
@@ -1060,10 +1078,12 @@ export default function CatalogoPage() {
           <h3 className="text-2xl font-bold text-gray-800 dark:text-white">Catálogo</h3>
           <p className="text-gray-500 dark:text-gray-400 text-sm">Produtos, serviços e combos do seu estúdio.</p>
         </div>
-        <button onClick={handleNovo}
-          className="flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white text-sm font-medium rounded-xl transition-colors">
-          <Plus size={16} />{novoLabel}
-        </button>
+        {!(aba === "produtos" && subP === "estoque") && (
+          <button onClick={handleNovo}
+            className="flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white text-sm font-medium rounded-xl transition-colors">
+            <Plus size={16} />{novoLabel}
+          </button>
+        )}
       </div>
 
       {/* Abas + Busca */}
@@ -1094,10 +1114,15 @@ export default function CatalogoPage() {
           {aba === "produtos" && (
             <div>
               <SubTabBar
-                tabs={[{ id: "produtos", label: "Produtos" }, { id: "categorias", label: "Categorias" }, { id: "fornecedores", label: "Fornecedores" }]}
+                tabs={[{ id: "produtos", label: "Produtos" }, { id: "categorias", label: "Categorias" }, { id: "fornecedores", label: "Fornecedores" }, { id: "estoque", label: "Estoque" }]}
                 active={subP}
                 onChange={(s) => setSubP(s as SubProdutos)}
               />
+
+              {/* Sub: Estoque */}
+              {subP === "estoque" && (
+                <EstoqueTab produtos={produtos} onChanged={() => load(true)} />
+              )}
 
               {/* Sub: Produtos */}
               {subP === "produtos" && (
@@ -1113,6 +1138,7 @@ export default function CatalogoPage() {
                         <th className={`${tableHeaderCls} text-right`}>Venda</th>
                         <th className={`${tableHeaderCls} text-right hidden sm:table-cell`}>Markup</th>
                         <th className={`${tableHeaderCls} text-center hidden lg:table-cell`}>Prazo</th>
+                        <th className={`${tableHeaderCls} text-center`}>Estoque</th>
                         <th className={`${tableHeaderCls} text-center`}>Status</th>
                         <th className="px-5 py-3" />
                       </tr></thead>
@@ -1142,6 +1168,19 @@ export default function CatalogoPage() {
                             </td>
                             <td className="px-5 py-3 text-center text-gray-500 dark:text-gray-400 hidden lg:table-cell">
                               {p.prazo_entrega ? `${p.prazo_entrega}d` : "—"}
+                            </td>
+                            <td className="px-5 py-3 text-center">
+                              {p.controla_estoque ? (
+                                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                                  (p.estoque ?? 0) <= 0
+                                    ? "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400"
+                                    : (p.estoque ?? 0) <= (p.estoque_minimo ?? 0)
+                                    ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400"
+                                    : "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400"
+                                }`}>{p.estoque ?? 0}</span>
+                              ) : (
+                                <span className="text-gray-300 dark:text-gray-600">—</span>
+                              )}
                             </td>
                             <td className="px-5 py-3 text-center">
                               <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${p.ativo ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400" : "bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400"}`}>{p.ativo ? "Ativo" : "Inativo"}</span>

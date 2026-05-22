@@ -1,5 +1,5 @@
 import { authFetch } from '../../utils/authFetch';
-import { Fornecedor, Produto, Servico, Combo, CategoriaCatalogo, TipoEnsaio } from '../../types';
+import { Fornecedor, Produto, Servico, Combo, CategoriaCatalogo, TipoEnsaio, Compra } from '../../types';
 
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -164,6 +164,27 @@ export const catalogoApi = {
 
   deleteCombo: async (id: string): Promise<void> => {
     const res = await authFetch(`/api/combos/${id}`, { method: 'DELETE' });
+    await handle<void>(res);
+  },
+
+  // ── Compras (reposição de estoque) ───────────────────────────────
+  getCompras: async (): Promise<Compra[]> => {
+    const res = await authFetch('/api/compras');
+    return handle<Compra[]>(res);
+  },
+
+  createCompra: async (data: { produto_id: string; quantidade: number; observacao?: string }): Promise<Compra> => {
+    const res = await authFetch('/api/compras', { method: 'POST', body: JSON.stringify(data) });
+    return handle<Compra>(res);
+  },
+
+  updateCompra: async (id: string, data: Partial<Compra>): Promise<Compra> => {
+    const res = await authFetch(`/api/compras/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+    return handle<Compra>(res);
+  },
+
+  deleteCompra: async (id: string): Promise<void> => {
+    const res = await authFetch(`/api/compras/${id}`, { method: 'DELETE' });
     await handle<void>(res);
   },
 };
