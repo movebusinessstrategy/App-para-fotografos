@@ -4733,6 +4733,50 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ success: true });
   });
 
+  // ── Etiquetas da Produção (paleta padronizada, estilo Trello) ──────
+  app.get('/api/jobs/labels', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase
+      .from('job_labels')
+      .select('*')
+      .eq('user_id', userId)
+      .order('name', { ascending: true });
+    if (error) {
+      if (error.code === '42P01') return res.json([]);
+      return res.status(500).json({ error: error.message });
+    }
+    res.json(data || []);
+  });
+
+  app.post('/api/jobs/labels', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { name, color } = req.body;
+    if (!name?.trim()) return res.status(400).json({ error: 'name é obrigatório' });
+    const { data, error } = await supabase
+      .from('job_labels')
+      .insert({ user_id: userId, name: name.trim(), color: color || '#6B7280' })
+      .select()
+      .single();
+    if (error) {
+      if (error.code === '42P01') {
+        return res.status(400).json({
+          error: 'Tabela job_labels não existe. Rode a migration 013_job_labels.sql no Supabase.',
+        });
+      }
+      return res.status(500).json({ error: error.message });
+    }
+    res.json(data);
+  });
+
+  app.delete('/api/jobs/labels/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    await supabase.from('job_labels').delete().eq('id', req.params.id).eq('user_id', userId);
+    res.json({ success: true });
+  });
+
   app.patch('/api/deals/:id/labels', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;

@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Calendar,
-  Camera,
+  Workflow,
   ChevronDown,
   ChevronRight,
   DollarSign,
@@ -29,7 +29,7 @@ import { useAuth } from "../../contexts/AuthContext";
 const ALL_NAV_ITEMS = [
   { to: "/dashboard",     label: "Dashboard",       icon: LayoutDashboard, end: true,  module: "dashboard" },
   { to: "/clients",       label: "Clientes",         icon: Users,           module: "clients" },
-  { to: "/jobs",          label: "Produção",         icon: Camera,          module: "jobs" },
+  { to: "/jobs",          label: "Produção",         icon: Workflow,        module: "jobs" },
   { to: "/tarefas",       label: "Tarefas",          icon: ListChecks,      module: "jobs" },
   { to: "/vendas",        label: "Vendas",           icon: Trello,          module: "vendas" },
   { to: "/agente",        label: "Agente IA",        icon: Bot,             module: "agente" },
