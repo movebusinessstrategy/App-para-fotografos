@@ -4361,6 +4361,75 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ success: true });
   });
 
+  // POST /api/compras/backfill — varre os trabalhos já existentes e gera os
+  // pedidos de compra dos produtos "sob encomenda" que ainda não têm pedido.
+  app.post('/api/compras/backfill', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+
+    // 1. Produtos marcados como sob encomenda
+    const { data: prods, error: prodErr } = await supabase
+      .from('produtos')
+      .select('id, nome')
+      .eq('user_id', userId)
+      .eq('sob_encomenda', true);
+    if (prodErr) return res.status(500).json({ error: prodErr.message });
+    if (!prods || prods.length === 0) {
+      return res.json({ created: 0, message: 'Nenhum produto está marcado como "sob encomenda".' });
+    }
+    const prodMap = new Map(prods.map((p: any) => [String(p.id), p.nome]));
+
+    // 2. Trabalhos do usuário (ignora cancelados) + nome do cliente
+    const { data: jobs } = await supabase
+      .from('jobs')
+      .select('id, status, clients(name)')
+      .eq('user_id', userId);
+    const validJobs = new Map<number, string | null>();
+    for (const j of jobs || []) {
+      if ((j as any).status === 'cancelled') continue;
+      validJobs.set((j as any).id, ((j as any).clients?.name) || null);
+    }
+
+    // 3. Itens de trabalho que são produtos sob encomenda
+    const { data: items } = await adminClient
+      .from('job_items')
+      .select('id, job_id, catalog_id, catalog_name, quantidade')
+      .in('catalog_id', Array.from(prodMap.keys()));
+
+    // 4. Pedidos já existentes ligados a um item (pra não duplicar)
+    const { data: existentes } = await supabase
+      .from('compras')
+      .select('job_item_id')
+      .eq('user_id', userId)
+      .not('job_item_id', 'is', null);
+    const jaTem = new Set((existentes || []).map((c: any) => String(c.job_item_id)));
+
+    // 5. Cria os pedidos faltantes
+    const novas: any[] = [];
+    for (const it of items || []) {
+      const jobId = (it as any).job_id;
+      if (!validJobs.has(jobId)) continue;          // trabalho não é do usuário ou está cancelado
+      if (jaTem.has(String((it as any).id))) continue; // já tem pedido
+      novas.push({
+        user_id: userId,
+        produto_id: (it as any).catalog_id,
+        produto_nome: (it as any).catalog_name || prodMap.get(String((it as any).catalog_id)) || 'Produto',
+        quantidade: Math.max(1, Number((it as any).quantidade) || 1),
+        status: 'analise',
+        job_id: jobId,
+        job_item_id: String((it as any).id),
+        cliente_nome: validJobs.get(jobId) || null,
+      });
+    }
+    if (novas.length === 0) {
+      return res.json({ created: 0, message: 'Nenhuma venda nova — tudo já está sincronizado.' });
+    }
+    const { error } = await adminClient.from('compras').insert(novas);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ created: novas.length });
+  });
+
   // ============ CATÁLOGO: SERVIÇOS ============
 
   app.get('/api/servicos', requireAuth, async (req, res) => {

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Package, ShoppingCart, X, Loader2, AlertTriangle, Trash2 } from "lucide-react";
+import { Package, ShoppingCart, X, Loader2, AlertTriangle, Trash2, RefreshCw } from "lucide-react";
 import { catalogoApi } from "../../services/api/catalogo";
 import { Produto, Compra, CompraStatus } from "../../types";
 
@@ -19,6 +19,8 @@ export function EstoqueTab({ produtos, onChanged }: { produtos: Produto[]; onCha
   const [qtd, setQtd] = useState(1);
   const [obs, setObs] = useState("");
   const [busy, setBusy] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillMsg, setBackfillMsg] = useState("");
 
   const loadCompras = async () => {
     try { setCompras(await catalogoApi.getCompras()); }
@@ -56,6 +58,24 @@ export function EstoqueTab({ produtos, onChanged }: { produtos: Produto[]; onCha
   async function excluir(c: Compra) {
     setCompras((prev) => prev.filter((x) => x.id !== c.id));
     await catalogoApi.deleteCompra(c.id);
+  }
+
+  async function puxarVendas() {
+    setBackfilling(true);
+    setBackfillMsg("");
+    try {
+      const r = await catalogoApi.backfillCompras();
+      await loadCompras();
+      setBackfillMsg(
+        r.created > 0
+          ? `${r.created} pedido(s) gerado(s) das vendas já feitas.`
+          : (r.message || "Nenhuma venda nova pra puxar."),
+      );
+    } catch (e: any) {
+      setBackfillMsg(e?.message || "Erro ao puxar as vendas.");
+    } finally {
+      setBackfilling(false);
+    }
   }
 
   if (loading) {
@@ -128,8 +148,22 @@ export function EstoqueTab({ produtos, onChanged }: { produtos: Produto[]; onCha
         <div className="px-5 py-3 border-b border-gray-100 dark:border-gray-800 flex items-center gap-2">
           <ShoppingCart size={16} className="text-gold-600" />
           <h4 className="font-semibold text-gray-800 dark:text-gray-100">Pedidos de compra</h4>
-          {pendentes.length > 0 && <span className="ml-auto text-xs text-gray-400">{pendentes.length} em andamento</span>}
+          {pendentes.length > 0 && <span className="text-xs text-gray-400">· {pendentes.length} em andamento</span>}
+          <button
+            onClick={puxarVendas}
+            disabled={backfilling}
+            title="Gera os pedidos das vendas que já estão na produção"
+            className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-50"
+          >
+            {backfilling ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+            Puxar vendas já feitas
+          </button>
         </div>
+        {backfillMsg && (
+          <div className="px-5 py-2 text-xs font-medium text-gold-700 dark:text-gold-300 bg-gold-50/60 dark:bg-gold-900/10 border-b border-gray-100 dark:border-gray-800">
+            {backfillMsg}
+          </div>
+        )}
         {compras.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-14 gap-1.5 text-gray-400">
             <ShoppingCart size={30} strokeWidth={1.5} />
