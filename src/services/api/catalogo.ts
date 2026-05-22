@@ -187,4 +187,9 @@ export const catalogoApi = {
     const res = await authFetch(`/api/compras/${id}`, { method: 'DELETE' });
     await handle<void>(res);
   },
+
+  backfillCompras: async (): Promise<{ created: number; message?: string }> => {
+    const res = await authFetch('/api/compras/backfill', { method: 'POST' });
+    return handle<{ created: number; message?: string }>(res);
+  },
 };
