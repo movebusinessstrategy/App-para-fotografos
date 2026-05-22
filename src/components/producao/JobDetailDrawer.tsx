@@ -254,7 +254,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
 
   // ── Financeiro ──
   const [dealItems, setDealItems] = useState<CatalogItem[]>([]);
-  const [packageItem, setPackageItem] = useState<{ name: string; value: number; discount: number } | null>(null);
+  const [packageItem, setPackageItem] = useState<{ name: string; value: number; discount: number; source: 'deal' | 'job' } | null>(null);
   const [jobItems, setJobItems] = useState<CatalogItem[]>([]);
   const [payments, setPayments] = useState<JobPayment[]>([]);
   const [jobAmount, setJobAmount] = useState(0);
@@ -1098,11 +1098,11 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                       </div>
                     </div>
 
-                    {/* ── Itens do negócio (deal) ── */}
+                    {/* ── Itens do negócio (deal) / valor base do trabalho ── */}
                     {(dealItems.length > 0 || packageItem) && (
                       <section>
                         <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-2">
-                          Itens do negócio
+                          {packageItem?.source === 'job' && dealItems.length === 0 ? 'Valor do trabalho' : 'Itens do negócio'}
                         </h3>
                         <div className="space-y-1.5">
                           {dealItems.length > 0 ? dealItems.map(item => {
@@ -1694,12 +1694,13 @@ function PackageEditor({
   catalogServicos,
   onSave,
 }: {
-  pkg: { name: string; value: number; discount: number };
+  pkg: { name: string; value: number; discount: number; source: 'deal' | 'job' };
   catalogCombos: any[];
   catalogProdutos: any[];
   catalogServicos: any[];
   onSave: (patch: { name?: string; value?: number; discount?: number }) => void;
 }) {
+  const isJob = pkg.source === 'job';
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(pkg.name);
   const [value, setValue] = useState(String(pkg.value));
@@ -1735,6 +1736,11 @@ function PackageEditor({
 
   function applyEdit() {
     const newValue = Math.max(0, parseFloat(value.replace(',', '.')) || 0);
+    if (isJob) {
+      onSave({ value: newValue });
+      setEditing(false);
+      return;
+    }
     let newDiscount = Math.max(0, parseFloat(discount.replace(',', '.')) || 0);
     if (discountMode === 'percent') newDiscount = (newValue * newDiscount) / 100;
     onSave({ name: name.trim() || 'Pacote', value: newValue, discount: newDiscount });
@@ -1761,7 +1767,7 @@ function PackageEditor({
       <div className={`relative flex items-center gap-2 px-3 py-2 rounded-xl border ${cfg.bg} ${cfg.border}`}>
         <span className={`flex-shrink-0 ${cfg.color}`}>{cfg.icon}</span>
         <span className="flex-1 text-sm text-gray-800 dark:text-gray-100 truncate min-w-0">{pkg.name}</span>
-        <span className="text-[10px] font-semibold text-gray-400 bg-white/70 dark:bg-gray-800/70 px-1.5 py-0.5 rounded-full flex-shrink-0">Pacote</span>
+        <span className="text-[10px] font-semibold text-gray-400 bg-white/70 dark:bg-gray-800/70 px-1.5 py-0.5 rounded-full flex-shrink-0">{isJob ? 'Valor base' : 'Pacote'}</span>
         {hasDiscount ? (
           <div className="flex flex-col items-end leading-tight flex-shrink-0">
             <span className="text-[10px] line-through opacity-50 text-gray-500">{formatCurrency(gross)}</span>
@@ -1773,7 +1779,7 @@ function PackageEditor({
         <button
           onMouseDown={e => e.preventDefault()}
           onClick={() => { setEditing(o => !o); setSwapOpen(false); }}
-          title="Editar pacote"
+          title={isJob ? 'Editar valor' : 'Editar pacote'}
           className="text-gray-300 hover:text-gold-600 dark:text-gray-600 dark:hover:text-gold-400 flex-shrink-0"
         >
           <Pencil size={13} />
@@ -1784,49 +1790,54 @@ function PackageEditor({
             className="absolute right-0 top-full mt-1 z-30 w-64 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl p-3 space-y-3"
             onClick={e => e.stopPropagation()}
           >
+            {!isJob && (
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1">
+                  Nome do pacote
+                </label>
+                <input
+                  value={name}
+                  onChange={e => setName(e.target.value)}
+                  className="w-full px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none focus:border-gold-400 dark:bg-gray-900"
+                />
+              </div>
+            )}
             <div>
               <label className="block text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1">
-                Nome do pacote
-              </label>
-              <input
-                value={name}
-                onChange={e => setName(e.target.value)}
-                className="w-full px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none focus:border-gold-400 dark:bg-gray-900"
-              />
-            </div>
-            <div>
-              <label className="block text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1">
-                Valor
+                {isJob ? 'Valor do trabalho' : 'Valor'}
               </label>
               <input
                 type="number" step="0.01" min="0" value={value}
                 onChange={e => setValue(e.target.value)}
+                autoFocus={isJob}
                 className="w-full px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none focus:border-gold-400 dark:bg-gray-900"
               />
             </div>
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                  Desconto
-                </label>
-                <div className="flex gap-0.5 text-[10px] font-semibold">
-                  <button
-                    onClick={() => setDiscountMode('value')}
-                    className={`px-1.5 py-0.5 rounded ${discountMode === 'value' ? 'bg-gold-500 text-white' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
-                  >R$</button>
-                  <button
-                    onClick={() => setDiscountMode('percent')}
-                    className={`px-1.5 py-0.5 rounded ${discountMode === 'percent' ? 'bg-gold-500 text-white' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
-                  >%</button>
+            {!isJob && (
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                    Desconto
+                  </label>
+                  <div className="flex gap-0.5 text-[10px] font-semibold">
+                    <button
+                      onClick={() => setDiscountMode('value')}
+                      className={`px-1.5 py-0.5 rounded ${discountMode === 'value' ? 'bg-gold-500 text-white' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                    >R$</button>
+                    <button
+                      onClick={() => setDiscountMode('percent')}
+                      className={`px-1.5 py-0.5 rounded ${discountMode === 'percent' ? 'bg-gold-500 text-white' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                    >%</button>
+                  </div>
                 </div>
+                <input
+                  type="number" step="0.01" min="0" value={discount}
+                  onChange={e => setDiscount(e.target.value)}
+                  placeholder="0"
+                  className="w-full px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none focus:border-gold-400 dark:bg-gray-900"
+                />
               </div>
-              <input
-                type="number" step="0.01" min="0" value={discount}
-                onChange={e => setDiscount(e.target.value)}
-                placeholder="0"
-                className="w-full px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none focus:border-gold-400 dark:bg-gray-900"
-              />
-            </div>
+            )}
             <div className="flex gap-1.5 justify-end">
               <button
                 onClick={() => setEditing(false)}
@@ -1841,7 +1852,8 @@ function PackageEditor({
         )}
       </div>
 
-      {/* Trocar pacote pelo catálogo */}
+      {/* Trocar pacote pelo catálogo — só para pacote de venda */}
+      {!isJob && (
       <div ref={swapRef}>
         <button
           onMouseDown={e => e.preventDefault()}
@@ -1898,6 +1910,7 @@ function PackageEditor({
           </div>
         )}
       </div>
+      )}
     </>
   );
 }
