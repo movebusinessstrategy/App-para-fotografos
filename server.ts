@@ -3837,7 +3837,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const adminClient = supabaseAdmin || supabase;
     const jobId = Number(req.params.id);
 
-    const { data: job } = await supabase.from('jobs').select('id, amount, labels').eq('id', jobId).eq('user_id', userId).single();
+    const { data: job } = await supabase.from('jobs').select('id, amount, labels, clients(name)').eq('id', jobId).eq('user_id', userId).single();
     if (!job) return res.status(404).json({ error: 'Job not found' });
 
     const { catalog_type, catalog_id, catalog_name, catalog_value, quantidade = 1, discount_value = 0 } = req.body;
@@ -3853,6 +3853,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     // Dá baixa no estoque do produto (se ele controla estoque)
     await adjustProductStock(adminClient, catalog_type, catalog_id, -(Number(quantidade) || 1));
+    // Produto sob encomenda → gera o pedido de compra automático
+    await createOrderForProduct(
+      adminClient, userId, jobId, item.id, catalog_type, catalog_id, catalog_name,
+      Number(quantidade) || 1, ((job as any).clients?.name) || null,
+    );
 
     // Auto-label "Álbum" se o produto adicionado tem "álbum" / "album" no nome.
     // Não usa \b porque em JS o word boundary não funciona com chars
@@ -3932,6 +3937,34 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     } catch { /* coluna controla_estoque ainda não existe — ignora */ }
   }
 
+  // Helper: gera um pedido de compra automático quando um produto
+  // "sob encomenda" é adicionado a um trabalho.
+  async function createOrderForProduct(
+    adminClient: SupabaseClient, userId: string, jobId: number, jobItemId: string,
+    catalogType: string, catalogId: string, catalogName: string, quantidade: number,
+    clienteNome: string | null,
+  ) {
+    if (catalogType !== 'produto' || !catalogId) return;
+    try {
+      const { data: prod } = await adminClient
+        .from('produtos')
+        .select('id, sob_encomenda')
+        .eq('id', catalogId)
+        .maybeSingle();
+      if (!prod || !(prod as any).sob_encomenda) return;
+      await adminClient.from('compras').insert({
+        user_id: userId,
+        produto_id: catalogId,
+        produto_nome: catalogName,
+        quantidade: Math.max(1, Number(quantidade) || 1),
+        status: 'analise',
+        job_id: jobId,
+        job_item_id: String(jobItemId),
+        cliente_nome: clienteNome,
+      });
+    } catch { /* coluna sob_encomenda / tabela compras ainda não existe — ignora */ }
+  }
+
   // PATCH /api/job-items/:id — atualizar quantidade
   app.patch('/api/job-items/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
@@ -3963,6 +3996,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Mudou a quantidade → ajusta o estoque pela diferença
     if (patch.quantidade !== undefined && patch.quantidade !== item.quantidade) {
       await adjustProductStock(adminClient, item.catalog_type, item.catalog_id, -(patch.quantidade - item.quantidade));
+      // Sincroniza a quantidade no pedido automático ainda em análise
+      try {
+        await adminClient.from('compras')
+          .update({ quantidade: patch.quantidade })
+          .eq('job_item_id', String(req.params.id))
+          .eq('status', 'analise');
+      } catch { /* tabela compras ainda não existe — ignora */ }
     }
 
     const result = await recalcJobFinancials(supabase, adminClient, item.job_id, userId);
@@ -3985,6 +4025,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     // Item removido → devolve a quantidade ao estoque do produto
     await adjustProductStock(adminClient, item.catalog_type, item.catalog_id, Number(item.quantidade) || 1);
+    // Remove o pedido automático ligado a esse item, se ainda em análise
+    try {
+      await adminClient.from('compras')
+        .delete()
+        .eq('job_item_id', String(req.params.id))
+        .eq('status', 'analise');
+    } catch { /* tabela compras ainda não existe — ignora */ }
 
     const result = await recalcJobFinancials(supabase, adminClient, item.job_id, userId);
     res.json({ success: true, ...result });
@@ -4288,15 +4335,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .single();
     if (error) return res.status(500).json({ error: error.message });
 
-    // Transição para "comprado" → repõe o estoque do produto (uma vez só)
+    // Transição para "comprado" → repõe o estoque do produto (uma vez só).
+    // Só vale pra produto que controla estoque; sob encomenda não tem estoque.
     if (patch.status === 'comprado' && (current as any).status !== 'comprado' && (current as any).produto_id) {
       const qtd = patch.quantidade !== undefined ? patch.quantidade : (current as any).quantidade;
       const { data: prod } = await adminClient
         .from('produtos')
-        .select('id, estoque')
+        .select('id, estoque, controla_estoque')
         .eq('id', (current as any).produto_id)
         .maybeSingle();
-      if (prod) {
+      if (prod && (prod as any).controla_estoque) {
         const novo = (Number((prod as any).estoque) || 0) + (Number(qtd) || 0);
         await adminClient.from('produtos').update({ estoque: novo }).eq('id', (current as any).produto_id);
       }

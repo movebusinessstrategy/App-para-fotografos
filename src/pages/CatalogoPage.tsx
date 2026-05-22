@@ -486,22 +486,51 @@ function ProdutoModal({ item, fornecedores, categorias, onSave, onClose }: {
 
           {/* Controle de estoque */}
           <div className="border-t border-gray-100 dark:border-gray-800 pt-4">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={form.controla_estoque ?? false} onChange={(e) => set("controla_estoque", e.target.checked)} className="w-4 h-4 accent-gold-500" />
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Controlar estoque deste produto</span>
-            </label>
-            <p className="text-xs text-gray-400 mt-1 ml-6">Dá baixa automática quando o produto é adicionado a um trabalho.</p>
+            <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-2">Controle de estoque</p>
+            <div className="grid grid-cols-3 gap-1.5">
+              {([
+                { id: "nenhum", label: "Não controlar" },
+                { id: "estoque", label: "Estoque" },
+                { id: "encomenda", label: "Sob encomenda" },
+              ] as const).map((opt) => {
+                const mode = form.sob_encomenda ? "encomenda" : form.controla_estoque ? "estoque" : "nenhum";
+                const active = mode === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => {
+                      set("controla_estoque", opt.id === "estoque");
+                      set("sob_encomenda", opt.id === "encomenda");
+                    }}
+                    className={`py-2 px-2 rounded-xl text-xs font-semibold border transition-colors ${
+                      active
+                        ? "bg-gold-50 dark:bg-gold-900/20 border-gold-400 text-gold-700 dark:text-gold-300"
+                        : "border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-gray-300"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
             {form.controla_estoque && (
-              <div className="grid grid-cols-2 gap-3 mt-3">
-                <div>
-                  <FieldLabel>Estoque atual</FieldLabel>
-                  <NumInput value={form.estoque ?? 0} onChange={(n) => set("estoque", n)} />
+              <>
+                <p className="text-xs text-gray-400 mt-2">Dá baixa automática quando o produto é adicionado a um trabalho e avisa quando o estoque fica baixo.</p>
+                <div className="grid grid-cols-2 gap-3 mt-2">
+                  <div>
+                    <FieldLabel>Estoque atual</FieldLabel>
+                    <NumInput value={form.estoque ?? 0} onChange={(n) => set("estoque", n)} />
+                  </div>
+                  <div>
+                    <FieldLabel>Estoque mínimo (alerta)</FieldLabel>
+                    <NumInput value={form.estoque_minimo ?? 0} onChange={(n) => set("estoque_minimo", n)} />
+                  </div>
                 </div>
-                <div>
-                  <FieldLabel>Estoque mínimo (alerta)</FieldLabel>
-                  <NumInput value={form.estoque_minimo ?? 0} onChange={(n) => set("estoque_minimo", n)} />
-                </div>
-              </div>
+              </>
+            )}
+            {form.sob_encomenda && (
+              <p className="text-xs text-gray-400 mt-2">Sem estoque de prateleira. Cada vez que o produto é adicionado a um trabalho, gera um pedido de compra automático — já com o nome do cliente.</p>
             )}
           </div>
 
@@ -1178,6 +1207,8 @@ export default function CatalogoPage() {
                                     ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400"
                                     : "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400"
                                 }`}>{p.estoque ?? 0}</span>
+                              ) : p.sob_encomenda ? (
+                                <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400">Encomenda</span>
                               ) : (
                                 <span className="text-gray-300 dark:text-gray-600">—</span>
                               )}

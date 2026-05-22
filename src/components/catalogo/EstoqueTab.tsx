@@ -146,7 +146,11 @@ export function EstoqueTab({ produtos, onChanged }: { produtos: Produto[]; onCha
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-gray-900 dark:text-white truncate">{c.produto_nome}</span>
                       <span className="text-xs text-gray-400 flex-shrink-0">× {c.quantidade}</span>
+                      {c.job_id && (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 flex-shrink-0">Automático</span>
+                      )}
                     </div>
+                    {c.cliente_nome && <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">Cliente: {c.cliente_nome}</p>}
                     {c.observacao && <p className="text-xs text-gray-400 truncate mt-0.5">{c.observacao}</p>}
                   </div>
                   <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${cfg.cls}`}>{cfg.label}</span>

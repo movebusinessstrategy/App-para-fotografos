@@ -380,6 +380,7 @@ export interface Produto {
   unidade: UnidadeProduto;
   estoque?: number;
   controla_estoque?: boolean;
+  sob_encomenda?: boolean;
   estoque_minimo?: number;
   prazo_entrega?: number;
   ncm?: string;
@@ -400,6 +401,9 @@ export interface Compra {
   quantidade: number;
   status: CompraStatus;
   observacao?: string | null;
+  job_id?: number | null;
+  job_item_id?: string | null;
+  cliente_nome?: string | null;
   created_at: string;
   updated_at?: string;
 }
