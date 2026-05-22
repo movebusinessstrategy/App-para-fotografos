@@ -7891,7 +7891,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Carrega todos os jobs — precisamos saber quais estão em produção
     const { data: allJobs } = await supabase
       .from('jobs')
-      .select('id,client_id,job_name,job_date,amount,payment_status,payment_method,production_stage,clients(id,name)')
+      .select('id,client_id,job_name,job_date,amount,payment_status,payment_method,production_stage,fin_synced,clients(id,name)')
       .eq('user_id', userId);
     if (!allJobs?.length) return res.json({ criadas: 0, atualizadas: 0, removidas: 0 });
 
@@ -7983,46 +7983,52 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const descricaoBase = job.job_name || clienteNome;
 
       if (!temReceita) {
-        // ── Job nunca sincronizado: criar receitas do zero ────────────────────
-        if (paymentsArr.length > 0) {
-          for (const pay of paymentsArr) {
+        // Sem receitas no momento. Se o job JÁ foi sincronizado uma vez, foi o
+        // usuário que apagou — não recria. Só cria pra job nunca sincronizado.
+        if (!job.fin_synced) {
+          // ── Job nunca sincronizado: criar receitas do zero ──
+          if (paymentsArr.length > 0) {
+            for (const pay of paymentsArr) {
+              await supabase.from('fin_receitas').insert({
+                user_id: userId, job_id: job.id,
+                cliente_id: job.client_id, cliente_nome: clienteNome,
+                descricao: `${descricaoBase} — ${pay.description || 'Pagamento'}`,
+                valor_bruto: pay.amount, taxa_meio: 0, valor_liquido: pay.amount,
+                data_vencimento: pay.payment_date || dataVencimento,
+                data_pagamento: pay.payment_date,
+                status: 'recebido', parcela: 1, total_parcelas: 1,
+                origem_automatica: true, updated_at: new Date().toISOString(),
+              });
+              criadas++;
+            }
+            const totalPago = paymentsArr.reduce((s: number, p: any) => s + (p.amount || 0), 0);
+            const restante = (job.amount || 0) - totalPago;
+            if (restante > 1 && job.payment_status !== 'paid') {
+              const st = dataVencimento < hoje ? 'atrasado' : 'pendente';
+              await supabase.from('fin_receitas').insert({
+                user_id: userId, job_id: job.id, cliente_id: job.client_id, cliente_nome: clienteNome,
+                descricao: `${descricaoBase} — Saldo restante`,
+                valor_bruto: restante, taxa_meio: 0, valor_liquido: restante,
+                data_vencimento: dataVencimento, status: st,
+                parcela: 1, total_parcelas: 1, origem_automatica: true, updated_at: new Date().toISOString(),
+              });
+              criadas++;
+            }
+          } else if ((job.amount || 0) > 0) {
+            const st = job.payment_status === 'paid' ? 'recebido' : (dataVencimento < hoje ? 'atrasado' : 'pendente');
             await supabase.from('fin_receitas').insert({
-              user_id: userId, job_id: job.id,
-              cliente_id: job.client_id, cliente_nome: clienteNome,
-              descricao: `${descricaoBase} — ${pay.description || 'Pagamento'}`,
-              valor_bruto: pay.amount, taxa_meio: 0, valor_liquido: pay.amount,
-              data_vencimento: pay.payment_date || dataVencimento,
-              data_pagamento: pay.payment_date,
-              status: 'recebido', parcela: 1, total_parcelas: 1,
+              user_id: userId, job_id: job.id, cliente_id: job.client_id, cliente_nome: clienteNome,
+              descricao: descricaoBase,
+              valor_bruto: job.amount, taxa_meio: 0, valor_liquido: job.amount,
+              data_vencimento: dataVencimento,
+              data_pagamento: st === 'recebido' ? hoje : null,
+              status: st, parcela: 1, total_parcelas: 1,
               origem_automatica: true, updated_at: new Date().toISOString(),
             });
             criadas++;
           }
-          const totalPago = paymentsArr.reduce((s: number, p: any) => s + (p.amount || 0), 0);
-          const restante = (job.amount || 0) - totalPago;
-          if (restante > 1 && job.payment_status !== 'paid') {
-            const st = dataVencimento < hoje ? 'atrasado' : 'pendente';
-            await supabase.from('fin_receitas').insert({
-              user_id: userId, job_id: job.id, cliente_id: job.client_id, cliente_nome: clienteNome,
-              descricao: `${descricaoBase} — Saldo restante`,
-              valor_bruto: restante, taxa_meio: 0, valor_liquido: restante,
-              data_vencimento: dataVencimento, status: st,
-              parcela: 1, total_parcelas: 1, origem_automatica: true, updated_at: new Date().toISOString(),
-            });
-            criadas++;
-          }
-        } else if ((job.amount || 0) > 0) {
-          const st = job.payment_status === 'paid' ? 'recebido' : (dataVencimento < hoje ? 'atrasado' : 'pendente');
-          await supabase.from('fin_receitas').insert({
-            user_id: userId, job_id: job.id, cliente_id: job.client_id, cliente_nome: clienteNome,
-            descricao: descricaoBase,
-            valor_bruto: job.amount, taxa_meio: 0, valor_liquido: job.amount,
-            data_vencimento: dataVencimento,
-            data_pagamento: st === 'recebido' ? hoje : null,
-            status: st, parcela: 1, total_parcelas: 1,
-            origem_automatica: true, updated_at: new Date().toISOString(),
-          });
-          criadas++;
+          // Marca o job como sincronizado — não recria se o usuário apagar depois
+          await supabase.from('jobs').update({ fin_synced: true }).eq('id', job.id).eq('user_id', userId);
         }
       } else {
         // ── Job já existente: reconciliar com estado atual ────────────────────
