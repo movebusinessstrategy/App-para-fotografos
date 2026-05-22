@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { ArrowDownToLine, BarChart2, Workflow, Edit2, Inbox, LayoutGrid, List, ListChecks, Plus, Search, Settings, Tag, Trash2, X } from "lucide-react";
+import { BarChart2, Workflow, Edit2, Inbox, LayoutGrid, List, ListChecks, Plus, Search, Settings, Tag, Trash2, X } from "lucide-react";
 import GerenciaPage from "./GerenciaPage";
 import TasksPage from "./TasksPage";
 import { SearchableSelect } from "../components/ui/SearchableSelect";
@@ -11,7 +11,6 @@ import JobFormModal from "../components/shared/JobFormModal";
 import { ProductionBoard, JobWithProduction } from "../components/producao/ProductionBoard";
 import { ProductionCustomizer } from "../components/producao/ProductionCustomizer";
 import { JobDetailDrawer } from "../components/producao/JobDetailDrawer";
-import { ImportToProductionModal } from "../components/producao/ImportToProductionModal";
 import { SalesOverviewPanel } from "../components/producao/SalesOverviewPanel";
 import { authFetch } from "../utils/authFetch";
 import { useApi, refreshApi } from "../utils/useApi";
@@ -58,7 +57,6 @@ export default function JobsPage() {
   const [filters, setFilters] = useState({ type: "all" });
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedJob, setSelectedJob] = useState<JobWithProduction | null>(null);
-  const [importModalOpen, setImportModalOpen] = useState(false);
   const [confirmModal, setConfirmModal] = useState<{
     open: boolean;
     onConfirm: () => void;
@@ -84,19 +82,6 @@ export default function JobsPage() {
       || normalizeText(job.job_name || '').includes(q);
     return matchesType && matchesSearch;
   }), [jobs, filters, searchQuery]);
-
-  const unstagedJobs = useMemo(
-    () => jobs.filter(j => !j.production_stage && j.status !== 'cancelled'),
-    [jobs]
-  );
-
-  const handleAssignStage = async (jobId: number, stageId: string) => {
-    await authFetch(`/api/jobs/${jobId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ production_stage: stageId }),
-    });
-  };
 
   const handleAssigneeChange = async (jobId: number, assigneeId: string | null) => {
     // Optimistic update via SWR mutate
@@ -341,32 +326,6 @@ export default function JobsPage() {
           />
         )}
 
-        {/* Banner: jobs fora da produção */}
-        {activeTab !== "gerencia" && activeTab !== "tarefas" && activeTab !== "vendas" && processes.length > 0 && unstagedJobs.length > 0 && (
-          <div className="flex items-center justify-between gap-4 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded-xl px-4 py-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-lg bg-amber-100 dark:bg-amber-500/20 flex items-center justify-center flex-shrink-0">
-                <ArrowDownToLine size={16} className="text-amber-600 dark:text-amber-400" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
-                  {unstagedJobs.length} {unstagedJobs.length === 1 ? 'trabalho está' : 'trabalhos estão'} fora da produção
-                </p>
-                <p className="text-xs text-amber-700 dark:text-amber-300/80 truncate">
-                  Importe e escolha em qual etapa cada um deve entrar.
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={() => setImportModalOpen(true)}
-              className="flex-shrink-0 flex items-center gap-2 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-sm font-semibold rounded-lg transition-colors"
-            >
-              <ArrowDownToLine size={14} />
-              Importar
-            </button>
-          </div>
-        )}
-
         {/* Content — funil / lista */}
         {activeTab !== "gerencia" && activeTab !== "tarefas" && activeTab !== "vendas" && (activeTab === "funil" ? (
           processes.length > 0 ? (
@@ -585,16 +544,6 @@ export default function JobsPage() {
         onUpdated={() => refreshAll()}
       />
 
-      {importModalOpen && (
-        <ImportToProductionModal
-          jobs={unstagedJobs}
-          processes={processes}
-          stages={stages}
-          onClose={() => setImportModalOpen(false)}
-          onImported={() => mutateJobs()}
-          onAssign={handleAssignStage}
-        />
-      )}
     </>
   );
 }
