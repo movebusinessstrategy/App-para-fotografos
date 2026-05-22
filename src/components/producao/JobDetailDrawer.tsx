@@ -231,6 +231,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
 
   // ── Financeiro ──
   const [dealItems, setDealItems] = useState<CatalogItem[]>([]);
+  const [packageItem, setPackageItem] = useState<{ name: string; value: number } | null>(null);
   const [jobItems, setJobItems] = useState<CatalogItem[]>([]);
   const [payments, setPayments] = useState<JobPayment[]>([]);
   const [jobAmount, setJobAmount] = useState(0);
@@ -260,6 +261,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
       if (res.ok) {
         const data = await res.json();
         setDealItems(data.dealItems || []);
+        setPackageItem(data.packageItem || null);
         setJobItems(data.jobItems || []);
         setPayments(data.payments || []);
         setJobAmount(data.jobAmount || 0);
@@ -962,13 +964,13 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                     </div>
 
                     {/* ── Itens do negócio (deal) ── */}
-                    {dealItems.length > 0 && (
+                    {(dealItems.length > 0 || packageItem) && (
                       <section>
                         <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-2">
                           Itens do negócio
                         </h3>
                         <div className="space-y-1.5">
-                          {dealItems.map(item => {
+                          {dealItems.length > 0 ? dealItems.map(item => {
                             const cfg = CATALOG_CFG[item.catalog_type] || CATALOG_CFG.produto;
                             return (
                               <div key={item.id} className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${cfg.bg} ${cfg.border}`}>
@@ -980,7 +982,17 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                                 </span>
                               </div>
                             );
-                          })}
+                          }) : packageItem && (
+                            /* Pacote vendido sem itens detalhados — mostra o pacote como item */
+                            <div className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${CATALOG_CFG.combo.bg} ${CATALOG_CFG.combo.border}`}>
+                              <span className={`flex-shrink-0 ${CATALOG_CFG.combo.color}`}>{CATALOG_CFG.combo.icon}</span>
+                              <span className="flex-1 text-sm text-gray-800 dark:text-gray-100 truncate">{packageItem.name}</span>
+                              <span className="text-xs text-gray-400">Pacote</span>
+                              <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">
+                                {formatCurrency(packageItem.value)}
+                              </span>
+                            </div>
+                          )}
                         </div>
                       </section>
                     )}
