@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   X, User, Phone, Mail, Instagram, MapPin, Calendar,
   CheckSquare, Square, Trash2, Plus, Image, Clock,
-  ChevronRight, Tag, FileText, LogOut, Camera,
+  ChevronRight, Tag, FileText, LogOut, Workflow, Check,
   DollarSign, Package, Layers, Briefcase, Search, CreditCard
 } from "lucide-react";
 import { SearchableSelect } from "../ui/SearchableSelect";
@@ -136,11 +136,22 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [labels, setLabels] = useState<string[]>([]);
-  const [newLabel, setNewLabel] = useState("");
+  const [labelMenuOpen, setLabelMenuOpen] = useState(false);
+  const [labelPalette, setLabelPalette] = useState<{ id: string; name: string; color: string }[]>([]);
+  const [newLabelName, setNewLabelName] = useState("");
+  const [newLabelColor, setNewLabelColor] = useState("#6366f1");
   const [contractId, setContractId] = useState<number | null>(null);
   const [creatingContract, setCreatingContract] = useState(false);
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [jobContract, setJobContract] = useState<{ id: number; status: 'draft' | 'pending_signature' | 'signed' | 'cancelled'; signers?: Array<{ status: string }> } | null>(null);
+
+  // Carrega a paleta de etiquetas da Produção (etiquetas padronizadas).
+  useEffect(() => {
+    authFetch('/api/jobs/labels')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setLabelPalette(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  }, []);
 
   // Load existing contract for this job (if any) so we can show status + reuse instead of duplicating.
   useEffect(() => {
@@ -482,12 +493,9 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
     setTestimonials(prev => prev.filter(t => t.id !== id));
   };
 
-  const handleAddLabel = async () => {
-    const trimmed = newLabel.trim();
-    if (!trimmed || labels.includes(trimmed)) return;
-    const next = [...labels, trimmed];
+  // Salva a lista de etiquetas do trabalho e avisa a tela de Produção.
+  const saveJobLabels = async (next: string[]) => {
     setLabels(next);
-    setNewLabel("");
     await authFetch(`/api/jobs/${job!.id}/labels`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -496,15 +504,40 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
     onLabelsChange?.(job!.id, next);
   };
 
-  const handleRemoveLabel = async (label: string) => {
-    const next = labels.filter(l => l !== label);
-    setLabels(next);
-    await authFetch(`/api/jobs/${job!.id}/labels`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ labels: next }),
-    });
-    onLabelsChange?.(job!.id, next);
+  const toggleLabel = (name: string) => {
+    saveJobLabels(labels.includes(name) ? labels.filter(l => l !== name) : [...labels, name]);
+  };
+
+  const handleRemoveLabel = (label: string) => saveJobLabels(labels.filter(l => l !== label));
+
+  // Cor de uma etiqueta: vem da paleta; se não estiver na paleta, usa o hash.
+  const labelColor = (name: string) =>
+    labelPalette.find(l => l.name === name)?.color || getLabelColor(name);
+
+  // Cria uma etiqueta na paleta da Produção e já aplica neste trabalho.
+  const createPaletteLabel = async () => {
+    const name = newLabelName.trim();
+    if (!name) return;
+    if (!labelPalette.some(l => l.name.toLowerCase() === name.toLowerCase())) {
+      const res = await authFetch('/api/jobs/labels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, color: newLabelColor }),
+      });
+      if (res.ok) {
+        const created = await res.json().catch(() => null);
+        if (created) {
+          setLabelPalette(prev => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+        }
+      }
+    }
+    if (!labels.includes(name)) saveJobLabels([...labels, name]);
+    setNewLabelName("");
+  };
+
+  const deletePaletteLabel = async (id: string) => {
+    setLabelPalette(prev => prev.filter(l => l.id !== id));
+    await authFetch(`/api/jobs/labels/${id}`, { method: 'DELETE' });
   };
 
   const done = checklist.filter(i => i.done).length;
@@ -677,7 +710,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                     <span
                       key={label}
                       className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold text-white"
-                      style={{ backgroundColor: getLabelColor(label) }}
+                      style={{ backgroundColor: labelColor(label) }}
                     >
                       <Tag size={10} />
                       {label}
@@ -686,22 +719,76 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                       </button>
                     </span>
                   ))}
+                  {labels.length === 0 && (
+                    <span className="text-xs text-gray-400 dark:text-gray-500">Nenhuma etiqueta neste trabalho.</span>
+                  )}
                 </div>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={newLabel}
-                    onChange={e => setNewLabel(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && handleAddLabel()}
-                    placeholder="Nova etiqueta..."
-                    className="flex-1 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-1.5 text-xs text-gray-700 dark:text-gray-200 focus:border-gold-500 focus:outline-none placeholder-gray-400 dark:placeholder-gray-500"
-                  />
+                <div className="relative">
                   <button
-                    onClick={handleAddLabel}
-                    className="px-3 py-1.5 rounded-lg bg-gold-600 text-white text-xs hover:bg-gold-700"
+                    onClick={() => setLabelMenuOpen(v => !v)}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 text-xs font-medium hover:bg-gray-200 dark:hover:bg-gray-700"
                   >
-                    <Plus size={13} />
+                    <Plus size={13} /> Etiqueta
                   </button>
+                  {labelMenuOpen && (
+                    <div className="absolute z-20 mt-1 w-60 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl p-2">
+                      <div className="max-h-44 overflow-y-auto">
+                        {labelPalette.map(pl => {
+                          const active = labels.includes(pl.name);
+                          return (
+                            <div
+                              key={pl.id}
+                              onClick={() => toggleLabel(pl.name)}
+                              className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer"
+                            >
+                              <span className="w-3.5 h-3.5 rounded-full flex-shrink-0" style={{ backgroundColor: pl.color }} />
+                              <span className="flex-1 text-xs text-gray-700 dark:text-gray-200 truncate">{pl.name}</span>
+                              {active && <Check size={13} className="text-gold-600 dark:text-gold-400 flex-shrink-0" />}
+                              <button
+                                onClick={e => { e.stopPropagation(); deletePaletteLabel(pl.id); }}
+                                title="Remover da paleta"
+                                className="text-gray-300 hover:text-red-500 flex-shrink-0"
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            </div>
+                          );
+                        })}
+                        {labelPalette.length === 0 && (
+                          <div className="px-2 py-2 text-xs text-gray-400">Crie sua primeira etiqueta abaixo.</div>
+                        )}
+                      </div>
+                      <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700">
+                        <input
+                          type="text"
+                          value={newLabelName}
+                          onChange={e => setNewLabelName(e.target.value)}
+                          onKeyDown={e => e.key === 'Enter' && createPaletteLabel()}
+                          placeholder="Nova etiqueta..."
+                          className="w-full rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 px-2.5 py-1.5 text-xs text-gray-700 dark:text-gray-200 focus:border-gold-500 focus:outline-none placeholder-gray-400"
+                        />
+                        <div className="flex items-center gap-1.5 mt-1.5">
+                          {LABEL_COLORS.map(c => (
+                            <button
+                              key={c}
+                              onClick={() => setNewLabelColor(c)}
+                              className={cn(
+                                "w-5 h-5 rounded-full transition-transform",
+                                newLabelColor === c && "ring-2 ring-offset-1 ring-gray-400 dark:ring-offset-gray-800 scale-110",
+                              )}
+                              style={{ backgroundColor: c }}
+                            />
+                          ))}
+                          <button
+                            onClick={createPaletteLabel}
+                            className="ml-auto px-2.5 py-1 rounded-lg bg-gold-600 text-white text-xs hover:bg-gold-700"
+                          >
+                            Criar
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </section>
 
@@ -806,7 +893,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                         onClick={() => onStageChange(job.id, stages[0].id)}
                         className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-gold-500/15 hover:bg-gold-500/25 text-gold-700 dark:text-gold-300 text-sm font-semibold rounded-lg transition-colors"
                       >
-                        <Camera size={14} />
+                        <Workflow size={14} />
                         Enviar para produção
                       </button>
                     )}

@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { ArrowDownToLine, BarChart2, Camera, Edit2, Inbox, LayoutGrid, List, ListChecks, Plus, Search, Settings, Tag, Trash2, X } from "lucide-react";
+import { ArrowDownToLine, BarChart2, Workflow, Edit2, Inbox, LayoutGrid, List, ListChecks, Plus, Search, Settings, Tag, Trash2, X } from "lucide-react";
 import GerenciaPage from "./GerenciaPage";
 import TasksPage from "./TasksPage";
 import { SearchableSelect } from "../components/ui/SearchableSelect";
@@ -37,6 +37,10 @@ export default function JobsPage() {
   const { data: stagesData, mutate: mutateStages } =
     useApi<ProductionStageV2[]>("/api/production/stages-v2");
   const { data: membersData } = useApi<TeamMember[]>("/api/team-members");
+  const { data: jobLabelsData } = useApi<{ name: string; color: string }[]>("/api/jobs/labels");
+  // Cor da etiqueta: vem da paleta padronizada; senão, cor por hash.
+  const labelColor = (name: string) =>
+    (jobLabelsData || []).find((l) => l.name === name)?.color || getLabelColor(name);
 
   const jobs = useMemo(() => Array.isArray(jobsData) ? jobsData : [], [jobsData]);
   const clients = useMemo(() => Array.isArray(clientsData) ? clientsData : [], [clientsData]);
@@ -435,7 +439,7 @@ export default function JobsPage() {
                           onClick={() => setSelectedJob(job)}
                           className="flex items-center gap-2 font-medium text-gray-900 dark:text-white hover:text-gold-600 dark:hover:text-gold-400 transition-colors text-left"
                         >
-                          <Camera size={14} className="text-gray-400 flex-shrink-0" />
+                          <Workflow size={14} className="text-gray-400 flex-shrink-0" />
                           {job.client_name || clients.find(c => c.id === job.client_id)?.name || job.job_name || "Trabalho"}
                         </button>
                       </td>
@@ -470,7 +474,7 @@ export default function JobsPage() {
                             <span
                               key={label}
                               className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold text-white"
-                              style={{ backgroundColor: getLabelColor(label) }}
+                              style={{ backgroundColor: labelColor(label) }}
                             >
                               <Tag size={8} />
                               {label}
