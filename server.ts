@@ -7901,8 +7901,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const productionJobIds = new Set(jobs.map((j: any) => Number(j.id)));
 
     // ── Limpeza da conciliação ──────────────────────────────────────────────
-    // Remove contas a receber automáticas (pendente/atrasado) de trabalhos
-    // que NÃO estão em produção; e deduplica as de trabalhos em produção.
+    // Remove TODAS as receitas automáticas de trabalhos fora da produção
+    // (recebidas ou não); e deduplica as contas a receber dos que estão.
+    // Lançamentos manuais (origem_automatica = false) nunca são tocados.
     let removidas = 0;
     const { data: autoReceitas } = await supabase
       .from('fin_receitas')
@@ -7913,11 +7914,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const idsParaRemover: string[] = [];
     const pendProdPorJob = new Map<number, any[]>();
     for (const r of (autoReceitas || [])) {
-      if (r.status !== 'pendente' && r.status !== 'atrasado') continue;
       const jid = Number(r.job_id);
       if (!productionJobIds.has(jid)) {
+        // Fora da produção → remove a receita automática (qualquer status)
         idsParaRemover.push(r.id);
-      } else {
+      } else if (r.status === 'pendente' || r.status === 'atrasado') {
+        // Em produção → guarda pra deduplicar as contas a receber
         const list = pendProdPorJob.get(jid) || [];
         list.push(r);
         pendProdPorJob.set(jid, list);
