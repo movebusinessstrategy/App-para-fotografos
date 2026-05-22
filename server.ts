@@ -3701,23 +3701,35 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       await supabase.from('jobs').update(upd).eq('id', jobId).eq('user_id', userId);
     }
 
-    // Item sintético do pacote vendido: quando o job veio de uma venda mas o
-    // deal não tem deal_items detalhados, o pacote precisa aparecer como item
-    // (e não só como valor total). Estilo Trello — visível para a equipe.
-    const packageItem = (deal?.id && dealItems.length === 0 && packageGross > 0)
-      ? {
+    // Item do pacote/valor mostrado na seção "Itens do negócio":
+    // - deal jobs sem deal_items → pacote sintético (nome/valor/desconto, source 'deal')
+    // - jobs sem negócio vinculado → valor base do trabalho editável (source 'job')
+    let packageItem: { name: string; value: number; discount: number; source: 'deal' | 'job' } | null = null;
+    if (deal?.id) {
+      if (dealItems.length === 0 && packageGross > 0) {
+        packageItem = {
           name: (deal as any)?.title || (job as any).job_name || (job as any).job_type || 'Pacote',
           value: packageGross,
           discount: dealDiscount,
-        }
-      : null;
+          source: 'deal',
+        };
+      }
+    } else {
+      packageItem = {
+        name: (job as any).job_name || (job as any).job_type || 'Valor do trabalho',
+        value: job.amount || 0,
+        discount: 0,
+        source: 'job',
+      };
+    }
 
     res.json({ dealItems, jobItems, payments, totalPago, jobAmount: realTotal, payment_status: correctStatus, packageItem });
   });
 
-  // PUT /api/jobs/:id/package — edita o pacote vendido (nome, valor, desconto)
-  // ou troca por outro do catálogo. Só vale para jobs vindos de uma venda
-  // cujo negócio ainda não tem deal_items detalhados (pacote sintético).
+  // PUT /api/jobs/:id/package — edita o pacote/valor base do trabalho.
+  // - Job com negócio vinculado (sem deal_items): edita o pacote no deal
+  //   (nome, valor, desconto) ou troca por outro do catálogo.
+  // - Job sem negócio: edita só o valor base (job.amount).
   app.put('/api/jobs/:id/package', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
@@ -3733,7 +3745,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('converted_job_id', jobId)
       .eq('user_id', userId)
       .maybeSingle();
-    if (!deal?.id) return res.status(400).json({ error: 'Job sem negócio vinculado' });
+
+    // Job sem negócio vinculado → edita o valor base direto no job
+    if (!deal?.id) {
+      if (req.body.value === undefined) return res.json({ ok: true });
+      const { error } = await supabase
+        .from('jobs')
+        .update({ amount: Math.max(0, Number(req.body.value) || 0) })
+        .eq('id', jobId)
+        .eq('user_id', userId);
+      if (error) return res.status(500).json({ error: error.message });
+      return res.json({ ok: true });
+    }
 
     // Se o negócio já tem itens detalhados, o pacote não é editável por aqui
     const { data: existingItems } = await adminClient.from('deal_items').select('id').eq('deal_id', deal.id).limit(1);
