@@ -7933,7 +7933,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
     }
     if (idsParaRemover.length > 0) {
-      await supabase.from('fin_receitas').delete().in('id', idsParaRemover).eq('user_id', userId);
+      // Apaga em lotes — uma lista enorme de IDs numa só requisição estoura
+      // o limite de tamanho da URL e a remoção falha silenciosamente.
+      for (let i = 0; i < idsParaRemover.length; i += 100) {
+        await supabase
+          .from('fin_receitas')
+          .delete()
+          .in('id', idsParaRemover.slice(i, i + 100))
+          .eq('user_id', userId);
+      }
       removidas = idsParaRemover.length;
     }
 
