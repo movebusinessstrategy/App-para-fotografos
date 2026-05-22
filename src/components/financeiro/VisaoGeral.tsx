@@ -80,13 +80,13 @@ export default function VisaoGeral() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState('');
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await authFetch('/api/fin/dashboard');
       if (res.ok) setData(await res.json());
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -108,7 +108,16 @@ export default function VisaoGeral() {
     }
   };
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    // Sincroniza com a Produção em segundo plano — sem precisar clicar no botão
+    (async () => {
+      try {
+        await authFetch('/api/fin/sync-jobs', { method: 'POST' });
+        load(true); // recarrega sem piscar o skeleton
+      } catch { /* sync falhou — segue com os dados atuais */ }
+    })();
+  }, [load]);
 
   if (loading) {
     return (
