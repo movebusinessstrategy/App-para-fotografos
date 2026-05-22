@@ -7888,16 +7888,58 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const supabase = finClient(req); const userId = finUser(req);
     const adminClient = supabaseAdmin || supabase;
 
-    // Join direto com clients para garantir o nome correto
-    const { data: jobs } = await supabase
+    // Carrega todos os jobs — precisamos saber quais estão em produção
+    const { data: allJobs } = await supabase
       .from('jobs')
-      .select('id,client_id,job_name,job_date,amount,payment_status,payment_method,clients(id,name)')
+      .select('id,client_id,job_name,job_date,amount,payment_status,payment_method,production_stage,clients(id,name)')
       .eq('user_id', userId);
-    if (!jobs?.length) return res.json({ criadas: 0, atualizadas: 0 });
+    if (!allJobs?.length) return res.json({ criadas: 0, atualizadas: 0, removidas: 0 });
+
+    // Só sincroniza trabalhos que estão EM PRODUÇÃO (têm etapa definida).
+    // Espelha a Produção: o que não está lá não vira conta a receber.
+    const jobs = (allJobs as any[]).filter((j) => j.production_stage);
+    const productionJobIds = new Set(jobs.map((j: any) => Number(j.id)));
+
+    // ── Limpeza da conciliação ──────────────────────────────────────────────
+    // Remove contas a receber automáticas (pendente/atrasado) de trabalhos
+    // que NÃO estão em produção; e deduplica as de trabalhos em produção.
+    let removidas = 0;
+    const { data: autoReceitas } = await supabase
+      .from('fin_receitas')
+      .select('id,job_id,status,valor_bruto')
+      .eq('user_id', userId)
+      .eq('origem_automatica', true)
+      .not('job_id', 'is', null);
+    const idsParaRemover: string[] = [];
+    const pendProdPorJob = new Map<number, any[]>();
+    for (const r of (autoReceitas || [])) {
+      if (r.status !== 'pendente' && r.status !== 'atrasado') continue;
+      const jid = Number(r.job_id);
+      if (!productionJobIds.has(jid)) {
+        idsParaRemover.push(r.id);
+      } else {
+        const list = pendProdPorJob.get(jid) || [];
+        list.push(r);
+        pendProdPorJob.set(jid, list);
+      }
+    }
+    // Cada trabalho em produção deve ter no máximo 1 conta a receber automática
+    for (const [, list] of pendProdPorJob) {
+      if (list.length > 1) {
+        list.sort((a: any, b: any) => (b.valor_bruto || 0) - (a.valor_bruto || 0));
+        for (const r of list.slice(1)) idsParaRemover.push(r.id);
+      }
+    }
+    if (idsParaRemover.length > 0) {
+      await supabase.from('fin_receitas').delete().in('id', idsParaRemover).eq('user_id', userId);
+      removidas = idsParaRemover.length;
+    }
+
+    if (!jobs.length) return res.json({ criadas: 0, atualizadas: 0, removidas });
 
     const jobIds = jobs.map((j: any) => j.id);
 
-    // Carrega receitas e pagamentos em paralelo
+    // Carrega receitas (já sem as removidas) e pagamentos em paralelo
     const [{ data: todasReceitas }, { data: todosPayments }] = await Promise.all([
       supabase
         .from('fin_receitas')
@@ -8049,7 +8091,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
     }
 
-    res.json({ criadas, atualizadas });
+    res.json({ criadas, atualizadas, removidas });
   });
 
   // ─── Diagnóstico do sync ────────────────────────────────────────────────────

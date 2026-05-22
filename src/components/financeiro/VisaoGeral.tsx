@@ -98,6 +98,7 @@ export default function VisaoGeral() {
       const msgs: string[] = [];
       if ((data.criadas || 0) > 0) msgs.push(`${data.criadas} receita(s) criada(s)`);
       if ((data.atualizadas || 0) > 0) msgs.push(`${data.atualizadas} receita(s) atualizada(s)`);
+      if ((data.removidas || 0) > 0) msgs.push(`${data.removidas} fora da produção removida(s)`);
       if (msgs.length === 0) msgs.push('Tudo já está sincronizado');
       setSyncMsg(msgs.join(' · '));
       setTimeout(() => setSyncMsg(''), 4000);
