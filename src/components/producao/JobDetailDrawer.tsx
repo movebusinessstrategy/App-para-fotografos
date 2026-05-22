@@ -3,7 +3,8 @@ import {
   X, User, Phone, Mail, Instagram, MapPin, Calendar,
   CheckSquare, Square, Trash2, Plus, Image, Clock,
   ChevronRight, Tag, FileText, LogOut, Workflow, Check,
-  DollarSign, Package, Layers, Briefcase, Search, CreditCard
+  DollarSign, Package, Layers, Briefcase, Search, CreditCard,
+  Pencil, RefreshCw
 } from "lucide-react";
 import { SearchableSelect } from "../ui/SearchableSelect";
 import { ContractGenerator } from "../contracts/ContractGenerator";
@@ -231,7 +232,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
 
   // ── Financeiro ──
   const [dealItems, setDealItems] = useState<CatalogItem[]>([]);
-  const [packageItem, setPackageItem] = useState<{ name: string; value: number } | null>(null);
+  const [packageItem, setPackageItem] = useState<{ name: string; value: number; discount: number } | null>(null);
   const [jobItems, setJobItems] = useState<CatalogItem[]>([]);
   const [payments, setPayments] = useState<JobPayment[]>([]);
   const [jobAmount, setJobAmount] = useState(0);
@@ -429,6 +430,17 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
     } else {
       loadFinanceiro(job.id);
     }
+  };
+
+  // Edita o pacote vendido (nome/valor/desconto) ou troca por outro do catálogo
+  const handleSavePackage = async (patch: { name?: string; value?: number; discount?: number }) => {
+    if (!job) return;
+    const res = await authFetch(`/api/jobs/${job.id}/package`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (res.ok) loadFinanceiro(job.id);
   };
 
   if (!job) return null;
@@ -983,15 +995,14 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                               </div>
                             );
                           }) : packageItem && (
-                            /* Pacote vendido sem itens detalhados — mostra o pacote como item */
-                            <div className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${CATALOG_CFG.combo.bg} ${CATALOG_CFG.combo.border}`}>
-                              <span className={`flex-shrink-0 ${CATALOG_CFG.combo.color}`}>{CATALOG_CFG.combo.icon}</span>
-                              <span className="flex-1 text-sm text-gray-800 dark:text-gray-100 truncate">{packageItem.name}</span>
-                              <span className="text-xs text-gray-400">Pacote</span>
-                              <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">
-                                {formatCurrency(packageItem.value)}
-                              </span>
-                            </div>
+                            /* Pacote vendido sem itens detalhados — editável/trocável */
+                            <PackageEditor
+                              pkg={packageItem}
+                              catalogCombos={catalogCombos}
+                              catalogProdutos={catalogProdutos}
+                              catalogServicos={catalogServicos}
+                              onSave={handleSavePackage}
+                            />
                           )}
                         </div>
                       </section>
@@ -1549,6 +1560,222 @@ function CoverImageSection({
       />
       {error && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
     </section>
+  );
+}
+
+// ─── Editor do pacote vendido: nome, valor, desconto + trocar do catálogo ──
+function PackageEditor({
+  pkg,
+  catalogCombos,
+  catalogProdutos,
+  catalogServicos,
+  onSave,
+}: {
+  pkg: { name: string; value: number; discount: number };
+  catalogCombos: any[];
+  catalogProdutos: any[];
+  catalogServicos: any[];
+  onSave: (patch: { name?: string; value?: number; discount?: number }) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(pkg.name);
+  const [value, setValue] = useState(String(pkg.value));
+  const [discount, setDiscount] = useState(String(pkg.discount || 0));
+  const [discountMode, setDiscountMode] = useState<'value' | 'percent'>('value');
+  const [swapOpen, setSwapOpen] = useState(false);
+  const [swapType, setSwapType] = useState<'combo' | 'produto' | 'servico'>('combo');
+  const [swapSearch, setSwapSearch] = useState('');
+  const popRef = useRef<HTMLDivElement>(null);
+  const swapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setName(pkg.name);
+    setValue(String(pkg.value));
+    setDiscount(String(pkg.discount || 0));
+  }, [pkg.name, pkg.value, pkg.discount]);
+
+  useEffect(() => {
+    if (!editing && !swapOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (editing && popRef.current && !popRef.current.contains(e.target as Node)) setEditing(false);
+      if (swapOpen && swapRef.current && !swapRef.current.contains(e.target as Node)) setSwapOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [editing, swapOpen]);
+
+  const cfg = CATALOG_CFG.combo;
+  const gross = pkg.value;
+  const discountAbs = pkg.discount || 0;
+  const net = Math.max(0, gross - discountAbs);
+  const hasDiscount = discountAbs > 0;
+
+  function applyEdit() {
+    const newValue = Math.max(0, parseFloat(value.replace(',', '.')) || 0);
+    let newDiscount = Math.max(0, parseFloat(discount.replace(',', '.')) || 0);
+    if (discountMode === 'percent') newDiscount = (newValue * newDiscount) / 100;
+    onSave({ name: name.trim() || 'Pacote', value: newValue, discount: newDiscount });
+    setEditing(false);
+  }
+
+  const swapList = swapType === 'combo'
+    ? catalogCombos.filter((c: any) => c.ativo).map((c: any) => ({ id: c.id, nome: c.nome, value: c.preco_final }))
+    : swapType === 'produto'
+    ? catalogProdutos.filter((p: any) => p.ativo).map((p: any) => ({ id: p.id, nome: p.nome, value: p.preco_venda }))
+    : catalogServicos.filter((s: any) => s.ativo).map((s: any) => ({ id: s.id, nome: s.nome, value: s.preco_base }));
+  const swapFiltered = swapSearch
+    ? swapList.filter((i: any) => i.nome.toLowerCase().includes(swapSearch.toLowerCase()))
+    : swapList;
+
+  function pickSwap(item: any) {
+    setSwapOpen(false);
+    setSwapSearch('');
+    onSave({ name: item.nome, value: item.value, discount: 0 });
+  }
+
+  return (
+    <>
+      <div className={`relative flex items-center gap-2 px-3 py-2 rounded-xl border ${cfg.bg} ${cfg.border}`}>
+        <span className={`flex-shrink-0 ${cfg.color}`}>{cfg.icon}</span>
+        <span className="flex-1 text-sm text-gray-800 dark:text-gray-100 truncate min-w-0">{pkg.name}</span>
+        <span className="text-[10px] font-semibold text-gray-400 bg-white/70 dark:bg-gray-800/70 px-1.5 py-0.5 rounded-full flex-shrink-0">Pacote</span>
+        {hasDiscount ? (
+          <div className="flex flex-col items-end leading-tight flex-shrink-0">
+            <span className="text-[10px] line-through opacity-50 text-gray-500">{formatCurrency(gross)}</span>
+            <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">{formatCurrency(net)}</span>
+          </div>
+        ) : (
+          <span className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex-shrink-0">{formatCurrency(gross)}</span>
+        )}
+        <button
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => { setEditing(o => !o); setSwapOpen(false); }}
+          title="Editar pacote"
+          className="text-gray-300 hover:text-gold-600 dark:text-gray-600 dark:hover:text-gold-400 flex-shrink-0"
+        >
+          <Pencil size={13} />
+        </button>
+        {editing && (
+          <div
+            ref={popRef}
+            className="absolute right-0 top-full mt-1 z-30 w-64 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl p-3 space-y-3"
+            onClick={e => e.stopPropagation()}
+          >
+            <div>
+              <label className="block text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1">
+                Nome do pacote
+              </label>
+              <input
+                value={name}
+                onChange={e => setName(e.target.value)}
+                className="w-full px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none focus:border-gold-400 dark:bg-gray-900"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1">
+                Valor
+              </label>
+              <input
+                type="number" step="0.01" min="0" value={value}
+                onChange={e => setValue(e.target.value)}
+                className="w-full px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none focus:border-gold-400 dark:bg-gray-900"
+              />
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                  Desconto
+                </label>
+                <div className="flex gap-0.5 text-[10px] font-semibold">
+                  <button
+                    onClick={() => setDiscountMode('value')}
+                    className={`px-1.5 py-0.5 rounded ${discountMode === 'value' ? 'bg-gold-500 text-white' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                  >R$</button>
+                  <button
+                    onClick={() => setDiscountMode('percent')}
+                    className={`px-1.5 py-0.5 rounded ${discountMode === 'percent' ? 'bg-gold-500 text-white' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                  >%</button>
+                </div>
+              </div>
+              <input
+                type="number" step="0.01" min="0" value={discount}
+                onChange={e => setDiscount(e.target.value)}
+                placeholder="0"
+                className="w-full px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none focus:border-gold-400 dark:bg-gray-900"
+              />
+            </div>
+            <div className="flex gap-1.5 justify-end">
+              <button
+                onClick={() => setEditing(false)}
+                className="px-3 py-1.5 text-xs font-semibold rounded-lg text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+              >Cancelar</button>
+              <button
+                onClick={applyEdit}
+                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gold-600 text-white hover:bg-gold-700"
+              >Aplicar</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Trocar pacote pelo catálogo */}
+      <div ref={swapRef}>
+        <button
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => { setSwapOpen(o => !o); setEditing(false); }}
+          className="flex items-center gap-1 text-[11px] font-semibold text-gray-400 hover:text-gold-600 dark:hover:text-gold-400 px-1 pt-1"
+        >
+          <RefreshCw size={11} /> Trocar pacote
+        </button>
+        {swapOpen && (
+          <div className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800 space-y-2 mt-1">
+            <div className="grid grid-cols-3 gap-1">
+              {(['combo', 'produto', 'servico'] as const).map(t => {
+                const c = CATALOG_CFG[t];
+                return (
+                  <button
+                    key={t}
+                    onMouseDown={e => e.preventDefault()}
+                    onClick={() => { setSwapType(t); setSwapSearch(''); }}
+                    className={`flex items-center justify-center gap-1 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
+                      swapType === t ? `${c.bg} ${c.border} ${c.color}` : 'border-gray-200 dark:border-gray-600 text-gray-400'
+                    }`}
+                  >
+                    {c.icon}
+                    <span>{t === 'servico' ? 'Serviço' : t.charAt(0).toUpperCase() + t.slice(1)}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-2 border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-1.5 bg-gray-50 dark:bg-gray-900 focus-within:border-gold-400">
+              <Search size={12} className="text-gray-400" />
+              <input
+                value={swapSearch}
+                onChange={e => setSwapSearch(e.target.value)}
+                placeholder="Buscar..."
+                className="flex-1 text-sm bg-transparent outline-none text-gray-800 dark:text-gray-100 placeholder-gray-400"
+              />
+            </div>
+            <div className="max-h-40 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700/50 border border-gray-100 dark:border-gray-700 rounded-lg">
+              {swapFiltered.length === 0 && (
+                <p className="text-xs text-gray-400 text-center py-3">Nada encontrado</p>
+              )}
+              {swapFiltered.map((item: any) => (
+                <button
+                  key={item.id}
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={() => pickSwap(item)}
+                  className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/60 text-left text-sm"
+                >
+                  <span className="text-gray-800 dark:text-gray-100 truncate">{item.nome}</span>
+                  <span className="text-xs font-semibold text-gray-400 ml-2 flex-shrink-0">{formatCurrency(item.value)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 
