@@ -4886,6 +4886,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const { trigger_job_type, target_job_type, days_offset } = req.body;
+    if (!trigger_job_type || !target_job_type) {
+      return res.status(400).json({ error: 'trigger_job_type e target_job_type são obrigatórios' });
+    }
+
+    // Não duplica: se já existe uma regra com mesmo gatilho + alvo, devolve ela
+    const { data: existente } = await supabase
+      .from('opportunity_rules')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('trigger_job_type', trigger_job_type)
+      .eq('target_job_type', target_job_type)
+      .maybeSingle();
+    if (existente) {
+      return res.status(409).json({ error: 'Já existe uma regra com esse gatilho e tipo.', id: (existente as any).id });
+    }
 
     const { data, error } = await supabase.from('opportunity_rules').insert({
       trigger_job_type,
