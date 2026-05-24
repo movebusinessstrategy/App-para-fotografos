@@ -197,7 +197,7 @@ export function DealCard({ deal, client, onClick, labelMap, seller }: DealCardPr
       {/* Footer: valor + vendedor + alerta */}
       <div className="flex items-center justify-between mt-2 sm:mt-3 pt-2 sm:pt-2.5 border-t border-gray-100 dark:border-gray-700/50">
         <span className="text-sm font-bold text-gray-900 dark:text-white">
-          {deal.value ? `R$ ${Number(deal.value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
+          {deal.value ? `R$ ${Number(deal.value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
         </span>
         <div className="flex items-center gap-2">
           {staleness && (

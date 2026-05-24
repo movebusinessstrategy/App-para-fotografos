@@ -304,7 +304,7 @@ export function ProductionCustomizer({ open, processes, stages, onClose, onUpdat
                         : 'bg-gray-50 dark:bg-gray-800 border border-transparent hover:border-gray-200 dark:hover:border-gray-700'
                     }`}
                   >
-                    {/* Color swatch — click to open picker */}
+                    {/* Color swatch - click to open picker */}
                     <div className="relative flex-shrink-0" onClick={e => e.stopPropagation()}>
                       <button
                         onClick={() => colorPickerFor === p.id ? cancelColorPicker() : openColorPicker(p)}
@@ -437,7 +437,7 @@ export function ProductionCustomizer({ open, processes, stages, onClose, onUpdat
             {activeProcessId && (
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-2">
-                  Etapas — {localProcesses.find(p => p.id === activeProcessId)?.name}
+                  Etapas - {localProcesses.find(p => p.id === activeProcessId)?.name}
                 </p>
 
                 <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>

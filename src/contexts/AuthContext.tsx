@@ -53,7 +53,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         setIsPlatformAdmin(data.isPlatformAdmin ?? false);
       }
     } catch {
-      // silencia — se falhar, trata como dono
+      // silencia - se falhar, trata como dono
     } finally {
       setLoading(false);
     }

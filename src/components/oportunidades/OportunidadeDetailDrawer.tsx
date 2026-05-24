@@ -98,7 +98,7 @@ export function OportunidadeDetailDrawer({
 
   const dataFormatada = op.data_oportunidade
     ? new Date(op.data_oportunidade + 'T12:00:00').toLocaleDateString('pt-BR')
-    : '—';
+    : '-';
 
   return (
     <>
@@ -212,7 +212,7 @@ export function OportunidadeDetailDrawer({
                   {jobs.map(job => {
                     const dataJob = job.job_date
                       ? new Date(job.job_date + 'T12:00:00').toLocaleDateString('pt-BR')
-                      : '—';
+                      : '-';
                     const isPast = job.status === 'completed';
                     return (
                       <div key={job.id} className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-4">
@@ -305,7 +305,7 @@ export function OportunidadeDetailDrawer({
           )}
         </div>
 
-        {/* Footer — action buttons */}
+        {/* Footer - action buttons */}
         <div className="flex-shrink-0 p-5 border-t border-gray-100 dark:border-gray-800 space-y-2">
           <button
             onClick={handleKanban}

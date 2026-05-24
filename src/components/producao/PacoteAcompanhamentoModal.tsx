@@ -86,7 +86,7 @@ export function PacoteAcompanhamentoModal({
           <div>
             <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Identificação (opcional)</label>
             <input value={identificacao} onChange={(e) => setIdentificacao(e.target.value)} placeholder="Ex: bebê da Marina" className={inputCls} />
-            <p className="text-[11px] text-gray-400 mt-1">Aparece no nome de cada trabalho — ex: "bebê da Marina — 6 meses".</p>
+            <p className="text-[11px] text-gray-400 mt-1">Aparece no nome de cada trabalho - ex: "bebê da Marina - 6 meses".</p>
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Sessões do pacote</label>
@@ -113,7 +113,7 @@ export function PacoteAcompanhamentoModal({
             </div>
           </div>
           <p className="text-[11px] text-gray-400">
-            Gera um trabalho por sessão (sem data — você agenda cada um depois). O valor entra como uma única receita já recebida no Financeiro.
+            Gera um trabalho por sessão (sem data - você agenda cada um depois). O valor entra como uma única receita já recebida no Financeiro.
           </p>
           {erro && <p className="text-xs text-red-600 dark:text-red-400">{erro}</p>}
         </div>

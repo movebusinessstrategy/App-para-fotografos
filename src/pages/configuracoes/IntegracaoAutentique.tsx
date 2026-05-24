@@ -31,10 +31,12 @@ interface ImportResult {
   skipped_duplicates: number;
   failed: number;
   errors: Array<{ doc_id: string; reason: string }>;
+  has_more?: boolean;
+  next_page?: number;
 }
 
 const formatDate = (iso: string) => {
-  if (!iso) return '—';
+  if (!iso) return '-';
   try { return new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR'); } catch { return iso; }
 };
 
@@ -173,7 +175,7 @@ export default function IntegracaoAutentique() {
             <h2 className="text-base font-bold text-gray-900 dark:text-white">Importar do Autentique</h2>
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
               Lista os contratos da sua conta Autentique e importa como histórico de cliente +
-              sessão. <strong>Não baixa PDFs</strong> — usa só metadados (instantâneo).
+              sessão. <strong>Não baixa PDFs</strong> - usa só metadados (instantâneo).
             </p>
           </div>
         </div>
@@ -290,7 +292,7 @@ export default function IntegracaoAutentique() {
                         />
                       </td>
                       <td className="px-3 py-2 text-gray-700 dark:text-gray-300 text-xs max-w-[220px] truncate" title={it.doc_name}>
-                        {it.doc_name || '—'}
+                        {it.doc_name || '-'}
                       </td>
                       <td className="px-3 py-2 text-gray-900 dark:text-white font-medium">
                         {it.client_name || <span className="text-red-500 italic">sem nome</span>}
@@ -301,7 +303,7 @@ export default function IntegracaoAutentique() {
                         )}
                       </td>
                       <td className="px-3 py-2 text-gray-500 dark:text-gray-400 text-xs">
-                        {it.client_email || '—'}
+                        {it.client_email || '-'}
                       </td>
                       <td className="px-3 py-2 text-gray-500 dark:text-gray-400 text-xs">
                         {it.job_type || <span className="opacity-50">Outro</span>}

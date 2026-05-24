@@ -88,7 +88,7 @@ export function ImportToProductionModal({
   };
 
   const formatDate = (d?: string) => {
-    if (!d) return '—';
+    if (!d) return '-';
     const parsed = parseDate(d);
     return parsed ? format(parsed, "dd 'de' MMM, yyyy", { locale: ptBR }) : d;
   };

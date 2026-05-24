@@ -11,9 +11,9 @@ export default function ImpersonationBanner() {
         <ShieldAlert size={16} className="flex-shrink-0" />
         <span className="truncate">
           {mode === "member" ? (
-            <>Você está vendo como o membro <strong>{memberLabel}</strong> da empresa <strong>{ownerEmail || ownerId}</strong> — todas as ações são registradas.</>
+            <>Você está vendo como o membro <strong>{memberLabel}</strong> da empresa <strong>{ownerEmail || ownerId}</strong> - todas as ações são registradas.</>
           ) : (
-            <>Você está vendo a conta de <strong>{ownerEmail ?? ownerId}</strong> — todas as ações são registradas.</>
+            <>Você está vendo a conta de <strong>{ownerEmail ?? ownerId}</strong> - todas as ações são registradas.</>
           )}
         </span>
       </div>

@@ -33,7 +33,7 @@ type Member = {
 };
 
 const fmtDate = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "—";
+  iso ? new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "-";
 
 export default function TenantDetailPage() {
   const { ownerId } = useParams<{ ownerId: string }>();
@@ -313,7 +313,7 @@ function Row({ label, value }: { label: string; value: string | number | null })
   return (
     <div className="flex items-start justify-between gap-3">
       <dt className="text-gray-500 dark:text-gray-400">{label}</dt>
-      <dd className="text-right text-gray-900 dark:text-gray-100 font-medium">{value ?? "—"}</dd>
+      <dd className="text-right text-gray-900 dark:text-gray-100 font-medium">{value ?? "-"}</dd>
     </div>
   );
 }

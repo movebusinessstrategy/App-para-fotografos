@@ -143,7 +143,7 @@ export function SearchableSelect({
         />
       </button>
 
-      {/* Dropdown — rendered in a portal to escape overflow:hidden containers */}
+      {/* Dropdown - rendered in a portal to escape overflow:hidden containers */}
       {open &&
         createPortal(
           <div

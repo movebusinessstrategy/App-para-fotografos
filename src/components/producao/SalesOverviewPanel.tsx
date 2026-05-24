@@ -37,10 +37,10 @@ const formatCurrency = (v: number) =>
   (v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: 0 });
 
 const formatShortDate = (iso: string | null) => {
-  if (!iso) return '—';
+  if (!iso) return '-';
   try {
     return new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
-  } catch { return '—'; }
+  } catch { return '-'; }
 };
 
 const formatJobDate = (s: string | null) => {
@@ -94,7 +94,7 @@ export function SalesOverviewPanel({ processes, stages, onRefreshJobs }: Props) 
     return { pending, inProd, noJob };
   }, [sales]);
 
-  // Primeira etapa do primeiro processo não-especial — destino do "Enviar"
+  // Primeira etapa do primeiro processo não-especial - destino do "Enviar"
   const entryStageId = useMemo(() => {
     const firstProcess = processes
       .filter(p => !p.is_special)
@@ -205,7 +205,7 @@ export function SalesOverviewPanel({ processes, stages, onRefreshJobs }: Props) 
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Header — chips de período + resumo */}
+      {/* Header - chips de período + resumo */}
       <div className="flex flex-wrap items-center justify-between gap-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-3 shadow-sm">
         <div className="flex gap-2 items-center">
           <span className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mr-1">Período:</span>
@@ -292,7 +292,7 @@ export function SalesOverviewPanel({ processes, stages, onRefreshJobs }: Props) 
 
                   {/* Ação primária */}
                   {hasNoJob ? (
-                    <span className="text-gray-300 dark:text-gray-700 text-xs px-3">—</span>
+                    <span className="text-gray-300 dark:text-gray-700 text-xs px-3">-</span>
                   ) : isInProd ? (
                     <div className="relative" data-sales-menu>
                       <button
@@ -340,7 +340,7 @@ export function SalesOverviewPanel({ processes, stages, onRefreshJobs }: Props) 
                     </button>
                   )}
 
-                  {/* Cancelar venda — disponível em todas as linhas (pendente/sem job tem como botão direto; em produção tá no menu) */}
+                  {/* Cancelar venda - disponível em todas as linhas (pendente/sem job tem como botão direto; em produção tá no menu) */}
                   {!isInProd && (
                     <button
                       onClick={() => setConfirmCancel(sale)}

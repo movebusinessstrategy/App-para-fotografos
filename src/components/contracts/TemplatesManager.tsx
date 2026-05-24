@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Plus, Trash2, Copy, Save, Loader2, FileText, AlertCircle, CheckCheck,
-  Search, Download, RotateCcw, Eye, EyeOff,
+  Search, Eye, EyeOff,
 } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
 import { cn } from '../../utils/cn';
@@ -61,7 +61,6 @@ export function TemplatesManager({ onNotify }: TemplatesManagerProps) {
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
-  const [importing, setImporting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<ContractTemplate | null>(null);
 
   const reload = async () => {
@@ -99,29 +98,6 @@ export function TemplatesManager({ onNotify }: TemplatesManagerProps) {
   }, [templates, search]);
 
   const selected = templates.find(t => t.id === selectedId) || null;
-
-  const importSeed = async () => {
-    setImporting(true);
-    try {
-      const seed = await import('../../data/contract-templates-seed.json');
-      const payload = (seed as any).default ?? seed;
-      const res = await authFetch('/api/contract-templates/seed', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        onNotify('error', 'Erro ao importar: ' + (err.error || res.statusText));
-        return;
-      }
-      const data = await res.json();
-      onNotify('success', `${data.inserted} modelo(s) importado(s). ${data.skipped} já existiam.`);
-      await reload();
-    } finally {
-      setImporting(false);
-    }
-  };
 
   const createNew = () => {
     setSelectedId(-1); // sentinel = novo
@@ -181,24 +157,16 @@ export function TemplatesManager({ onNotify }: TemplatesManagerProps) {
         </div>
         <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-1">Nenhum modelo cadastrado</h3>
         <p className="text-sm text-gray-500 dark:text-gray-400 max-w-md mb-5">
-          Modelos servem como base de cada tipo de contrato (Newborn, Gestante, Casal…).
-          Importe os 24 modelos do estúdio agora ou crie um do zero.
+          Modelos servem como base pros seus contratos. Crie quantos modelos
+          quiser e use variáveis pra preencher dados do cliente automaticamente.
         </p>
         <div className="flex items-center gap-3">
           <button
-            onClick={importSeed}
-            disabled={importing}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 disabled:opacity-60 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
-          >
-            {importing ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-            Importar 24 modelos do estúdio
-          </button>
-          <button
             onClick={createNew}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 text-sm font-semibold rounded-xl transition-colors"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
           >
             <Plus size={14} />
-            Criar do zero
+            Criar primeiro modelo
           </button>
         </div>
         {selectedId === -1 && (
@@ -270,17 +238,6 @@ export function TemplatesManager({ onNotify }: TemplatesManagerProps) {
               </div>
             </div>
           ))}
-        </div>
-        <div className="p-2 border-t border-gray-100 dark:border-gray-800">
-          <button
-            onClick={importSeed}
-            disabled={importing}
-            className="w-full inline-flex items-center justify-center gap-1.5 px-2 py-1.5 text-[11px] text-gray-500 hover:text-gold-700 dark:hover:text-gold-400 disabled:opacity-60 transition-colors"
-            title="Importa modelos do estúdio. Pula nomes que já existem."
-          >
-            {importing ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
-            Reimportar modelos do estúdio
-          </button>
         </div>
       </aside>
 
@@ -562,27 +519,47 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({ template, allCategories
         </div>
       )}
 
-      {/* Body editor + Preview */}
-      <div className={cn('flex-1 grid gap-0', showPreview ? 'grid-cols-2' : 'grid-cols-1')}>
-        <textarea
-          ref={textareaRef}
-          value={body}
-          onChange={e => setBody(e.target.value)}
-          disabled={isLegacy}
-          placeholder="Texto do contrato. Use os botões acima para inserir variáveis como {{cliente_nome}}, {{valor_total}} etc."
-          spellCheck={false}
-          className={cn(
-            'w-full h-full p-4 text-[13px] leading-relaxed font-mono bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-200 outline-none resize-none disabled:opacity-70',
-            showPreview && 'border-r border-gray-100 dark:border-gray-800',
-          )}
-          style={{ minHeight: 400 }}
-        />
+      {/* Body editor + Preview — o editor é uma "folha A4" no formato ABNT
+          (Times 12pt, margens 3/2/2/3 cm, line-height 1.5, justificado) pra que
+          o que o usuário escreve já se pareça com o PDF que vai pro Autentique. */}
+      <div className={cn('flex-1 grid gap-0 bg-gray-100 dark:bg-gray-950 overflow-y-auto', showPreview ? 'grid-cols-2' : 'grid-cols-1')}>
+        <div className={cn('p-6 flex justify-center', showPreview && 'border-r border-gray-200 dark:border-gray-800')}>
+          <textarea
+            ref={textareaRef}
+            value={body}
+            onChange={e => setBody(e.target.value)}
+            disabled={isLegacy}
+            placeholder="Texto do contrato. Use os botões acima para inserir variáveis como {{cliente_nome}}, {{valor_total}} etc."
+            spellCheck={false}
+            className="block w-full max-w-[21cm] bg-white text-black outline-none resize-none disabled:opacity-70 shadow-[0_2px_8px_rgba(0,0,0,0.08)]"
+            style={{
+              minHeight: 'calc(29.7cm)',
+              fontFamily: '"Times New Roman", Times, serif',
+              fontSize: '12pt',
+              lineHeight: 1.5,
+              textAlign: 'justify',
+              padding: '3cm 2cm 2cm 3cm',
+              border: '1px solid #e5e7eb',
+            }}
+          />
+        </div>
         {showPreview && (
-          <div className="p-4 overflow-y-auto bg-gray-50 dark:bg-gray-800/30" style={{ minHeight: 400 }}>
-            <p className="text-[10px] font-bold uppercase text-gray-400 mb-2">
-              Preview com dados de exemplo
+          <div className="p-6 overflow-y-auto flex flex-col items-center bg-gray-100 dark:bg-gray-950" style={{ minHeight: 400 }}>
+            <p className="text-[10px] font-bold uppercase text-gray-400 mb-2 self-start">
+              Preview com dados de exemplo (igual ao Autentique)
             </p>
-            <div className="text-[13px] leading-relaxed whitespace-pre-wrap text-gray-800 dark:text-gray-200 font-serif">
+            <div
+              className="block w-full max-w-[21cm] bg-white text-black shadow-[0_2px_8px_rgba(0,0,0,0.08)] whitespace-pre-wrap"
+              style={{
+                minHeight: 'calc(29.7cm)',
+                fontFamily: '"Times New Roman", Times, serif',
+                fontSize: '12pt',
+                lineHeight: 1.5,
+                textAlign: 'justify',
+                padding: '3cm 2cm 2cm 3cm',
+                border: '1px solid #e5e7eb',
+              }}
+            >
               {previewText}
             </div>
           </div>

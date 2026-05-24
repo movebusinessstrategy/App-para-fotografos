@@ -169,7 +169,7 @@ export function DateTimePicker({
         </span>
       </button>
 
-      {/* Dropdown — portal to escape overflow:hidden */}
+      {/* Dropdown - portal to escape overflow:hidden */}
       {open &&
         createPortal(
           <div
@@ -329,7 +329,7 @@ export function DateTimePicker({
                 className="w-full py-1.5 text-sm font-semibold rounded-xl bg-gold-600 hover:bg-gold-700 text-white disabled:opacity-40 transition-colors"
               >
                 {parsed
-                  ? `Confirmar — ${format(parsed, "dd/MM 'às' HH:mm", { locale: ptBR })}`
+                  ? `Confirmar - ${format(parsed, "dd/MM 'às' HH:mm", { locale: ptBR })}`
                   : "Selecione uma data"}
               </button>
             </div>

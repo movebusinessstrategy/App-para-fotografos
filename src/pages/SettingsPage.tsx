@@ -420,7 +420,7 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
         </div>
       </div>
 
-      {/* WhatsApp Message Templates — só quando conectado */}
+      {/* WhatsApp Message Templates - só quando conectado */}
       {waConnected && (
         <WhatsAppTemplatesManager
           onNotify={(kind, message) => {

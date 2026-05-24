@@ -43,7 +43,7 @@ export default function PrivacyPolicyPage() {
             <section>
               <h2 className="text-lg font-semibold text-white mb-3">1. Introdução</h2>
               <p>
-                A <strong className="text-white">FotoMOVE</strong> ("nós", "nosso" ou "Empresa") respeita a sua privacidade e está comprometida em proteger os dados pessoais que você nos fornece ao utilizar nossa plataforma de CRM para fotógrafos. Esta Política de Privacidade descreve como coletamos, usamos, armazenamos e protegemos suas informações.
+                A <strong className="text-white">CRM Trilha</strong> ("nós", "nosso" ou "Empresa") respeita a sua privacidade e está comprometida em proteger os dados pessoais que você nos fornece ao utilizar nossa plataforma de CRM para fotógrafos. Esta Política de Privacidade descreve como coletamos, usamos, armazenamos e protegemos suas informações.
               </p>
             </section>
 
@@ -62,7 +62,7 @@ export default function PrivacyPolicyPage() {
               <h2 className="text-lg font-semibold text-white mb-3">3. Como usamos seus dados</h2>
               <p className="mb-3">Utilizamos seus dados para:</p>
               <ul className="list-disc list-inside space-y-2 pl-2">
-                <li>Fornecer e melhorar a plataforma FotoMOVE.</li>
+                <li>Fornecer e melhorar a plataforma CRM Trilha.</li>
                 <li>Autenticar seu acesso e garantir a segurança da conta.</li>
                 <li>Enviar notificações relacionadas ao serviço (atualizações, alertas de segurança).</li>
                 <li>Processar automações de follow-up configuradas por você.</li>
@@ -91,7 +91,7 @@ export default function PrivacyPolicyPage() {
             <section>
               <h2 className="text-lg font-semibold text-white mb-3">6. Integração com WhatsApp Business</h2>
               <p>
-                Ao utilizar a funcionalidade de automação via WhatsApp, você concorda com os <strong className="text-white">Termos de Serviço do WhatsApp Business</strong> e com a <strong className="text-white">Política de Dados da Meta</strong>. As mensagens enviadas através dessa integração seguem as diretrizes da plataforma Meta, incluindo a janela de 24 horas e o uso de templates aprovados. A FotoMOVE não se responsabiliza por conteúdo enviado em desacordo com as políticas da Meta.
+                Ao utilizar a funcionalidade de automação via WhatsApp, você concorda com os <strong className="text-white">Termos de Serviço do WhatsApp Business</strong> e com a <strong className="text-white">Política de Dados da Meta</strong>. As mensagens enviadas através dessa integração seguem as diretrizes da plataforma Meta, incluindo a janela de 24 horas e o uso de templates aprovados. A CRM Trilha não se responsabiliza por conteúdo enviado em desacordo com as políticas da Meta.
               </p>
             </section>
 
@@ -104,7 +104,7 @@ export default function PrivacyPolicyPage() {
 
             <section>
               <h2 className="text-lg font-semibold text-white mb-3">8. Seus direitos</h2>
-              <p className="mb-3">De acordo com a Lei Geral de Proteção de Dados (LGPD – Lei nº 13.709/2018), você tem direito a:</p>
+              <p className="mb-3">De acordo com a Lei Geral de Proteção de Dados (LGPD - Lei nº 13.709/2018), você tem direito a:</p>
               <ul className="list-disc list-inside space-y-2 pl-2">
                 <li>Confirmar a existência de tratamento de seus dados.</li>
                 <li>Acessar seus dados pessoais.</li>
@@ -136,7 +136,7 @@ export default function PrivacyPolicyPage() {
                 Para dúvidas, solicitações ou exercício de direitos relacionados à privacidade, entre em contato conosco:
               </p>
               <div className="mt-3 p-4 bg-white/5 border border-white/10 rounded-lg">
-                <p><strong className="text-white">FotoMOVE</strong></p>
+                <p><strong className="text-white">CRM Trilha</strong></p>
                 <p>E-mail: <a href="mailto:contato@movebusiness.com.br" className="text-[#D4A94A] hover:underline">contato@movebusiness.com.br</a></p>
               </div>
             </section>

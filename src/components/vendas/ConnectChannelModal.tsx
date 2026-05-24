@@ -232,7 +232,7 @@ export function ConnectChannelModal({ open, onClose, onStatusChange }: ConnectCh
             <div className="flex items-start justify-between">
               <div>
                 <h2 className="text-xl font-bold text-white tracking-tight">Conectar Canais</h2>
-                <p className="text-green-200 text-sm mt-0.5">Vincule seu WhatsApp ou Instagram ao FotoMOVE</p>
+                <p className="text-green-200 text-sm mt-0.5">Vincule seu WhatsApp ou Instagram ao Trilha</p>
               </div>
               <button
                 onClick={onClose}
@@ -468,7 +468,7 @@ function WhatsAppPanel({
     );
   }
 
-  // ── Tela inicial — 2 opções: WhatsApp (QR/código) e API ─────────────────
+  // ── Tela inicial - 2 opções: WhatsApp (QR/código) e API ─────────────────
   const isWhatsApp = connectMethod === "qr" || connectMethod === "code";
 
   return (
@@ -516,7 +516,7 @@ function WhatsAppPanel({
             </div>
             <div>
               <p className={`text-sm font-bold ${connectMethod === "api" ? "text-gray-900 dark:text-gray-100" : "text-gray-500 dark:text-gray-400"}`}>API Oficial</p>
-              <p className="text-[11px] text-gray-400 leading-tight mt-0.5">Meta Business — sem risco de ban</p>
+              <p className="text-[11px] text-gray-400 leading-tight mt-0.5">Meta Business - sem risco de ban</p>
             </div>
           </button>
         </div>
@@ -524,7 +524,7 @@ function WhatsAppPanel({
 
       <div className="h-px bg-gray-100 dark:bg-gray-700/60" />
 
-      {/* Painel WhatsApp — QR + toggle para número */}
+      {/* Painel WhatsApp - QR + toggle para número */}
       {isWhatsApp && (
         <WhatsAppConnectPanel
           usePhone={connectMethod === "code"}
@@ -654,7 +654,7 @@ function ApiMethodPanel({ onGoToSettings }: { onGoToSettings: () => void }) {
         <p className="text-sm font-bold text-gray-700 dark:text-gray-300">WhatsApp Business API Oficial (Meta)</p>
         <div className="space-y-2.5">
           {[
-            { icon: <ShieldCheck size={15} />, text: "Conexão oficial — zero risco de banimento", color: "text-green-600 dark:text-green-400" },
+            { icon: <ShieldCheck size={15} />, text: "Conexão oficial - zero risco de banimento", color: "text-green-600 dark:text-green-400" },
             { icon: <Zap size={15} />,         text: "Capacidade de alto volume de mensagens",    color: "text-blue-600 dark:text-blue-400" },
             { icon: <Building2 size={15} />,   text: "Suporte a múltiplos números por empresa",   color: "text-purple-600 dark:text-purple-400" },
             { icon: <Settings size={15} />,    text: "Requer conta no Meta Business Manager",     color: "text-gray-500 dark:text-gray-400" },
@@ -703,7 +703,7 @@ function InstagramPanel({ status, onRefresh }: { status: ConnStatus; onRefresh: 
         </div>
         <div>
           <p className="text-lg font-bold text-gray-900 dark:text-gray-100">Instagram conectado!</p>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">DMs chegando no FotoMOVE.</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">DMs chegando no Trilha.</p>
         </div>
       </div>
     );
@@ -713,7 +713,7 @@ function InstagramPanel({ status, onRefresh }: { status: ConnStatus; onRefresh: 
     <div className="flex flex-col lg:flex-row gap-8 items-start">
       <div className="flex-1 space-y-4">
         <p className="text-sm font-bold text-gray-700 dark:text-gray-300">Conectar Instagram DM</p>
-        <p className="text-sm text-gray-500 dark:text-gray-400">Receba e responda DMs do Instagram diretamente no FotoMOVE.</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">Receba e responda DMs do Instagram diretamente no Trilha.</p>
         <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 p-4">
           <p className="text-xs font-semibold text-amber-700 dark:text-amber-400 mb-2">Requisitos</p>
           <ul className="space-y-1.5 text-xs text-amber-600 dark:text-amber-500">

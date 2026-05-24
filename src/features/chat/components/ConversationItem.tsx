@@ -5,6 +5,7 @@ import { extractContact, getInitials } from '../utils/contactHelpers';
 import { useContactProfile } from '../hooks/useContactProfile';
 
 interface Props {
+  key?: React.Key | null;
   conv: Conversation;
   selected: boolean;
   onClick: () => void;

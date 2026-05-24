@@ -20,7 +20,7 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 const fmtDate = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "—";
+  iso ? new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "-";
 
 export default function TenantsListPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -102,7 +102,7 @@ export default function TenantsListPage() {
                       {t.email ?? "(sem e-mail)"}
                     </Link>
                   </td>
-                  <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{t.plan_name ?? "—"}</td>
+                  <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{t.plan_name ?? "-"}</td>
                   <td className="px-4 py-3">
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLOR[t.status] ?? ""}`}>
                       {t.status}

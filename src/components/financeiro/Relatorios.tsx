@@ -149,7 +149,7 @@ export default function Relatorios() {
               <cfg.icon className={`w-4 h-4 ${cfg.color}`} />
               <span className="text-sm font-semibold text-gray-800 dark:text-gray-200">{cfg.label}</span>
               <span className="text-xs text-gray-400">
-                {MESES[mesInicio - 1]} – {MESES[mesFim - 1]} {ano}
+                {MESES[mesInicio - 1]} - {MESES[mesFim - 1]} {ano}
               </span>
             </div>
             {resultado.length > 0 && (
@@ -187,7 +187,7 @@ export default function Relatorios() {
                         const isMoney = isNum && (col.toLowerCase().includes('valor') || col.toLowerCase().includes('total') || col.toLowerCase().includes('receita') || col.toLowerCase().includes('despesa'));
                         return (
                           <td key={col} className={`px-4 py-3 ${isNum ? 'text-right font-medium' : 'text-left'} text-gray-800 dark:text-gray-200`}>
-                            {isMoney ? fmtBRL(val as number) : String(val ?? '—')}
+                            {isMoney ? fmtBRL(val as number) : String(val ?? '-')}
                           </td>
                         );
                       })}

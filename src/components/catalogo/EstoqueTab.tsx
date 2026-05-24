@@ -60,7 +60,7 @@ export function EstoqueTab({ produtos, onChanged }: { produtos: Produto[]; onCha
     await loadCompras();
   }
 
-  // Abre o modal de "marcar comprado" — pede o valor real pago
+  // Abre o modal de "marcar comprado" - pede o valor real pago
   function abrirComprar(c: Compra) {
     setComprarFor(c);
     const prod = produtos.find((p) => p.id === c.produto_id);

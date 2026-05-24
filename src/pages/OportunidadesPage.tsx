@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Gift, RefreshCw, Cake, Baby, Target, Zap, Users, Sparkles, PartyPopper } from 'lucide-react';
 import { DashboardCards } from '../components/oportunidades/DashboardCards';
+import { TotaisPorProduto } from '../components/oportunidades/TotaisPorProduto';
 import { FiltrosPeriodo } from '../components/oportunidades/FiltrosPeriodo';
 import { AniversariantesList } from '../components/oportunidades/AniversariantesList';
 import { OportunidadesList } from '../components/oportunidades/OportunidadesList';
@@ -75,7 +76,7 @@ export default function OportunidadesPage() {
         tipo: a.tipo === 'MAE' ? 'Aniversário Mãe' : `Aniversário Filho - ${a.nome}`,
         data_oportunidade: new Date().toISOString().split('T')[0],
         status: 'future',
-        notas: `Aniversário em ${new Date(a.dataNascimento + 'T12:00:00').toLocaleDateString('pt-BR')} — ${a.diasParaAniversario === 0 ? 'hoje!' : `em ${a.diasParaAniversario} dias`}`,
+        notas: `Aniversário em ${new Date(a.dataNascimento + 'T12:00:00').toLocaleDateString('pt-BR')} - ${a.diasParaAniversario === 0 ? 'hoje!' : `em ${a.diasParaAniversario} dias`}`,
       });
       refetchOps();
     } catch (e) {
@@ -133,6 +134,9 @@ export default function OportunidadesPage() {
       {/* Dashboard Cards */}
       <DashboardCards {...dashboard} loading={dashLoading} />
 
+      {/* Totais agregados por produto: estimado em aberto vs convertido */}
+      <TotaisPorProduto />
+
       {/* Tabs */}
       <div className="flex gap-1 p-1 bg-gray-100 dark:bg-gray-800/60 rounded-xl w-fit flex-wrap">
         {tabs.map(t => (
@@ -159,7 +163,7 @@ export default function OportunidadesPage() {
           <div className="flex items-start gap-3 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded-xl px-4 py-3">
             <Gift size={16} className="text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
             <p className="text-sm text-amber-700 dark:text-amber-300">
-              <strong>Parabéns para o cliente!</strong> — Esta seção mostra clientes com aniversário próximo para você enviar uma mensagem carinhosa ou um cupom especial de desconto.
+              <strong>Parabéns para o cliente!</strong> - Esta seção mostra clientes com aniversário próximo para você enviar uma mensagem carinhosa ou um cupom especial de desconto.
             </p>
           </div>
           <div className="space-y-4">
@@ -180,7 +184,7 @@ export default function OportunidadesPage() {
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
               <Sparkles size={15} />
-              <span>Bebês nascidos nos últimos 30 dias — janela ideal para ensaio newborn</span>
+              <span>Bebês nascidos nos últimos 30 dias - janela ideal para ensaio newborn</span>
             </div>
             {newbornLoading ? (
               <div className="space-y-3">
@@ -212,7 +216,7 @@ export default function OportunidadesPage() {
                         tipo: 'Newborn',
                         data_oportunidade: new Date().toISOString().split('T')[0],
                         status: 'urgent',
-                        notas: `${f.nome} nasceu há ${f.diasDeVida} dias — janela newborn`,
+                        notas: `${f.nome} nasceu há ${f.diasDeVida} dias - janela newborn`,
                       } as any).then(refetchOps).catch(console.error);
                     }}
                     className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-xs font-medium text-white transition-colors"
@@ -230,7 +234,7 @@ export default function OportunidadesPage() {
               <div className="flex items-center gap-3">
                 <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
                 <span className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide whitespace-nowrap">
-                  Oportunidades criadas — Newborn
+                  Oportunidades criadas - Newborn
                 </span>
                 <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
               </div>
@@ -301,7 +305,7 @@ export default function OportunidadesPage() {
               <div className="flex items-center gap-3">
                 <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
                 <span className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide whitespace-nowrap">
-                  Oportunidades criadas — Aniversário
+                  Oportunidades criadas - Aniversário
                 </span>
                 <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
               </div>
@@ -372,7 +376,7 @@ export default function OportunidadesPage() {
               <div className="flex items-center gap-3">
                 <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
                 <span className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide whitespace-nowrap">
-                  Oportunidades criadas — Smash the Cake
+                  Oportunidades criadas - Smash the Cake
                 </span>
                 <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
               </div>
@@ -443,7 +447,7 @@ export default function OportunidadesPage() {
               <div className="flex items-center gap-3">
                 <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
                 <span className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide whitespace-nowrap">
-                  Oportunidades criadas — Acompanhamentos
+                  Oportunidades criadas - Acompanhamentos
                 </span>
                 <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
               </div>

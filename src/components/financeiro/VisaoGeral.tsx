@@ -110,12 +110,12 @@ export default function VisaoGeral() {
 
   useEffect(() => {
     load();
-    // Sincroniza com a Produção em segundo plano — sem precisar clicar no botão
+    // Sincroniza com a Produção em segundo plano - sem precisar clicar no botão
     (async () => {
       try {
         await authFetch('/api/fin/sync-jobs', { method: 'POST' });
         load(true); // recarrega sem piscar o skeleton
-      } catch { /* sync falhou — segue com os dados atuais */ }
+      } catch { /* sync falhou - segue com os dados atuais */ }
     })();
   }, [load]);
 
@@ -215,7 +215,7 @@ export default function VisaoGeral() {
       {/* Fluxo de Caixa 12 meses */}
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
         <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">
-          Fluxo de Caixa — últimos 12 meses
+          Fluxo de Caixa - últimos 12 meses
         </h3>
         <ResponsiveContainer width="100%" height={240}>
           <BarChart data={data?.fluxo_12m ?? []} margin={{ top: 0, right: 8, left: 0, bottom: 0 }}>

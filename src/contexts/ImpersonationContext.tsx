@@ -56,7 +56,7 @@ export function ImpersonationProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<ImpersonationState>(readState);
 
   const startAsOwner = useCallback(async (ownerId: string, ownerEmail?: string | null) => {
-    // Loga ANTES de ativar o header — assim o registro fica no admin real.
+    // Loga ANTES de ativar o header - assim o registro fica no admin real.
     await authFetch(`/api/platform/tenants/${ownerId}/impersonate-start`, { method: "POST" });
     sessionStorage.removeItem(IMPERSONATION_MEMBER_STORAGE_KEY);
     sessionStorage.removeItem(MEMBER_LABEL_KEY);

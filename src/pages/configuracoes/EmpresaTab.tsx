@@ -98,7 +98,7 @@ export default function EmpresaTab() {
         const res = await fetchCompanyByCNPJ(digits);
         setCnpjLoading(false);
         if (!res) return;
-        // Preenche só os campos que estão vazios — não sobrescreve dados editados manualmente
+        // Preenche só os campos que estão vazios - não sobrescreve dados editados manualmente
         setData(prev => ({
           ...prev,
           legal_name:        prev.legal_name        || res.legal_name,
@@ -171,7 +171,7 @@ export default function EmpresaTab() {
         </p>
       </div>
 
-      {/* CNPJ no topo — autopreenche tudo */}
+      {/* CNPJ no topo - autopreenche tudo */}
       <div>
         <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200 mb-3 flex items-center gap-2">
           <Search size={14} /> Identificação
@@ -194,7 +194,7 @@ export default function EmpresaTab() {
         </div>
       </div>
 
-      {/* CEP primeiro no endereço — autopreenche logradouro/bairro/cidade/UF */}
+      {/* CEP primeiro no endereço - autopreenche logradouro/bairro/cidade/UF */}
       <div>
         <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200 mb-3 flex items-center gap-2">
           <Search size={14} /> Endereço

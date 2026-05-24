@@ -117,7 +117,7 @@ const formatCurrency = (v: number) =>
   (v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: 0 });
 
 const formatDuration = (ms: number | null | undefined) => {
-  if (ms == null) return "—";
+  if (ms == null) return "-";
   const totalMinutes = Math.floor(ms / 60_000);
   if (totalMinutes < 1) return "< 1min";
   if (totalMinutes < 60) return `${totalMinutes}min`;
@@ -268,7 +268,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
   const [jobItemSearch, setJobItemSearch] = useState('');
   const [jobItemOpen, setJobItemOpen] = useState(false);
   const [jobItemQty, setJobItemQty] = useState(1);
-  // Catálogos via SWR — cache compartilhado entre JobDetailDrawer, DealDetailDrawer e NewDealModal
+  // Catálogos via SWR - cache compartilhado entre JobDetailDrawer, DealDetailDrawer e NewDealModal
   const { data: catalogProdutosData } = useApi<any[]>("/api/produtos");
   const { data: catalogServicosData } = useApi<any[]>("/api/servicos");
   const { data: catalogCombosData } = useApi<any[]>("/api/combos");
@@ -468,7 +468,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
   if (!job) return null;
 
   const jobDate = job.job_date ? parseDate(job.job_date) : null;
-  const currentStageName = stages.find(s => s.id === job.production_stage)?.name || "—";
+  const currentStageName = stages.find(s => s.id === job.production_stage)?.name || "-";
 
   const handleAddItem = async () => {
     const text = newItem.trim();
@@ -752,7 +752,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                 )}
               </section>
 
-              {/* Observações — editável inline */}
+              {/* Observações - editável inline */}
               <EditableNotesSection
                 jobId={job.id}
                 initialNotes={job.notes || ''}
@@ -929,7 +929,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                 </div>
               </section>
 
-              {/* Checklist — inline after labels */}
+              {/* Checklist - inline after labels */}
               <section>
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 flex items-center gap-1.5">
                   <CheckSquare size={12} />
@@ -1118,7 +1118,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                               </div>
                             );
                           }) : packageItem && (
-                            /* Pacote vendido sem itens detalhados — editável/trocável */
+                            /* Pacote vendido sem itens detalhados - editável/trocável */
                             <PackageEditor
                               pkg={packageItem}
                               catalogCombos={catalogCombos}
@@ -1426,7 +1426,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
         </div>
       </div>
 
-      {/* Contract generator — full-screen, above drawer */}
+      {/* Contract generator - full-screen, above drawer */}
       {contractId !== null && (
         <ContractGenerator
           contractId={contractId}
@@ -1434,7 +1434,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
         />
       )}
 
-      {/* Template picker — antes de criar o contrato */}
+      {/* Template picker - antes de criar o contrato */}
       {templatePickerOpen && (
         <TemplatePickerModal
           subtitle={`Cliente: ${job?.client_name || 'sem nome'}`}
@@ -1852,7 +1852,7 @@ function PackageEditor({
         )}
       </div>
 
-      {/* Trocar pacote pelo catálogo — só para pacote de venda */}
+      {/* Trocar pacote pelo catálogo - só para pacote de venda */}
       {!isJob && (
       <div ref={swapRef}>
         <button

@@ -45,7 +45,7 @@ export default function TrialBanner() {
     );
   }
 
-  // Trial nos últimos 3 dias — banner azul leve, dispensável
+  // Trial nos últimos 3 dias - banner azul leve, dispensável
   if (me.subscription_status === "trial" && me.trial_days_left > 0 && me.trial_days_left <= 3 && !dismissed) {
     return (
       <div className="bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200 border-b border-blue-200 dark:border-blue-800 px-4 py-2 flex items-center justify-center gap-3 text-sm flex-shrink-0">

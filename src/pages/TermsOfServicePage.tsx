@@ -43,14 +43,14 @@ export default function TermsOfServicePage() {
             <section>
               <h2 className="text-lg font-semibold text-white mb-3">1. Aceitação dos Termos</h2>
               <p>
-                Ao criar uma conta ou utilizar a plataforma <strong className="text-white">FotoMOVE</strong>, você concorda com estes Termos de Serviço. Caso não concorde com algum dos termos, não utilize o serviço. Estes termos constituem um contrato vinculante entre você e a FotoMOVE.
+                Ao criar uma conta ou utilizar a plataforma <strong className="text-white">CRM Trilha</strong>, você concorda com estes Termos de Serviço. Caso não concorde com algum dos termos, não utilize o serviço. Estes termos constituem um contrato vinculante entre você e a CRM Trilha.
               </p>
             </section>
 
             <section>
               <h2 className="text-lg font-semibold text-white mb-3">2. Descrição do Serviço</h2>
               <p>
-                A FotoMOVE é uma plataforma de CRM (Customer Relationship Management) desenvolvida para fotógrafos e estúdios fotográficos. O serviço oferece funcionalidades de gestão de clientes, controle de trabalhos, funil de vendas, agenda, controle financeiro, produção e automações de comunicação.
+                A CRM Trilha é uma plataforma de CRM (Customer Relationship Management) desenvolvida para fotógrafos e estúdios fotográficos. O serviço oferece funcionalidades de gestão de clientes, controle de trabalhos, funil de vendas, agenda, controle financeiro, produção e automações de comunicação.
               </p>
             </section>
 
@@ -67,7 +67,7 @@ export default function TermsOfServicePage() {
 
             <section>
               <h2 className="text-lg font-semibold text-white mb-3">4. Uso Permitido</h2>
-              <p className="mb-3">Você concorda em usar a FotoMOVE apenas para fins legítimos e de acordo com estes termos. É proibido:</p>
+              <p className="mb-3">Você concorda em usar a CRM Trilha apenas para fins legítimos e de acordo com estes termos. É proibido:</p>
               <ul className="list-disc list-inside space-y-2 pl-2">
                 <li>Usar o serviço para atividades ilegais ou fraudulentas.</li>
                 <li>Tentar acessar sistemas ou dados de outros usuários sem autorização.</li>
@@ -81,19 +81,19 @@ export default function TermsOfServicePage() {
             <section>
               <h2 className="text-lg font-semibent text-white mb-3">5. Dados e Propriedade</h2>
               <p>
-                Os dados inseridos por você na plataforma (clientes, trabalhos, negociações, etc.) são de sua propriedade. A FotoMOVE não reivindica propriedade sobre seu conteúdo. Ao usar o serviço, você nos concede uma licença limitada para armazenar e processar esses dados com o único objetivo de fornecer o serviço a você.
+                Os dados inseridos por você na plataforma (clientes, trabalhos, negociações, etc.) são de sua propriedade. A CRM Trilha não reivindica propriedade sobre seu conteúdo. Ao usar o serviço, você nos concede uma licença limitada para armazenar e processar esses dados com o único objetivo de fornecer o serviço a você.
               </p>
             </section>
 
             <section>
               <h2 className="text-lg font-semibold text-white mb-3">6. Integrações de Terceiros</h2>
               <p className="mb-3">
-                A FotoMOVE pode integrar com serviços de terceiros, incluindo WhatsApp Business (Meta). Ao usar essas integrações:
+                A CRM Trilha pode integrar com serviços de terceiros, incluindo WhatsApp Business (Meta). Ao usar essas integrações:
               </p>
               <ul className="list-disc list-inside space-y-2 pl-2">
                 <li>Você concorda com os termos de serviço e políticas do respectivo terceiro.</li>
                 <li>Você é responsável pelo uso adequado dessas integrações e pelo conteúdo das mensagens enviadas.</li>
-                <li>A FotoMOVE não se responsabiliza por suspensões ou penalidades aplicadas por plataformas de terceiros devido ao uso inadequado.</li>
+                <li>A CRM Trilha não se responsabiliza por suspensões ou penalidades aplicadas por plataformas de terceiros devido ao uso inadequado.</li>
                 <li>Mensagens via WhatsApp devem seguir as políticas de negócios da Meta, incluindo respeito à janela de 24 horas e uso de templates aprovados.</li>
               </ul>
             </section>
@@ -114,21 +114,21 @@ export default function TermsOfServicePage() {
             <section>
               <h2 className="text-lg font-semibold text-white mb-3">8. Disponibilidade do Serviço</h2>
               <p>
-                A FotoMOVE envidar seus melhores esforços para manter a plataforma disponível 24 horas por dia, 7 dias por semana. No entanto, não garantimos disponibilidade ininterrupta. Manutenções programadas serão comunicadas com antecedência sempre que possível. Não nos responsabilizamos por danos decorrentes de indisponibilidade temporária do serviço.
+                A CRM Trilha envidar seus melhores esforços para manter a plataforma disponível 24 horas por dia, 7 dias por semana. No entanto, não garantimos disponibilidade ininterrupta. Manutenções programadas serão comunicadas com antecedência sempre que possível. Não nos responsabilizamos por danos decorrentes de indisponibilidade temporária do serviço.
               </p>
             </section>
 
             <section>
               <h2 className="text-lg font-semibold text-white mb-3">9. Limitação de Responsabilidade</h2>
               <p>
-                A FotoMOVE não se responsabiliza por danos indiretos, incidentais, especiais ou consequentes decorrentes do uso ou impossibilidade de uso do serviço. Nossa responsabilidade total está limitada ao valor pago por você nos últimos 12 meses de serviço.
+                A CRM Trilha não se responsabiliza por danos indiretos, incidentais, especiais ou consequentes decorrentes do uso ou impossibilidade de uso do serviço. Nossa responsabilidade total está limitada ao valor pago por você nos últimos 12 meses de serviço.
               </p>
             </section>
 
             <section>
               <h2 className="text-lg font-semibold text-white mb-3">10. Encerramento de Conta</h2>
               <p>
-                Você pode encerrar sua conta a qualquer momento entrando em contato conosco. A FotoMOVE pode suspender ou encerrar sua conta em caso de violação destes termos, com ou sem aviso prévio dependendo da gravidade da infração. Após o encerramento, seus dados serão retidos por 90 dias conforme descrito na Política de Privacidade.
+                Você pode encerrar sua conta a qualquer momento entrando em contato conosco. A CRM Trilha pode suspender ou encerrar sua conta em caso de violação destes termos, com ou sem aviso prévio dependendo da gravidade da infração. Após o encerramento, seus dados serão retidos por 90 dias conforme descrito na Política de Privacidade.
               </p>
             </section>
 
@@ -152,7 +152,7 @@ export default function TermsOfServicePage() {
                 Para dúvidas ou questões relacionadas a estes Termos de Serviço:
               </p>
               <div className="mt-3 p-4 bg-white/5 border border-white/10 rounded-lg">
-                <p><strong className="text-white">FotoMOVE</strong></p>
+                <p><strong className="text-white">CRM Trilha</strong></p>
                 <p>E-mail: <a href="mailto:contato@movebusiness.com.br" className="text-[#D4A94A] hover:underline">contato@movebusiness.com.br</a></p>
               </div>
             </section>

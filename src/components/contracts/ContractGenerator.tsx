@@ -447,7 +447,7 @@ function TemplateContractDocument({ d, body }: { d: ContractData; body: string }
       i++; continue;
     }
 
-    // "Cambé, _____ de YYYY" — linha da cidade de assinatura, sem indent
+    // "Cambé, _____ de YYYY" - linha da cidade de assinatura, sem indent
     if (/^[A-ZÁÉÍÓÚ][a-záéíóúâêôãõç]+,\s+_{5,}\s+de/i.test(trimmed)) {
       elements.push(<p key={i} style={{ ...pNoIndentStyle, marginTop: '2em' }}>{trimmed}</p>);
       i++; continue;
@@ -787,7 +787,7 @@ export function ContractGenerator({ contractId, onClose, onSaved, onDeleted }: C
               {isSigned ? 'Contrato Assinado' : isPending ? 'Aguardando Assinaturas' : 'Editar Contrato'}
             </h2>
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              {form.clientName || 'Cliente'} · {form.serviceDate || '—'}
+              {form.clientName || 'Cliente'} · {form.serviceDate || '-'}
               {template && (
                 <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-gold-50 dark:bg-gold-500/10 text-gold-700 dark:text-gold-400 font-semibold text-[10px]">
                   <FileText size={9} /> {template.name}

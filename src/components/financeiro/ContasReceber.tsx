@@ -73,7 +73,7 @@ export default function ContasReceber() {
 
   useEffect(() => {
     load();
-    // Sincroniza com a Produção em segundo plano — limpa o que está fora dela
+    // Sincroniza com a Produção em segundo plano - limpa o que está fora dela
     (async () => {
       try {
         await authFetch('/api/fin/sync-jobs', { method: 'POST' });
@@ -305,7 +305,7 @@ export default function ContasReceber() {
                   // ── Linha normal ──────────────────────────────────────────
                   <tr key={r.id} className="border-b border-gray-50 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-700/30 last:border-0">
                     <td className="px-4 py-3">
-                      <p className="font-medium text-gray-800 dark:text-gray-200">{r.cliente_nome || '—'}</p>
+                      <p className="font-medium text-gray-800 dark:text-gray-200">{r.cliente_nome || '-'}</p>
                     </td>
                     <td className="px-4 py-3">
                       <p className="text-gray-700 dark:text-gray-300">{r.descricao}</p>
@@ -371,7 +371,7 @@ export default function ContasReceber() {
                 <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Data do recebimento</label>
                 <DatePicker value={dataReceb} onChange={setDataReceb} />
               </div>
-              <p className="text-xs text-gray-400">Coloque a data real em que o dinheiro entrou — assim o faturamento conta no mês certo.</p>
+              <p className="text-xs text-gray-400">Coloque a data real em que o dinheiro entrou - assim o faturamento conta no mês certo.</p>
             </div>
             <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100 dark:border-gray-700">
               <button onClick={() => setReceberFor(null)} className="px-4 py-2 text-sm font-medium rounded-lg text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">Cancelar</button>

@@ -192,7 +192,7 @@ function StageColumn(props: {
                 e.stopPropagation();
                 if (hoverCardId !== job.id) setHoverCardId(job.id);
               }}
-              // Não setamos null no leave do CARD pra evitar flicker — o
+              // Não setamos null no leave do CARD pra evitar flicker - o
               // hoverCardId só muda quando outro card recebe o dragOver,
               // ou no dragEnd/drop. (Antes: leave → null → mouse de volta
               // no card → over → set → leave → null → loop infinito).
@@ -555,7 +555,7 @@ export function ProductionBoard({ jobs, processes, stages, teamMembers, onChange
   const [draggingTab, setDraggingTab] = useState<ProductionProcess | null>(null);
   const [jobDragOverProcess, setJobDragOverProcess] = useState<string | null>(null);
   const dragJobId = useRef<number | null>(null);
-  // Timer pra "peek" — trocar de pasta após hover por 250ms durante drag
+  // Timer pra "peek" - trocar de pasta após hover por 250ms durante drag
   const tabPeekTimer = useRef<number | null>(null);
 
   const tabSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -593,7 +593,7 @@ export function ProductionBoard({ jobs, processes, stages, teamMembers, onChange
     setDragOverStage(null);
     if (dragJobId.current !== null) {
       const job = jobs.find(j => j.id === dragJobId.current);
-      // Skip the call if dropping on the same stage — otherwise the backend
+      // Skip the call if dropping on the same stage - otherwise the backend
       // resets production_stage_entered_at and the "atrasado/atenção" flag is lost.
       if (job && job.production_stage !== stageId) {
         onChangeStage(dragJobId.current, stageId);
@@ -631,7 +631,7 @@ export function ProductionBoard({ jobs, processes, stages, teamMembers, onChange
   const handleJobDropOnProcess = (processId: string) => {
     const jobId = dragJobId.current;
     if (jobId == null) return;
-    // Troca de aba ANTES de mexer no job — assim o usuário já vê a pasta
+    // Troca de aba ANTES de mexer no job - assim o usuário já vê a pasta
     // certa enquanto o update do backend vai rolando.
     setOpenProcess(processId);
     setJobDragOverProcess(null);
@@ -676,11 +676,11 @@ export function ProductionBoard({ jobs, processes, stages, teamMembers, onChange
   return (
     <div className="flex flex-col gap-3">
 
-      {/* ── All processes — folder tabs (special ones highlighted) ── */}
+      {/* ── All processes - folder tabs (special ones highlighted) ── */}
       {processes.length > 0 && (
         <div className="flex flex-col">
 
-          {/* Tab row — draggable to reorder */}
+          {/* Tab row - draggable to reorder */}
           <DndContext
             sensors={tabSensors}
             collisionDetection={closestCenter}
@@ -759,7 +759,7 @@ export function ProductionBoard({ jobs, processes, stages, teamMembers, onChange
             </DragOverlay>
           </DndContext>
 
-          {/* Kanban panel — gold border when a special process is active */}
+          {/* Kanban panel - gold border when a special process is active */}
           <div
             className={cn(
               'rounded-b-xl rounded-tr-xl overflow-hidden relative z-0',
