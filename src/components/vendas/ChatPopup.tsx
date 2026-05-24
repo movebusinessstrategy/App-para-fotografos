@@ -158,7 +158,7 @@ export function ChatPopup({ phone, contactName, onClose }: ChatPopupProps) {
         style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(4px)' }}
       />
 
-      {/* Janela do chat — 65% da tela */}
+      {/* Janela do chat - 65% da tela */}
       <div
         style={{
           position: 'relative',

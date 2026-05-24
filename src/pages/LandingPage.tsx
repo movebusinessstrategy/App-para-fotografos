@@ -3,12 +3,23 @@ import { Link, Navigate } from "react-router-dom";
 import { motion, useReducedMotion } from "motion/react";
 import { useAuth } from "../contexts/AuthContext";
 import {
-  Camera, Check, ChevronRight, Workflow, MessageCircle, Calendar, FileSignature,
+  Check, ChevronRight, Workflow, MessageCircle, Calendar, FileSignature,
   Users, ArrowRight, Zap, Shield, X, AlertTriangle, Clock,
   TrendingUp, Heart, Award, Gift, ChevronDown, PlayCircle, BadgeCheck,
 } from "lucide-react";
 
-const APP_NAME = "FotoMOVE";
+const APP_NAME = "Trilha";
+
+// Logo horizontal "CRM Trilha" - alterna por dark mode. `heightClass` é uma
+// classe Tailwind (ex.: "h-9") pra controlar o tamanho.
+function TrilhaLogo({ heightClass = "h-9" }: { heightClass?: string }) {
+  return (
+    <>
+      <img src="/logo-light.png" alt="CRM Trilha" className={`${heightClass} w-auto dark:hidden`} />
+      <img src="/logo-dark.png" alt="CRM Trilha" className={`${heightClass} w-auto hidden dark:block`} />
+    </>
+  );
+}
 
 // ─── Hook util: contagem regressiva pra urgência ──────────────────────────────
 function useCountdown(targetMs: number) {
@@ -54,7 +65,7 @@ interface Plan {
   price_cents: number;
 }
 
-// Planos hard-coded — quando integrar com Asaas/billing de verdade, basta voltar
+// Planos hard-coded - quando integrar com Asaas/billing de verdade, basta voltar
 // o fetch pra `/api/public/plans` aqui. O resto da página continua igual.
 const PLANS: Plan[] = [
   { id: "pro",      slug: "pro",      name: "Pro",      price_cents: 9700  },
@@ -63,13 +74,13 @@ const PLANS: Plan[] = [
 
 export default function LandingPage() {
   const { user, loading } = useAuth();
-  // Usuários já logados pulam a landing — vão direto pro app
+  // Usuários já logados pulam a landing - vão direto pro app
   if (!loading && user) return <Navigate to="/dashboard" replace />;
 
   // Promoção termina em 7 dias (renovável; serve só pra demonstrar escassez)
   const promoEndsAt = React.useMemo(() => Date.now() + 7 * 24 * 60 * 60 * 1000, []);
 
-  // O body do app tem `overflow: hidden` global — então a landing precisa
+  // O body do app tem `overflow: hidden` global - então a landing precisa
   // ter scroll PRÓPRIO dentro de um container `h-screen overflow-y-auto`.
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrolled, setScrolled] = useState(false);
@@ -81,7 +92,7 @@ export default function LandingPage() {
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
-  // Pré-aquece o backend já na landing — assim quando o visitante for
+  // Pré-aquece o backend já na landing - assim quando o visitante for
   // fazer cadastro/login, o Render free tier não estará dormindo.
   useEffect(() => {
     const base = (import.meta.env.VITE_API_BASE_URL as string) || '';
@@ -123,11 +134,8 @@ function Header({ scrolled }: { scrolled: boolean }) {
         : "bg-transparent"
     }`}>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-        <Link to="/" className="flex items-center gap-2">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center shadow-lg shadow-amber-500/30">
-            <Camera size={18} className="text-white" />
-          </div>
-          <span className="font-bold text-lg tracking-tight">{APP_NAME}</span>
+        <Link to="/" className="flex items-center">
+          <TrilhaLogo heightClass="h-9" />
         </Link>
         <nav className="hidden md:flex items-center gap-7 text-sm font-medium text-gray-600 dark:text-gray-300">
           <a href="#recursos" className="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">Recursos</a>
@@ -159,7 +167,7 @@ function Hero() {
 
       <div className="relative max-w-7xl mx-auto px-4 sm:px-6">
         <div className="grid lg:grid-cols-[1.1fr_1fr] gap-12 lg:gap-16 items-center">
-          {/* Coluna esquerda — Copy */}
+          {/* Coluna esquerda - Copy */}
           <div className="text-center lg:text-left">
             <FadeIn>
               <div className="inline-flex items-center px-3 py-1 rounded-full bg-amber-100 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700/40 text-amber-700 dark:text-amber-300 text-xs font-semibold mb-5">
@@ -180,7 +188,7 @@ function Hero() {
             </FadeIn>
             <FadeIn delay={0.1}>
               <p className="text-lg sm:text-xl text-gray-600 dark:text-gray-300 mb-7 leading-relaxed max-w-xl mx-auto lg:mx-0">
-                O <strong>{APP_NAME}</strong> é o CRM feito <em>especificamente</em> pra fotógrafos brasileiros. Pipeline visual, WhatsApp integrado, contratos digitais e agenda — tudo num só lugar, em <strong>menos de 5 minutos</strong>.
+                O <strong>{APP_NAME}</strong> é o CRM feito <em>especificamente</em> pra fotógrafos brasileiros. Pipeline visual, WhatsApp integrado, contratos digitais e agenda - tudo num só lugar, em <strong>menos de 5 minutos</strong>.
               </p>
             </FadeIn>
             <FadeIn delay={0.15}>
@@ -206,7 +214,7 @@ function Hero() {
             </FadeIn>
           </div>
 
-          {/* Coluna direita — Mockup animado */}
+          {/* Coluna direita - Mockup animado */}
           <FadeIn delay={0.25} y={40}>
             <HeroMockup />
           </FadeIn>
@@ -216,7 +224,7 @@ function Hero() {
   );
 }
 
-/* Mockup do app no Hero — pipeline kanban estilizado */
+/* Mockup do app no Hero - pipeline kanban estilizado */
 function HeroMockup() {
   const reduce = useReducedMotion();
   return (
@@ -237,9 +245,9 @@ function HeroMockup() {
         {/* Kanban mini */}
         <div className="p-4 grid grid-cols-3 gap-3 bg-gray-50/60 dark:bg-gray-900/50">
           {[
-            { label: "Entrou em contato", color: "bg-blue-500", count: 12, cards: ["Camila Lopes", "Júlia Rocha", "Mariana Sá"] },
-            { label: "Conversa iniciada", color: "bg-amber-500", count: 8, cards: ["Ana Paula", "Beatriz Lima"] },
-            { label: "Orçamento enviado", color: "bg-emerald-500", count: 5, cards: ["Thaís Martins"] },
+            { label: "Entrou em contato", color: "bg-blue-500", count: 12, cards: ["Bruno Santos", "Marina Costa", "Ricardo Alves"] },
+            { label: "Conversa iniciada", color: "bg-amber-500", count: 8, cards: ["Fernanda Lima", "Carlos Dias"] },
+            { label: "Orçamento enviado", color: "bg-emerald-500", count: 5, cards: ["João Pereira"] },
           ].map((col, ci) => (
             <div key={col.label} className="bg-white dark:bg-gray-800 rounded-lg p-2 min-h-[200px]">
               <div className="flex items-center justify-between mb-2">
@@ -285,7 +293,7 @@ function HeroMockup() {
         </div>
         <div className="text-xs">
           <p className="font-bold text-gray-900 dark:text-white">Novo lead!</p>
-          <p className="text-gray-500 dark:text-gray-400">Mariana mandou mensagem no WhatsApp</p>
+          <p className="text-gray-500 dark:text-gray-400">Marina mandou mensagem no WhatsApp</p>
         </div>
       </motion.div>
 
@@ -668,10 +676,10 @@ function GuaranteeSection() {
               </div>
               <h2 className="text-3xl sm:text-4xl font-bold mb-3">Garantia incondicional de 7 dias</h2>
               <p className="text-lg opacity-95 max-w-xl mx-auto mb-5">
-                Use por 7 dias COMPLETOS. Se em qualquer momento você decidir que não é pra você, é só cancelar — sem perguntas, sem burocracia, sem ressentimento. <strong>Você ainda fica com os bônus.</strong>
+                Use por 7 dias COMPLETOS. Se em qualquer momento você decidir que não é pra você, é só cancelar - sem perguntas, sem burocracia, sem ressentimento. <strong>Você ainda fica com os bônus.</strong>
               </p>
               <p className="text-sm opacity-80 max-w-xl mx-auto">
-                <BadgeCheck size={14} className="inline mr-1" /> O risco é totalmente nosso. Se não funcionar pra você, a gente quer saber o porquê — e devolve seu dinheiro na hora.
+                <BadgeCheck size={14} className="inline mr-1" /> O risco é totalmente nosso. Se não funcionar pra você, a gente quer saber o porquê - e devolve seu dinheiro na hora.
               </p>
             </div>
           </div>
@@ -684,7 +692,7 @@ function GuaranteeSection() {
 /* ─────────────────────── TESTIMONIALS ──────────────────────────────────────── */
 function TestimonialsSection() {
   const ts = [
-    { name: "Marina Silva", role: "Fotógrafa Newborn · Curitiba/PR", text: "Em 2 meses fechei 14 ensaios a mais. O pipeline visual mudou minha vida — eu não esqueço de NINGUÉM agora.", rating: 5 },
+    { name: "Marina Silva", role: "Fotógrafa Newborn · Curitiba/PR", text: "Em 2 meses fechei 14 ensaios a mais. O pipeline visual mudou minha vida - eu não esqueço de NINGUÉM agora.", rating: 5 },
     { name: "Estúdio Pitori", role: "Estúdio Familiar · Londrina/PR", text: "A extensão do WhatsApp é mágica. Cliente manda mensagem, eu já transformo em lead sem sair do WhatsApp. Economizo umas 2 horas por dia.", rating: 5 },
     { name: "Júlia Rocha", role: "Fotógrafa Gestante · São Paulo/SP", text: "Já tinha testado Trello, Asana, planilha. Nada funcionava porque não era PRA fotógrafo. Esse aqui é o primeiro que entende como a gente trabalha.", rating: 5 },
   ];
@@ -755,7 +763,7 @@ function ComparisonTable() {
               <div className="px-5 py-4 text-sm font-semibold text-gray-500 dark:text-gray-400">Recurso</div>
               <div className="px-5 py-4 text-center">
                 <span className="inline-flex items-center gap-1.5 text-sm font-bold text-amber-600 dark:text-amber-400">
-                  <Camera size={14} /> {APP_NAME}
+                  <img src="/favicon.png" alt="" className="h-4 w-4" /> CRM Trilha
                 </span>
               </div>
               <div className="px-5 py-4 text-sm font-semibold text-gray-500 dark:text-gray-400 text-center">Outros CRMs</div>
@@ -991,11 +999,8 @@ function Footer() {
       <div className="max-w-6xl mx-auto px-4 sm:px-6">
         <div className="grid sm:grid-cols-3 gap-8 mb-8">
           <div>
-            <div className="flex items-center gap-2 mb-3">
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center">
-                <Camera size={14} className="text-white" />
-              </div>
-              <span className="font-bold">{APP_NAME}</span>
+            <div className="flex items-center mb-3">
+              <TrilhaLogo heightClass="h-7" />
             </div>
             <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
               O CRM completo pensado pra fotógrafos brasileiros.

@@ -177,7 +177,7 @@ export function HistoricoTab({ deals, stages, clients, onOpenDeal }: HistoricoTa
                       >
                         {stage.name}
                       </span>
-                    ) : <span className="text-xs text-gray-400">—</span>}
+                    ) : <span className="text-xs text-gray-400">-</span>}
                   </td>
                   <td className="px-5 py-3 text-sm font-semibold text-gray-900 dark:text-white whitespace-nowrap">
                     {formatCurrency(d.value || 0)}
@@ -186,10 +186,10 @@ export function HistoricoTab({ deals, stages, clients, onOpenDeal }: HistoricoTa
                     <StatusBadge status={status} />
                   </td>
                   <td className="px-5 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                    {d.created_at ? format(new Date(d.created_at), "dd/MM/yyyy", { locale: ptBR }) : "—"}
+                    {d.created_at ? format(new Date(d.created_at), "dd/MM/yyyy", { locale: ptBR }) : "-"}
                   </td>
                   <td className="px-5 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                    {d.converted_at ? format(new Date(d.converted_at), "dd/MM/yyyy", { locale: ptBR }) : "—"}
+                    {d.converted_at ? format(new Date(d.converted_at), "dd/MM/yyyy", { locale: ptBR }) : "-"}
                   </td>
                   <td className="px-5 py-3 text-right">
                     <div className="inline-flex items-center gap-1.5">

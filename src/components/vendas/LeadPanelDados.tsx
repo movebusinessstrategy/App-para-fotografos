@@ -28,7 +28,7 @@ export function LeadPanelDados({
   const infoRow = (label: string, value?: string) => (
     <div className="flex items-center justify-between text-sm text-gray-700 dark:text-gray-200">
       <span className="font-medium">{label}</span>
-      <span className="text-gray-600 dark:text-gray-300">{value || "—"}</span>
+      <span className="text-gray-600 dark:text-gray-300">{value || "-"}</span>
     </div>
   );
 

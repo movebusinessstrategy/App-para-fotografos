@@ -105,14 +105,14 @@ export default function IntegracoesTab() {
           icon={<Chrome size={22} className="text-blue-600 dark:text-blue-400" />}
           iconBg="bg-blue-50 dark:bg-blue-900/20"
         />
-        {/* Autentique — Importar histórico (DESATIVADO temporariamente).
+        {/* Autentique - Importar histórico (DESATIVADO temporariamente).
             Backend e rota /configuracoes/integracoes/autentique continuam
             existindo, só não estão expostos no menu. Pra reativar, basta
             descomentar este bloco. */}
         {false && isOwner && (
           <IntegrationCard
             to="/configuracoes/integracoes/autentique"
-            title="Autentique — Importar histórico"
+            title="Autentique - Importar histórico"
             description="Puxa contratos antigos do Autentique e cria clientes + histórico de sessões."
             badge="Importar"
             icon={<FileSignature size={22} className="text-gold-600 dark:text-gold-400" />}

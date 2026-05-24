@@ -215,7 +215,7 @@ export function GerenciarFilhosPanel() {
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5">
             <h3 className="font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
               <span className="text-pink-500">🎂</span>
-              Aniversário da Mãe — {selectedClient.name}
+              Aniversário da Mãe - {selectedClient.name}
             </h3>
             <div className="flex items-center gap-3">
               <div className="flex-1">

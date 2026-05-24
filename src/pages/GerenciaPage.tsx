@@ -258,7 +258,7 @@ function TaskDetailDrawer({
     completed: "bg-emerald-400",
   }[urgency];
 
-  // Progress bar — percentage of time elapsed between created_at and due_date
+  // Progress bar - percentage of time elapsed between created_at and due_date
   const progressPct = (() => {
     if (task.completed_at) return 100;
     const created = new Date(task.created_at).getTime();
@@ -585,7 +585,7 @@ function TaskModal({ task, teamMembers, jobs, stages, processes, onSave, onClose
                   { value: "", label: "Nenhum" },
                   ...activeJobs.map((j) => ({
                     value: String(j.id),
-                    label: `${j.client_name || j.job_name || `Job #${j.id}`}${j.job_type ? ` — ${j.job_type}` : ""}`,
+                    label: `${j.client_name || j.job_name || `Job #${j.id}`}${j.job_type ? ` - ${j.job_type}` : ""}`,
                   })),
                 ]}
               />

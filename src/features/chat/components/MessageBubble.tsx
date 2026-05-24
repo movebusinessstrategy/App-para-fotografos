@@ -4,6 +4,7 @@ import { Message } from '../types';
 import { AudioMessagePlayer } from './AudioMessagePlayer';
 
 interface Props {
+  key?: React.Key | null;
   msg: Message;
   onImageClick?: (url: string) => void;
   contactInitial?: string;
@@ -18,7 +19,7 @@ function timeStr(iso: string) {
 function StatusIcon({ msg }: { msg: Message }) {
   if (!msg.from_me) return null;
 
-  // DEBUG temporário — veja no DevTools → Console os valores reais
+  // DEBUG temporário - veja no DevTools → Console os valores reais
   console.log('[MessageBubble] status debug:', {
     message_id: msg.message_id?.slice(-8),
     status: msg.status,

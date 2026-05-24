@@ -84,7 +84,7 @@ export function NumInput({ value, onChange, className, allowDecimal = true, ...r
   );
 }
 
-// ── FinSelect (dropdown com portal — não corta dentro de modal) ───────────────
+// ── FinSelect (dropdown com portal - não corta dentro de modal) ───────────────
 export interface SelectOption {
   value: string;
   label: string;

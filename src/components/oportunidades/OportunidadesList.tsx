@@ -59,7 +59,7 @@ interface OportunidadesListProps {
   loading: boolean;
   onSendToKanban: (op: Oportunidade) => Promise<void>;
   onDiscard: (id: string) => Promise<void>;
-  /** Modo compacto: sem stats, sem filtro de tipo — usado nas abas de categoria */
+  /** Modo compacto: sem stats, sem filtro de tipo - usado nas abas de categoria */
   compact?: boolean;
 }
 
@@ -77,7 +77,7 @@ export function OportunidadesList({ data, loading, onSendToKanban, onDiscard, co
   const aproveitadas = noKanban.length + convertidas.length;
   const taxa        = total > 0 ? Math.round((aproveitadas / total) * 100) : 0;
 
-  // Visible list — only pending, ordered urgent first
+  // Visible list - only pending, ordered urgent first
   const PRIORITY_ORDER = { urgent: 0, active: 1, future: 2 };
   const visible = pendentes
     .filter(o => !filterTipo || o.tipo.toLowerCase().includes(filterTipo.toLowerCase()))
@@ -114,7 +114,7 @@ export function OportunidadesList({ data, loading, onSendToKanban, onDiscard, co
     <>
       <div className="space-y-4">
 
-        {/* Stats + Progress + Filtro — apenas no modo completo */}
+        {/* Stats + Progress + Filtro - apenas no modo completo */}
         {!compact && (
           <>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">

@@ -32,7 +32,7 @@ export default function IntegracaoExtensao() {
           <div className="flex-1">
             <h2 className="text-xl font-bold text-gray-900 dark:text-white">Extensão do Chrome</h2>
             <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-              Adicione leads direto do WhatsApp Web, veja seu pipeline ao lado das conversas e mande mensagens com templates aprovados — sem trocar de aba.
+              Adicione leads direto do WhatsApp Web, veja seu pipeline ao lado das conversas e mande mensagens com templates aprovados - sem trocar de aba.
             </p>
             {version && (
               <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-2">
@@ -56,7 +56,7 @@ export default function IntegracaoExtensao() {
       <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-6">
         <h3 className="font-semibold text-gray-900 dark:text-white mb-1">Como instalar (1 minuto)</h3>
         <p className="text-xs text-gray-500 dark:text-gray-400 mb-5">
-          O processo é manual porque ainda não estamos na Chrome Web Store. Depois de instalar, basta logar com seu email e senha — sem configuração.
+          O processo é manual porque ainda não estamos na Chrome Web Store. Depois de instalar, basta logar com seu email e senha - sem configuração.
         </p>
 
         <ol className="space-y-4">

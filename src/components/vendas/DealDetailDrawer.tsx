@@ -241,7 +241,7 @@ export function DealDetailDrawer({
   const [catalogSearch, setCatalogSearch] = useState('');
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [catalogSaving, setCatalogSaving] = useState(false);
-  // Catálogos via SWR — cache compartilhado com JobDetailDrawer e NewDealModal
+  // Catálogos via SWR - cache compartilhado com JobDetailDrawer e NewDealModal
   const { data: catalogProdutosData } = useApi<Produto[]>("/api/produtos");
   const { data: catalogServicosData } = useApi<Servico[]>("/api/servicos");
   const { data: catalogCombosData } = useApi<Combo[]>("/api/combos");
@@ -580,7 +580,7 @@ export function DealDetailDrawer({
 
   return (
     <>
-      {/* Painel lateral — popup da conversa ocupando ~50% da tela à direita.
+      {/* Painel lateral - popup da conversa ocupando ~50% da tela à direita.
           Sem fundo escuro: a pipeline continua visível e clicável atrás. */}
       <div className="fixed inset-y-0 right-0 z-50 w-full lg:w-[30vw] flex">
         <div className="relative bg-white dark:bg-gray-900 shadow-2xl flex flex-col overflow-hidden w-full h-full border-l border-gray-200 dark:border-gray-800 animate-slide-up sm:animate-none">
@@ -651,7 +651,7 @@ export function DealDetailDrawer({
                 </div>
               </div>
 
-              {/* Fechar — sempre visível no canto */}
+              {/* Fechar - sempre visível no canto */}
               <button
                 onClick={onClose}
                 title="Fechar"
@@ -661,7 +661,7 @@ export function DealDetailDrawer({
               </button>
             </div>
 
-            {/* Row 2: Botões de ação — empilham com gap respiratório */}
+            {/* Row 2: Botões de ação - empilham com gap respiratório */}
             {!isFinal && (
               <div className="flex items-center gap-2 mb-3 flex-wrap">
                 <button
@@ -697,9 +697,9 @@ export function DealDetailDrawer({
               </div>
             )}
 
-            {/* Etiquetas do lead — dropdown inline no header */}
+            {/* Etiquetas do lead - dropdown inline no header */}
             <div ref={headerLabelRef} className="relative flex items-center gap-1.5 mb-2 flex-wrap">
-              {/* Labels aplicadas — clique para remover */}
+              {/* Labels aplicadas - clique para remover */}
               {dealLabels.map(lId => {
                 const label = availableLabels.find(l => l.id === lId);
                 if (!label) return null;
@@ -880,7 +880,7 @@ export function DealDetailDrawer({
                   <p className="text-sm font-semibold text-gray-900 dark:text-white">
                     {(() => {
                       const formatted = safeFormat(deal.expected_close_date, "dd/MM/yyyy");
-                      return formatted || <span className="text-gray-400 font-normal">—</span>;
+                      return formatted || <span className="text-gray-400 font-normal">-</span>;
                     })()}
                   </p>
                 )}
@@ -1352,7 +1352,7 @@ export function DealDetailDrawer({
                       <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 mb-1">
                         <span className="font-medium uppercase">{act.type}</span>
                         <span>•</span>
-                        <span>{safeFormat(act.created_at, "dd/MM/yyyy HH:mm") || "—"}</span>
+                        <span>{safeFormat(act.created_at, "dd/MM/yyyy HH:mm") || "-"}</span>
                       </div>
                       <p className="text-sm text-gray-700 dark:text-gray-300">{act.description}</p>
                     </div>

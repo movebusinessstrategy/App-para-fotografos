@@ -404,7 +404,7 @@ function ProdutoModal({ item, fornecedores, categorias, onSave, onClose }: {
   // Markup = (venda - custo) / venda
   const markup = form.preco_venda && form.preco_venda > 0
     ? (((form.preco_venda - (form.preco_custo ?? 0)) / form.preco_venda) * 100).toFixed(1)
-    : "—";
+    : "-";
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -464,7 +464,7 @@ function ProdutoModal({ item, fornecedores, categorias, onSave, onClose }: {
             </div>
             <div>
               <FieldLabel>Markup</FieldLabel>
-              <div className={`${INPUT} text-gray-400`}>{markup !== "—" ? `${markup}%` : "—"}</div>
+              <div className={`${INPUT} text-gray-400`}>{markup !== "-" ? `${markup}%` : "-"}</div>
             </div>
           </div>
 
@@ -531,7 +531,7 @@ function ProdutoModal({ item, fornecedores, categorias, onSave, onClose }: {
               </>
             )}
             {form.sob_encomenda && (
-              <p className="text-xs text-gray-400 mt-2">Sem estoque de prateleira. Cada vez que o produto é adicionado a um trabalho, gera um pedido de compra automático — já com o nome do cliente.</p>
+              <p className="text-xs text-gray-400 mt-2">Sem estoque de prateleira. Cada vez que o produto é adicionado a um trabalho, gera um pedido de compra automático - já com o nome do cliente.</p>
             )}
           </div>
 
@@ -543,7 +543,7 @@ function ProdutoModal({ item, fornecedores, categorias, onSave, onClose }: {
 
           {/* Dados fiscais */}
           <div className="border-t border-gray-100 dark:border-gray-800 pt-4">
-            <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-3">Dados fiscais (opcional — NFe)</p>
+            <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-3">Dados fiscais (opcional - NFe)</p>
             <div className="grid grid-cols-3 gap-3">
               <div>
                 <FieldLabel>NCM</FieldLabel>
@@ -560,9 +560,9 @@ function ProdutoModal({ item, fornecedores, categorias, onSave, onClose }: {
                   onChange={(v) => set("origem", v || undefined)}
                   options={[
                     { value: "", label: "Não informado" },
-                    { value: "0", label: "0 – Nacional" },
-                    { value: "1", label: "1 – Estrangeira (importação direta)" },
-                    { value: "2", label: "2 – Estrangeira (adquirida no mercado interno)" },
+                    { value: "0", label: "0 - Nacional" },
+                    { value: "1", label: "1 - Estrangeira (importação direta)" },
+                    { value: "2", label: "2 - Estrangeira (adquirida no mercado interno)" },
                   ]}
                   placeholder="Origem"
                 />
@@ -644,7 +644,7 @@ function ServicoModal({ item, tiposEnsaio, onSave, onClose }: {
 
         {/* Dados fiscais */}
         <div className="border-t border-gray-100 dark:border-gray-800 pt-4">
-          <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-3">Dados fiscais (opcional — NFS-e)</p>
+          <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-3">Dados fiscais (opcional - NFS-e)</p>
           <div className="grid grid-cols-3 gap-3">
             <div>
               <FieldLabel>CNAE</FieldLabel>
@@ -1188,7 +1188,7 @@ export default function CatalogoPage() {
                                   <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: categorias.find((c) => c.nome === p.categoria)?.cor ?? "#6B7280" }} />
                                   {p.categoria}
                                 </span>
-                              ) : "—"}
+                              ) : "-"}
                             </td>
                             <td className="px-5 py-3 text-right text-gray-700 dark:text-gray-300">R$ {p.preco_custo.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</td>
                             <td className="px-5 py-3 text-right font-semibold text-gray-900 dark:text-white">R$ {p.preco_venda.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</td>
@@ -1197,10 +1197,10 @@ export default function CatalogoPage() {
                                 <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${p.margem_lucro >= 30 ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400" : p.margem_lucro >= 10 ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400" : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400"}`}>
                                   {p.margem_lucro.toFixed(1)}%
                                 </span>
-                              ) : "—"}
+                              ) : "-"}
                             </td>
                             <td className="px-5 py-3 text-center text-gray-500 dark:text-gray-400 hidden lg:table-cell">
-                              {p.prazo_entrega ? `${p.prazo_entrega}d` : "—"}
+                              {p.prazo_entrega ? `${p.prazo_entrega}d` : "-"}
                             </td>
                             <td className="px-5 py-3 text-center">
                               {p.controla_estoque ? (
@@ -1214,7 +1214,7 @@ export default function CatalogoPage() {
                               ) : p.sob_encomenda ? (
                                 <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400">Encomenda</span>
                               ) : (
-                                <span className="text-gray-300 dark:text-gray-600">—</span>
+                                <span className="text-gray-300 dark:text-gray-600">-</span>
                               )}
                             </td>
                             <td className="px-5 py-3 text-center">
@@ -1299,7 +1299,7 @@ export default function CatalogoPage() {
                                 {f.tipo_pessoa === "PF" ? "Pessoa Física" : "Pessoa Jurídica"}
                               </span>
                             </td>
-                            <td className="px-5 py-3 text-gray-500 dark:text-gray-400 hidden md:table-cell">{f.contato || f.whatsapp || "—"}</td>
+                            <td className="px-5 py-3 text-gray-500 dark:text-gray-400 hidden md:table-cell">{f.contato || f.whatsapp || "-"}</td>
                             <td className="px-5 py-3">
                               <div className="flex items-center justify-end gap-1">
                                 <button onClick={() => setEditFornecedor(f)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gold-600"><Pencil size={14} /></button>
@@ -1347,7 +1347,7 @@ export default function CatalogoPage() {
                               <div className="font-medium text-gray-900 dark:text-white">{s.nome}</div>
                               {s.descricao && <div className="text-xs text-gray-400 mt-0.5 truncate max-w-[180px]">{s.descricao}</div>}
                             </td>
-                            <td className="px-5 py-3 text-gray-500 dark:text-gray-400 hidden md:table-cell">{s.tipo_ensaio || "—"}</td>
+                            <td className="px-5 py-3 text-gray-500 dark:text-gray-400 hidden md:table-cell">{s.tipo_ensaio || "-"}</td>
                             <td className="px-5 py-3 text-right font-semibold text-gray-900 dark:text-white">R$ {s.preco_base.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</td>
                             <td className="px-5 py-3 text-center hidden sm:table-cell">
                               {s.inclui_edicao ? <CheckCircle size={16} className="mx-auto text-green-500" /> : <XCircle size={16} className="mx-auto text-gray-300 dark:text-gray-600" />}

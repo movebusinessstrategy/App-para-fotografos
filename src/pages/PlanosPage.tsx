@@ -146,7 +146,7 @@ export default function PlanosPage() {
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Escolha seu plano</h1>
         {me?.subscription_status === "trial" && (
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            Você está no trial — {me.trial_days_left} {me.trial_days_left === 1 ? "dia restante" : "dias restantes"}.
+            Você está no trial - {me.trial_days_left} {me.trial_days_left === 1 ? "dia restante" : "dias restantes"}.
           </p>
         )}
       </div>
@@ -322,7 +322,7 @@ export default function PlanosPage() {
         >
           {loading && <Loader2 size={16} className="animate-spin" />}
           {selectedPlan
-            ? `Assinar ${selectedPlan.name} — R$ ${(selectedPlan.price_cents / 100).toFixed(2)}/mês`
+            ? `Assinar ${selectedPlan.name} - R$ ${(selectedPlan.price_cents / 100).toFixed(2)}/mês`
             : "Selecione um plano"}
         </button>
         <p className="text-[11px] text-gray-400 dark:text-gray-500 text-center">

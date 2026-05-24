@@ -74,7 +74,7 @@ export default function Header({ title, userInitial, userEmail, onSignOut, onMen
           {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
         </button>
 
-        {/* Avatar com dropdown — único caminho de logout no mobile */}
+        {/* Avatar com dropdown - único caminho de logout no mobile */}
         <div className="relative" ref={menuRef}>
           <button
             onClick={() => setMenuOpen((o) => !o)}
@@ -87,7 +87,7 @@ export default function Header({ title, userInitial, userEmail, onSignOut, onMen
 
           {menuOpen && (
             <div className="absolute right-0 top-12 w-60 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 overflow-hidden z-40">
-              {/* Header do menu — info do usuário */}
+              {/* Header do menu - info do usuário */}
               <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700">
                 <div className="text-xs text-gray-500 dark:text-gray-400">Logado como</div>
                 <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">

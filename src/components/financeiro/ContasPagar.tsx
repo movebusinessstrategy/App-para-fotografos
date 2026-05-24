@@ -319,7 +319,7 @@ export default function ContasPagar() {
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{d.fornecedor ?? '—'}</td>
+                    <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{d.fornecedor ?? '-'}</td>
                     <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{fmtDate(d.data_vencimento)}</td>
                     <td className="px-4 py-3 text-right font-semibold text-gray-900 dark:text-white">{fmtBRL(d.valor)}</td>
                     <td className="px-4 py-3 text-center">

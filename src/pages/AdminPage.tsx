@@ -18,9 +18,9 @@ const MODULES = [
   { key: "finance",          label: "Financeiro",                   group: "Módulos" },
   { key: "oportunidades",    label: "Oportunidades",                group: "Módulos" },
   { key: "contratos",        label: "Contratos",                    group: "Módulos" },
-  { key: "vendas_add_stage", label: "Vendas — Adicionar etapa",     group: "Ações" },
-  { key: "vendas_edit_stage",label: "Vendas — Editar/excluir etapa",group: "Ações" },
-  { key: "calendar_create",  label: "Agenda — Criar tarefa",        group: "Ações" },
+  { key: "vendas_add_stage", label: "Vendas - Adicionar etapa",     group: "Ações" },
+  { key: "vendas_edit_stage",label: "Vendas - Editar/excluir etapa",group: "Ações" },
+  { key: "calendar_create",  label: "Agenda - Criar tarefa",        group: "Ações" },
 ];
 
 const COLORS = [
@@ -279,7 +279,7 @@ export default function AdminPage({ lockedTab, embedded = false }: AdminPageProp
   return (
     <>
       <div className="space-y-5 max-w-5xl">
-        {/* Header — escondido quando embedded em outra página */}
+        {/* Header - escondido quando embedded em outra página */}
         {!embedded && (
           <div className="flex items-center justify-between">
             <div className="flex-1">
@@ -324,7 +324,7 @@ export default function AdminPage({ lockedTab, embedded = false }: AdminPageProp
           </div>
         )}
 
-        {/* Tabs — escondidas quando lockedTab */}
+        {/* Tabs - escondidas quando lockedTab */}
         {!lockedTab && <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-xl p-1 w-fit">
           {[
             { id: "members" as const, label: "Membros da equipe", icon: Users },

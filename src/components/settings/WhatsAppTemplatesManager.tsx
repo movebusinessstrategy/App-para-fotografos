@@ -24,7 +24,7 @@ function countVars(body: string): number {
   return nums.length ? Math.max(...nums) : 0;
 }
 
-// Substitui {{N}} pelos valores de exemplo — pra pré-visualização.
+// Substitui {{N}} pelos valores de exemplo - pra pré-visualização.
 // Se o exemplo estiver vazio, mantém o {{N}} visível.
 function renderPreview(body: string, examples: string[]): string {
   return body.replace(/\{\{(\d+)\}\}/g, (match, n) => {
@@ -44,7 +44,7 @@ const VAR_SUGGESTIONS: Array<{ label: string; example: string }> = [
   { label: "Link", example: "https://g.page/r/..." },
 ];
 
-// Templates prontos comuns de fotografia — a usuária escolhe e ajusta.
+// Templates prontos comuns de fotografia - a usuária escolhe e ajusta.
 const SEED_TEMPLATES: Array<{
   title: string;
   name: string;
@@ -450,7 +450,7 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
 
         {/* Duas colunas: formulário à esquerda, prévia fixa à direita */}
         <div className="flex flex-1 overflow-hidden">
-          {/* Coluna esquerda — formulário */}
+          {/* Coluna esquerda - formulário */}
           <div className="flex-1 p-5 space-y-4 overflow-y-auto">
           {/* Modelos prontos */}
           <div>
@@ -470,7 +470,7 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
                 </button>
               ))}
             </div>
-            <p className="text-[11px] text-gray-400 mt-1">Preenche o formulário — você ajusta antes de enviar.</p>
+            <p className="text-[11px] text-gray-400 mt-1">Preenche o formulário - você ajusta antes de enviar.</p>
           </div>
 
           <div>
@@ -653,7 +653,7 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
 
           </div>
 
-          {/* Coluna direita — prévia fixa ao lado */}
+          {/* Coluna direita - prévia fixa ao lado */}
           <div className="w-[40%] flex-shrink-0 border-l border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/40 p-5 overflow-y-auto">
             <label className="block text-xs font-bold uppercase text-gray-400 mb-2">
               Pré-visualização
@@ -676,7 +676,7 @@ function TemplateForm({ onClose, onCreated, onNotify }: {
                         {new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
                       </span>
                     </div>
-                    {/* Botões — chips abaixo do balão, estilo WhatsApp */}
+                    {/* Botões - chips abaixo do balão, estilo WhatsApp */}
                     {buttons.length > 0 && (
                       <div className="mt-1 space-y-0.5">
                         {buttons.map((b, i) => (

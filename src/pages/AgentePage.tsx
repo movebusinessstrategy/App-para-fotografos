@@ -184,7 +184,7 @@ export default function AgentePage() {
             Agente IA
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            Assistente de atendimento do WhatsApp — configure e teste antes de ativar.
+            Assistente de atendimento do WhatsApp - configure e teste antes de ativar.
           </p>
         </div>
       </div>
@@ -266,7 +266,7 @@ export default function AgentePage() {
           <ConfigSection
             icon={Sparkles}
             title="Personalidade e tom de voz"
-            help="Como o agente fala — o jeitinho da sua marca. Quanto mais específico, mais parecido com você."
+            help="Como o agente fala - o jeitinho da sua marca. Quanto mais específico, mais parecido com você."
             value={persona}
             onChange={setPersona}
             rows={9}
@@ -284,7 +284,7 @@ export default function AgentePage() {
           <ConfigSection
             icon={BookOpen}
             title="Base de conhecimento"
-            help="Pacotes, preços, horários e políticas. O agente nunca inventa nada fora daqui — preencha os campos entre colchetes."
+            help="Pacotes, preços, horários e políticas. O agente nunca inventa nada fora daqui - preencha os campos entre colchetes."
             value={knowledge}
             onChange={setKnowledge}
             rows={16}
@@ -298,7 +298,7 @@ export default function AgentePage() {
           <ConfigSection
             icon={ShieldAlert}
             title="Regras e limites"
-            help="O que o agente NUNCA pode fazer ou falar. É aqui que você o deixa fechadinho — sem elogio vazio, sem enrolação, sem fugir do assunto."
+            help="O que o agente NUNCA pode fazer ou falar. É aqui que você o deixa fechadinho - sem elogio vazio, sem enrolação, sem fugir do assunto."
             value={rules}
             onChange={setRules}
             rows={15}
@@ -335,7 +335,7 @@ export default function AgentePage() {
           <div className="flex gap-3 p-4 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
             <Sparkles size={20} className="text-blue-500 flex-shrink-0 mt-0.5" />
             <div className="text-sm text-blue-800 dark:text-blue-300">
-              <strong>Modo teste.</strong> Converse como se fosse um cliente — nada é
+              <strong>Modo teste.</strong> Converse como se fosse um cliente - nada é
               enviado para ninguém. Usa a configuração da aba ao lado (mesmo sem salvar).
             </div>
           </div>

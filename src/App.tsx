@@ -46,6 +46,7 @@ const IntegracaoAutentique = lazy(() => import("./pages/configuracoes/Integracao
 const EquipeTab = lazy(() => import("./pages/configuracoes/EquipeTab"));
 const PermissoesTab = lazy(() => import("./pages/configuracoes/PermissoesTab"));
 const OportunidadesConfigTab = lazy(() => import("./pages/configuracoes/AutomacoesTab"));
+const CamposPersonalizadosTab = lazy(() => import("./pages/configuracoes/CamposPersonalizadosTab"));
 
 // ── Platform Admin (super-admin do SaaS) ─────────────────────────────────────
 const PlatformAdminLayout = lazy(() => import("./pages/platform-admin/PlatformAdminLayout"));
@@ -60,7 +61,7 @@ export default function App() {
     <BrowserRouter>
       <SWRConfig
         value={{
-          // Cache 60s — navegar entre páginas vira instantâneo (não refetch)
+          // Cache 60s - navegar entre páginas vira instantâneo (não refetch)
           dedupingInterval: 60_000,
           // Sem revalidar ao trocar de aba (chato e desnecessário)
           revalidateOnFocus: false,
@@ -68,7 +69,7 @@ export default function App() {
           revalidateIfStale: false,
           // Mas revalida ao recuperar conexão
           revalidateOnReconnect: true,
-          // Sem retry agressivo — 1 só, e com delay maior pra não martelar
+          // Sem retry agressivo - 1 só, e com delay maior pra não martelar
           errorRetryCount: 1,
           errorRetryInterval: 3000,
           // Mantém dados antigos enquanto revalida (sem "Carregando..." flash)
@@ -124,7 +125,7 @@ export default function App() {
                 <Route path="catalogo" element={<PermissionRoute module="catalogo"><CatalogoPage /></PermissionRoute>} />
                 <Route path="planos" element={<PermissionRoute ownerOnly><PlanosPage /></PermissionRoute>} />
 
-                {/* Central de Configurações — sidebar interna com sub-rotas.
+                {/* Central de Configurações - sidebar interna com sub-rotas.
                     Equipe, Permissões e Plano são owner-only (membros nem
                     pelo URL direto). Demais sub-rotas seguem permissões. */}
                 <Route path="configuracoes" element={<SettingsLayout />}>
@@ -139,6 +140,7 @@ export default function App() {
                   <Route path="equipe" element={<PermissionRoute ownerOnly><EquipeTab /></PermissionRoute>} />
                   <Route path="permissoes" element={<PermissionRoute ownerOnly><PermissoesTab /></PermissionRoute>} />
                   <Route path="oportunidades" element={<OportunidadesConfigTab />} />
+                  <Route path="campos-personalizados" element={<CamposPersonalizadosTab />} />
                   <Route path="automacoes"    element={<Navigate to="/configuracoes/oportunidades" replace />} />
                 </Route>
 

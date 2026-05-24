@@ -592,7 +592,7 @@ export default function Configuracoes() {
                           <div className="grid grid-cols-2 gap-2">
                             <div className="col-span-2">
                               <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                                Nome <span className="text-gray-400 font-normal">— como você identifica essa conta (ex: "Nubank", "Caixa Empresa")</span>
+                                Nome <span className="text-gray-400 font-normal">- como você identifica essa conta (ex: "Nubank", "Caixa Empresa")</span>
                               </label>
                               <input
                                 value={editandoConta.nome}
@@ -602,7 +602,7 @@ export default function Configuracoes() {
                             </div>
                             <div>
                               <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                                Tipo <span className="text-gray-400 font-normal">— natureza da conta</span>
+                                Tipo <span className="text-gray-400 font-normal">- natureza da conta</span>
                               </label>
                               <FinSelect
                                 value={editandoConta.tipo}
@@ -618,7 +618,7 @@ export default function Configuracoes() {
                             </div>
                             <div>
                               <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                                Banco <span className="text-gray-400 font-normal">— opcional (ex: "Bradesco", "Inter")</span>
+                                Banco <span className="text-gray-400 font-normal">- opcional (ex: "Bradesco", "Inter")</span>
                               </label>
                               <input
                                 value={editandoConta.banco || ''}
@@ -629,7 +629,7 @@ export default function Configuracoes() {
                             </div>
                             <div className="col-span-2">
                               <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                                Saldo Inicial <span className="text-gray-400 font-normal">— quanto havia nessa conta quando você a cadastrou aqui</span>
+                                Saldo Inicial <span className="text-gray-400 font-normal">- quanto havia nessa conta quando você a cadastrou aqui</span>
                               </label>
                               <MoneyInput
                                 value={String(editandoConta.saldo_inicial)}
@@ -684,7 +684,7 @@ export default function Configuracoes() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div className="md:col-span-2">
                     <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                      Nome <span className="text-gray-400 font-normal">— como você identifica essa conta (ex: "Nubank", "Caixa Empresa")</span>
+                      Nome <span className="text-gray-400 font-normal">- como você identifica essa conta (ex: "Nubank", "Caixa Empresa")</span>
                     </label>
                     <input
                       value={novaConta.nome}
@@ -695,7 +695,7 @@ export default function Configuracoes() {
                   </div>
                   <div>
                     <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                      Tipo <span className="text-gray-400 font-normal">— natureza da conta</span>
+                      Tipo <span className="text-gray-400 font-normal">- natureza da conta</span>
                     </label>
                     <FinSelect
                       value={novaConta.tipo}
@@ -711,7 +711,7 @@ export default function Configuracoes() {
                   </div>
                   <div>
                     <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                      Banco <span className="text-gray-400 font-normal">— opcional (ex: "Bradesco", "Inter")</span>
+                      Banco <span className="text-gray-400 font-normal">- opcional (ex: "Bradesco", "Inter")</span>
                     </label>
                     <input
                       value={novaConta.banco || ''}
@@ -722,7 +722,7 @@ export default function Configuracoes() {
                   </div>
                   <div>
                     <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                      Saldo Inicial <span className="text-gray-400 font-normal">— quanto havia na conta ao cadastrá-la aqui</span>
+                      Saldo Inicial <span className="text-gray-400 font-normal">- quanto havia na conta ao cadastrá-la aqui</span>
                     </label>
                     <MoneyInput
                       value={novaConta.saldo_inicial}

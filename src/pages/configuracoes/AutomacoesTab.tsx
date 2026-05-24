@@ -1,12 +1,116 @@
 import React, { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { Edit2, Plus, Trash2, Target } from "lucide-react";
+import { Edit2, Plus, Trash2, Target, DollarSign, Save, Loader2 } from "lucide-react";
 import { authFetch } from "../../utils/authFetch";
 import { cn } from "../../utils/cn";
 import { ConfirmModal } from "../../components/ui/ConfirmModal";
 import { OpportunityRule } from "../../types";
 
 const JOB_TYPES = ["Gestante", "Newborn", "Acompanhamento", "Smash the Cake", "Aniversário", "Família", "Outros"];
+
+// ─── Valor mínimo por tipo de ensaio ─────────────────────────────────────
+// O usuário cadastra o preço do pacote base de cada tipo. Esses valores são
+// usados como fallback no cálculo de "potencial de venda" das oportunidades
+// que não têm valor preenchido individualmente.
+function ValoresPorTipoSection() {
+  const [precos, setPrecos] = useState<Record<string, number>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  useEffect(() => {
+    authFetch('/api/tipo-ensaio-precos')
+      .then(r => r.ok ? r.json() : [])
+      .then((rows: any[]) => {
+        const m: Record<string, number> = {};
+        // Pre-popula com os tipos hardcoded zerados
+        JOB_TYPES.forEach(t => { m[t] = 0; });
+        // Sobrescreve com o que já foi salvo (preserva nomes que não estão no hardcoded)
+        rows.forEach(r => { m[r.tipo_nome] = Number(r.preco_minimo) || 0; });
+        setPrecos(m);
+      })
+      .catch(() => setPrecos(Object.fromEntries(JOB_TYPES.map(t => [t, 0]))))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const setPreco = (tipo: string, valor: number) => {
+    setPrecos(prev => ({ ...prev, [tipo]: valor }));
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const items = (Object.entries(precos) as [string, number][])
+        .filter(([, v]) => Number.isFinite(v) && v >= 0)
+        .map(([tipo_nome, preco_minimo]) => ({ tipo_nome, preco_minimo }));
+      await authFetch('/api/tipo-ensaio-precos', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items }),
+      });
+      setSavedAt(Date.now());
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-5 mb-6">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div>
+          <h3 className="text-base font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+            <DollarSign size={16} /> Valor mínimo por tipo de ensaio
+          </h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            Cadastre o valor do pacote base de cada tipo. É usado pra calcular o potencial de venda das oportunidades.
+          </p>
+        </div>
+        <button
+          onClick={save}
+          disabled={saving || loading}
+          className="inline-flex items-center gap-1.5 px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold rounded-lg disabled:opacity-60"
+        >
+          {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+          Salvar
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center gap-2 text-sm text-gray-400 py-4">
+          <Loader2 size={14} className="animate-spin" /> Carregando...
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {Object.entries(precos).map(([tipo, valor]) => (
+            <div key={tipo} className="flex items-center gap-2">
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300 flex-1 min-w-0 truncate">
+                {tipo}
+              </span>
+              <div className="relative flex-shrink-0">
+                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">R$</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={valor || ''}
+                  onChange={e => setPreco(tipo, Number(e.target.value) || 0)}
+                  placeholder="0,00"
+                  className="w-32 pl-9 pr-2 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 outline-none focus:border-gold-400"
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {savedAt && (
+        <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-3">
+          ✓ Salvo. O painel de oportunidades usa esses valores no próximo carregamento.
+        </p>
+      )}
+    </div>
+  );
+}
 
 function RuleModal({ rule, onClose, onSave }: { rule: OpportunityRule | null; onClose: () => void; onSave: () => void }) {
   const [formData, setFormData] = useState({
@@ -94,13 +198,15 @@ export default function AutomacoesTab() {
 
   return (
     <div className="max-w-4xl">
+      <ValoresPorTipoSection />
+
       <div className="flex items-center justify-between mb-5">
         <div>
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-            <Target size={18} /> Configurações de oportunidades
+            <Target size={18} /> Regras de oportunidade
           </h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-            Regras que geram oportunidades automaticamente após um ensaio (ex.: Gestante → Newborn após 30 dias).
+            Regras que geram oportunidades automaticamente após um ensaio (ex.: Gestante {'→'} Newborn após 30 dias).
           </p>
         </div>
         <button onClick={() => { setEditing(null); setModalOpen(true); }}

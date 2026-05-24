@@ -102,7 +102,7 @@ export default function AppLayout() {
               </div>
             }
           >
-            {/* Vendas não tem padding — precisa de flex-1 para o chat funcionar */}
+            {/* Vendas não tem padding - precisa de flex-1 para o chat funcionar */}
             {location.pathname.startsWith('/vendas') ? (
               <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
                 <Outlet context={{ openContactModal }} />

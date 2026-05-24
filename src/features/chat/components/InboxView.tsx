@@ -208,7 +208,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
 
   async function handleAudioSend(blob: Blob, durationSec: number) {
     const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) throw new Error('Sessão expirada — faça login novamente');
+    if (!session?.access_token) throw new Error('Sessão expirada - faça login novamente');
     if (!selectedPhone) throw new Error('Nenhuma conversa selecionada');
 
     const base64 = await new Promise<string>((resolve, reject) => {
@@ -463,7 +463,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
                 </p>
               </div>
 
-              {/* FEATURE 6 — botões do header */}
+              {/* FEATURE 6 - botões do header */}
               <div className="flex items-center gap-1 flex-shrink-0">
                 <FunnelStatusButton
                   phone={selectedPhone || ''}
@@ -489,7 +489,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
               </div>
             </div>
 
-            {/* Mensagens — fundo e scroll como irmãos para evitar conflito de position CSS */}
+            {/* Mensagens - fundo e scroll como irmãos para evitar conflito de position CSS */}
             <div className="flex-1 min-h-0 relative">
               {/* Camada de fundo: wa-chat-pattern como irmão do scroll, não pai */}
               <div className="wa-chat-pattern absolute inset-0" aria-hidden="true" />
@@ -591,7 +591,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
                             const newPos = start + data.emoji.length;
                             textarea.setSelectionRange(newPos, newPos);
                           }, 0);
-                          // Não fecha — permite escolher vários
+                          // Não fecha - permite escolher vários
                         }}
                         height={380}
                         width={320}
@@ -766,7 +766,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
         onStart={phone => setSelectedPhone(phone)}
       />
 
-      {/* Gerenciador de templates — aberto como modal pelo header do Inbox */}
+      {/* Gerenciador de templates - aberto como modal pelo header do Inbox */}
       {templatesOpen && (
         <div className="fixed inset-0 z-[70] flex items-start justify-center bg-black/50 p-4 overflow-y-auto">
           <div className="w-full max-w-3xl my-8" onClick={(e) => e.stopPropagation()}>

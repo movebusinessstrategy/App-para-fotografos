@@ -8,7 +8,7 @@ import { useApi, refreshApi } from "../../utils/useApi";
 import { Deal, PipelineStage, Client } from "../../types";
 
 // Lazy: cada tab vira um chunk próprio, baixado só quando o usuário clicar.
-// FunilTab fica eager porque é a tab default (Kanban) — render instantâneo.
+// FunilTab fica eager porque é a tab default (Kanban) - render instantâneo.
 const AnalisesTab = lazy(() => import("./AnalisesTab").then(m => ({ default: m.AnalisesTab })));
 const HistoricoTab = lazy(() => import("./HistoricoTab").then(m => ({ default: m.HistoricoTab })));
 const InboxView = lazy(() => import("../../features/chat/components/InboxView").then(m => ({ default: m.InboxView })));
@@ -46,7 +46,7 @@ export function VendasDashboard() {
 
   const [refreshing, setRefreshing] = useState(false);
 
-  // Substitui o antigo fetchData() — revalida tudo
+  // Substitui o antigo fetchData() - revalida tudo
   const fetchData = async (_options?: { silent?: boolean }) => {
     setRefreshing(true);
     try {
@@ -99,7 +99,7 @@ export function VendasDashboard() {
 
   return (
     <div className="flex flex-col flex-1 min-h-0 bg-gray-50 dark:bg-gray-900">
-      {/* Header — compacto no mobile */}
+      {/* Header - compacto no mobile */}
       <div className="flex items-center justify-between gap-2 px-3 sm:px-6 py-3 sm:py-4 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
         <div className="min-w-0 flex-1">
           <h1 className="text-base sm:text-xl font-bold text-gray-900 dark:text-white truncate">Vendas</h1>
@@ -138,7 +138,7 @@ export function VendasDashboard() {
         </div>
       </div>
 
-      {/* Tabs — scroll horizontal se necessário no mobile, sem quebrar */}
+      {/* Tabs - scroll horizontal se necessário no mobile, sem quebrar */}
       <div className="flex gap-1 px-3 sm:px-6 py-2 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex-shrink-0 overflow-x-auto">
         {TABS.map(({ id, label, icon: Icon }) => (
           <button
@@ -156,7 +156,7 @@ export function VendasDashboard() {
         ))}
       </div>
 
-      {/* Conteúdo — flex-1 para preencher o espaço restante */}
+      {/* Conteúdo - flex-1 para preencher o espaço restante */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {loading ? (
           <div className="flex items-center justify-center h-full">

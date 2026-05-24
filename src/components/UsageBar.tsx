@@ -26,7 +26,7 @@ export default function UsageBar({ resource, compact = false }: UsageBarProps) {
   const { data } = useApi<Record<Resource, LimitInfo>>("/api/billing/limits");
   const info = data?.[resource];
   if (!info) return null;
-  if (info.max < 0) return null; // ilimitado — não mostra nada
+  if (info.max < 0) return null; // ilimitado - não mostra nada
 
   const pct = Math.min(100, Math.round((info.current / info.max) * 100));
   const nearLimit = pct >= 80;

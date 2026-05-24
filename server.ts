@@ -9199,6 +9199,213 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ anivHoje, anivSemana, totalPendentes, taxaConversao });
   });
 
+  // ── Valor mínimo por tipo de ensaio ─────────────────────────────────────
+  // O usuário define o valor mínimo de cada tipo (Gestante R$1150, Newborn
+  // R$1550 etc) na tela de Configurações → Oportunidades. Usado como base
+  // pro cálculo de potencial de venda quando as oportunidades não têm
+  // estimated_value preenchido individualmente.
+  app.get('/api/tipo-ensaio-precos', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase
+      .from('tipo_ensaio_precos')
+      .select('*')
+      .eq('user_id', userId)
+      .order('tipo_nome');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  });
+
+  // Upsert em batch: recebe array [{tipo_nome, preco_minimo}, ...] e grava
+  // tudo de uma vez. Mantém tipos não enviados (não apaga ausentes — pra
+  // apagar, frontend manda preco_minimo: null que ignoramos).
+  app.put('/api/tipo-ensaio-precos', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const items: any[] = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (items.length === 0) return res.json({ ok: true, count: 0 });
+
+    const { data: existing } = await supabase
+      .from('tipo_ensaio_precos')
+      .select('id, tipo_nome')
+      .eq('user_id', userId);
+    const byLower = new Map<string, string>();
+    (existing || []).forEach((r: any) => byLower.set(r.tipo_nome.toLowerCase().trim(), r.id));
+
+    const toInsert: any[] = [];
+    const toUpdate: { id: string; preco: number; nome: string }[] = [];
+    for (const it of items) {
+      const nome = String(it.tipo_nome || '').trim();
+      const preco = Number(it.preco_minimo);
+      if (!nome || !isFinite(preco) || preco < 0) continue;
+      const existingId = byLower.get(nome.toLowerCase());
+      if (existingId) toUpdate.push({ id: existingId, preco, nome });
+      else toInsert.push({ user_id: userId, tipo_nome: nome, preco_minimo: preco });
+    }
+
+    if (toInsert.length) {
+      const { error } = await supabase.from('tipo_ensaio_precos').insert(toInsert);
+      if (error) return res.status(500).json({ error: error.message });
+    }
+    for (const u of toUpdate) {
+      await supabase.from('tipo_ensaio_precos')
+        .update({ preco_minimo: u.preco, tipo_nome: u.nome })
+        .eq('id', u.id)
+        .eq('user_id', userId);
+    }
+    res.json({ ok: true, inserted: toInsert.length, updated: toUpdate.length });
+  });
+
+  app.delete('/api/tipo-ensaio-precos/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { error } = await supabase.from('tipo_ensaio_precos')
+      .delete().eq('user_id', userId).eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+  });
+
+  // Totais por produto: agrega estimated_value das oportunidades agrupadas
+  // por produto vinculado (produto_id) ou por type. Pra oportunidades SEM
+  // valor preenchido, usa o "pacote mínimo" como estimativa. Ordem de fallback:
+  //   1. tipo_ensaio_precos.preco_minimo (configurado pelo usuário por tipo)
+  //   2. produtos.preco_venda (se a opp tem produto_id vinculado)
+  //   3. menor preço do catálogo (combos/servicos/produtos) cujo nome dê match
+  app.get('/api/oportunidades/totais-por-produto', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    // Tenta com produto_id; se a coluna não existir, refaz sem ela.
+    let opsRows: any[] | null = null;
+    let hasProductCol = true;
+    {
+      const r = await supabase.from('opportunities')
+        .select('produto_id, estimated_value, status, type')
+        .eq('user_id', userId);
+      if (r.error) {
+        hasProductCol = false;
+        const r2 = await supabase.from('opportunities')
+          .select('estimated_value, status, type')
+          .eq('user_id', userId);
+        if (r2.error) return res.status(500).json({ error: r2.error.message });
+        opsRows = r2.data || [];
+      } else {
+        opsRows = r.data || [];
+      }
+    }
+
+    // Carrega catálogo + tipo_ensaio_precos (valores configurados pelo user
+    // por tipo de ensaio — fonte primária do "pacote mínimo").
+    const [prodsRes, servsRes, combosRes, tipoPrecosRes] = await Promise.all([
+      supabase.from('produtos').select('id, nome, preco_venda').eq('user_id', userId),
+      supabase.from('servicos').select('nome, preco_base').eq('user_id', userId),
+      supabase.from('combos').select('nome, preco_final').eq('user_id', userId),
+      supabase.from('tipo_ensaio_precos').select('tipo_nome, preco_minimo').eq('user_id', userId)
+        .then(r => r.error ? { data: [] } : r),
+    ]);
+
+    // Map case-insensitive: tipo_nome.lower() → preço mínimo
+    const tipoMinPrice = new Map<string, number>();
+    (tipoPrecosRes.data || []).forEach((t: any) => {
+      const key = (t.tipo_nome || '').toString().trim().toLowerCase();
+      const preco = Number(t.preco_minimo) || 0;
+      if (key && preco > 0) tipoMinPrice.set(key, preco);
+    });
+
+    const prodMap = new Map<string, { nome: string; preco: number }>();
+    (prodsRes.data || []).forEach((p: any) => {
+      prodMap.set(p.id, { nome: p.nome, preco: Number(p.preco_venda) || 0 });
+    });
+
+    // minPriceByKeyword: pra cada primeira palavra do nome de qualquer item
+    // do catálogo, guarda o menor preço encontrado. Usado como fallback
+    // quando a oportunidade não tem estimated_value e o nome do type/produto
+    // começa com essa palavra (ex: type "Newborn Premium" → match com combo
+    // "Newborn Basic" pelo prefixo "newborn").
+    const minPriceByKeyword = new Map<string, number>();
+    const addToLookup = (nome: string, preco: number) => {
+      if (!nome || !(preco > 0)) return;
+      const key = nome.trim().toLowerCase().split(/\s+/)[0];
+      if (!key) return;
+      const cur = minPriceByKeyword.get(key);
+      if (cur === undefined || preco < cur) minPriceByKeyword.set(key, preco);
+    };
+    (combosRes.data || []).forEach((c: any) => addToLookup(c.nome, Number(c.preco_final)));
+    (servsRes.data || []).forEach((s: any) => addToLookup(s.nome, Number(s.preco_base)));
+    (prodsRes.data || []).forEach((p: any) => addToLookup(p.nome, Number(p.preco_venda)));
+
+    const lookupPrice = (name: string): number => {
+      if (!name) return 0;
+      const k = name.trim().toLowerCase().split(/\s+/)[0];
+      return k ? (minPriceByKeyword.get(k) || 0) : 0;
+    };
+
+    const PENDING = new Set(['pendente', 'future', 'active', 'urgent', 'contatado', 'negociando']);
+    const CONVERTED = new Set(['em_kanban', 'converted', 'convertido']);
+
+    type Bucket = {
+      produto_id: string | null;
+      produto_nome: string;
+      total_estimado: number;
+      total_convertido: number;
+      qtd_aberta: number;
+      qtd_convertida: number;
+      usando_estimativa: boolean;  // true se ao menos uma opp usou fallback
+      preco_base: number | null;    // preço-base usado no fallback (pacote mínimo)
+    };
+    const buckets = new Map<string, Bucket>();
+
+    for (const op of opsRows) {
+      const tipo = (op.type || '').toString();
+      const hasProd = hasProductCol && op.produto_id;
+      const prodInfo = hasProd ? prodMap.get(op.produto_id) : null;
+      const key = hasProd ? `p:${op.produto_id}` : `t:${tipo || '__sem_tipo__'}`;
+      const nome = hasProd
+        ? (prodInfo?.nome || tipo || 'Produto removido')
+        : (tipo || 'Sem categoria');
+
+      // Pacote mínimo pra esse bucket. Ordem de prioridade:
+      //   1. tipo_ensaio_precos pelo type (configurado manualmente pelo user)
+      //   2. preço do produto vinculado (se opp.produto_id existe)
+      //   3. lookup no catálogo (combos/servicos/produtos) pela primeira palavra do nome
+      const tipoKey = (tipo || '').toLowerCase().trim();
+      const tipoConfigured = tipoMinPrice.get(tipoKey) || 0;
+      const precoBase = tipoConfigured > 0
+        ? tipoConfigured
+        : (prodInfo?.preco && prodInfo.preco > 0)
+          ? prodInfo.preco
+          : lookupPrice(nome);
+
+      const bucket = buckets.get(key) || {
+        produto_id: hasProd ? op.produto_id : null,
+        produto_nome: nome,
+        total_estimado: 0,
+        total_convertido: 0,
+        qtd_aberta: 0,
+        qtd_convertida: 0,
+        usando_estimativa: false,
+        preco_base: precoBase > 0 ? precoBase : null,
+      };
+
+      const valorReal = Number(op.estimated_value) || 0;
+      const valor = valorReal > 0 ? valorReal : precoBase;
+      if (valorReal <= 0 && precoBase > 0) bucket.usando_estimativa = true;
+
+      if (PENDING.has(op.status)) {
+        bucket.total_estimado += valor;
+        bucket.qtd_aberta += 1;
+      } else if (CONVERTED.has(op.status)) {
+        bucket.total_convertido += valor;
+        bucket.qtd_convertida += 1;
+      }
+      buckets.set(key, bucket);
+    }
+
+    const list = Array.from(buckets.values())
+      .sort((a, b) => (b.total_estimado + b.total_convertido) - (a.total_estimado + a.total_convertido));
+    res.json(list);
+  });
+
   // Aniversariantes (mães e filhos)
   app.get('/api/oportunidades/aniversariantes', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
@@ -9710,7 +9917,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
             messaging_product: 'whatsapp',
             to: '5543988416682',
             type: 'text',
-            text: { body: 'Teste diagnóstico FotoMOVE' },
+            text: { body: 'Teste diagnóstico CRM Trilha' },
           }),
         }
       );
@@ -10552,10 +10759,142 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ ok: true });
   });
 
+  // ── Custom Fields (campos personalizados de cadastro de cliente) ─────────
+  // Define a estrutura dos campos extras que cada usuário quer no cliente.
+  // Os VALORES por cliente ficam em clients.custom_fields_data (jsonb).
+  const VALID_FIELD_TYPES = new Set(['text', 'date', 'number', 'select', 'textarea']);
+
+  app.get('/api/custom-fields', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase
+      .from('custom_fields')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('archived', false)
+      .order('sort_order', { ascending: true })
+      .order('created_at', { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  });
+
+  app.post('/api/custom-fields', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const body = req.body || {};
+    if (!body.label || typeof body.label !== 'string') {
+      return res.status(400).json({ error: 'label is required' });
+    }
+    const fieldType = body.field_type || 'text';
+    if (!VALID_FIELD_TYPES.has(fieldType)) {
+      return res.status(400).json({ error: 'invalid field_type' });
+    }
+    // Slug pra field_key: lowercase, sem acento, sem espaço
+    const slug = (body.field_key || body.label)
+      .toString()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-zA-Z0-9_]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .toLowerCase()
+      .slice(0, 60);
+    if (!slug) return res.status(400).json({ error: 'invalid field_key' });
+
+    const { data, error } = await supabase
+      .from('custom_fields')
+      .insert({
+        user_id: userId,
+        field_key: slug,
+        label: body.label.trim(),
+        field_type: fieldType,
+        options: Array.isArray(body.options) ? body.options : [],
+        required: !!body.required,
+        sort_order: Number(body.sort_order) || 0,
+      })
+      .select()
+      .single();
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'Já existe um campo com essa chave' });
+      return res.status(500).json({ error: error.message });
+    }
+    res.json(data);
+  });
+
+  app.put('/api/custom-fields/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const body = req.body || {};
+    const patch: any = {};
+    if (typeof body.label === 'string') patch.label = body.label.trim();
+    if (typeof body.field_type === 'string') {
+      if (!VALID_FIELD_TYPES.has(body.field_type)) {
+        return res.status(400).json({ error: 'invalid field_type' });
+      }
+      patch.field_type = body.field_type;
+    }
+    if (Array.isArray(body.options)) patch.options = body.options;
+    if (typeof body.required === 'boolean') patch.required = body.required;
+    if (typeof body.sort_order === 'number') patch.sort_order = body.sort_order;
+    if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'nothing to update' });
+
+    const { data, error } = await supabase
+      .from('custom_fields')
+      .update(patch)
+      .eq('user_id', userId)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.delete('/api/custom-fields/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    // Soft delete via archived=true — preserva os valores já preenchidos
+    // em clients.custom_fields_data; só esconde do formulário.
+    const { error } = await supabase
+      .from('custom_fields')
+      .update({ archived: true })
+      .eq('user_id', userId)
+      .eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+  });
+
   // ── Contract Templates (modelos de contrato) ──────────────────────────────
   app.get('/api/contract-templates', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
+
+    // Auto-provisão do template padrão pra conta nova: se a flag
+    // default_template_provisioned ainda for false, insere 1 modelo
+    // genérico e marca a flag. Idempotente — se o usuário apagar
+    // depois, NÃO recria (a flag continua true).
+    const { data: settings } = await supabase
+      .from('studio_settings')
+      .select('default_template_provisioned')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!settings?.default_template_provisioned) {
+      try {
+        const { DEFAULT_TEMPLATE } = await import('./lib/default-contract-template.js');
+        await supabase.from('contract_templates').insert({
+          user_id: userId,
+          name: DEFAULT_TEMPLATE.name,
+          category: DEFAULT_TEMPLATE.category,
+          body: DEFAULT_TEMPLATE.body,
+          default_data: DEFAULT_TEMPLATE.default_data,
+          is_default: DEFAULT_TEMPLATE.is_default,
+        });
+        await supabase
+          .from('studio_settings')
+          .upsert({ user_id: userId, default_template_provisioned: true }, { onConflict: 'user_id' });
+      } catch (err) {
+        console.error('[contract-templates] auto-provision falhou:', err);
+      }
+    }
+
     const { data, error } = await supabase
       .from('contract_templates')
       .select('*')
@@ -10640,49 +10979,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ ok: true });
   });
 
-  // Bulk seed: importa N modelos de uma vez. Pula nomes já existentes
-  // (mesma categoria + mesmo nome no user) — idempotente.
-  app.post('/api/contract-templates/seed', requireAuth, async (req, res) => {
-    const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
-    const items: any[] = Array.isArray(req.body?.templates) ? req.body.templates : [];
-    if (items.length === 0) return res.status(400).json({ error: 'templates array required' });
-
-    const { data: existing } = await supabase
-      .from('contract_templates')
-      .select('name, category')
-      .eq('user_id', userId);
-    const existingKeys = new Set(
-      (existing || []).map((t: any) => `${t.category}::${t.name}`)
-    );
-
-    const toInsert = items
-      .filter(it => it && it.name && it.category && it.body)
-      .filter(it => !existingKeys.has(`${it.category}::${it.name}`))
-      .map(it => ({
-        user_id: userId,
-        name: String(it.name).trim(),
-        category: String(it.category).trim(),
-        body: String(it.body),
-        default_data: it.default_data || {},
-        is_default: !!it.is_default,
-        is_legacy: !!it.is_legacy,
-      }));
-
-    if (toInsert.length === 0) {
-      return res.json({ inserted: 0, skipped: items.length });
-    }
-
-    const { data, error } = await supabase
-      .from('contract_templates')
-      .insert(toInsert)
-      .select();
-    if (error) return res.status(500).json({ error: error.message });
-    res.json({
-      inserted: (data || []).length,
-      skipped: items.length - (data || []).length,
-    });
-  });
+  // Endpoint /api/contract-templates/seed (bulk import dos 24 modelos do
+  // estúdio) foi removido em 2026-05-23. Contas que já tinham importado
+  // mantêm os modelos no banco; contas novas começam sem modelos hardcoded
+  // e ganham 1 modelo padrão genérico via auto-provision em /api/contract-templates GET.
 
   // ── Autentique: send for signature ─────────────────────────────────────────
   // Creates a document via Autentique GraphQL API using the tenant's API key.

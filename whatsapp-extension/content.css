@@ -1,4 +1,4 @@
-/* ===== FOCALPOINT CRM — INTEGRADO AO WHATSAPP ===== */
+/* ===== FOCALPOINT CRM - INTEGRADO AO WHATSAPP ===== */
 
 /* ---- Kanban (cobre a área direita do WA) ---- */
 #fp-kanban {
@@ -17,6 +17,105 @@
 }
 #fp-kanban.fp-hidden { display: none !important; }
 .fp-hidden { display: none !important; }
+
+/* Quando o kanban (ou agenda/produção) está aberto, esconder a lista de
+   conversas do WhatsApp pra liberar espaço - a rail vertical da nav
+   esquerda fica visível pra alternar entre as views. */
+body.fp-kanban-open #side,
+body.fp-kanban-open #pane-side { display: none !important; }
+
+/* ---- Mini-painel lateral fixo na conversa (nome + etapa + cadastro avançado) ---- */
+#fp-contact-panel {
+  position: fixed;
+  top: 60px;
+  right: 0;
+  z-index: 460;
+  width: 280px;
+  max-height: calc(100vh - 80px);
+  background: #fff;
+  border-left: 1px solid #e9edef;
+  box-shadow: -4px 0 16px rgba(0,0,0,0.06);
+  display: flex;
+  flex-direction: column;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  color: #111b21;
+  transition: width 0.2s ease;
+}
+#fp-contact-panel.fp-expanded { width: 380px; }
+#fp-contact-panel.fp-hidden { display: none !important; }
+
+.fp-cp-head {
+  padding: 14px 16px;
+  border-bottom: 1px solid #f0f2f5;
+  display: flex; align-items: center; gap: 10px;
+}
+.fp-cp-avatar {
+  width: 38px; height: 38px; border-radius: 50%;
+  background: linear-gradient(135deg, #D4A94A 0%, #b08830 100%);
+  color: #fff; font-weight: 700; font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.fp-cp-head-info { flex: 1; min-width: 0; }
+.fp-cp-name {
+  font-weight: 700; font-size: 14px; color: #111b21;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fp-cp-phone {
+  font-size: 11px; color: #667781; margin-top: 2px;
+}
+.fp-cp-body {
+  padding: 12px 16px; flex: 1; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.fp-cp-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 12px;
+}
+.fp-cp-label { color: #667781; font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: 0.4px; }
+.fp-cp-stage-badge {
+  padding: 3px 9px; border-radius: 6px; font-size: 11px; font-weight: 700;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.fp-cp-stage-dot { width: 6px; height: 6px; border-radius: 50%; }
+.fp-cp-btn {
+  width: 100%;
+  padding: 8px 12px; border-radius: 8px; border: 1px solid #e9edef;
+  background: #f7f8fa; color: #111b21; cursor: pointer;
+  font-size: 12px; font-weight: 600; font-family: inherit;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  transition: background 0.15s;
+}
+.fp-cp-btn:hover { background: #e9edef; }
+.fp-cp-btn-primary { background: #00a884; color: #fff; border-color: #00a884; }
+.fp-cp-btn-primary:hover { background: #008f6f; }
+
+.fp-cp-field { display: flex; flex-direction: column; gap: 4px; }
+.fp-cp-field label {
+  font-size: 10px; font-weight: 700; color: #667781;
+  text-transform: uppercase; letter-spacing: 0.4px;
+}
+.fp-cp-field input,
+.fp-cp-field select,
+.fp-cp-field textarea {
+  width: 100%;
+  padding: 7px 10px; font-size: 12px; font-family: inherit;
+  border: 1px solid #e9edef; border-radius: 6px;
+  background: #fff; color: #111b21; outline: none;
+}
+.fp-cp-field input:focus,
+.fp-cp-field select:focus,
+.fp-cp-field textarea:focus { border-color: #00a884; }
+.fp-cp-field textarea { resize: vertical; min-height: 50px; }
+
+.fp-cp-section-title {
+  font-size: 10px; font-weight: 700; color: #667781;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  padding: 4px 0; border-top: 1px solid #f0f2f5; margin-top: 4px;
+}
+
+body.fp-kanban-open #fp-contact-panel { display: none !important; }
 
 /* ---- Agenda (overlay estilo Google Calendar) ---- */
 #fp-agenda {
@@ -155,7 +254,7 @@
 }
 #fp-ag-weekdays span { padding: 10px 8px; }
 
-/* Grid principal — célula tipo Google */
+/* Grid principal - célula tipo Google */
 #fp-ag-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
@@ -237,7 +336,7 @@
 }
 .fp-ag-chip-more:hover { color: #1a73e8; }
 
-/* Painel lateral/inferior — lista do dia selecionado */
+/* Painel lateral/inferior - lista do dia selecionado */
 #fp-ag-day-list {
   background: #fff;
   border-top: 1px solid #e8eaed;
@@ -640,11 +739,11 @@
 }
 .fp-chat-task-new:hover { background: #008f6f; }
 
-/* FAB legado — removido. Substituído pela rail vertical (#fp-rail). */
+/* FAB legado - removido. Substituído pela rail vertical (#fp-rail). */
 #fp-fab { display: none !important; }
 
-/* ─── Rail nativa — botões injetados DENTRO da sidebar do WhatsApp ───────── */
-/* Não usa background/border — herda do container do WA pra parecer nativo */
+/* ─── Rail nativa - botões injetados DENTRO da sidebar do WhatsApp ───────── */
+/* Não usa background/border - herda do container do WA pra parecer nativo */
 .fp-rail-nat {
   display: flex;
   flex-direction: column;
@@ -869,7 +968,7 @@
 }
 .fpc-open:hover { text-decoration: underline; }
 
-/* Botão de "foguete" — follow-up em massa no header da coluna */
+/* Botão de "foguete" - follow-up em massa no header da coluna */
 .fpc-meta-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .fpc-blast {
   display: inline-flex; align-items: center; justify-content: center;
@@ -1097,7 +1196,7 @@
 }
 .fp-mw-stop:hover { background: #fee2e2; color: #b91c1c; }
 
-/* Follow-up — destacado em pill verde pra reforçar a ação primária da etapa */
+/* Follow-up - destacado em pill verde pra reforçar a ação primária da etapa */
 .fpc-followup {
   background: #00a884;
   color: #fff !important;
@@ -1782,9 +1881,9 @@
 }
 
 /* ============================================================ */
-/* ===== TAREFAS — painel lateral à direita (não cobre chat) === */
+/* ===== TAREFAS - painel lateral à direita (não cobre chat) === */
 /* ============================================================ */
-/* Diferente do Funil/Agenda: Tarefas é um painel "auxiliar" — você
+/* Diferente do Funil/Agenda: Tarefas é um painel "auxiliar" - você
  * quer abrir e continuar lendo as mensagens. Por isso vai pra direita
  * em vez de tomar a área toda do chat. */
 #fp-tasks {
@@ -2027,7 +2126,7 @@ body.fp-tasks-open #main {
 }
 
 /* ============================================================ */
-/* ===== PRODUÇÃO — pastas (tabs) + kanban estilo app web ==== */
+/* ===== PRODUÇÃO - pastas (tabs) + kanban estilo app web ==== */
 /* ============================================================ */
 #fp-production {
   position: fixed;
@@ -2593,7 +2692,7 @@ body.fp-tasks-open #main {
   color: #92400e;
 }
 
-/* ─── Time grid (Semana / Dia) — estilo Google Calendar ─────────────────── */
+/* ─── Time grid (Semana / Dia) - estilo Google Calendar ─────────────────── */
 .fp-ag-tg-header {
   display: grid;
   grid-template-columns: 60px repeat(7, 1fr);
@@ -2688,7 +2787,7 @@ body.fp-tasks-open #main {
   font-weight: 500;
   position: relative;
 }
-/* Marcador final "23:00" — fica colado no rodapé da coluna, sem ocupar altura */
+/* Marcador final "23:00" - fica colado no rodapé da coluna, sem ocupar altura */
 .fp-ag-tg-hour-end {
   position: absolute;
   bottom: -6px;
@@ -2709,7 +2808,7 @@ body.fp-tasks-open #main {
 }
 .fp-ag-tg-col:last-child { border-right: none; }
 
-/* Cada slot de 1h — alvo de clique pra "agendar" */
+/* Cada slot de 1h - alvo de clique pra "agendar" */
 .fp-ag-tg-slot {
   border-bottom: 1px solid #f1f3f4;
   cursor: pointer;
@@ -2737,7 +2836,7 @@ body.fp-tasks-open #main {
   line-height: 1;
 }
 
-/* Bloco de evento — posicionamento absoluto na coluna */
+/* Bloco de evento - posicionamento absoluto na coluna */
 .fp-ag-tg-event {
   position: absolute;
   left: 4px;
@@ -3096,7 +3195,7 @@ body.fp-tasks-open #main {
   background: #f0fdf4;
 }
 
-/* Linha vermelha "agora" — estilo Google Calendar */
+/* Linha vermelha "agora" - estilo Google Calendar */
 .fp-ag-tg-now {
   position: absolute;
   height: 2px;

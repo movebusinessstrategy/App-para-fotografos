@@ -67,13 +67,13 @@ export default function AuditLogPage() {
                       {r.action}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{r.target_email ?? "—"}</td>
+                  <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{r.target_email ?? "-"}</td>
                   <td className="px-4 py-3">
                     {Object.keys(r.metadata ?? {}).length > 0 ? (
                       <code className="text-xs bg-gray-50 dark:bg-gray-800 px-2 py-1 rounded">
                         {JSON.stringify(r.metadata)}
                       </code>
-                    ) : "—"}
+                    ) : "-"}
                   </td>
                 </tr>
               ))}

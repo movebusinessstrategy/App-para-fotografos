@@ -325,18 +325,18 @@ function ContractsList({ contracts, tab, onOpen, onAskDelete }: { contracts: Con
                   </p>
                 </td>
                 <td className="px-6 py-4 text-gray-600 dark:text-gray-300 text-sm">
-                  {c.contract_data?.serviceType || '—'}
+                  {c.contract_data?.serviceType || '-'}
                   {c.contract_data?.serviceDate && (
                     <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">{c.contract_data.serviceDate}</p>
                   )}
                 </td>
                 <td className="px-6 py-4 text-gray-500 dark:text-gray-400 text-sm">
-                  {total > 0 ? `${signedCount} de ${total}` : '—'}
+                  {total > 0 ? `${signedCount} de ${total}` : '-'}
                 </td>
                 <td className="px-6 py-4">
                   {tab === 'signed' ? (
                     <span className="text-sm text-gray-600 dark:text-gray-300">
-                      {c.signed_at ? format(new Date(c.signed_at), "dd/MM/yyyy", { locale: ptBR }) : '—'}
+                      {c.signed_at ? format(new Date(c.signed_at), "dd/MM/yyyy", { locale: ptBR }) : '-'}
                     </span>
                   ) : (
                     <ListStatusBadge status={c.status} />
@@ -694,7 +694,7 @@ function NewContractPicker({ onClose, onCreated, onError }: { onClose: () => voi
                     <div className="min-w-0 flex-1">
                       <p className="font-medium text-gray-900 dark:text-white text-sm truncate">{c.name || 'Sem nome'}</p>
                       <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
-                        {c.phone || c.email || '—'}
+                        {c.phone || c.email || '-'}
                         {c.jobs && c.jobs.length > 0 && (
                           <span className="ml-2 inline-flex items-center gap-1 text-gray-400">
                             <Briefcase size={9} /> {c.jobs.length}
@@ -809,7 +809,7 @@ function SettingsForm({ onNotify }: { onNotify: (kind: ToastKind, message: strin
           setData({
             ...EMPTY_SETTINGS,
             ...d,
-            autentique_api_key: '', // never pre-fill — user re-enters if changing
+            autentique_api_key: '', // never pre-fill - user re-enters if changing
           });
         }
       })
@@ -970,7 +970,7 @@ function SettingsForm({ onNotify }: { onNotify: (kind: ToastKind, message: strin
               onChange={e => set('autentique_sandbox', e.target.checked)}
               className="rounded border-gray-300 text-gold-600 focus:ring-gold-500"
             />
-            <span className="text-sm text-gray-700 dark:text-gray-200">Usar modo sandbox (testes — não envia e-mails reais)</span>
+            <span className="text-sm text-gray-700 dark:text-gray-200">Usar modo sandbox (testes - não envia e-mails reais)</span>
           </label>
         </div>
       </section>

@@ -67,7 +67,7 @@ export default function JobsPage() {
     variant?: "danger" | "warning";
   }>({ open: false, onConfirm: () => {}, title: "", message: "" });
 
-  // Substitui o antigo fetchData() — revalida tudo de uma vez.
+  // Substitui o antigo fetchData() - revalida tudo de uma vez.
   const refreshAll = () => {
     mutateJobs();
     refreshApi("/api/clients");
@@ -280,7 +280,7 @@ export default function JobsPage() {
           </div>
         </div>
 
-        {/* Filters — only for Kanban/List job views */}
+        {/* Filters - only for Kanban/List job views */}
         {activeTab !== "gerencia" && activeTab !== "tarefas" && activeTab !== "vendas" && <div className="flex flex-wrap items-center gap-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-3 shadow-sm">
           {/* Search */}
           <div className="relative flex-1 min-w-[200px]">
@@ -337,7 +337,7 @@ export default function JobsPage() {
           />
         )}
 
-        {/* Content — funil / lista */}
+        {/* Content - funil / lista */}
         {activeTab !== "gerencia" && activeTab !== "tarefas" && activeTab !== "vendas" && (activeTab === "funil" ? (
           processes.length > 0 ? (
             <ProductionBoard
@@ -415,7 +415,7 @@ export default function JobsPage() {
                       </td>
                       <td className="px-6 py-4 text-gray-600 dark:text-gray-300 text-sm">{job.job_type}</td>
                       <td className="px-6 py-4 text-gray-500 dark:text-gray-400 text-sm">
-                        {jobDate ? format(jobDate, "dd/MM/yyyy", { locale: ptBR }) : "—"}
+                        {jobDate ? format(jobDate, "dd/MM/yyyy", { locale: ptBR }) : "-"}
                         {job.job_time && <span className="text-xs text-gray-400"> · {job.job_time}</span>}
                       </td>
                       <td className="px-6 py-4 font-semibold text-gray-900 dark:text-white text-sm">
@@ -435,7 +435,7 @@ export default function JobsPage() {
                             )}
                           </div>
                         ) : (
-                          <span className="text-xs text-gray-400">—</span>
+                          <span className="text-xs text-gray-400">-</span>
                         )}
                       </td>
                       <td className="px-6 py-4">
@@ -509,7 +509,7 @@ export default function JobsPage() {
         />
       )}
 
-      {/* Pacote de acompanhamento — gera vários trabalhos de uma vez */}
+      {/* Pacote de acompanhamento - gera vários trabalhos de uma vez */}
       {showPacoteModal && (
         <PacoteAcompanhamentoModal
           clients={clients.map((c) => ({ id: c.id, name: c.name }))}

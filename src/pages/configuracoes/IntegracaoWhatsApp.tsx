@@ -173,7 +173,7 @@ export default function IntegracaoWhatsApp() {
           ) : !connected ? (
             <div className="space-y-3">
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                A conexão é feita via Meta (Facebook) — você vai precisar autorizar o app com sua conta comercial.
+                A conexão é feita via Meta (Facebook) - você vai precisar autorizar o app com sua conta comercial.
               </p>
               <button
                 onClick={connect}

@@ -67,7 +67,7 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
     }
   }, [open, currentMemberId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Catálogos via SWR — cache compartilhado entre componentes
+  // Catálogos via SWR - cache compartilhado entre componentes
   const { data: produtosData } = useApi<any[]>(open ? "/api/produtos" : null);
   const { data: servicosData } = useApi<any[]>(open ? "/api/servicos" : null);
   const { data: combosData } = useApi<any[]>(open ? "/api/combos" : null);

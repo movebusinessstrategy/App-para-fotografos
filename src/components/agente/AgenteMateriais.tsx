@@ -83,7 +83,7 @@ export default function AgenteMateriais() {
       </div>
       <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
         Os PDFs de pacotes e dicas, por nicho. São salvos automaticamente ao
-        enviar — não dependem do botão Salvar.
+        enviar - não dependem do botão Salvar.
       </p>
 
       {/* Adicionar */}

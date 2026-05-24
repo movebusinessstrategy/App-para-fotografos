@@ -1,6 +1,6 @@
 import React from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { Building2, CreditCard, Plug, Users, Shield, Target } from "lucide-react";
+import { Building2, CreditCard, Plug, Users, Shield, Target, FormInput } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 
 const SECTIONS = [
@@ -10,6 +10,7 @@ const SECTIONS = [
   { to: "/configuracoes/equipe",        label: "Equipe",                     icon: Users, ownerOnly: true },
   { to: "/configuracoes/permissoes",    label: "Permissões",                 icon: Shield, ownerOnly: true },
   { to: "/configuracoes/oportunidades", label: "Configurações de oportunidades", icon: Target, ownerOnly: false },
+  { to: "/configuracoes/campos-personalizados", label: "Campos personalizados", icon: FormInput, ownerOnly: false },
 ];
 
 export default function SettingsLayout() {

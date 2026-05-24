@@ -28,6 +28,7 @@ import {
 import ImportProgressModal, { ImportSummary } from "../components/ImportProgressModal";
 import JobFormModal from "../components/shared/JobFormModal";
 import ConfirmModal from "../components/shared/ConfirmModal";
+import { CustomFieldsForm } from "../components/clientes/CustomFieldsForm";
 import { LayoutOutletContext } from "../components/layout/AppLayout";
 import { authFetch } from "../utils/authFetch";
 import { useApi } from "../utils/useApi";
@@ -1302,6 +1303,9 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
     lead_source: initialClient?.lead_source || 'Instagram',
     status: initialClient?.status || 'active'
   });
+  const [customData, setCustomData] = useState<Record<string, any>>(
+    (initialClient as any)?.custom_fields_data || {}
+  );
 
   useEffect(() => {
     if (initialClient) {
@@ -1363,7 +1367,7 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
       const response = await authFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
+        body: JSON.stringify({ ...formData, custom_fields_data: customData })
       });
       
       if (!response.ok) {
@@ -1624,9 +1628,11 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                 </div>
               </div>
 
+              <CustomFieldsForm value={customData} onChange={setCustomData} />
+
               <div>
                 <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Observações</label>
-                <textarea 
+                <textarea
                   rows={3}
                   value={formData.notes}
                   onChange={e => setFormData({...formData, notes: e.target.value})}

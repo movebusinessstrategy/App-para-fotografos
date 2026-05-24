@@ -84,7 +84,7 @@ export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalP
   const telefone = (op as any).cliente_telefone || '';
   const dataFormatada = op.data_oportunidade
     ? new Date(op.data_oportunidade + 'T12:00:00').toLocaleDateString('pt-BR')
-    : '—';
+    : '-';
 
   const mensagemWpp =
     `Olá ${op.cliente_nome}! 😊\n\nPassando para falar sobre ${op.tipo}.\n` +
@@ -318,7 +318,7 @@ export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalP
             />
           </div>
 
-          {/* Converter em Job — mini form */}
+          {/* Converter em Job - mini form */}
           {showConvert && !terminal && (
             <form onSubmit={handleConverter} className="bg-gold-50 dark:bg-gold-500/10 rounded-xl p-4 space-y-3 border border-gold-100 dark:border-gold-500/20">
               <p className="text-sm font-semibold text-gold-700 dark:text-gold-300 flex items-center gap-2">
@@ -360,7 +360,7 @@ export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalP
             </form>
           )}
 
-          {/* Descartar — mini form */}
+          {/* Descartar - mini form */}
           {showLost && !terminal && (
             <div className="bg-red-50 dark:bg-red-500/10 rounded-xl p-4 space-y-3 border border-red-100 dark:border-red-500/20">
               <p className="text-sm font-semibold text-red-600 dark:text-red-400 flex items-center gap-2">
@@ -387,7 +387,7 @@ export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalP
             </div>
           )}
 
-          {/* Enviar para o Kanban — mini form */}
+          {/* Enviar para o Kanban - mini form */}
           {showKanban && !terminal && (
             <div className="bg-violet-50 dark:bg-violet-500/10 rounded-xl p-4 space-y-3 border border-violet-100 dark:border-violet-500/20">
               <p className="text-sm font-semibold text-violet-700 dark:text-violet-300 flex items-center gap-2">
@@ -457,7 +457,7 @@ export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalP
             </div>
           ) : (
             <div className="space-y-2">
-              {/* Kanban — ação principal */}
+              {/* Kanban - ação principal */}
               <button
                 onClick={() => { setShowKanban(v => !v); setShowLost(false); setShowConvert(false); }}
                 className={cn(

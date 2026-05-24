@@ -39,7 +39,7 @@ const ALL_NAV_ITEMS = [
   { to: "/contratos",     label: "Contratos",        icon: FileText,        module: "contratos" },
 ];
 
-// Item único de configurações — leva pra central com sidebar interna
+// Item único de configurações - leva pra central com sidebar interna
 const OWNER_ITEMS = [
   { to: "/configuracoes", label: "Configurações", icon: Settings },
 ];
@@ -73,7 +73,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
 
   return (
     <>
-      {/* Overlay — apenas mobile */}
+      {/* Overlay - apenas mobile */}
       {isOpen && (
         <div
           className="fixed inset-0 bg-black/50 z-40 lg:hidden"
@@ -92,17 +92,9 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
       >
         {/* Header */}
         <div className="p-6 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            {/* FotoMOVE icon — 4 curved quadrants */}
-            <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M17 4C17 4 7 5.5 4.5 17H17V4Z" fill="#F1C665"/>
-              <path d="M19 4C19 4 29 5.5 31.5 17H19V4Z" fill="#D4A94A"/>
-              <path d="M17 32C17 32 7 30.5 4.5 19H17V32Z" fill="#D4A94A"/>
-              <path d="M19 32C19 32 29 30.5 31.5 19H19V32Z" fill="#F1C665"/>
-            </svg>
-            <span className="text-xl font-extrabold tracking-tight text-gray-900 dark:text-white">
-              Foto<span style={{ color: "#D4A94A" }}>MOVE</span>
-            </span>
+          <div className="flex items-center">
+            <img src="/logo-light.png" alt="CRM Trilha" className="h-9 w-auto dark:hidden" />
+            <img src="/logo-dark.png" alt="CRM Trilha" className="h-9 w-auto hidden dark:block" />
           </div>
           <button
             onClick={onClose}
