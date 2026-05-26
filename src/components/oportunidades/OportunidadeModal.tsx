@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { Oportunidade } from '../../types';
 import { authFetch } from '../../utils/authFetch';
+import { useAuth } from '../../contexts/AuthContext';
 import { cn } from '../../utils/cn';
 
 // ─── Status pipeline ───────────────────────────────────────────────────────
@@ -57,6 +58,7 @@ interface OportunidadeModalProps {
 
 export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalProps) {
   const navigate = useNavigate();
+  const { isMember } = useAuth();
   const [status, setStatus] = useState(op.status);
   const [notas, setNotas] = useState(op.notas || '');
   const [valor, setValor] = useState(op.valor_proposta ? String(op.valor_proposta) : '');
@@ -88,7 +90,7 @@ export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalP
 
   const mensagemWpp =
     `Olá ${op.cliente_nome}! 😊\n\nPassando para falar sobre ${op.tipo}.\n` +
-    (valor ? `Valor: R$ ${Number(valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` : '') +
+    (!isMember && valor ? `Valor: R$ ${Number(valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` : '') +
     `\nQualquer dúvida, estou à disposição! 📸`;
 
   // ── Save notes/value ────────────────────────────────────────────────────
@@ -285,23 +287,25 @@ export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalP
             <span>Data prevista: <strong className="text-gray-900 dark:text-white">{dataFormatada}</strong></span>
           </div>
 
-          {/* Valor da proposta */}
-          <div>
-            <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2 block flex items-center gap-1.5">
-              <DollarSign size={12} />
-              Valor da Proposta
-            </label>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">R$</span>
-              <input
-                type="number"
-                placeholder="0,00"
-                value={valor}
-                onChange={e => setValor(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm"
-              />
+          {/* Valor da proposta — só admin/dono. Membro não vê. */}
+          {!isMember && (
+            <div>
+              <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2 block flex items-center gap-1.5">
+                <DollarSign size={12} />
+                Valor da Proposta
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">R$</span>
+                <input
+                  type="number"
+                  placeholder="0,00"
+                  value={valor}
+                  onChange={e => setValor(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm"
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Notas */}
           <div>
@@ -331,11 +335,13 @@ export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalP
                   <input required type="date" value={jobDate} onChange={e => setJobDate(e.target.value)}
                     className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm" />
                 </div>
-                <div>
-                  <label className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1 block">Valor (R$)</label>
-                  <input type="number" placeholder="0" value={jobAmount} onChange={e => setJobAmount(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm" />
-                </div>
+                {!isMember && (
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1 block">Valor (R$)</label>
+                    <input type="number" placeholder="0" value={jobAmount} onChange={e => setJobAmount(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm" />
+                  </div>
+                )}
                 <div>
                   <label className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1 block">Pagamento</label>
                   <select value={jobPayment} onChange={e => setJobPayment(e.target.value)}
@@ -403,19 +409,21 @@ export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalP
                   className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm"
                 />
               </div>
-              <div>
-                <label className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1 block">Valor estimado (R$)</label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">R$</span>
-                  <input
-                    type="number"
-                    placeholder="0"
-                    value={kanbanValue}
-                    onChange={e => setKanbanValue(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm"
-                  />
+              {!isMember && (
+                <div>
+                  <label className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1 block">Valor estimado (R$)</label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">R$</span>
+                    <input
+                      type="number"
+                      placeholder="0"
+                      value={kanbanValue}
+                      onChange={e => setKanbanValue(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm"
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
               <p className="text-xs text-gray-500 dark:text-gray-400">
                 O negócio será criado na primeira etapa do funil vinculado a <strong>{op.cliente_nome}</strong>.
               </p>
