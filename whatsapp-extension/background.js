@@ -203,18 +203,6 @@ async function handleMessage(message) {
         body: JSON.stringify(message.data),
       });
     }
-    case 'GET_CLIENT_BY_ID': {
-      return apiFetch(`/api/clients/${message.clientId}`);
-    }
-    case 'UPDATE_CLIENT': {
-      return apiFetch(`/api/clients/${message.clientId}`, {
-        method: 'PUT',
-        body: JSON.stringify(message.data),
-      });
-    }
-    case 'GET_CUSTOM_FIELDS': {
-      return apiFetch('/api/custom-fields');
-    }
     case 'GET_TASKS_DATA': {
       // Junta tasks + team-members + me + clients numa chamada — a extensão
       // precisa dos quatro pra montar a tela (filtrar "minhas", mostrar

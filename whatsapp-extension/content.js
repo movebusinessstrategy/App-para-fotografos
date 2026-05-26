@@ -1997,7 +1997,6 @@
     chatPhone = null;
     chatDeal = null;
     removeChatStrip();
-    removeContactPanel();
     // Tenta clicar no logo do WhatsApp ou disparar Esc duas vezes (fecha pesquisa+chat)
     try { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); } catch {}
     try { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); } catch {}
@@ -4105,215 +4104,6 @@
     removeStageMenu();
   }
 
-  // ═══ Mini-painel lateral fixo na conversa ═════════════════════════════════
-  // Mostra avatar + nome + etapa atual em modo compacto. Botão "Cadastro
-  // avançado" expande pra mostrar form com campos do cliente + campos custom.
-  function removeContactPanel() {
-    document.getElementById('fp-contact-panel')?.remove();
-    document.body.classList.remove('fp-contact-panel-open', 'fp-contact-panel-expanded');
-  }
-
-  async function injectContactPanel(opts) {
-    // opts: { deal, phone, name, stages }
-    removeContactPanel();
-    const deal = opts.deal;
-    const phone = opts.phone || deal?.contact_phone || '';
-    const name = opts.name || deal?.contact_name || phone || 'Contato';
-    const stgs = opts.stages || [];
-    const stage = stgs.find(s => s.id === deal?.stage);
-    const c = stage ? C(stage.position ?? 0) : { bg: '#f0f2f5', text: '#667781', dot: '#8696a0' };
-    const initial = (name || '?').trim().charAt(0).toUpperCase();
-
-    const panel = document.createElement('div');
-    panel.id = 'fp-contact-panel';
-    panel.innerHTML = `
-      <div class="fp-cp-head">
-        <div class="fp-cp-avatar">${esc(initial)}</div>
-        <div class="fp-cp-head-info">
-          <div class="fp-cp-name" title="${esc(name)}">${esc(name)}</div>
-          <div class="fp-cp-phone">${esc(formatPhoneDisplay(phone))}</div>
-        </div>
-      </div>
-      <div class="fp-cp-body" id="fp-cp-body">
-        <div class="fp-cp-row">
-          <span class="fp-cp-label">Etapa</span>
-          ${stage
-            ? `<span class="fp-cp-stage-badge" style="background:${c.bg};color:${c.text}">
-                 <span class="fp-cp-stage-dot" style="background:${c.dot}"></span>
-                 ${esc(stage.name)}
-               </span>`
-            : `<span style="font-size:11px;color:#8696a0">Sem deal</span>`
-          }
-        </div>
-        <button class="fp-cp-btn fp-cp-btn-primary" id="fp-cp-expand">
-          ${deal ? '✎ Cadastro avançado' : '＋ Adicionar ao pipeline'}
-        </button>
-      </div>
-    `;
-    document.body.appendChild(panel);
-    document.body.classList.add('fp-contact-panel-open');
-
-    const btn = panel.querySelector('#fp-cp-expand');
-    btn?.addEventListener('click', () => {
-      if (!deal) {
-        // Sem deal — delega pro botão "Criar com dados" da strip horizontal.
-        const stripBtn = document.getElementById('fp-strip-add-details');
-        stripBtn?.click();
-        return;
-      }
-      if (panel.classList.contains('fp-expanded')) {
-        // colapsa de volta
-        panel.classList.remove('fp-expanded');
-        document.body.classList.remove('fp-contact-panel-expanded');
-        renderCollapsedBody(panel, deal, stgs);
-      } else {
-        panel.classList.add('fp-expanded');
-        document.body.classList.add('fp-contact-panel-expanded');
-        renderExpandedBody(panel, deal, stgs);
-      }
-    });
-  }
-
-  function renderCollapsedBody(panel, deal, stgs) {
-    const stage = stgs.find(s => s.id === deal?.stage);
-    const c = stage ? C(stage.position ?? 0) : { bg: '#f0f2f5', text: '#667781', dot: '#8696a0' };
-    const body = panel.querySelector('#fp-cp-body');
-    if (!body) return;
-    body.innerHTML = `
-      <div class="fp-cp-row">
-        <span class="fp-cp-label">Etapa</span>
-        ${stage
-          ? `<span class="fp-cp-stage-badge" style="background:${c.bg};color:${c.text}">
-               <span class="fp-cp-stage-dot" style="background:${c.dot}"></span>
-               ${esc(stage.name)}
-             </span>`
-          : `<span style="font-size:11px;color:#8696a0">Sem deal</span>`
-        }
-      </div>
-      <button class="fp-cp-btn fp-cp-btn-primary" id="fp-cp-expand-again">
-        ✎ Cadastro avançado
-      </button>
-    `;
-    body.querySelector('#fp-cp-expand-again')?.addEventListener('click', () => {
-      panel.classList.add('fp-expanded');
-      document.body.classList.add('fp-contact-panel-expanded');
-      renderExpandedBody(panel, deal, stgs);
-    });
-  }
-
-  async function renderExpandedBody(panel, deal, stgs) {
-    const body = panel.querySelector('#fp-cp-body');
-    if (!body) return;
-
-    // Loading enquanto busca cliente + campos custom
-    body.innerHTML = `<div style="padding:20px 0;text-align:center;color:#8696a0;font-size:12px">Carregando...</div>`;
-
-    let client = null;
-    let customFields = [];
-    try {
-      const [clientRes, fieldsRes] = await Promise.all([
-        deal?.client_id ? bg({ type: 'GET_CLIENT_BY_ID', clientId: deal.client_id }).catch(() => null) : Promise.resolve(null),
-        bg({ type: 'GET_CUSTOM_FIELDS' }).catch(() => []),
-      ]);
-      client = clientRes && !clientRes.error ? clientRes : null;
-      customFields = Array.isArray(fieldsRes) ? fieldsRes : [];
-    } catch {
-      // segue sem dados extras
-    }
-
-    const customData = client?.custom_fields_data || {};
-    const stage = stgs.find(s => s.id === deal?.stage);
-
-    const customFieldsHtml = customFields.map(f => {
-      const val = customData[f.field_key] ?? '';
-      if (f.field_type === 'select') {
-        return `
-          <div class="fp-cp-field">
-            <label>${esc(f.label)}</label>
-            <select data-cf="${esc(f.field_key)}">
-              <option value="">—</option>
-              ${(f.options || []).map(o => `<option value="${esc(o)}"${val === o ? ' selected' : ''}>${esc(o)}</option>`).join('')}
-            </select>
-          </div>`;
-      }
-      if (f.field_type === 'textarea') {
-        return `
-          <div class="fp-cp-field">
-            <label>${esc(f.label)}</label>
-            <textarea data-cf="${esc(f.field_key)}">${esc(val)}</textarea>
-          </div>`;
-      }
-      const inputType = f.field_type === 'date' ? 'date' : f.field_type === 'number' ? 'number' : 'text';
-      return `
-        <div class="fp-cp-field">
-          <label>${esc(f.label)}</label>
-          <input type="${inputType}" data-cf="${esc(f.field_key)}" value="${esc(val)}" />
-        </div>`;
-    }).join('');
-
-    body.innerHTML = `
-      <div class="fp-cp-field">
-        <label>Nome</label>
-        <input data-base="name" value="${esc(client?.name || deal?.contact_name || '')}" />
-      </div>
-      <div class="fp-cp-field">
-        <label>Telefone</label>
-        <input data-base="phone" value="${esc(client?.phone || deal?.contact_phone || '')}" />
-      </div>
-      <div class="fp-cp-field">
-        <label>E-mail</label>
-        <input type="email" data-base="email" value="${esc(client?.email || '')}" />
-      </div>
-      <div class="fp-cp-row" style="margin-top:4px">
-        <span class="fp-cp-label">Etapa</span>
-        ${stage
-          ? `<span class="fp-cp-stage-badge" style="background:${C(stage.position).bg};color:${C(stage.position).text}">
-               <span class="fp-cp-stage-dot" style="background:${C(stage.position).dot}"></span>
-               ${esc(stage.name)}
-             </span>`
-          : `<span style="font-size:11px;color:#8696a0">—</span>`
-        }
-      </div>
-      ${customFields.length > 0 ? `<div class="fp-cp-section-title">Campos personalizados</div>` : ''}
-      ${customFieldsHtml}
-      <div style="display:flex; gap:6px; margin-top:8px">
-        <button class="fp-cp-btn" id="fp-cp-collapse">↑ Recolher</button>
-        ${client ? `<button class="fp-cp-btn fp-cp-btn-primary" id="fp-cp-save">Salvar</button>` : ''}
-      </div>
-    `;
-
-    body.querySelector('#fp-cp-collapse')?.addEventListener('click', () => {
-      panel.classList.remove('fp-expanded');
-      document.body.classList.remove('fp-contact-panel-expanded');
-      renderCollapsedBody(panel, deal, stgs);
-    });
-
-    body.querySelector('#fp-cp-save')?.addEventListener('click', async () => {
-      if (!client) return;
-      const patch = { custom_fields_data: { ...customData } };
-      body.querySelectorAll('input[data-base], select[data-base], textarea[data-base]').forEach(el => {
-        patch[el.dataset.base] = el.value;
-      });
-      body.querySelectorAll('input[data-cf], select[data-cf], textarea[data-cf]').forEach(el => {
-        patch.custom_fields_data[el.dataset.cf] = el.value;
-      });
-      try {
-        await bg({ type: 'UPDATE_CLIENT', clientId: client.id, data: patch });
-        toast('Cadastro salvo');
-      } catch (err) {
-        toast(err.message || 'Erro ao salvar', true);
-      }
-    });
-  }
-
-  function formatPhoneDisplay(phone) {
-    const d = (phone || '').toString().replace(/\D/g, '');
-    if (!d) return '';
-    if (d.length === 13) return `+${d.slice(0,2)} (${d.slice(2,4)}) ${d.slice(4,9)}-${d.slice(9)}`;
-    if (d.length === 11) return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`;
-    return d;
-  }
-
   async function onChatOpened(phone) {
     const cleanPhone = digits(phone || '');
     const chatName = getWAChatName();
@@ -4347,7 +4137,6 @@
         chatDeal = cachedDeal;
         chatStages = stgsNow;
         injectChatStrip(chatDeal, chatStages);
-        injectContactPanel({ deal: chatDeal, phone: cleanPhone, name: chatName, stages: chatStages });
       }
 
       // Busca a versão completa (deal + etapas + tarefas) e atualiza.
@@ -4360,11 +4149,9 @@
       if (chatDeal) {
         injectChatStrip(chatDeal, chatStages);
         injectPendingTasksRow(chatDeal);
-        injectContactPanel({ deal: chatDeal, phone: cleanPhone, name: chatName, stages: chatStages });
       } else {
         // Contato sem deal — mostra strip mínima com botão "Adicionar"
         injectAddStrip(cleanPhone);
-        injectContactPanel({ deal: null, phone: cleanPhone, name: chatName, stages: chatStages });
       }
     } catch {
       // silencia — não atrapalha o chat
