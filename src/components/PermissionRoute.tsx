@@ -1,8 +1,8 @@
 import React from "react";
-import { useNavigate } from "react-router-dom";
-import { Shield, ArrowLeft } from "lucide-react";
+import { Navigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { Loader2 } from "lucide-react";
+import { getLandingRoute } from "../utils/landingRoute";
 
 interface PermissionRouteProps {
   children: React.ReactNode;
@@ -22,10 +22,14 @@ interface PermissionRouteProps {
  * - Platform admin sempre passa (override total).
  * - Membro: precisa de `permissions[module] !== false` (default = true).
  * - `ownerOnly`: bloqueia membros independente das permissões.
+ *
+ * Quando bloqueado, redireciona silenciosamente pra primeira rota acessível
+ * (ver [[landingRoute]]) — antes mostrava tela "Acesso restrito" com botão
+ * Voltar, mas isso quebrava o login (login → /dashboard sem permissão →
+ * tela de erro → Voltar → /login → loop).
  */
 export default function PermissionRoute({ children, module, ownerOnly }: PermissionRouteProps) {
   const { loading, user, isMember, isPlatformAdmin, canAccess } = useAuth();
-  const navigate = useNavigate();
 
   if (loading) {
     return (
@@ -47,32 +51,7 @@ export default function PermissionRoute({ children, module, ownerOnly }: Permiss
   const denied = ownerOnly || (module ? !canAccess(module) : false);
 
   if (denied) {
-    return (
-      <div className="min-h-[60vh] flex items-center justify-center p-6">
-        <div className="max-w-md w-full bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-8 text-center shadow-sm">
-          <div className="w-16 h-16 mx-auto rounded-full bg-red-50 dark:bg-red-900/20 flex items-center justify-center mb-4">
-            <Shield className="w-8 h-8 text-red-500" />
-          </div>
-          <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-2">
-            Acesso restrito
-          </h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">
-            {ownerOnly
-              ? "Essa área é restrita ao dono da conta."
-              : "Você não tem permissão pra acessar essa página."}
-          </p>
-          <p className="text-xs text-gray-400 dark:text-gray-500 mb-6">
-            Peça pro administrador liberar o acesso em <strong>Configurações &gt; Permissões</strong>.
-          </p>
-          <button
-            onClick={() => navigate(-1)}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-gold-500 hover:bg-gold-600 text-white rounded-lg text-sm font-semibold transition-colors"
-          >
-            <ArrowLeft size={14} /> Voltar
-          </button>
-        </div>
-      </div>
-    );
+    return <Navigate to={getLandingRoute(canAccess)} replace />;
   }
 
   return <>{children}</>;
