@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { Oportunidade } from '../../types';
 import { OportunidadeDetailDrawer } from './OportunidadeDetailDrawer';
+import { useAuth } from '../../contexts/AuthContext';
 import { cn } from '../../utils/cn';
 
 // ─── Priority config ─────────────────────────────────────────────────────────
@@ -64,6 +65,7 @@ interface OportunidadesListProps {
 }
 
 export function OportunidadesList({ data, loading, onSendToKanban, onDiscard, compact = false }: OportunidadesListProps) {
+  const { isMember } = useAuth();
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState<string | null>(null);
   const [filterTipo, setFilterTipo] = useState('');
@@ -280,7 +282,7 @@ export function OportunidadesList({ data, loading, onSendToKanban, onDiscard, co
                             {op.cliente_telefone}
                           </span>
                         )}
-                        {op.valor_proposta ? (
+                        {!isMember && op.valor_proposta ? (
                           <span className="text-emerald-600 dark:text-emerald-400 font-medium">
                             R$ {op.valor_proposta.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                           </span>

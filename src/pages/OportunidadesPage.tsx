@@ -12,12 +12,14 @@ import { useAniversariantes } from '../hooks/useAniversariantes';
 import { useOportunidades } from '../hooks/useOportunidades';
 import { oportunidadesApi } from '../services/api/oportunidades';
 import { authFetch } from '../utils/authFetch';
+import { useAuth } from '../contexts/AuthContext';
 import { Aniversariante, Oportunidade } from '../types';
 import { cn } from '../utils/cn';
 
 type Tab = 'aniversariantes' | 'newborn' | 'aniversario' | 'smash' | 'acompanhamentos' | 'todas' | 'filhos';
 
 export default function OportunidadesPage() {
+  const { isMember } = useAuth();
   const [tab, setTab] = useState<Tab>('aniversariantes');
   const [periodo, setPeriodo] = useState<'hoje' | 'semana' | 'mes'>('hoje');
   const [dashboard, setDashboard] = useState({ anivHoje: 0, anivSemana: 0, totalPendentes: 0, taxaConversao: 0 });
@@ -134,8 +136,9 @@ export default function OportunidadesPage() {
       {/* Dashboard Cards */}
       <DashboardCards {...dashboard} loading={dashLoading} />
 
-      {/* Totais agregados por produto: estimado em aberto vs convertido */}
-      <TotaisPorProduto />
+      {/* Totais agregados por produto — só admin/dono vê. Membros não devem
+          enxergar potencial de venda (decisão de negócio). */}
+      {!isMember && <TotaisPorProduto />}
 
       {/* Tabs */}
       <div className="flex gap-1 p-1 bg-gray-100 dark:bg-gray-800/60 rounded-xl w-fit flex-wrap">
