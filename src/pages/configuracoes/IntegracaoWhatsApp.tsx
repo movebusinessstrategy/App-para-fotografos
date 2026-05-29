@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ChevronLeft, MessageCircle, CheckCircle2, Phone, RefreshCw, RefreshCcw, Stethoscope } from "lucide-react";
+import { ChevronLeft, MessageCircle, CheckCircle2, Phone, RefreshCw, RefreshCcw, Stethoscope, Smartphone, Cloud } from "lucide-react";
 import { authFetch } from "../../utils/authFetch";
 import { ConfirmModal } from "../../components/ui/ConfirmModal";
 import { WhatsAppTemplatesManager } from "../../components/settings/WhatsAppTemplatesManager";
@@ -8,6 +8,7 @@ import { PhoneNumberPicker } from "./PhoneNumberPicker";
 import { DiagnosticPanel } from "./DiagnosticPanel";
 
 type Tab = "conexao" | "templates";
+type ConnectMode = "cloud_api" | "coexistence";
 
 interface WaAccount {
   phone_number: string | null;
@@ -20,7 +21,7 @@ export default function IntegracaoWhatsApp() {
   const [connected, setConnected] = useState(false);
   const [account, setAccount] = useState<WaAccount | null>(null);
   const [loading, setLoading] = useState(true);
-  const [connecting, setConnecting] = useState(false);
+  const [connecting, setConnecting] = useState<ConnectMode | null>(null);
   const [subscribing, setSubscribing] = useState(false);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [phonePickerOpen, setPhonePickerOpen] = useState(false);
@@ -60,36 +61,38 @@ export default function IntegracaoWhatsApp() {
     }
   }, []);
 
-  const connect = () => {
+  const connectMode = (mode: ConnectMode) => {
     const configId = import.meta.env.VITE_META_WA_CONFIG_ID;
     if (!configId) return alert("VITE_META_WA_CONFIG_ID não configurado no .env");
     const FB = (window as any).FB;
     if (!FB) return alert("SDK do Facebook não carregado. Tente recarregar a página.");
 
-    setConnecting(true);
+    const featureType = mode === "coexistence" ? "whatsapp_business_app_onboarding" : "";
+
+    setConnecting(mode);
     FB.login(
       (response: any) => {
-        if (response.authResponse?.accessToken) {
+        if (response.authResponse?.code) {
           authFetch("/api/meta/whatsapp/exchange-token", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ access_token: response.authResponse.accessToken }),
+            body: JSON.stringify({ code: response.authResponse.code, mode }),
           })
             .then(r => r.json())
             .then(data => {
               if (data.success) checkStatus();
               else alert("Erro ao conectar: " + (data.error || "desconhecido"));
             })
-            .finally(() => setConnecting(false));
+            .finally(() => setConnecting(null));
         } else {
-          setConnecting(false);
+          setConnecting(null);
         }
       },
       {
         config_id: configId,
-        response_type: "token",
+        response_type: "code",
         override_default_response_type: true,
-        extras: { setup: {}, featureType: "", sessionInfoVersion: "3" },
+        extras: { setup: {}, featureType, sessionInfoVersion: "3" },
       }
     );
   };
@@ -177,16 +180,38 @@ export default function IntegracaoWhatsApp() {
           ) : !connected ? (
             <div className="space-y-3">
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                A conexão é feita via Meta (Facebook) - você vai precisar autorizar o app com sua conta comercial.
+                A conexão é feita via Meta (Facebook) - você vai precisar autorizar o app com sua conta comercial. Escolha como quer conectar:
               </p>
-              <button
-                onClick={connect}
-                disabled={connecting}
-                className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg disabled:opacity-60"
-              >
-                {connecting ? <RefreshCw size={16} className="animate-spin" /> : <MessageCircle size={16} />}
-                {connecting ? "Conectando…" : "Conectar WhatsApp Business"}
-              </button>
+
+              {/* Botão primário: Coexistence */}
+              <div>
+                <button
+                  onClick={() => connectMode("coexistence")}
+                  disabled={connecting !== null}
+                  className="w-full sm:w-auto flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg disabled:opacity-60"
+                >
+                  {connecting === "coexistence" ? <RefreshCw size={16} className="animate-spin" /> : <Smartphone size={16} />}
+                  {connecting === "coexistence" ? "Conectando…" : "Conectar (mantém WhatsApp no celular)"}
+                </button>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Recomendado — Coexistence Mode oficial Meta
+                </p>
+              </div>
+
+              {/* Botão secundário: Cloud API tradicional */}
+              <div>
+                <button
+                  onClick={() => connectMode("cloud_api")}
+                  disabled={connecting !== null}
+                  className="w-full sm:w-auto flex items-center gap-2 px-5 py-2.5 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 font-semibold rounded-lg disabled:opacity-60"
+                >
+                  {connecting === "cloud_api" ? <RefreshCw size={16} className="animate-spin" /> : <Cloud size={16} />}
+                  {connecting === "cloud_api" ? "Conectando…" : "Conectar (substituir WhatsApp Business app)"}
+                </button>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Cloud API tradicional — número sai do celular
+                </p>
+              </div>
             </div>
           ) : (
             <div className="space-y-3">
