@@ -10388,6 +10388,497 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
   });
 
+  // Diagnóstico — roda 9 checks de saúde da conta WhatsApp Cloud sem
+  // chamar /messages nem nada que cobre. Só leitura.
+  app.post('/api/meta/whatsapp/diagnose', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    type Check = { id: string; label: string; ok: boolean; detail: string; fix_hint?: string };
+    const META_PANEL_REMINDER =
+      "Verifique no painel Meta (App > Webhooks > WhatsApp Business Account) se 'messages' está marcado nos campos do webhook. Sem isso, mesmo com app subscrito, nenhuma mensagem chega.";
+
+    const { data: acc, error: accErr } = await supabase
+      .from('whatsapp_business_accounts')
+      .select('id, waba_id, phone_number_id, phone_number, display_name, access_token, is_active, token_expires_at')
+      .eq('user_id', userId)
+      .order('connected_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (accErr || !acc) {
+      return res.status(400).json({
+        error: 'Nenhuma conta WhatsApp encontrada para este usuário',
+        meta_panel_reminder: META_PANEL_REMINDER,
+      });
+    }
+
+    const account = {
+      waba_id: acc.waba_id,
+      phone_number_id: acc.phone_number_id,
+      phone_number: acc.phone_number,
+      display_name: acc.display_name,
+    };
+
+    // Token pode estar cifrado ou plaintext
+    let decryptedToken: string | null = null;
+    let decryptError: string | null = null;
+    try {
+      decryptedToken = decryptIfNeeded(acc.access_token);
+      if (!decryptedToken) decryptError = 'decryptIfNeeded retornou vazio';
+    } catch (e: any) {
+      decryptError = e?.message || 'Erro desconhecido ao decifrar';
+    }
+
+    // Se não conseguimos decifrar, devolvemos só os checks que não dependem do token
+    if (!decryptedToken) {
+      const checks: Check[] = [
+        {
+          id: 'env_app_secret',
+          label: 'META_APP_SECRET configurado',
+          ok: !!process.env.META_APP_SECRET,
+          detail: process.env.META_APP_SECRET
+            ? 'Secret presente nas envs do servidor'
+            : 'META_APP_SECRET ausente — webhook HMAC rejeita TODOS os payloads do Meta com 403',
+          fix_hint: process.env.META_APP_SECRET
+            ? undefined
+            : 'Copie o App Secret de Meta App > Configurações > Básico e adicione como env var META_APP_SECRET (sem aspas, sem espaços). Reinicie o servidor.',
+        },
+        {
+          id: 'env_encryption_key',
+          label: 'WA_TOKEN_ENCRYPTION_KEY configurado',
+          ok: !!process.env.WA_TOKEN_ENCRYPTION_KEY,
+          detail: process.env.WA_TOKEN_ENCRYPTION_KEY
+            ? 'Chave de criptografia presente'
+            : 'WA_TOKEN_ENCRYPTION_KEY ausente — tokens estão salvos em plaintext no banco (aviso de segurança, não bloqueia funcionamento)',
+          fix_hint: process.env.WA_TOKEN_ENCRYPTION_KEY
+            ? undefined
+            : 'Gere uma chave aleatória de 32 bytes em base64 e adicione como WA_TOKEN_ENCRYPTION_KEY. Tokens novos serão cifrados; antigos continuam funcionando.',
+        },
+        {
+          id: 'token_decrypt',
+          label: 'Token pode ser decifrado',
+          ok: false,
+          detail: `Falha ao decifrar o token salvo: ${decryptError}. Provavelmente a env WA_TOKEN_ENCRYPTION_KEY foi alterada ou removida depois que o token foi salvo.`,
+          fix_hint: 'Restaure a WA_TOKEN_ENCRYPTION_KEY original OU peça o cliente reconectar via Embedded Signup para gerar um token novo com a chave atual.',
+        },
+        {
+          id: 'db_row_is_active',
+          label: 'Linha do banco está ativa',
+          ok: acc.is_active === true,
+          detail: acc.is_active
+            ? 'Row marcada como is_active=true — webhook lookup vai encontrar'
+            : 'Row está com is_active=false — webhook descarta mensagens silenciosamente (log diz "Nenhuma conta ativa")',
+          fix_hint: acc.is_active
+            ? undefined
+            : 'Faça o cliente refazer o select-number para reativar a row, OU rode UPDATE manual no banco setando is_active=true.',
+        },
+      ];
+
+      return res.json({ account, checks, meta_panel_reminder: META_PANEL_REMINDER });
+    }
+
+    const token = decryptedToken;
+    const authHeader = { Authorization: `Bearer ${token}` };
+    const GRAPH = 'https://graph.facebook.com/v21.0';
+
+    // Helpers que SEMPRE resolvem (capturam erros internamente)
+    const safeFetch = async (url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: any; networkError?: string }> => {
+      try {
+        const r = await fetch(url, init);
+        let data: any = null;
+        try {
+          data = await r.json();
+        } catch {
+          data = null;
+        }
+        return { ok: r.ok, status: r.status, data };
+      } catch (e: any) {
+        return { ok: false, status: 0, data: null, networkError: e?.message || 'Erro de rede' };
+      }
+    };
+
+    // ── 1. env_app_secret ──────────────────────────────────────────────────
+    const checkEnvAppSecret = async (): Promise<Check> => {
+      const has = !!process.env.META_APP_SECRET && process.env.META_APP_SECRET.trim().length > 0;
+      return {
+        id: 'env_app_secret',
+        label: 'META_APP_SECRET configurado',
+        ok: has,
+        detail: has
+          ? `Secret presente (${process.env.META_APP_SECRET!.trim().length} chars)`
+          : 'META_APP_SECRET ausente ou vazio — webhook HMAC rejeita TODOS os payloads do Meta com 403',
+        fix_hint: has
+          ? undefined
+          : 'Copie o App Secret de Meta App > Configurações > Básico e adicione como env var META_APP_SECRET (sem aspas, sem espaços, sem newline). Reinicie o servidor.',
+      };
+    };
+
+    // ── 2. env_encryption_key ──────────────────────────────────────────────
+    const checkEnvEncryptionKey = async (): Promise<Check> => {
+      const has = !!process.env.WA_TOKEN_ENCRYPTION_KEY;
+      return {
+        id: 'env_encryption_key',
+        label: 'WA_TOKEN_ENCRYPTION_KEY configurado',
+        ok: has,
+        detail: has
+          ? 'Chave de criptografia presente — tokens são cifrados em repouso'
+          : 'WA_TOKEN_ENCRYPTION_KEY ausente — tokens estão em plaintext no banco (aviso de segurança, não bloqueia funcionamento)',
+        fix_hint: has
+          ? undefined
+          : 'Gere uma chave aleatória de 32 bytes em base64 e adicione como WA_TOKEN_ENCRYPTION_KEY. Tokens novos serão cifrados automaticamente.',
+      };
+    };
+
+    // ── 3. token_valid (debug_token) ───────────────────────────────────────
+    let debugTokenData: any = null;
+    const checkTokenValid = async (): Promise<Check> => {
+      if (!process.env.META_APP_SECRET) {
+        return {
+          id: 'token_valid',
+          label: 'Token válido (debug_token)',
+          ok: false,
+          detail: 'Não foi possível verificar — META_APP_SECRET ausente, debug_token precisa de app_token',
+          fix_hint: 'Configure META_APP_SECRET primeiro.',
+        };
+      }
+      const appToken = `${META_APP_ID}|${META_APP_SECRET}`;
+      const r = await safeFetch(
+        `${GRAPH}/debug_token?input_token=${encodeURIComponent(token)}&access_token=${encodeURIComponent(appToken)}`
+      );
+      if (!r.ok || !r.data?.data) {
+        return {
+          id: 'token_valid',
+          label: 'Token válido (debug_token)',
+          ok: false,
+          detail: r.networkError
+            ? `Erro de rede: ${r.networkError}`
+            : `Meta retornou status ${r.status}: ${JSON.stringify(r.data?.error || r.data || {})}`,
+          fix_hint: 'Verifique se o token long-lived ainda é válido. Se expirou (60d), peça o cliente reconectar via Embedded Signup.',
+        };
+      }
+      debugTokenData = r.data.data;
+      const isValid = debugTokenData.is_valid === true;
+      const expiresAt = debugTokenData.expires_at;
+      const expiresIso = expiresAt && expiresAt > 0 ? new Date(expiresAt * 1000).toISOString() : 'sem expiração (system user)';
+      const expired = expiresAt > 0 && expiresAt * 1000 < Date.now();
+      return {
+        id: 'token_valid',
+        label: 'Token válido (debug_token)',
+        ok: isValid && !expired,
+        detail: isValid
+          ? expired
+            ? `Token EXPIROU em ${expiresIso}`
+            : `Token válido. Expira em: ${expiresIso}. Type: ${debugTokenData.type || 'desconhecido'}, App ID: ${debugTokenData.app_id}`
+          : `Token inválido. Meta diz: ${JSON.stringify(debugTokenData.error || {})}`,
+        fix_hint: !isValid || expired
+          ? 'Chame POST /api/meta/whatsapp/refresh-token para renovar (se ainda válido), ou peça o cliente reconectar via Embedded Signup.'
+          : undefined,
+      };
+    };
+
+    // ── 4. token_scopes ────────────────────────────────────────────────────
+    const checkTokenScopes = async (): Promise<Check> => {
+      if (!debugTokenData) {
+        return {
+          id: 'token_scopes',
+          label: 'Escopos do token (granular_scopes)',
+          ok: false,
+          detail: 'debug_token não retornou dados — não dá pra verificar escopos',
+          fix_hint: 'Resolva o check token_valid primeiro.',
+        };
+      }
+      const granular = debugTokenData.granular_scopes;
+      if (!Array.isArray(granular)) {
+        return {
+          id: 'token_scopes',
+          label: 'Escopos do token (granular_scopes)',
+          ok: false,
+          detail: 'Token não tem granular_scopes (campo ausente). Pode ser token de system user ou versão antiga do auth flow.',
+          fix_hint: 'Reconecte via Embedded Signup atual para gerar token com granular_scopes.',
+        };
+      }
+      const scopeNames = granular.map((g: any) => g.scope);
+      const hasMessaging = scopeNames.includes('whatsapp_business_messaging');
+      const hasManagement = scopeNames.includes('whatsapp_business_management');
+      const ok = hasMessaging && hasManagement;
+      const missing: string[] = [];
+      if (!hasMessaging) missing.push('whatsapp_business_messaging');
+      if (!hasManagement) missing.push('whatsapp_business_management');
+      // Verifica também se a waba_id atual está nos target_ids do scope management
+      let wabaInScope = true;
+      let wabaInScopeDetail = '';
+      if (hasManagement && acc.waba_id) {
+        const mgmtScope = granular.find((g: any) => g.scope === 'whatsapp_business_management');
+        const targets: string[] = mgmtScope?.target_ids || [];
+        if (targets.length > 0) {
+          wabaInScope = targets.includes(acc.waba_id);
+          if (!wabaInScope) {
+            wabaInScopeDetail = ` ATENÇÃO: waba_id ${acc.waba_id} NÃO está nos target_ids do scope whatsapp_business_management (autorizadas: ${targets.join(', ')}). Webhook subscribe vai falhar.`;
+          }
+        }
+      }
+      return {
+        id: 'token_scopes',
+        label: 'Escopos do token (granular_scopes)',
+        ok: ok && wabaInScope,
+        detail: ok
+          ? `Scopes presentes: ${scopeNames.join(', ')}.${wabaInScopeDetail}`
+          : `Faltam scopes: ${missing.join(', ')}. Scopes atuais: ${scopeNames.join(', ') || '(nenhum)'}.${wabaInScopeDetail}`,
+        fix_hint: !ok
+          ? 'Refaça o Embedded Signup pedindo whatsapp_business_messaging E whatsapp_business_management.'
+          : !wabaInScope
+            ? 'Esta WABA não está autorizada pelo token atual. Refaça o Embedded Signup selecionando esta WABA, ou troque pra uma WABA autorizada via select-number.'
+            : undefined,
+      };
+    };
+
+    // ── 5. waba_accessible ─────────────────────────────────────────────────
+    const checkWabaAccessible = async (): Promise<Check> => {
+      if (!acc.waba_id) {
+        return {
+          id: 'waba_accessible',
+          label: 'WABA acessível',
+          ok: false,
+          detail: 'waba_id ausente no banco',
+          fix_hint: 'Reconecte via Embedded Signup.',
+        };
+      }
+      const r = await safeFetch(`${GRAPH}/${acc.waba_id}`, { headers: authHeader });
+      return {
+        id: 'waba_accessible',
+        label: 'WABA acessível',
+        ok: r.ok,
+        detail: r.ok
+          ? `GET /${acc.waba_id} retornou 200. Name: ${r.data?.name || 'sem nome'}, Currency: ${r.data?.currency || 'N/A'}`
+          : r.networkError
+            ? `Erro de rede: ${r.networkError}`
+            : `Meta retornou status ${r.status}: ${JSON.stringify(r.data?.error || r.data || {})}`,
+        fix_hint: !r.ok
+          ? 'Token pode não ter permissão pra esta WABA. Verifique granular_scopes e reconecte se necessário.'
+          : undefined,
+      };
+    };
+
+    // ── 6/7. phone_accessible + phone_registered ───────────────────────────
+    let phoneData: any = null;
+    let phoneFetchOk = false;
+    let phoneFetchDetail = '';
+    const checkPhoneAccessible = async (): Promise<Check> => {
+      if (!acc.phone_number_id) {
+        return {
+          id: 'phone_accessible',
+          label: 'Número de telefone acessível',
+          ok: false,
+          detail: 'phone_number_id ausente no banco',
+          fix_hint: 'Reconecte via Embedded Signup ou rode select-number.',
+        };
+      }
+      const fields = 'id,display_phone_number,verified_name,code_verification_status,quality_rating,platform_type';
+      const r = await safeFetch(`${GRAPH}/${acc.phone_number_id}?fields=${fields}`, { headers: authHeader });
+      phoneFetchOk = r.ok;
+      if (r.ok) {
+        phoneData = r.data;
+        phoneFetchDetail = `display_phone_number: ${r.data?.display_phone_number}, verified_name: ${r.data?.verified_name}, code_verification_status: ${r.data?.code_verification_status}, quality_rating: ${r.data?.quality_rating}, platform_type: ${r.data?.platform_type}`;
+      } else {
+        phoneFetchDetail = r.networkError
+          ? `Erro de rede: ${r.networkError}`
+          : `Meta retornou status ${r.status}: ${JSON.stringify(r.data?.error || r.data || {})}`;
+      }
+      return {
+        id: 'phone_accessible',
+        label: 'Número de telefone acessível',
+        ok: r.ok,
+        detail: phoneFetchDetail,
+        fix_hint: !r.ok
+          ? 'Verifique se o phone_number_id ainda pertence ao token. Pode ter sido migrado pra outra WABA — rode select-number pra atualizar.'
+          : undefined,
+      };
+    };
+
+    const checkPhoneRegistered = async (): Promise<Check> => {
+      if (!phoneFetchOk || !phoneData) {
+        return {
+          id: 'phone_registered',
+          label: 'Número registrado na Cloud API (VERIFIED)',
+          ok: false,
+          detail: 'Não foi possível verificar — phone_accessible falhou',
+          fix_hint: 'Resolva phone_accessible primeiro.',
+        };
+      }
+      const status = phoneData.code_verification_status;
+      const ok = status === 'VERIFIED';
+      return {
+        id: 'phone_registered',
+        label: 'Número registrado na Cloud API (VERIFIED)',
+        ok,
+        detail: ok
+          ? `code_verification_status = VERIFIED — pronto pra enviar/receber`
+          : `code_verification_status = ${status || 'desconhecido'}. Número não está VERIFIED — Cloud API não vai entregar mensagens.`,
+        fix_hint: !ok
+          ? 'Chame POST /{phone_number_id}/register com PIN correto. Se cliente tem 2FA na WABA, PIN "000000" hardcoded vai falhar — use o PIN real configurado no painel Meta.'
+          : undefined,
+      };
+    };
+
+    // ── 8. app_subscribed_on_waba ──────────────────────────────────────────
+    const checkAppSubscribedOnWaba = async (): Promise<Check> => {
+      if (!acc.waba_id) {
+        return {
+          id: 'app_subscribed_on_waba',
+          label: 'App subscrito na WABA',
+          ok: false,
+          detail: 'waba_id ausente no banco',
+        };
+      }
+      if (!META_APP_ID) {
+        return {
+          id: 'app_subscribed_on_waba',
+          label: 'App subscrito na WABA',
+          ok: false,
+          detail: 'META_APP_ID não configurado no servidor — não dá pra comparar',
+          fix_hint: 'Configure env META_APP_ID com o ID do seu app Meta.',
+        };
+      }
+      const r = await safeFetch(`${GRAPH}/${acc.waba_id}/subscribed_apps`, { headers: authHeader });
+      if (!r.ok) {
+        return {
+          id: 'app_subscribed_on_waba',
+          label: 'App subscrito na WABA',
+          ok: false,
+          detail: r.networkError
+            ? `Erro de rede: ${r.networkError}`
+            : `Meta retornou status ${r.status}: ${JSON.stringify(r.data?.error || r.data || {})}`,
+          fix_hint: 'Token pode não ter permissão whatsapp_business_management nesta WABA. Reconecte.',
+        };
+      }
+      const apps = Array.isArray(r.data?.data) ? r.data.data : [];
+      const found = apps.find((a: any) => {
+        // Meta retorna whatsapp_business_api_data.id ou diretamente o id em algumas versões
+        const id = a?.whatsapp_business_api_data?.id || a?.id;
+        return String(id) === String(META_APP_ID);
+      });
+      const ok = !!found;
+      const subscribedFields = found?.subscribed_fields || found?.whatsapp_business_api_data?.subscribed_fields || [];
+      const hasMessagesField = Array.isArray(subscribedFields) && subscribedFields.includes('messages');
+      return {
+        id: 'app_subscribed_on_waba',
+        label: 'App subscrito na WABA',
+        ok: ok && (subscribedFields.length === 0 || hasMessagesField),
+        detail: ok
+          ? subscribedFields.length === 0
+            ? `App ${META_APP_ID} está subscrito (subscribed_fields não retornado pela Graph — verifique manualmente no painel)`
+            : hasMessagesField
+              ? `App ${META_APP_ID} subscrito com fields: ${subscribedFields.join(', ')}`
+              : `App ${META_APP_ID} subscrito MAS sem field "messages" (fields atuais: ${subscribedFields.join(', ')}) — mensagens não chegam`
+          : `App ${META_APP_ID} NÃO está na lista de subscribed_apps desta WABA. Apps subscritos: ${apps.map((a: any) => a?.whatsapp_business_api_data?.id || a?.id).join(', ') || '(nenhum)'}. Webhook nunca dispara.`,
+        fix_hint: !ok
+          ? 'Chame POST /api/meta/whatsapp/subscribe-webhook para subscrever o app. Se falhar, verifique granular_scopes (whatsapp_business_management).'
+          : !hasMessagesField && subscribedFields.length > 0
+            ? 'Vá em Meta App > Webhooks > WhatsApp Business Account e marque o field "messages".'
+            : undefined,
+      };
+    };
+
+    // ── 9. db_row_is_active ────────────────────────────────────────────────
+    const checkDbRowIsActive = async (): Promise<Check> => {
+      // Conta quantas rows ativas existem pra este phone_number_id (detecta race)
+      const { data: activeRows } = await supabase
+        .from('whatsapp_business_accounts')
+        .select('id, user_id, waba_id, is_active')
+        .eq('phone_number_id', acc.phone_number_id)
+        .eq('is_active', true);
+      const count = activeRows?.length || 0;
+      const userRowActive = acc.is_active === true;
+      const ok = userRowActive && count === 1;
+      let detail = '';
+      let fixHint: string | undefined;
+      if (!userRowActive) {
+        detail = `Row do user está com is_active=false — webhook descarta mensagens silenciosamente (log diz "Nenhuma conta ativa para phone_number_id")`;
+        fixHint = 'Faça o cliente refazer select-number, OU rode UPDATE manual: UPDATE whatsapp_business_accounts SET is_active=true WHERE id=...';
+      } else if (count === 0) {
+        detail = `Inconsistência: row deveria estar ativa mas query retornou 0 ativas pro phone_number_id`;
+        fixHint = 'Provavelmente race condition. Rode UPDATE manual.';
+      } else if (count > 1) {
+        detail = `${count} rows com is_active=true pro mesmo phone_number_id ${acc.phone_number_id} — webhook lookup com .maybeSingle() retorna erro PGRST116 'multiple rows' e descarta mensagem`;
+        fixHint = 'Desative manualmente as rows duplicadas: UPDATE whatsapp_business_accounts SET is_active=false WHERE phone_number_id=X AND id != (id mais recente).';
+      } else {
+        detail = `Row do user (id=${acc.id}, waba_id=${acc.waba_id}) está ativa e única pro phone_number_id`;
+      }
+      return {
+        id: 'db_row_is_active',
+        label: 'Linha do banco está ativa e única',
+        ok,
+        detail,
+        fix_hint: fixHint,
+      };
+    };
+
+    // Roda em paralelo, mas alguns dependem de outros — então separamos em fases
+    // Fase 1: independentes
+    const phase1 = await Promise.allSettled([
+      checkEnvAppSecret(),
+      checkEnvEncryptionKey(),
+      checkWabaAccessible(),
+      checkPhoneAccessible(),
+      checkAppSubscribedOnWaba(),
+      checkDbRowIsActive(),
+      checkTokenValid(), // popula debugTokenData
+    ]);
+
+    // Fase 2: dependem de phase 1 (debugTokenData, phoneData)
+    const phase2 = await Promise.allSettled([
+      checkTokenScopes(),
+      checkPhoneRegistered(),
+    ]);
+
+    const unwrap = (results: PromiseSettledResult<Check>[], fallbackIds: string[]): Check[] =>
+      results.map((r, idx) =>
+        r.status === 'fulfilled'
+          ? r.value
+          : {
+              id: fallbackIds[idx] || 'unknown',
+              label: 'Check falhou com exceção',
+              ok: false,
+              detail: `Exceção: ${r.reason?.message || String(r.reason)}`,
+            }
+      );
+
+    const phase1Checks = unwrap(phase1, [
+      'env_app_secret',
+      'env_encryption_key',
+      'waba_accessible',
+      'phone_accessible',
+      'app_subscribed_on_waba',
+      'db_row_is_active',
+      'token_valid',
+    ]);
+    const phase2Checks = unwrap(phase2, ['token_scopes', 'phone_registered']);
+
+    // Ordem final: env → token → waba → phone → subscribe → db
+    const allChecks = [...phase1Checks, ...phase2Checks];
+    const order = [
+      'env_app_secret',
+      'env_encryption_key',
+      'token_valid',
+      'token_scopes',
+      'waba_accessible',
+      'phone_accessible',
+      'phone_registered',
+      'app_subscribed_on_waba',
+      'db_row_is_active',
+    ];
+    const ordered: Check[] = order
+      .map((id) => allChecks.find((c) => c.id === id))
+      .filter((c): c is Check => !!c);
+
+    res.json({
+      account,
+      checks: ordered,
+      meta_panel_reminder: META_PANEL_REMINDER,
+    });
+  });
+
   // Assina/verifica webhook no nível da WABA
   app.post('/api/meta/whatsapp/subscribe-webhook', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
