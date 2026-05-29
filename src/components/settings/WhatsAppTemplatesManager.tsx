@@ -195,6 +195,21 @@ export function WhatsAppTemplatesManager({ onNotify }: Props) {
         </div>
       </div>
 
+      {/* Aviso: este caminho é PAGO. Pra envios rotineiros sem custo, usa a
+          extensão Chrome (Baileys+Lia). Separação clara pro cliente não
+          gastar à toa com mensagens que poderiam ir pela extensão. */}
+      <div className="flex gap-2 mb-3 p-3 rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-100 dark:border-amber-500/20">
+        <AlertCircle size={15} className="text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+        <div className="text-xs text-amber-800 dark:text-amber-200">
+          <p className="font-semibold mb-0.5">Este caminho cobra por mensagem enviada.</p>
+          <p>
+            Use para <strong>campanhas grandes pra base inteira</strong> ou mensagens
+            <strong> fora da janela de 24h</strong>. Pra <strong>follow-ups rotineiros e disparos pequenos sem custo</strong>,
+            use a extensão Chrome (Configurações → Integrações → Extensão).
+          </p>
+        </div>
+      </div>
+
       {/* Aviso sobre janela 24h */}
       <div className="flex gap-2 mb-4 p-3 rounded-xl bg-blue-50 dark:bg-blue-500/10 border border-blue-100 dark:border-blue-500/20">
         <Info size={15} className="text-blue-500 flex-shrink-0 mt-0.5" />
