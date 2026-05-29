@@ -13,6 +13,8 @@ ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 import * as BaileysManager from './baileys-manager.js';
 import * as Asaas from './asaas-client.js';
 import { initSentry } from './sentry-server.js';
+import { encryptIfNeeded, decryptIfNeeded } from './lib/wa-token-crypto.js';
+import crypto from 'crypto';
 
 // Não bloqueia o boot — roda em paralelo
 const sentryReady = initSentry();
@@ -815,7 +817,13 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
-  app.use(express.json({ limit: '50mb' }));
+  // Guarda o raw body em req.rawBody pra rotas que precisam validar HMAC
+  // (webhook do Meta WhatsApp via X-Hub-Signature-256). Sem isso, JSON.stringify
+  // re-serializa com formatação diferente e o hash não bate.
+  app.use(express.json({
+    limit: '50mb',
+    verify: (req: any, _res, buf) => { req.rawBody = buf; },
+  }));
 
   // ============ CORS — permite extensão Chrome ============
   app.use((req, res, next) => {
@@ -2008,6 +2016,35 @@ async function startServer() {
   });
 
   app.post('/api/whatsapp/webhook', async (req, res) => {
+    // ── HMAC verification ────────────────────────────────────────────────────
+    // Meta assina cada POST com sha256(rawBody, META_APP_SECRET) em X-Hub-Signature-256.
+    // Sem essa checagem, qualquer um pode forjar webhooks (mensagens, statuses).
+    // Skipa em dev se WA_WEBHOOK_VERIFY_SIGNATURE=false. Default = on.
+    // Eventos do Baileys (sem assinatura) só são aceitos se a verificação tá off.
+    const verifySig = process.env.WA_WEBHOOK_VERIFY_SIGNATURE !== 'false';
+    const isMetaPayload = req.body?.object === 'whatsapp_business_account';
+    const secret = process.env.META_APP_SECRET;
+
+    if (verifySig && isMetaPayload) {
+      const signatureHeader = req.headers['x-hub-signature-256'] as string | undefined;
+      const rawBody = (req as any).rawBody as Buffer | undefined;
+      if (!signatureHeader || !rawBody || !secret) {
+        console.warn('[Webhook] HMAC rejeitado: header/body/secret ausente');
+        return res.status(403).send('Forbidden');
+      }
+      const expected = 'sha256=' + crypto
+        .createHmac('sha256', secret)
+        .update(rawBody)
+        .digest('hex');
+      // timingSafeEqual exige buffers do mesmo tamanho — se diferentes, rejeita
+      const a = Buffer.from(signatureHeader);
+      const b = Buffer.from(expected);
+      if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+        console.warn('[Webhook] HMAC inválido — payload rejeitado');
+        return res.status(403).send('Forbidden');
+      }
+    }
+
     res.sendStatus(200); // always respond fast to avoid timeout
 
     try {
@@ -2034,15 +2071,23 @@ async function startServer() {
         // Nome do contato vem em value.contacts[0].profile.name
         const contactName: string | null = value.contacts?.[0]?.profile?.name || null;
 
-        // Precisa do access_token para baixar mídia — busca antes do processamento
+        // Precisa do access_token para baixar mídia — busca antes do processamento.
+        // Filtra is_active=true (multi-WABA: um phone_number_id pertence só a uma
+        // WABA ativa; rows antigas viram is_active=false).
         const { data: waAccount, error: waErr } = await supabaseAdmin
           .from('whatsapp_business_accounts')
           .select('user_id, access_token')
           .eq('phone_number_id', phoneNumberId)
+          .eq('is_active', true)
           .maybeSingle();
 
         if (waErr) { console.error('[Webhook Meta] Erro ao buscar conta:', waErr.message); return; }
-        if (!waAccount) { console.error('[Webhook Meta] Nenhuma conta para phone_number_id:', phoneNumberId); return; }
+        if (!waAccount) { console.error('[Webhook Meta] Nenhuma conta ativa para phone_number_id:', phoneNumberId); return; }
+
+        // Decifra o token (no-op se a linha estiver em plaintext legacy).
+        const decryptedToken = decryptIfNeeded(waAccount.access_token);
+        if (!decryptedToken) { console.error('[Webhook Meta] Falha ao decifrar token da conta'); return; }
+        waAccount.access_token = decryptedToken;
 
         let msgBody = '';
         let mediaDataUrl: string | null = null;
@@ -2597,16 +2642,20 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .from('whatsapp_business_accounts')
       .select('phone_number_id, phone_number, access_token')
       .eq('user_id', userId)
+      .eq('is_active', true)
       .maybeSingle();
 
     if (!waAccount) return res.status(400).json({ error: 'WhatsApp não conectado. Configure nas Configurações.' });
+
+    const metaToken = decryptIfNeeded(waAccount.access_token);
+    if (!metaToken) return res.status(500).json({ error: 'Falha ao decifrar token' });
 
     try {
       const metaRes = await fetch(
         `https://graph.facebook.com/v21.0/${waAccount.phone_number_id}/messages`,
         {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${waAccount.access_token}`, 'Content-Type': 'application/json' },
+          headers: { 'Authorization': `Bearer ${metaToken}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ messaging_product: 'whatsapp', to: cleanPhone, type: 'text', text: { body: text } }),
         }
       );
@@ -2743,9 +2792,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .from('whatsapp_business_accounts')
       .select('phone_number_id, access_token')
       .eq('user_id', userId)
+      .eq('is_active', true)
       .maybeSingle();
 
     if (!waAccount) return res.status(400).json({ error: 'WhatsApp não conectado. Configure nas Configurações.' });
+
+    const metaMediaToken = decryptIfNeeded(waAccount.access_token);
+    if (!metaMediaToken) return res.status(500).json({ error: 'Falha ao decifrar token' });
 
     try {
       // 1. Upload da mídia
@@ -2756,7 +2809,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
       const uploadRes = await fetch(
         `https://graph.facebook.com/v21.0/${waAccount.phone_number_id}/media`,
-        { method: 'POST', headers: { 'Authorization': `Bearer ${waAccount.access_token}` }, body: formData }
+        { method: 'POST', headers: { 'Authorization': `Bearer ${metaMediaToken}` }, body: formData }
       );
       const uploadData = await uploadRes.json();
       if (!uploadRes.ok || !uploadData.id) {
@@ -2779,7 +2832,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         `https://graph.facebook.com/v21.0/${waAccount.phone_number_id}/messages`,
         {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${waAccount.access_token}`, 'Content-Type': 'application/json' },
+          headers: { 'Authorization': `Bearer ${metaMediaToken}`, 'Content-Type': 'application/json' },
           body: JSON.stringify(msgBody),
         }
       );
@@ -5186,7 +5239,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .from('whatsapp_business_accounts')
       .select('phone_number_id, access_token')
       .eq('user_id', userId)
+      .eq('is_active', true)
       .maybeSingle();
+
+    const blastMetaToken = waAccount?.access_token ? decryptIfNeeded(waAccount.access_token) : null;
 
     let sent = 0, failed = 0;
     const errors: string[] = [];
@@ -5217,12 +5273,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         }
 
         // Meta API (provider principal se não for Evolution, ou fallback)
-        if (!ok && waAccount?.phone_number_id && waAccount?.access_token) {
+        if (!ok && waAccount?.phone_number_id && blastMetaToken) {
           const metaRes = await fetch(
             `https://graph.facebook.com/v21.0/${waAccount.phone_number_id}/messages`,
             {
               method: 'POST',
-              headers: { 'Authorization': `Bearer ${waAccount.access_token}`, 'Content-Type': 'application/json' },
+              headers: { 'Authorization': `Bearer ${blastMetaToken}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({ messaging_product: 'whatsapp', to: phone, type: 'text', text: { body: personalizedMsg } }),
             }
           );
@@ -9884,16 +9940,22 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .from('whatsapp_business_accounts')
       .select('*')
       .eq('user_id', userId)
+      .eq('is_active', true)
       .maybeSingle();
 
     if (!acc) return res.status(404).json({ error: 'Nenhuma conta conectada' });
 
-    const result: any = { account_in_db: acc };
+    const debugToken = decryptIfNeeded(acc.access_token);
+    if (!debugToken) return res.status(500).json({ error: 'Falha ao decifrar token' });
+
+    // Não devolve o token plaintext na resposta — só metadata. O cliente
+    // não precisa ver o token; debug é pra equipe interna.
+    const result: any = { account_in_db: { ...acc, access_token: '<encrypted>' } };
 
     try {
       // 1. debug_token
       const debugRes = await fetch(
-        `https://graph.facebook.com/v21.0/debug_token?input_token=${acc.access_token}&access_token=${META_APP_ID}|${META_APP_SECRET}`
+        `https://graph.facebook.com/v21.0/debug_token?input_token=${debugToken}&access_token=${META_APP_ID}|${META_APP_SECRET}`
       );
       result.debug_token = await debugRes.json();
     } catch (e: any) { result.debug_token_error = e.message; }
@@ -9901,7 +9963,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     try {
       // 2. phone number details
       const phoneRes = await fetch(
-        `https://graph.facebook.com/v21.0/${acc.phone_number_id}?fields=id,display_phone_number,verified_name,quality_rating,platform_type&access_token=${acc.access_token}`
+        `https://graph.facebook.com/v21.0/${acc.phone_number_id}?fields=id,display_phone_number,verified_name,quality_rating,platform_type&access_token=${debugToken}`
       );
       result.phone_number_details = await phoneRes.json();
     } catch (e: any) { result.phone_number_error = e.message; }
@@ -9912,7 +9974,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         `https://graph.facebook.com/v21.0/${acc.phone_number_id}/messages`,
         {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${acc.access_token}`, 'Content-Type': 'application/json' },
+          headers: { 'Authorization': `Bearer ${debugToken}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             messaging_product: 'whatsapp',
             to: '5543988416682',
@@ -9992,7 +10054,26 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         console.warn('[Meta] Falha ao trocar token (continua com token original):', ltErr.message);
       }
 
-      // 5. Salva ou atualiza no banco
+      // 5. Multi-WABA: desativa outras WABAs do mesmo user antes de salvar
+      //    a nova como ativa. Cliente pode ter várias WABAs conectadas, mas
+      //    só uma é a "ativa" — a que os endpoints usam por default.
+      await supabase
+        .from('whatsapp_business_accounts')
+        .update({ is_active: false })
+        .eq('user_id', userId);
+
+      // 6. Encripta o token antes de salvar (em repouso). Helper retorna
+      //    plaintext se WA_TOKEN_ENCRYPTION_KEY não tá configurada — fluxo
+      //    continua funcionando, só sem proteção. Linhas antigas em plaintext
+      //    são lidas via decryptIfNeeded sem migration de dados.
+      const encryptedToken = encryptIfNeeded(finalToken);
+      const isEncrypted = !!encryptedToken && encryptedToken !== finalToken;
+
+      // 7. Long-lived token dura ~60 dias. Marca a data esperada de expiração
+      //    pra frontend mostrar aviso antes e pro endpoint de refresh saber
+      //    quando rodar.
+      const expiresAt = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString();
+
       const { error } = await supabase
         .from('whatsapp_business_accounts')
         .upsert(
@@ -10002,15 +10083,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
             phone_number_id: phoneNumberId,
             phone_number: phoneNumber,
             display_name: displayName,
-            access_token: finalToken,
+            access_token: encryptedToken,
+            token_encrypted: isEncrypted,
+            token_expires_at: expiresAt,
+            is_active: true,
             connected_at: new Date().toISOString(),
           },
-          { onConflict: 'user_id' }
+          { onConflict: 'user_id,waba_id' }
         );
 
       if (error) return res.status(500).json({ error: error.message });
 
-      // 6. Assina webhook no nível da WABA (necessário para receber eventos)
+      // 8. Assina webhook no nível da WABA (necessário para receber eventos)
       if (wabaId && finalToken) {
         try {
           const subRes = await fetch(
@@ -10025,9 +10109,98 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         }
       }
 
+      // 9. Registra o phone number na Cloud API. Sem isso, POST /messages
+      //    falha com "Phone number not registered". O PIN '000000' é o default
+      //    pra números que NÃO têm 2FA configurado — se o cliente já usa o
+      //    número fora da Cloud API com 2FA, vai falhar e ele precisa
+      //    desativar a verificação em duas etapas no WhatsApp Business app
+      //    antes de conectar.
+      if (phoneNumberId && finalToken) {
+        try {
+          const regRes = await fetch(
+            `https://graph.facebook.com/v21.0/${phoneNumberId}/register`,
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${finalToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ messaging_product: 'whatsapp', pin: '000000' }),
+            }
+          );
+          const regData = await regRes.json();
+          if (regData.error) {
+            console.warn('[Meta] phone register falhou:', JSON.stringify(regData.error));
+            // Não bloqueia — conexão salva. Cliente pode precisar desativar 2FA
+            // no número e tentar reconectar.
+          } else {
+            console.log('[Meta] phone registered:', JSON.stringify(regData));
+          }
+        } catch (regErr) {
+          console.error('[Meta] phone register exception:', regErr);
+        }
+      }
+
       res.json({ success: true, waba_id: wabaId, phone_number: phoneNumber, display_name: displayName });
     } catch (err: any) {
       console.error('[Meta] exchange-token error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Tenta renovar o long-lived token sem reabrir o Embedded Signup. Funciona
+  // enquanto o token atual ainda é válido (idealmente rodar quando faltam
+  // 14d pra expirar). Depois de expirado, só re-autorização do user resolve.
+  // Frontend pode chamar este endpoint quando detectar token_expires_at próximo.
+  app.post('/api/meta/whatsapp/refresh-token', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    if (!META_APP_ID || !META_APP_SECRET) {
+      return res.status(500).json({ error: 'META_APP_ID/META_APP_SECRET não configurados' });
+    }
+
+    const { data: acc } = await supabase
+      .from('whatsapp_business_accounts')
+      .select('id, access_token')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .maybeSingle();
+    if (!acc?.access_token) return res.status(400).json({ error: 'Conta não conectada' });
+
+    const currentToken = decryptIfNeeded(acc.access_token);
+    if (!currentToken) return res.status(500).json({ error: 'Falha ao decifrar token' });
+
+    try {
+      const ltRes = await fetch(
+        `https://graph.facebook.com/oauth/access_token?grant_type=fb_exchange_token` +
+        `&client_id=${META_APP_ID}&client_secret=${META_APP_SECRET}&fb_exchange_token=${encodeURIComponent(currentToken)}`
+      );
+      const ltData = await ltRes.json();
+      if (!ltData.access_token) {
+        return res.status(400).json({
+          error: 'Token não pôde ser renovado. Cliente precisa reconectar.',
+          meta_error: ltData.error?.message,
+        });
+      }
+
+      const newEncrypted = encryptIfNeeded(ltData.access_token);
+      const isEncrypted = !!newEncrypted && newEncrypted !== ltData.access_token;
+      const newExpiresAt = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString();
+
+      const { error: upErr } = await supabase
+        .from('whatsapp_business_accounts')
+        .update({
+          access_token: newEncrypted,
+          token_encrypted: isEncrypted,
+          token_expires_at: newExpiresAt,
+        })
+        .eq('id', acc.id);
+      if (upErr) return res.status(500).json({ error: upErr.message });
+
+      res.json({ success: true, token_expires_at: newExpiresAt });
+    } catch (err: any) {
+      console.error('[Meta] refresh-token error:', err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -10041,24 +10214,28 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .from('whatsapp_business_accounts')
       .select('waba_id, access_token')
       .eq('user_id', userId)
+      .eq('is_active', true)
       .maybeSingle();
 
     if (!acc?.waba_id || !acc?.access_token) {
       return res.status(400).json({ error: 'Conta WhatsApp não conectada' });
     }
 
+    const token = decryptIfNeeded(acc.access_token);
+    if (!token) return res.status(500).json({ error: 'Falha ao decifrar token' });
+
     try {
       // Verifica assinatura atual
       const checkRes = await fetch(
         `https://graph.facebook.com/v21.0/${acc.waba_id}/subscribed_apps`,
-        { headers: { Authorization: `Bearer ${acc.access_token}` } }
+        { headers: { Authorization: `Bearer ${token}` } }
       );
       const checkData = await checkRes.json();
 
       // Assina o app
       const subRes = await fetch(
         `https://graph.facebook.com/v21.0/${acc.waba_id}/subscribed_apps`,
-        { method: 'POST', headers: { Authorization: `Bearer ${acc.access_token}` } }
+        { method: 'POST', headers: { Authorization: `Bearer ${token}` } }
       );
       const subData = await subRes.json();
 
@@ -10081,8 +10258,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const { data, error } = await supabase
       .from('whatsapp_business_accounts')
-      .select('waba_id, phone_number_id, phone_number, display_name, connected_at')
+      .select('waba_id, phone_number_id, phone_number, display_name, connected_at, token_expires_at')
       .eq('user_id', userId)
+      .eq('is_active', true)
       .maybeSingle();
 
     if (error) return res.status(500).json({ error: error.message });
@@ -10094,10 +10272,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
 
+    // Desconecta só a WABA ativa. Rows inativas (de WABAs antigas) ficam pra
+    // auditoria e pra eventual reativação manual via Supabase Studio.
     const { error } = await supabase
       .from('whatsapp_business_accounts')
       .delete()
-      .eq('user_id', userId);
+      .eq('user_id', userId)
+      .eq('is_active', true);
 
     if (error) return res.status(500).json({ error: error.message });
 
@@ -10211,14 +10392,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .from('whatsapp_business_accounts')
       .select('waba_id, access_token')
       .eq('user_id', userId)
+      .eq('is_active', true)
       .maybeSingle();
 
     if (!acc?.waba_id || !acc?.access_token) {
       return res.json([]);
     }
 
+    const decryptedAccToken = decryptIfNeeded(acc.access_token);
+    if (!decryptedAccToken) return res.status(500).json({ error: 'Falha ao decifrar token' });
+
     try {
-      const { rows } = await syncWhatsappTemplatesFromMeta(supabase, userId, acc);
+      const { rows } = await syncWhatsappTemplatesFromMeta(supabase, userId, {
+        waba_id: acc.waba_id,
+        access_token: decryptedAccToken,
+      });
       const sortedRows = [...rows].sort((a: any, b: any) => {
         const aTime = new Date(a.created_at || a.updated_at || 0).getTime();
         const bTime = new Date(b.created_at || b.updated_at || 0).getTime();
@@ -10273,10 +10461,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .from('whatsapp_business_accounts')
       .select('waba_id, access_token')
       .eq('user_id', userId)
+      .eq('is_active', true)
       .maybeSingle();
     if (!acc?.waba_id || !acc?.access_token) {
       return res.status(400).json({ error: 'Conta WhatsApp não conectada' });
     }
+
+    const createTplToken = decryptIfNeeded(acc.access_token);
+    if (!createTplToken) return res.status(500).json({ error: 'Falha ao decifrar token' });
 
     // Monta os componentes na ordem que o Meta espera: HEADER, BODY, FOOTER, BUTTONS
     const components: any[] = [];
@@ -10307,7 +10499,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         `https://graph.facebook.com/v21.0/${acc.waba_id}/message_templates`,
         {
           method: 'POST',
-          headers: { Authorization: `Bearer ${acc.access_token}`, 'Content-Type': 'application/json' },
+          headers: { Authorization: `Bearer ${createTplToken}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ name, category, language, components }),
         }
       );
@@ -10350,13 +10542,20 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .from('whatsapp_business_accounts')
       .select('waba_id, access_token')
       .eq('user_id', userId)
+      .eq('is_active', true)
       .maybeSingle();
     if (!acc?.waba_id || !acc?.access_token) {
       return res.status(400).json({ error: 'Conta WhatsApp não conectada' });
     }
 
+    const syncToken = decryptIfNeeded(acc.access_token);
+    if (!syncToken) return res.status(500).json({ error: 'Falha ao decifrar token' });
+
     try {
-      const { metaTemplates, rows } = await syncWhatsappTemplatesFromMeta(supabase, userId, acc);
+      const { metaTemplates, rows } = await syncWhatsappTemplatesFromMeta(supabase, userId, {
+        waba_id: acc.waba_id,
+        access_token: syncToken,
+      });
       res.json({ synced: metaTemplates.length, updated: rows.length });
     } catch (err: any) {
       console.error('[Meta] sync templates error:', err);
@@ -10381,13 +10580,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .from('whatsapp_business_accounts')
       .select('waba_id, access_token')
       .eq('user_id', userId)
+      .eq('is_active', true)
       .maybeSingle();
 
     // Tenta deletar no Meta (não bloqueia se falhar — pode já não existir lá)
-    if (acc?.waba_id && acc?.access_token) {
+    const delTplToken = acc?.access_token ? decryptIfNeeded(acc.access_token) : null;
+    if (acc?.waba_id && delTplToken) {
       try {
         await fetch(
-          `https://graph.facebook.com/v21.0/${acc.waba_id}/message_templates?name=${encodeURIComponent(tpl.name)}&access_token=${acc.access_token}`,
+          `https://graph.facebook.com/v21.0/${acc.waba_id}/message_templates?name=${encodeURIComponent(tpl.name)}&access_token=${delTplToken}`,
           { method: 'DELETE' }
         );
       } catch (err) {
@@ -10428,10 +10629,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .from('whatsapp_business_accounts')
       .select('phone_number_id, access_token')
       .eq('user_id', userId)
+      .eq('is_active', true)
       .maybeSingle();
     if (!acc?.phone_number_id || !acc?.access_token) {
       return res.status(400).json({ error: 'Conta WhatsApp não conectada' });
     }
+
+    const accessToken = decryptIfNeeded(acc.access_token);
+    if (!accessToken) return res.status(500).json({ error: 'Falha ao decifrar token' });
 
     const varCount = countTemplateVars(tpl.body_text);
     const components: any[] = [];
@@ -10447,7 +10652,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         `https://graph.facebook.com/v21.0/${acc.phone_number_id}/messages`,
         {
           method: 'POST',
-          headers: { Authorization: `Bearer ${acc.access_token}`, 'Content-Type': 'application/json' },
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             messaging_product: 'whatsapp',
             to: toRaw,
@@ -10489,23 +10694,103 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   // (Meta POST webhook is handled by the unified handler above)
 
-  // Send message
+  // Send message — texto livre OU template aprovado.
+  // - Sem template_id: envia texto livre, mas SÓ se a janela de 24h tá aberta
+  //   (cliente mandou alguma mensagem nas últimas 24h). Fora da janela, Meta
+  //   rejeita texto livre — preempção via 403 com mensagem clara.
+  // - Com template_id: envia o template aprovado + parâmetros, sempre (janela
+  //   não importa pra template).
   app.post('/api/whatsapp/send', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { to, body, client_id } = req.body;
+    const { to, body, client_id, template_id, parameters } = req.body;
 
-    if (!to || !body) return res.status(400).json({ error: 'to e body são obrigatórios' });
+    if (!to) return res.status(400).json({ error: 'to é obrigatório' });
+    if (!template_id && !body) return res.status(400).json({ error: 'body ou template_id é obrigatório' });
 
     const { data: waAccount } = await supabase
       .from('whatsapp_business_accounts')
       .select('phone_number_id, phone_number, access_token')
       .eq('user_id', userId)
+      .eq('is_active', true)
       .maybeSingle();
 
     if (!waAccount) return res.status(400).json({ error: 'WhatsApp Business não conectado' });
 
+    const accessToken = decryptIfNeeded(waAccount.access_token);
+    if (!accessToken) return res.status(500).json({ error: 'Falha ao decifrar token' });
+
     const cleanPhone = to.replace(/\D/g, '');
+
+    // Monta o payload pro Graph API — texto livre OU template
+    let payload: any;
+    let savedBody = body;
+
+    if (template_id) {
+      // Carrega o template do cache local
+      const { data: tpl } = await supabase
+        .from('whatsapp_message_templates')
+        .select('name, language, body_text, status')
+        .eq('user_id', userId)
+        .eq('id', template_id)
+        .maybeSingle();
+
+      if (!tpl) return res.status(404).json({ error: 'Template não encontrado' });
+      if (tpl.status !== 'APPROVED') {
+        return res.status(400).json({ error: 'Só é possível enviar templates aprovados pelo Meta.' });
+      }
+
+      const params: string[] = Array.isArray(parameters) ? parameters.map(String) : [];
+      const varCount = countTemplateVars(tpl.body_text);
+      const components: any[] = [];
+      if (varCount > 0) {
+        components.push({
+          type: 'body',
+          parameters: params.slice(0, varCount).map(p => ({ type: 'text', text: p })),
+        });
+      }
+
+      payload = {
+        messaging_product: 'whatsapp',
+        to: cleanPhone,
+        type: 'template',
+        template: {
+          name: tpl.name,
+          language: { code: tpl.language },
+          ...(components.length ? { components } : {}),
+        },
+      };
+
+      // Substitui {{N}} por parâmetros pra salvar no histórico legível.
+      savedBody = tpl.body_text.replace(/\{\{(\d+)\}\}/g, (_m: string, n: string) => params[Number(n) - 1] ?? `{{${n}}}`);
+    } else {
+      // Texto livre: confere janela de 24h. Meta exige que o cliente tenha
+      // mandado pelo menos uma mensagem nas últimas 24h pra enviar texto livre.
+      // Fora da janela, só template funciona.
+      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const { data: recentIncoming } = await supabase
+        .from('wa_messages')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('phone', cleanPhone)
+        .eq('from_me', false)
+        .gte('timestamp', cutoff)
+        .limit(1);
+
+      if (!recentIncoming || recentIncoming.length === 0) {
+        return res.status(403).json({
+          error: 'Janela de 24h fechada. Cliente precisa responder primeiro, ou envie um template aprovado.',
+          code: 'window_closed',
+        });
+      }
+
+      payload = {
+        messaging_product: 'whatsapp',
+        to: cleanPhone,
+        type: 'text',
+        text: { body },
+      };
+    }
 
     try {
       const metaRes = await fetch(
@@ -10513,15 +10798,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${waAccount.access_token}`,
+            'Authorization': `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            messaging_product: 'whatsapp',
-            to: cleanPhone,
-            type: 'text',
-            text: { body },
-          }),
+          body: JSON.stringify(payload),
         }
       );
       const metaData = await metaRes.json();
@@ -10538,7 +10818,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         from_number: waAccount.phone_number,
         to_number: cleanPhone,
         wa_message_id: metaData.messages?.[0]?.id,
-        body,
+        body: savedBody,
         status: 'sent',
       });
 
