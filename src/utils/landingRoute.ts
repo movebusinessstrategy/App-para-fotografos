@@ -9,6 +9,7 @@
 // então qualquer logado consegue abrir.
 
 const ROUTES: Array<{ path: string; module: string | null }> = [
+  { path: "/whatsapp",      module: "whatsapp" },
   { path: "/tarefas",       module: "jobs" },
   { path: "/vendas",        module: "vendas" },
   { path: "/jobs",          module: "jobs" },

@@ -33,6 +33,7 @@ const TasksPage = lazy(() => import("./pages/TasksPage"));
 const PlanosPage = lazy(() => import("./pages/PlanosPage"));
 const AssinaturaPage = lazy(() => import("./pages/AssinaturaPage"));
 const AgentePage = lazy(() => import("./pages/AgentePage"));
+const WhatsappPage = lazy(() => import("./pages/WhatsappPage"));
 
 // ── Central de Configurações ────────────────────────────────────────────────
 const SettingsLayout = lazy(() => import("./pages/configuracoes/SettingsLayout"));
@@ -113,6 +114,7 @@ export default function App() {
                 <Route path="tarefas" element={<PermissionRoute module="jobs"><TasksPage /></PermissionRoute>} />
                 <Route path="agente" element={<AgentePage />} />
                 <Route path="vendas" element={<PermissionRoute module="vendas"><VendasPage /></PermissionRoute>} />
+                <Route path="whatsapp" element={<PermissionRoute module="whatsapp"><WhatsappPage /></PermissionRoute>} />
                 <Route path="calendar" element={<PermissionRoute module="calendar"><CalendarPage /></PermissionRoute>} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="finance" element={<PermissionRoute module="finance"><FinancePage /></PermissionRoute>} />
