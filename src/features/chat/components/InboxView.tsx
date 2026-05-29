@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic, Sun, Moon, PenSquare, Search, MoreVertical, Smile, Paperclip, ChevronDown, UserPlus, Loader2, CheckCircle2, FileText, X } from 'lucide-react';
+import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic, Sun, Moon, PenSquare, Search, MoreVertical, Smile, Paperclip, ChevronDown, UserPlus, Loader2, CheckCircle2, FileText, X, Megaphone } from 'lucide-react';
 import { authFetch } from '../../../utils/authFetch';
 import EmojiPicker, { Theme as EmojiTheme } from 'emoji-picker-react';
 import { useTheme } from '../../../contexts/ThemeContext';
@@ -13,6 +13,8 @@ import { ConversationItem } from './ConversationItem';
 import { MessageBubble } from './MessageBubble';
 import { AudioRecorder } from './AudioRecorder';
 import { CrmDealStrip } from './CrmDealStrip';
+import { LiaSuggestButton } from './LiaSuggestButton';
+import { BulkFollowupModal } from './BulkFollowupModal';
 import { ConnectChannelModal } from '../../../components/vendas/ConnectChannelModal';
 import { NewConversationModal } from './NewConversationModal';
 import { WhatsAppTemplatesManager } from '../../../components/settings/WhatsAppTemplatesManager';
@@ -66,6 +68,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
   const [connectOpen, setConnectOpen] = useState(false);
   const [newConvOpen, setNewConvOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
   const [mediaPreview, setMediaPreview] = useState<{ file: File; url: string; type: string } | null>(null);
   const [mediaCaption, setMediaCaption] = useState('');
@@ -324,6 +327,17 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
                 title="Templates de mensagem"
               >
                 <FileText size={16} />
+              </button>
+            )}
+
+            {connected && (
+              <button
+                onClick={() => setBulkOpen(true)}
+                className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
+                style={{ color: 'var(--wa-text-secondary)' }}
+                title="Disparos em massa por etapa do funil"
+              >
+                <Megaphone size={16} />
               </button>
             )}
 
@@ -638,6 +652,15 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
                     <Paperclip size={20} />
                   </button>
 
+                  <LiaSuggestButton
+                    messages={messages}
+                    onSuggested={reply => {
+                      setText(reply);
+                      // Foca o textarea pra usuário revisar antes de mandar
+                      setTimeout(() => textareaRef.current?.focus(), 0);
+                    }}
+                  />
+
                   <textarea
                     ref={textareaRef}
                     value={text}
@@ -775,6 +798,14 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
         open={newConvOpen}
         onClose={() => setNewConvOpen(false)}
         onStart={phone => setSelectedPhone(phone)}
+      />
+
+      <BulkFollowupModal
+        open={bulkOpen}
+        onClose={() => setBulkOpen(false)}
+        stages={stages}
+        deals={deals}
+        onSent={onDealUpdated}
       />
 
       {/* Gerenciador de templates - aberto como modal pelo header do Inbox */}
