@@ -10037,13 +10037,40 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.post('/api/meta/whatsapp/exchange-token', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { access_token, code } = req.body;
-    const token = access_token || code;
+    const { access_token, code, mode } = req.body;
 
-    if (!token) return res.status(400).json({ error: 'access_token é obrigatório' });
+    // Normaliza mode: só aceita 'cloud_api' e 'coexistence'; default cloud_api.
+    // Em coexistence o número segue ativo no app WhatsApp Business e o
+    // pareamento é via QR — então pulamos o POST /register no final do fluxo.
+    const connectionMode: 'cloud_api' | 'coexistence' =
+      mode === 'coexistence' ? 'coexistence' : 'cloud_api';
+    console.log('[Meta] exchange-token mode:', connectionMode);
+
+    if (!access_token && !code) return res.status(400).json({ error: 'access_token ou code é obrigatório' });
     if (!META_APP_ID || !META_APP_SECRET) return res.status(500).json({ error: 'META_APP_ID/META_APP_SECRET não configurados' });
 
     try {
+      // 0. Embedded Signup v4: se veio `code` (e não access_token), troca por
+      //    access_token via /oauth/access_token. Pra v4 não precisa redirect_uri
+      //    — a Meta valida implícito via config_id do FB.login. Se veio
+      //    access_token (v3 legacy), usa direto sem trocar.
+      let token: string = access_token || '';
+      if (!access_token && code) {
+        const exchangeRes = await fetch(
+          `https://graph.facebook.com/v21.0/oauth/access_token?client_id=${META_APP_ID}` +
+          `&client_secret=${META_APP_SECRET}&code=${encodeURIComponent(code)}`
+        );
+        const exchangeData = await exchangeRes.json();
+        if (exchangeData.error || !exchangeData.access_token) {
+          console.error('[Meta] code->token exchange error:', JSON.stringify(exchangeData));
+          return res.status(400).json({
+            error: `Falha ao trocar code por token: ${exchangeData.error?.message || 'sem access_token na resposta'}`,
+          });
+        }
+        token = exchangeData.access_token;
+        console.log('[Meta] code trocado por access_token com sucesso');
+      }
+
       // 1. Inspeciona o token para extrair WABA IDs autorizados
       const appToken = encodeURIComponent(`${META_APP_ID}|${META_APP_SECRET}`);
       const debugRes = await fetch(
@@ -10133,6 +10160,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
             token_expires_at: expiresAt,
             is_active: true,
             connected_at: new Date().toISOString(),
+            mode: connectionMode,
           },
           { onConflict: 'user_id,waba_id' }
         );
@@ -10160,7 +10188,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       //    número fora da Cloud API com 2FA, vai falhar e ele precisa
       //    desativar a verificação em duas etapas no WhatsApp Business app
       //    antes de conectar.
-      if (phoneNumberId && finalToken) {
+      //    Em modo coexistence o número continua ativo no app WhatsApp Business
+      //    e a Meta proíbe registrá-lo na Cloud API — então pulamos esse passo.
+      if (connectionMode === 'coexistence') {
+        console.log('[Meta] mode=coexistence — pulando POST /register (número segue no app WA Business)');
+      } else if (phoneNumberId && finalToken) {
         try {
           const regRes = await fetch(
             `https://graph.facebook.com/v21.0/${phoneNumberId}/register`,
@@ -10186,7 +10218,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         }
       }
 
-      res.json({ success: true, waba_id: wabaId, phone_number: phoneNumber, display_name: displayName });
+      res.json({ success: true, waba_id: wabaId, phone_number: phoneNumber, display_name: displayName, mode: connectionMode });
     } catch (err: any) {
       console.error('[Meta] exchange-token error:', err);
       res.status(500).json({ error: err.message });
@@ -10445,7 +10477,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const { data: acc, error: accErr } = await supabase
       .from('whatsapp_business_accounts')
-      .select('id, waba_id, phone_number_id, phone_number, display_name, access_token, is_active, token_expires_at')
+      .select('id, waba_id, phone_number_id, phone_number, display_name, access_token, is_active, token_expires_at, mode')
       .eq('user_id', userId)
       .order('connected_at', { ascending: false })
       .limit(1)
@@ -10518,6 +10550,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
             ? undefined
             : 'Faça o cliente refazer o select-number para reativar a row, OU rode UPDATE manual no banco setando is_active=true.',
         },
+        (() => {
+          const mode = (acc as any).mode || 'cloud_api';
+          return {
+            id: 'mode_active',
+            label: 'Modo de conexão',
+            ok: true,
+            detail: `Modo ativo: ${mode} (${mode === 'coexistence' ? 'WhatsApp Business app continua no celular' : 'número exclusivo Cloud API'})`,
+          };
+        })(),
       ];
 
       return res.json({ account, checks, meta_panel_reminder: META_PANEL_REMINDER });
@@ -10541,6 +10582,17 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       } catch (e: any) {
         return { ok: false, status: 0, data: null, networkError: e?.message || 'Erro de rede' };
       }
+    };
+
+    // ── 0. mode_active (informativo) ───────────────────────────────────────
+    const accMode: string = (acc as any).mode || 'cloud_api';
+    const checkModeActive = async (): Promise<Check> => {
+      return {
+        id: 'mode_active',
+        label: 'Modo de conexão',
+        ok: true,
+        detail: `Modo ativo: ${accMode} (${accMode === 'coexistence' ? 'WhatsApp Business app continua no celular' : 'número exclusivo Cloud API'})`,
+      };
     };
 
     // ── 1. env_app_secret ──────────────────────────────────────────────────
@@ -10752,6 +10804,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         };
       }
       const status = phoneData.code_verification_status;
+      // Em Coexistence Mode, o número não passa pelo /register da Cloud API — ele continua
+      // ativo no WhatsApp Business app. Então esse check vira informativo (ok=true).
+      if (accMode === 'coexistence') {
+        return {
+          id: 'phone_registered',
+          label: 'Número registrado na Cloud API (VERIFIED)',
+          ok: true,
+          detail: `N/A em Coexistence Mode (número não passa por register Cloud API). code_verification_status atual: ${status || 'desconhecido'}.`,
+        };
+      }
       const ok = status === 'VERIFIED';
       return {
         id: 'phone_registered',
@@ -10869,6 +10931,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       checkAppSubscribedOnWaba(),
       checkDbRowIsActive(),
       checkTokenValid(), // popula debugTokenData
+      checkModeActive(),
     ]);
 
     // Fase 2: dependem de phase 1 (debugTokenData, phoneData)
@@ -10897,12 +10960,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       'app_subscribed_on_waba',
       'db_row_is_active',
       'token_valid',
+      'mode_active',
     ]);
     const phase2Checks = unwrap(phase2, ['token_scopes', 'phone_registered']);
 
-    // Ordem final: env → token → waba → phone → subscribe → db
+    // Ordem final: mode → env → token → waba → phone → subscribe → db
     const allChecks = [...phase1Checks, ...phase2Checks];
     const order = [
+      'mode_active',
       'env_app_secret',
       'env_encryption_key',
       'token_valid',
