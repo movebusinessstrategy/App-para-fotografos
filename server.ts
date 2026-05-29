@@ -1687,7 +1687,6 @@ async function startServer() {
   app.get('/api/whatsapp/status', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const instanceName = getInstanceName(userId);
 
     // Baileys direto
     const baileysStatus = BaileysManager.getStatus(userId);
@@ -1698,17 +1697,23 @@ async function startServer() {
       return res.json({ connected: false, provider: 'baileys', state: 'connecting', whatsapp: { connected: false } });
     }
 
-    // Fallback: Meta API se configurada
+    // Fallback: Meta Cloud API. Filtra is_active=true porque o user pode ter
+    // múltiplas rows (uma ativa + histórico inativo após troca-número). Sem
+    // is_active, maybeSingle estoura PGRST116 e cai no catch silencioso, daí
+    // a UI mostrava "Conectar" mesmo com Cloud API funcionando.
     try {
       const { data: metaAccount } = await supabase
         .from('whatsapp_business_accounts')
         .select('phone_number, display_name')
         .eq('user_id', userId)
+        .eq('is_active', true)
         .maybeSingle();
       if (metaAccount) {
         return res.json({ connected: true, provider: 'meta', phone: metaAccount.phone_number, whatsapp: { connected: true } });
       }
-    } catch {}
+    } catch (err: any) {
+      console.error('[Status] Erro ao consultar Meta Cloud:', err?.message || err);
+    }
 
     return res.json({ connected: false, provider: 'baileys', whatsapp: { connected: false } });
   });
@@ -2133,9 +2138,16 @@ async function startServer() {
         const cleanFrom = normalizeBrazilianPhone(fromNumber.replace(/\D/g, ''));
         const now = new Date().toISOString();
 
+        // wa_number = o NOSSO número (display_phone_number da WABA), só dígitos.
+        // Sem isso, /api/inbox/conversations.eq('wa_number', X) não encontra
+        // a conversa — fica invisível na UI mesmo persistida no banco.
+        const ourDisplayPhone = value.metadata?.display_phone_number || '';
+        const ourWaNumber = ourDisplayPhone.replace(/\D/g, '');
+
         const { error: msgErr } = await supabaseAdmin.from('wa_messages').insert({
           user_id: waAccount.user_id,
           phone: cleanFrom,
+          ...(ourWaNumber ? { wa_number: ourWaNumber } : {}),
           message_id: msgId || `meta-in-${Date.now()}`,
           body: msgBody,
           from_me: false,
@@ -2151,6 +2163,7 @@ async function startServer() {
         const metaConvPayload: Record<string, any> = {
           user_id: waAccount.user_id, phone: cleanFrom,
           last_message: lastMsg, last_message_at: now, unread_count: 1,
+          ...(ourWaNumber ? { wa_number: ourWaNumber } : {}),
           ...(contactName ? { contact_name: contactName } : {}),
         };
         const { data: metaUpdated, error: metaUpdateErr } = await supabaseAdmin
@@ -2329,9 +2342,27 @@ async function startServer() {
   app.get('/api/inbox/conversations', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const db = supabaseAdmin;
-    // Filtra pelas conversas do WhatsApp atualmente conectado. Se nenhum número
-    // está conectado, devolve vazio (sem WhatsApp = sem Inbox).
-    const waNumber = BaileysManager.getConnectedPhone(userId) || '';
+    // Filtra pelas conversas do WhatsApp atualmente conectado.
+    // Tenta Baileys primeiro, depois fallback Meta Cloud (sem isso, usuário
+    // que migrou pra Cloud API via Embedded Signup nunca vê conversa — Baileys
+    // não tem sessão, getConnectedPhone retorna null, query retorna []).
+    let waNumber = BaileysManager.getConnectedPhone(userId) || '';
+    if (!waNumber) {
+      try {
+        const userDb = (req as any).supabase as SupabaseClient;
+        const { data: metaAcc } = await userDb
+          .from('whatsapp_business_accounts')
+          .select('phone_number')
+          .eq('user_id', userId)
+          .eq('is_active', true)
+          .maybeSingle();
+        if (metaAcc?.phone_number) {
+          waNumber = metaAcc.phone_number.replace(/\D/g, '');
+        }
+      } catch (err: any) {
+        console.error('[Inbox] Erro fallback Meta:', err?.message || err);
+      }
+    }
     if (!waNumber) {
       return res.json([]);
     }
@@ -2402,7 +2433,21 @@ async function startServer() {
     const phone12 = phoneRaw.startsWith('55') ? phoneRaw : '55' + phoneRaw;
     const phone13 = normalizeBrazilianPhone(phone12); // versão com "9" adicionado
     const limit = Number(req.query.limit) || 60;
-    const waNumber = BaileysManager.getConnectedPhone(userId) || '';
+    // Mesmo fallback do /conversations: tenta Baileys, depois Meta Cloud.
+    let waNumber = BaileysManager.getConnectedPhone(userId) || '';
+    if (!waNumber) {
+      try {
+        const { data: metaAcc } = await supabase
+          .from('whatsapp_business_accounts')
+          .select('phone_number')
+          .eq('user_id', userId)
+          .eq('is_active', true)
+          .maybeSingle();
+        if (metaAcc?.phone_number) {
+          waNumber = metaAcc.phone_number.replace(/\D/g, '');
+        }
+      } catch {}
+    }
     if (!waNumber) {
       return res.json([]);
     }
