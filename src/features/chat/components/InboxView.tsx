@@ -12,6 +12,7 @@ import { useWaStatus } from '../hooks/useWaStatus';
 import { ConversationItem } from './ConversationItem';
 import { MessageBubble } from './MessageBubble';
 import { AudioRecorder } from './AudioRecorder';
+import { CrmDealStrip } from './CrmDealStrip';
 import { ConnectChannelModal } from '../../../components/vendas/ConnectChannelModal';
 import { NewConversationModal } from './NewConversationModal';
 import { WhatsAppTemplatesManager } from '../../../components/settings/WhatsAppTemplatesManager';
@@ -488,6 +489,16 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
                 </button>
               </div>
             </div>
+
+            {/* Faixa do CRM: só aparece quando o contato tem deal no funil. */}
+            {selectedPhone && (
+              <CrmDealStrip
+                phone={selectedPhone}
+                deals={deals}
+                stages={stages}
+                onUpdate={onDealUpdated}
+              />
+            )}
 
             {/* Mensagens - fundo e scroll como irmãos para evitar conflito de position CSS */}
             <div className="flex-1 min-h-0 relative">
