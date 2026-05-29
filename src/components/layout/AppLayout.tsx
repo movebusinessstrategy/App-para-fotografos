@@ -44,6 +44,7 @@ const TITLE_MAP: Record<string, string> = {
   "/jobs": "Jobs",
   "/pipeline": "Funil de Vendas",
   "/vendas": "Vendas",
+  "/whatsapp": "WhatsApp",
   "/calendar": "Agenda",
   "/settings": "Configurações",
   "/finance": "Financeiro",
@@ -102,8 +103,9 @@ export default function AppLayout() {
               </div>
             }
           >
-            {/* Vendas não tem padding - precisa de flex-1 para o chat funcionar */}
-            {location.pathname.startsWith('/vendas') ? (
+            {/* /vendas e /whatsapp não têm padding — o chat precisa ocupar
+                a tela inteira pra ficar parecido com o WhatsApp Web. */}
+            {location.pathname.startsWith('/vendas') || location.pathname.startsWith('/whatsapp') ? (
               <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
                 <Outlet context={{ openContactModal }} />
               </div>
