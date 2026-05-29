@@ -10148,6 +10148,189 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
   });
 
+  // Lista TODAS as WABAs e números autorizados no token salvo. Usa o
+  // debug_token pra descobrir as WABAs (granular_scopes) e o Graph API
+  // pra listar os phone_numbers de cada uma. Resolve o caso comum onde
+  // o Embedded Signup expõe múltiplos números (Test Number + reais)
+  // e a gente só pegou o primeiro no exchange-token.
+  app.get('/api/meta/whatsapp/available-numbers', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    if (!META_APP_ID || !META_APP_SECRET) {
+      return res.status(500).json({ error: 'META_APP_ID/META_APP_SECRET não configurados' });
+    }
+
+    const { data: acc } = await supabase
+      .from('whatsapp_business_accounts')
+      .select('waba_id, phone_number_id, access_token')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .maybeSingle();
+    if (!acc?.access_token) return res.status(400).json({ error: 'Nenhuma conta conectada' });
+
+    const token = decryptIfNeeded(acc.access_token);
+    if (!token) return res.status(500).json({ error: 'Falha ao decifrar token' });
+
+    try {
+      // 1. debug_token pra extrair todas as WABAs autorizadas
+      const appToken = encodeURIComponent(`${META_APP_ID}|${META_APP_SECRET}`);
+      const debugRes = await fetch(
+        `https://graph.facebook.com/v21.0/debug_token?input_token=${encodeURIComponent(token)}&access_token=${appToken}`
+      );
+      const debugData = await debugRes.json();
+      if (debugData.error) {
+        return res.status(400).json({ error: `debug_token: ${debugData.error.message}` });
+      }
+
+      const scopes = debugData.data?.granular_scopes || [];
+      const wabaScope = scopes.find((s: any) => s.scope === 'whatsapp_business_management');
+      const wabaIds: string[] = wabaScope?.target_ids || [];
+
+      // Garantir que a WABA já salva também aparece (mesmo que não esteja
+      // mais nas granular_scopes por alguma esquisitice)
+      if (acc.waba_id && !wabaIds.includes(acc.waba_id)) wabaIds.unshift(acc.waba_id);
+
+      // 2. Pra cada WABA, busca phone_numbers + dados básicos da WABA
+      const wabas: any[] = [];
+      for (const wid of wabaIds) {
+        try {
+          const [wabaInfoRes, numbersRes] = await Promise.all([
+            fetch(`https://graph.facebook.com/v21.0/${wid}?fields=id,name&access_token=${encodeURIComponent(token)}`),
+            fetch(`https://graph.facebook.com/v21.0/${wid}/phone_numbers?access_token=${encodeURIComponent(token)}`),
+          ]);
+          const wabaInfo = await wabaInfoRes.json();
+          const numbersData = await numbersRes.json();
+          wabas.push({
+            waba_id: wid,
+            waba_name: wabaInfo.name || null,
+            numbers: Array.isArray(numbersData.data)
+              ? numbersData.data.map((p: any) => ({
+                  phone_number_id: p.id,
+                  display_phone_number: p.display_phone_number,
+                  verified_name: p.verified_name,
+                  quality_rating: p.quality_rating,
+                  code_verification_status: p.code_verification_status,
+                  // marca qual está ativo no momento pra UI destacar
+                  is_active: p.id === acc.phone_number_id,
+                }))
+              : [],
+          });
+        } catch (err: any) {
+          console.error(`[Meta] falha listando WABA ${wid}:`, err.message);
+          wabas.push({ waba_id: wid, waba_name: null, numbers: [], error: err.message });
+        }
+      }
+
+      res.json({ wabas, current: { waba_id: acc.waba_id, phone_number_id: acc.phone_number_id } });
+    } catch (err: any) {
+      console.error('[Meta] available-numbers error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Troca o número ativo da conta WhatsApp do user. Recebe (waba_id,
+  // phone_number_id) — busca os dados via Graph API, atualiza/cria o registro
+  // ativo no DB, registra o phone na Cloud API e subscribe webhook.
+  // O token long-lived atual cobre todas as WABAs autorizadas no Embedded Signup,
+  // então não precisa reconectar.
+  app.post('/api/meta/whatsapp/select-number', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { waba_id: newWabaId, phone_number_id: newPhoneId } = req.body || {};
+
+    if (!newWabaId || !newPhoneId) {
+      return res.status(400).json({ error: 'waba_id e phone_number_id são obrigatórios' });
+    }
+
+    // Pega o token atual (qualquer linha ativa do user serve — todas
+    // compartilham o mesmo long-lived token vindo do Embedded Signup)
+    const { data: existing } = await supabase
+      .from('whatsapp_business_accounts')
+      .select('access_token, token_expires_at')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .maybeSingle();
+    if (!existing?.access_token) return res.status(400).json({ error: 'Nenhuma conta conectada' });
+
+    const token = decryptIfNeeded(existing.access_token);
+    if (!token) return res.status(500).json({ error: 'Falha ao decifrar token' });
+
+    try {
+      // 1. Confirma o número existe e pega os dados (display_phone_number, verified_name)
+      const phoneRes = await fetch(
+        `https://graph.facebook.com/v21.0/${newPhoneId}?fields=id,display_phone_number,verified_name&access_token=${encodeURIComponent(token)}`
+      );
+      const phoneData = await phoneRes.json();
+      if (phoneData.error) {
+        return res.status(400).json({ error: `Número não acessível: ${phoneData.error.message}` });
+      }
+
+      // 2. Desativa todas as WABAs ativas atuais do user
+      await supabase
+        .from('whatsapp_business_accounts')
+        .update({ is_active: false })
+        .eq('user_id', userId);
+
+      // 3. Reusa o token cifrado original — não precisa re-encriptar
+      // (encryptIfNeeded é idempotente; passa direto)
+      const { error } = await supabase
+        .from('whatsapp_business_accounts')
+        .upsert(
+          {
+            user_id: userId,
+            waba_id: newWabaId,
+            phone_number_id: newPhoneId,
+            phone_number: phoneData.display_phone_number || null,
+            display_name: phoneData.verified_name || null,
+            access_token: existing.access_token,
+            token_encrypted: existing.access_token?.startsWith('enc:v1:'),
+            token_expires_at: existing.token_expires_at,
+            is_active: true,
+            connected_at: new Date().toISOString(),
+          },
+          { onConflict: 'user_id,waba_id' }
+        );
+      if (error) return res.status(500).json({ error: error.message });
+
+      // 4. Garante que o webhook está subscrito na nova WABA
+      try {
+        await fetch(
+          `https://graph.facebook.com/v21.0/${newWabaId}/subscribed_apps`,
+          { method: 'POST', headers: { Authorization: `Bearer ${token}` } }
+        );
+      } catch (subErr) {
+        console.error('[Meta] subscribed_apps falhou (não bloqueia):', subErr);
+      }
+
+      // 5. Registra o phone number novo (PIN 000000 — só funciona sem 2FA)
+      try {
+        const regRes = await fetch(
+          `https://graph.facebook.com/v21.0/${newPhoneId}/register`,
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messaging_product: 'whatsapp', pin: '000000' }),
+          }
+        );
+        const regData = await regRes.json();
+        if (regData.error) console.warn('[Meta] register falhou:', regData.error.message);
+      } catch (regErr) {
+        console.error('[Meta] register exception:', regErr);
+      }
+
+      res.json({
+        success: true,
+        waba_id: newWabaId,
+        phone_number: phoneData.display_phone_number,
+        display_name: phoneData.verified_name,
+      });
+    } catch (err: any) {
+      console.error('[Meta] select-number error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Tenta renovar o long-lived token sem reabrir o Embedded Signup. Funciona
   // enquanto o token atual ainda é válido (idealmente rodar quando faltam
   // 14d pra expirar). Depois de expirado, só re-autorização do user resolve.

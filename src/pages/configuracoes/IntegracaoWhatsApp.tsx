@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ChevronLeft, MessageCircle, CheckCircle2, Phone, RefreshCw } from "lucide-react";
+import { ChevronLeft, MessageCircle, CheckCircle2, Phone, RefreshCw, RefreshCcw } from "lucide-react";
 import { authFetch } from "../../utils/authFetch";
 import { ConfirmModal } from "../../components/ui/ConfirmModal";
 import { WhatsAppTemplatesManager } from "../../components/settings/WhatsAppTemplatesManager";
+import { PhoneNumberPicker } from "./PhoneNumberPicker";
 
 type Tab = "conexao" | "templates";
 
@@ -21,6 +22,7 @@ export default function IntegracaoWhatsApp() {
   const [connecting, setConnecting] = useState(false);
   const [subscribing, setSubscribing] = useState(false);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [phonePickerOpen, setPhonePickerOpen] = useState(false);
 
   const checkStatus = async () => {
     try {
@@ -188,6 +190,14 @@ export default function IntegracaoWhatsApp() {
             <div className="space-y-3">
               <div className="flex flex-wrap gap-2">
                 <button
+                  onClick={() => setPhonePickerOpen(true)}
+                  title="Escolher outro número entre os que você autorizou no Facebook"
+                  className="flex items-center gap-2 px-4 py-2 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 rounded-lg text-sm font-semibold"
+                >
+                  <RefreshCcw size={13} />
+                  Trocar número
+                </button>
+                <button
                   onClick={subscribeWebhook}
                   disabled={subscribing}
                   title="Reativa o recebimento de mensagens no Inbox"
@@ -244,6 +254,12 @@ export default function IntegracaoWhatsApp() {
         variant="warning"
         onConfirm={disconnect}
         onCancel={() => setConfirmDisconnect(false)}
+      />
+
+      <PhoneNumberPicker
+        open={phonePickerOpen}
+        onClose={() => setPhonePickerOpen(false)}
+        onChanged={checkStatus}
       />
     </div>
   );
