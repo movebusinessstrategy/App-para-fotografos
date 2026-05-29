@@ -36,18 +36,50 @@ export function PhoneNumberPicker({ open, onClose, onChanged }: Props) {
   const [wabas, setWabas] = useState<Waba[]>([]);
   const [selecting, setSelecting] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
+  // Parser seguro de respostas: o vercel.json reescreve /api/* pra Render,
+  // mas no cold start (Render free tier dormindo) pode voltar HTML do
+  // próprio Vercel em vez de JSON. Tratamos isso em vez de explodir.
+  const safeJson = async (r: Response): Promise<any> => {
+    const text = await r.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      // Detecta caso clássico: HTML voltando em vez de JSON
+      if (text.trim().startsWith("<")) {
+        throw new Error(
+          "Servidor demorou a responder (cold start). Aguarde 30s e tente de novo.",
+        );
+      }
+      throw new Error("Resposta inválida do servidor.");
+    }
+  };
+
+  const fetchNumbers = async (attempt = 1) => {
     setLoading(true);
     setError(null);
-    authFetch("/api/meta/whatsapp/available-numbers")
-      .then(async r => {
-        const data = await r.json();
-        if (!r.ok) throw new Error(data?.error || "Erro ao listar números");
-        setWabas(data.wabas || []);
-      })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
+    try {
+      const r = await authFetch("/api/meta/whatsapp/available-numbers");
+      const data = await safeJson(r);
+      if (!r.ok) throw new Error(data?.error || "Erro ao listar números");
+      setWabas(data.wabas || []);
+    } catch (e: any) {
+      // Cold start? retry uma vez com delay (Render acorda em ~30s)
+      const isCold = (e?.message || "").includes("cold start") || (e?.message || "").includes("Failed to fetch");
+      if (isCold && attempt === 1) {
+        setError("Acordando servidor… (tenta de novo em 5s)");
+        setTimeout(() => fetchNumbers(2), 5000);
+        return;
+      }
+      setError(e?.message || "Erro ao listar números");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    fetchNumbers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const handleSelect = async (waba_id: string, n: Number) => {
@@ -61,13 +93,15 @@ export function PhoneNumberPicker({ open, onClose, onChanged }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ waba_id, phone_number_id: n.phone_number_id }),
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (!res.ok) {
         setError(data?.error || "Erro ao trocar número");
         return;
       }
       onChanged();
       onClose();
+    } catch (e: any) {
+      setError(e?.message || "Erro ao trocar número");
     } finally {
       setSelecting(null);
     }
@@ -112,9 +146,17 @@ export function PhoneNumberPicker({ open, onClose, onChanged }: Props) {
               <Loader2 size={20} className="animate-spin text-gray-400" />
             </div>
           ) : error ? (
-            <div className="flex items-start gap-2 p-3 rounded-xl bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 text-rose-700 dark:text-rose-300 text-sm">
-              <AlertCircle size={15} className="flex-shrink-0 mt-0.5" />
-              <span>{error}</span>
+            <div className="space-y-3">
+              <div className="flex items-start gap-2 p-3 rounded-xl bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 text-rose-700 dark:text-rose-300 text-sm">
+                <AlertCircle size={15} className="flex-shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+              <button
+                onClick={() => fetchNumbers()}
+                className="w-full py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm font-semibold text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
+              >
+                Tentar de novo
+              </button>
             </div>
           ) : totalNumbers === 0 ? (
             <div className="text-center py-10 text-gray-500 dark:text-gray-400">
