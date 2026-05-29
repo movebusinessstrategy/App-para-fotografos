@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ChevronLeft, MessageCircle, CheckCircle2, Phone, RefreshCw, RefreshCcw } from "lucide-react";
+import { ChevronLeft, MessageCircle, CheckCircle2, Phone, RefreshCw, RefreshCcw, Stethoscope } from "lucide-react";
 import { authFetch } from "../../utils/authFetch";
 import { ConfirmModal } from "../../components/ui/ConfirmModal";
 import { WhatsAppTemplatesManager } from "../../components/settings/WhatsAppTemplatesManager";
 import { PhoneNumberPicker } from "./PhoneNumberPicker";
+import { DiagnosticPanel } from "./DiagnosticPanel";
 
 type Tab = "conexao" | "templates";
 
@@ -23,6 +24,7 @@ export default function IntegracaoWhatsApp() {
   const [subscribing, setSubscribing] = useState(false);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [phonePickerOpen, setPhonePickerOpen] = useState(false);
+  const [diagnosticOpen, setDiagnosticOpen] = useState(false);
 
   const checkStatus = async () => {
     try {
@@ -198,6 +200,14 @@ export default function IntegracaoWhatsApp() {
                   Trocar número
                 </button>
                 <button
+                  onClick={() => setDiagnosticOpen(true)}
+                  title="Roda uma bateria de checagens na conexão e mostra o que tá quebrado"
+                  className="flex items-center gap-2 px-4 py-2 bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/30 rounded-lg text-sm font-semibold"
+                >
+                  <Stethoscope size={13} />
+                  Diagnosticar
+                </button>
+                <button
                   onClick={subscribeWebhook}
                   disabled={subscribing}
                   title="Reativa o recebimento de mensagens no Inbox"
@@ -260,6 +270,11 @@ export default function IntegracaoWhatsApp() {
         open={phonePickerOpen}
         onClose={() => setPhonePickerOpen(false)}
         onChanged={checkStatus}
+      />
+
+      <DiagnosticPanel
+        open={diagnosticOpen}
+        onClose={() => setDiagnosticOpen(false)}
       />
     </div>
   );
