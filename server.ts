@@ -10037,7 +10037,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.post('/api/meta/whatsapp/exchange-token', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { access_token, code, mode } = req.body;
+    const { access_token, code, mode, redirect_uri } = req.body;
 
     // Normaliza mode: só aceita 'cloud_api' e 'coexistence'; default cloud_api.
     // Em coexistence o número segue ativo no app WhatsApp Business e o
@@ -10056,19 +10056,30 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       //    access_token (v3 legacy), usa direto sem trocar.
       let token: string = access_token || '';
       if (!access_token && code) {
+        // Meta v4 EXIGE redirect_uri batendo com o usado no FB.login. Pra popup
+        // do Embedded Signup, FB SDK usa o origin da página como redirect_uri
+        // implícito. Backend precisa ecoar o mesmo valor que o frontend mandou
+        // (window.location.origin). Se vier vazio, Meta rejeita com
+        // "Error validating verification code".
+        const exchangeParams = new URLSearchParams({
+          client_id: META_APP_ID,
+          client_secret: META_APP_SECRET,
+          code,
+        });
+        if (redirect_uri) exchangeParams.set('redirect_uri', redirect_uri);
+
         const exchangeRes = await fetch(
-          `https://graph.facebook.com/v21.0/oauth/access_token?client_id=${META_APP_ID}` +
-          `&client_secret=${META_APP_SECRET}&code=${encodeURIComponent(code)}`
+          `https://graph.facebook.com/v21.0/oauth/access_token?${exchangeParams.toString()}`
         );
         const exchangeData = await exchangeRes.json();
         if (exchangeData.error || !exchangeData.access_token) {
-          console.error('[Meta] code->token exchange error:', JSON.stringify(exchangeData));
+          console.error('[Meta] code->token exchange error:', JSON.stringify(exchangeData), 'redirect_uri usado:', redirect_uri || '(vazio)');
           return res.status(400).json({
             error: `Falha ao trocar code por token: ${exchangeData.error?.message || 'sem access_token na resposta'}`,
           });
         }
         token = exchangeData.access_token;
-        console.log('[Meta] code trocado por access_token com sucesso');
+        console.log('[Meta] code trocado por access_token com sucesso (redirect_uri:', redirect_uri || '(vazio)', ')');
       }
 
       // 1. Inspeciona o token para extrair WABA IDs autorizados

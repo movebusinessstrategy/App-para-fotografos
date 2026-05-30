@@ -73,10 +73,18 @@ export default function IntegracaoWhatsApp() {
     FB.login(
       (response: any) => {
         if (response.authResponse?.code) {
+          // redirect_uri precisa bater com o origin que o FB SDK usou
+          // implicitamente no popup. Sem isso Meta retorna "Error validating
+          // verification code". O origin também precisa estar em
+          // Facebook Login for Business → Settings → Valid OAuth Redirect URIs.
           authFetch("/api/meta/whatsapp/exchange-token", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ code: response.authResponse.code, mode }),
+            body: JSON.stringify({
+              code: response.authResponse.code,
+              mode,
+              redirect_uri: window.location.origin,
+            }),
           })
             .then(r => r.json())
             .then(data => {
