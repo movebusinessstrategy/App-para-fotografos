@@ -26,6 +26,15 @@ export default function IntegracaoWhatsApp() {
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [phonePickerOpen, setPhonePickerOpen] = useState(false);
   const [diagnosticOpen, setDiagnosticOpen] = useState(false);
+  // Plan B (fallback manual): só aparece depois de 1 falha do fluxo automático.
+  // Chatwoot e Twilio Tech Provider oferecem o mesmo escape hatch — System
+  // User Token de 60 dias + WABA ID + Phone Number ID colados na mão.
+  const [autoFlowFailed, setAutoFlowFailed] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualToken, setManualToken] = useState("");
+  const [manualWabaId, setManualWabaId] = useState("");
+  const [manualPhoneId, setManualPhoneId] = useState("");
+  const [manualSubmitting, setManualSubmitting] = useState(false);
 
   const checkStatus = async () => {
     try {
@@ -76,25 +85,47 @@ export default function IntegracaoWhatsApp() {
       extras.featureType = "whatsapp_business_app_onboarding";
     }
 
+    // Captura a URL launcher ANTES de chamar FB.login. Se capturarmos no
+    // callback, o user pode ter navegado durante o popup e a URL fica
+    // inconsistente com a usada pelo FB SDK como referência de origem.
+    // Normaliza removendo query string, hash e trailing slash — só
+    // origin+pathname canônico, que é o formato que Meta espera ver
+    // cadastrado em "Valid OAuth Redirect URIs".
+    const rawLauncher = window.location.origin + window.location.pathname;
+    const launcherUrl = rawLauncher.replace(/\/+$/, "");
+    console.log("[WA] launcher_url:", launcherUrl);
+
     setConnecting(mode);
     FB.login(
       (response: any) => {
         if (response.authResponse?.code) {
-          // No popup mode v4 o vínculo é via config_id — backend NÃO precisa
-          // (nem deve) mandar redirect_uri no exchange. Só passa code + mode.
+          // No popup mode v4 o vínculo é via config_id, MAS a Meta valida
+          // o redirect_uri no exchange contra "Valid OAuth Redirect URIs"
+          // do Facebook Login for Business. Tem que mandar a MESMA URL que
+          // originou o FB.login (window.location.origin+pathname) — não
+          // pode ser vazio nem staticxx (subdomínio interno do JS SDK,
+          // nunca aceito em produção). Padrão usado por Sinch, Y-Cloud e
+          // Dualhook.
           authFetch("/api/meta/whatsapp/exchange-token", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               code: response.authResponse.code,
               mode,
+              launcher_url: launcherUrl,
             }),
           })
             .then(r => r.json())
             .then(data => {
-              if (data.success) checkStatus();
-              else alert("Erro ao conectar: " + (data.error || "desconhecido"));
+              if (data.success) {
+                setAutoFlowFailed(false);
+                checkStatus();
+              } else {
+                setAutoFlowFailed(true);
+                alert("Erro ao conectar: " + (data.error || "desconhecido"));
+              }
             })
+            .catch(() => setAutoFlowFailed(true))
             .finally(() => setConnecting(null));
         } else {
           setConnecting(null);
@@ -120,6 +151,47 @@ export default function IntegracaoWhatsApp() {
     setConnected(false);
     setAccount(null);
     setConfirmDisconnect(false);
+  };
+
+  // Plan B: conectar manualmente colando System User Token de 60 dias.
+  // Backend aceita {access_token, waba_id, phone_number_id, mode} sem code.
+  // Esse fluxo é o que Chatwoot/Twilio Tech Provider oferecem como fallback
+  // quando Embedded Signup falha — token gerado em business.facebook.com >
+  // Configurações > Usuários > Usuários do sistema, escopo
+  // whatsapp_business_management + whatsapp_business_messaging.
+  const submitManual = async () => {
+    if (!manualToken.trim() || !manualWabaId.trim() || !manualPhoneId.trim()) {
+      alert("Preencha token, WABA ID e Phone Number ID.");
+      return;
+    }
+    setManualSubmitting(true);
+    try {
+      const res = await authFetch("/api/meta/whatsapp/exchange-token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          access_token: manualToken.trim(),
+          waba_id: manualWabaId.trim(),
+          phone_number_id: manualPhoneId.trim(),
+          mode: "cloud_api",
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setManualOpen(false);
+        setManualToken("");
+        setManualWabaId("");
+        setManualPhoneId("");
+        setAutoFlowFailed(false);
+        checkStatus();
+      } else {
+        alert("Erro: " + (data.error || "desconhecido"));
+      }
+    } catch (e: any) {
+      alert("Falha: " + (e?.message || "erro de rede"));
+    } finally {
+      setManualSubmitting(false);
+    }
   };
 
   const subscribeWebhook = async () => {
@@ -230,6 +302,21 @@ export default function IntegracaoWhatsApp() {
                   Cloud API tradicional — número sai do celular
                 </p>
               </div>
+
+              {/* Plan B: só aparece depois de falhar o fluxo automático */}
+              {autoFlowFailed && (
+                <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+                  <button
+                    onClick={() => setManualOpen(true)}
+                    className="text-sm font-medium text-emerald-700 dark:text-emerald-400 hover:underline"
+                  >
+                    Conectar manualmente (System User Token)
+                  </button>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    Use se o fluxo automático falhar. Gere o token em business.facebook.com &gt; Usuários do sistema.
+                  </p>
+                </div>
+              )}
             </div>
           ) : (
             <div className="space-y-3">
@@ -319,6 +406,74 @@ export default function IntegracaoWhatsApp() {
         open={diagnosticOpen}
         onClose={() => setDiagnosticOpen(false)}
       />
+
+      {/* Modal de conexão manual (Plan B) */}
+      {manualOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 space-y-4">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+              Conectar manualmente
+            </h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Cole um System User Token de 60 dias (escopo whatsapp_business_management + whatsapp_business_messaging) e os IDs da WABA e do número.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  System User Token
+                </label>
+                <input
+                  type="password"
+                  value={manualToken}
+                  onChange={e => setManualToken(e.target.value)}
+                  placeholder="EAAG..."
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  WABA ID
+                </label>
+                <input
+                  type="text"
+                  value={manualWabaId}
+                  onChange={e => setManualWabaId(e.target.value)}
+                  placeholder="1234567890"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Phone Number ID
+                </label>
+                <input
+                  type="text"
+                  value={manualPhoneId}
+                  onChange={e => setManualPhoneId(e.target.value)}
+                  placeholder="0987654321"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => setManualOpen(false)}
+                disabled={manualSubmitting}
+                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg disabled:opacity-60"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={submitManual}
+                disabled={manualSubmitting}
+                className="px-4 py-2 text-sm font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg disabled:opacity-60"
+              >
+                {manualSubmitting ? "Conectando…" : "Conectar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
