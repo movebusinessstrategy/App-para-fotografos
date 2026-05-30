@@ -10040,7 +10040,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.post('/api/meta/whatsapp/exchange-token', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { access_token, code, mode, launcher_url, waba_id: bodyWabaId, phone_number_id: bodyPhoneId } = req.body;
+    const { access_token, code, mode, launcher_url, fb_sdk_redirect_uri, waba_id: bodyWabaId, phone_number_id: bodyPhoneId } = req.body;
 
     // Normaliza mode: só aceita 'cloud_api' e 'coexistence'; default cloud_api.
     // Em coexistence o número segue ativo no app WhatsApp Business e o
@@ -10104,19 +10104,35 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           });
         }
 
-        // ACHADO EMPÍRICO (workflow #5 + fontes: Meta PHP SDK arquivada,
-        // Chatwoot, Bird, Twilio, Akash Tyagi 2026, Meta dev community
-        // thread 597333095976937): FB SDK em popup mode (response_type=code +
-        // config_id + override_default_response_type) NÃO faz redirect
-        // navegacional — o code volta via postMessage/xd_arbiter. Qualquer
-        // valor de redirect_uri no exchange gera subcode 36008 ("Error
-        // validating verification code"). Solução: OMITIR o parâmetro.
-        // launcher_url continua chegando pra auditoria/allowlist, mas não vai
-        // pro Meta.
+        // ACHADO EMPÍRICO (URL real do popup capturada em 2026-05-30): o FB
+        // SDK em popup mode + response_type=code USA o xd_arbiter COM HASH
+        // FRAGMENT ÚNICO POR CHAMADA como redirect_uri. Os IDs cb/origin/frame
+        // são gerados frescos a cada FB.login — backend NÃO consegue prever.
+        // Frontend captura a URL via monkey-patch em window.open e envia em
+        // fb_sdk_redirect_uri. Sem isso → subcode 36008.
+        //
+        // Tentativas anteriores que falharam: window.location.origin (sem path),
+        // origin+pathname, xd_arbiter sem hash, vazio, omitir.
+        if (!fb_sdk_redirect_uri || typeof fb_sdk_redirect_uri !== 'string') {
+          return res.status(400).json({
+            error: 'fb_sdk_redirect_uri obrigatório. Frontend precisa capturar a URL via monkey-patch em window.open antes de FB.login (atualize o bundle).',
+          });
+        }
+        // Segurança: só aceita URLs do xd_arbiter da Meta — bloqueia injeção
+        // de URL atacante que poderia ser usada pra confundir o exchange.
+        if (!fb_sdk_redirect_uri.startsWith('https://staticxx.facebook.com/x/connect/xd_arbiter/')) {
+          console.warn('[Meta] fb_sdk_redirect_uri REJEITADO (não é xd_arbiter):', fb_sdk_redirect_uri);
+          return res.status(400).json({
+            error: 'fb_sdk_redirect_uri inválido — esperado xd_arbiter da Meta.',
+          });
+        }
+        console.log('[Meta] fb_sdk_redirect_uri capturado:', fb_sdk_redirect_uri.slice(0, 80) + '...');
+
         const exchangeParams = new URLSearchParams({
           client_id: META_APP_ID,
           client_secret: META_APP_SECRET,
           code,
+          redirect_uri: fb_sdk_redirect_uri,
         });
 
         // Versão alinhada com o FB.init do frontend (v21.0).
