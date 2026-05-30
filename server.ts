@@ -10037,7 +10037,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.post('/api/meta/whatsapp/exchange-token', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { access_token, code, mode, redirect_uri } = req.body;
+    const { access_token, code, mode } = req.body;
 
     // Normaliza mode: só aceita 'cloud_api' e 'coexistence'; default cloud_api.
     // Em coexistence o número segue ativo no app WhatsApp Business e o
@@ -10050,52 +10050,49 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!META_APP_ID || !META_APP_SECRET) return res.status(500).json({ error: 'META_APP_ID/META_APP_SECRET não configurados' });
 
     try {
-      // 0. Embedded Signup v4: se veio `code` (e não access_token), troca por
-      //    access_token via /oauth/access_token. Pra v4 não precisa redirect_uri
-      //    — a Meta valida implícito via config_id do FB.login. Se veio
-      //    access_token (v3 legacy), usa direto sem trocar.
+      // 0. Embedded Signup v4 (popup mode): se veio `code` (e não access_token),
+      //    troca por access_token via /oauth/access_token. NÃO mandar redirect_uri
+      //    — o vínculo é via config_id do FB.login, não via redirect_uri. Esse é
+      //    o padrão usado em produção por Chatwoot, Bird e Y-Cloud.
+      //
+      //    IMPORTANTE: code da Meta é one-time-use. Qualquer tentativa que falhe
+      //    invalida o code; retries em sequência viram cascata de "Error
+      //    validating verification code". Por isso UMA única chamada — se
+      //    falhar, propaga o erro literal da Meta pra o frontend.
       let token: string = access_token || '';
       if (!access_token && code) {
-        // FB SDK no popup do Embedded Signup escolhe o redirect_uri implícito,
-        // que varia entre window.location.origin, window.location.href, ou
-        // um URI interno do FB. A Meta exige que o redirect_uri no exchange
-        // BATA com o usado no popup, mas a SDK não expõe qual foi. Estratégia:
-        // tenta as variações conhecidas em ordem, fica com a primeira que
-        // retornar access_token. Loga qual funcionou pra investigação.
-        const candidates: Array<string | undefined> = [];
-        if (redirect_uri) {
-          candidates.push(redirect_uri); // window.location.origin (do frontend)
-          // Algumas integrações Embedded Signup precisam de trailing slash
-          candidates.push(redirect_uri.endsWith('/') ? redirect_uri.slice(0, -1) : redirect_uri + '/');
-        }
-        candidates.push(undefined); // sem redirect_uri (alguns fluxos v4 funcionam assim)
+        const exchangeParams = new URLSearchParams({
+          client_id: META_APP_ID,
+          client_secret: META_APP_SECRET,
+          code,
+        });
 
-        let lastError: any = null;
-        for (const candidate of candidates) {
-          const exchangeParams = new URLSearchParams({
-            client_id: META_APP_ID,
-            client_secret: META_APP_SECRET,
-            code,
-          });
-          if (candidate) exchangeParams.set('redirect_uri', candidate);
+        const exchangeRes = await fetch(
+          `https://graph.facebook.com/v22.0/oauth/access_token?${exchangeParams.toString()}`
+        );
+        const exchangeData = await exchangeRes.json();
 
-          const exchangeRes = await fetch(
-            `https://graph.facebook.com/v21.0/oauth/access_token?${exchangeParams.toString()}`
-          );
-          const exchangeData = await exchangeRes.json();
-          if (exchangeData.access_token) {
-            token = exchangeData.access_token;
-            console.log('[Meta] code trocado por access_token com sucesso. redirect_uri vencedor:', candidate ?? '(omitido)');
-            break;
-          }
-          lastError = exchangeData;
-          console.warn('[Meta] tentativa redirect_uri=', candidate ?? '(omitido)', 'falhou:', exchangeData.error?.message);
-        }
-
-        if (!token) {
-          console.error('[Meta] todas as tentativas de exchange falharam. Último erro:', JSON.stringify(lastError));
+        if (exchangeData.access_token) {
+          token = exchangeData.access_token;
+          console.log('[Meta] code trocado por access_token com sucesso (sem redirect_uri, padrão v4 popup).');
+        } else {
+          // Log detalhado pra diferenciar redirect_uri mismatch (code 100) de
+          // code já consumido (code 100 subcode 33) vs app_secret errado (code 1)
+          // vs config_id de outro app (code 100 subcode diferente).
+          const err = exchangeData.error || {};
+          console.error('[Meta] exchange code→token falhou:', JSON.stringify({
+            error_code: err.code,
+            error_subcode: err.error_subcode,
+            error_message: err.message,
+            error_type: err.type,
+            fbtrace_id: err.fbtrace_id,
+            full_response: exchangeData,
+          }));
           return res.status(400).json({
-            error: `Falha ao trocar code por token: ${lastError?.error?.message || 'sem access_token na resposta'}. Tentativas: ${candidates.length}.`,
+            error: `Falha ao trocar code por token: ${err.message || 'sem access_token na resposta'}`,
+            meta_error_code: err.code,
+            meta_error_subcode: err.error_subcode,
+            fbtrace_id: err.fbtrace_id,
           });
         }
       }

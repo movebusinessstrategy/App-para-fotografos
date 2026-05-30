@@ -67,23 +67,27 @@ export default function IntegracaoWhatsApp() {
     const FB = (window as any).FB;
     if (!FB) return alert("SDK do Facebook não carregado. Tente recarregar a página.");
 
-    const featureType = mode === "coexistence" ? "whatsapp_business_app_onboarding" : "";
+    // Embedded Signup v4 (popup mode) — extras condicionais por modo:
+    // - sessionInfoVersion: 3 como number (doc oficial Meta v4 / Y-Cloud).
+    // - featureType: SÓ no modo coexistence. Mandar string vazia no cloud_api
+    //   faz a Meta gerar code com flow inválido — omite a chave nesse caso.
+    const extras: any = { setup: {}, sessionInfoVersion: 3 };
+    if (mode === "coexistence") {
+      extras.featureType = "whatsapp_business_app_onboarding";
+    }
 
     setConnecting(mode);
     FB.login(
       (response: any) => {
         if (response.authResponse?.code) {
-          // redirect_uri precisa bater com o origin que o FB SDK usou
-          // implicitamente no popup. Sem isso Meta retorna "Error validating
-          // verification code". O origin também precisa estar em
-          // Facebook Login for Business → Settings → Valid OAuth Redirect URIs.
+          // No popup mode v4 o vínculo é via config_id — backend NÃO precisa
+          // (nem deve) mandar redirect_uri no exchange. Só passa code + mode.
           authFetch("/api/meta/whatsapp/exchange-token", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               code: response.authResponse.code,
               mode,
-              redirect_uri: window.location.origin,
             }),
           })
             .then(r => r.json())
@@ -100,7 +104,7 @@ export default function IntegracaoWhatsApp() {
         config_id: configId,
         response_type: "code",
         override_default_response_type: true,
-        extras: { setup: {}, featureType, sessionInfoVersion: "3" },
+        extras,
       }
     );
   };
