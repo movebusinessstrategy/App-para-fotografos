@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { X, Phone, Loader2, CheckCircle2, AlertCircle, Building2 } from "lucide-react";
 import { authFetch } from "../../utils/authFetch";
+import { ConfirmModal } from "../../components/ui/ConfirmModal";
 
 interface Number {
   phone_number_id: string;
@@ -35,6 +36,7 @@ export function PhoneNumberPicker({ open, onClose, onChanged }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [wabas, setWabas] = useState<Waba[]>([]);
   const [selecting, setSelecting] = useState<string | null>(null);
+  const [pendingSelect, setPendingSelect] = useState<{ waba_id: string; number: Number } | null>(null);
 
   // Parser seguro de respostas: o vercel.json reescreve /api/* pra Render,
   // mas no cold start (Render free tier dormindo) pode voltar HTML do
@@ -82,9 +84,15 @@ export function PhoneNumberPicker({ open, onClose, onChanged }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const handleSelect = async (waba_id: string, n: Number) => {
+  const handleSelect = (waba_id: string, n: Number) => {
     if (n.is_active) return;
-    if (!confirm(`Trocar pro número ${n.display_phone_number} (${n.verified_name || "sem nome"})?`)) return;
+    setPendingSelect({ waba_id, number: n });
+  };
+
+  const confirmSelect = async () => {
+    if (!pendingSelect) return;
+    const { waba_id, number: n } = pendingSelect;
+    setPendingSelect(null);
     setSelecting(n.phone_number_id);
     setError(null);
     try {
@@ -252,6 +260,25 @@ export function PhoneNumberPicker({ open, onClose, onChanged }: Props) {
           </span>
         </div>
       </div>
+
+      <ConfirmModal
+        open={!!pendingSelect}
+        title="Trocar número conectado"
+        message={
+          pendingSelect
+            ? `Trocar pro número ${pendingSelect.number.display_phone_number}${
+                pendingSelect.number.verified_name
+                  ? ` (${pendingSelect.number.verified_name})`
+                  : ""
+              }? O número atual fica desativado, mas não é deletado.`
+            : ""
+        }
+        confirmText="Trocar agora"
+        cancelText="Cancelar"
+        variant="warning"
+        onConfirm={confirmSelect}
+        onCancel={() => setPendingSelect(null)}
+      />
     </div>
   );
 }
