@@ -87,13 +87,16 @@ export default function IntegracaoWhatsApp() {
 
     // Captura a URL launcher ANTES de chamar FB.login. Se capturarmos no
     // callback, o user pode ter navegado durante o popup e a URL fica
-    // inconsistente com a usada pelo FB SDK como referência de origem.
-    // Normaliza removendo query string, hash e trailing slash — só
-    // origin+pathname canônico, que é o formato que Meta espera ver
-    // cadastrado em "Valid OAuth Redirect URIs".
-    const rawLauncher = window.location.origin + window.location.pathname;
-    const launcherUrl = rawLauncher.replace(/\/+$/, "");
-    console.log("[WA] launcher_url:", launcherUrl);
+    // ACHADO EMPÍRICO (curl direto na Graph API confirmou): Meta SÓ aceita
+    // redirect_uri = origin RAIZ (sem path). Testes:
+    //   ✅ https://app-para-fotografos.vercel.app       → passa domain check
+    //   ✅ https://app-para-fotografos.vercel.app/      → passa domain check
+    //   ❌ https://app-para-fotografos.vercel.app/configuracoes/...
+    //                                                    → "domain not in
+    //                                                       app's domains"
+    // Path tem que ficar de fora — Meta valida só o HOST contra app_domains.
+    const launcherUrl = window.location.origin;
+    console.log("[WA] launcher_url (origin sem path):", launcherUrl);
 
     setConnecting(mode);
     FB.login(
