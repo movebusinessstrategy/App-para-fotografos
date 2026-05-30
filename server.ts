@@ -2720,6 +2720,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         if (code === 131030 || msg.includes('not in allowed list') || msg.includes('recipient')) {
           return res.status(400).json({ error: 'Número não está na lista de testes do Meta. Adicione-o no Meta Business ou use o QR Code para enviar livremente.' });
         }
+        // 133010 "Account not registered" — número ainda em platform_type=ON_PREMISE
+        // (Coexistence Mode aguardando App Review da Meta liberar Advanced Access).
+        // Comum quando Embedded Signup completou mas o app Meta ainda está em Dev Mode.
+        if (code === 133010 || msg.toLowerCase().includes('account not registered')) {
+          return res.status(400).json({
+            error: 'Conta WhatsApp ainda em provisionamento na Meta. Sua integração foi conectada, mas o número precisa ser promovido pra Cloud API antes de enviar/receber mensagens. Aguarde aprovação do App Review da Meta (3-4 semanas após submissão) ou consulte o status em Configurações → WhatsApp → Diagnóstico.',
+          });
+        }
         return res.status(400).json({ error: msg });
       }
       const msgId = metaData.messages?.[0]?.id || `meta-${Date.now()}`;
@@ -11144,14 +11152,84 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const { data, error } = await supabase
       .from('whatsapp_business_accounts')
-      .select('waba_id, phone_number_id, phone_number, display_name, connected_at, token_expires_at')
+      .select('waba_id, phone_number_id, phone_number, display_name, connected_at, token_expires_at, access_token')
       .eq('user_id', userId)
       .eq('is_active', true)
       .maybeSingle();
 
     if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.json({ connected: false, account: null });
 
-    res.json({ connected: !!data, account: data || null });
+    // Não vaza o token criptografado pra o frontend.
+    const { access_token, ...accountSafe } = data;
+
+    res.json({ connected: true, account: accountSafe });
+  });
+
+  // Diagnóstico de provisionamento Meta — bate na Graph API e retorna o estado
+  // ao vivo do phone number. Usado pelo banner de "conta em provisionamento"
+  // na inbox e pela tela de diagnóstico de Configurações → WhatsApp.
+  app.get('/api/meta/whatsapp/diag', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    const { data: acc, error } = await supabase
+      .from('whatsapp_business_accounts')
+      .select('phone_number_id, access_token')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (error) return res.status(500).json({ error: error.message });
+    if (!acc) return res.json({ connected: false });
+
+    const token = decryptIfNeeded(acc.access_token);
+    if (!token) return res.status(500).json({ error: 'Falha ao decifrar token' });
+
+    try {
+      const r = await fetch(
+        `https://graph.facebook.com/v21.0/${acc.phone_number_id}?fields=platform_type,code_verification_status,status,quality_rating,display_phone_number,verified_name`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      const phone = await r.json();
+      if (phone.error) return res.status(400).json({ error: phone.error.message, code: phone.error.code });
+
+      const platform = String(phone.platform_type || '').toUpperCase();
+      const verified = String(phone.code_verification_status || '').toUpperCase();
+      const cloudApiReady = platform === 'CLOUD_API';
+
+      // Interpretação humana do estado pra o frontend renderizar banner.
+      // Ordem importa: CLOUD_API → OK; ON_PREMISE → aguardando migração; outros → erro genérico.
+      let humanState: 'ready' | 'provisioning' | 'error';
+      let humanMessage: string;
+      if (cloudApiReady) {
+        humanState = 'ready';
+        humanMessage = 'Cloud API ativa — envio e recebimento de mensagens habilitados.';
+      } else if (platform === 'ON_PREMISE') {
+        humanState = 'provisioning';
+        humanMessage = 'Número conectado, mas ainda não promovido pra Cloud API. A Meta processa essa migração após aprovação do App Review (3-4 semanas). Mensagens enviadas/recebidas pela API oficial estarão indisponíveis até lá.';
+      } else {
+        humanState = 'error';
+        humanMessage = `Estado inesperado do número: platform_type=${platform || 'desconhecido'}. Reconecte em Configurações → WhatsApp.`;
+      }
+
+      res.json({
+        connected: true,
+        cloud_api_ready: cloudApiReady,
+        state: humanState,
+        message: humanMessage,
+        phone: {
+          platform_type: phone.platform_type || null,
+          code_verification_status: phone.code_verification_status || null,
+          status: phone.status || null,
+          quality_rating: phone.quality_rating || null,
+          display_phone_number: phone.display_phone_number || null,
+          verified_name: phone.verified_name || null,
+        },
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   app.delete('/api/meta/whatsapp/disconnect', requireAuth, async (req, res) => {
