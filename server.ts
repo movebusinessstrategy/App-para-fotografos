@@ -10037,23 +10037,51 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.post('/api/meta/whatsapp/exchange-token', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { access_token, code, mode } = req.body;
+    const { access_token, code, mode, launcher_url, waba_id: bodyWabaId, phone_number_id: bodyPhoneId } = req.body;
 
     // Normaliza mode: só aceita 'cloud_api' e 'coexistence'; default cloud_api.
     // Em coexistence o número segue ativo no app WhatsApp Business e o
     // pareamento é via QR — então pulamos o POST /register no final do fluxo.
     const connectionMode: 'cloud_api' | 'coexistence' =
       mode === 'coexistence' ? 'coexistence' : 'cloud_api';
-    console.log('[Meta] exchange-token mode:', connectionMode);
+    console.log('[Meta] exchange-token mode:', connectionMode, '| launcher_url:', launcher_url);
 
     if (!access_token && !code) return res.status(400).json({ error: 'access_token ou code é obrigatório' });
     if (!META_APP_ID || !META_APP_SECRET) return res.status(500).json({ error: 'META_APP_ID/META_APP_SECRET não configurados' });
 
+    // Allowlist de domínios que podem ser usados como redirect_uri no exchange.
+    // Bloqueia token leak via origin atacante. Cobre prod (Vercel), backend
+    // (Render) e o domínio customizado do app caso seja configurado via env.
+    const ALLOWED_LAUNCHER_HOSTS = [
+      'app-para-fotografos.vercel.app',
+      'onrender.com',
+      ...(process.env.APP_PUBLIC_URL
+        ? [(() => { try { return new URL(process.env.APP_PUBLIC_URL!).host; } catch { return ''; } })()]
+        : []),
+    ].filter(Boolean);
+
+    function isLauncherAllowed(url: string): boolean {
+      try {
+        const u = new URL(url);
+        if (u.protocol !== 'https:') return false;
+        return ALLOWED_LAUNCHER_HOSTS.some(h => u.host === h || u.host.endsWith('.' + h) || u.host.endsWith(h));
+      } catch {
+        return false;
+      }
+    }
+
     try {
       // 0. Embedded Signup v4 (popup mode): se veio `code` (e não access_token),
-      //    troca por access_token via /oauth/access_token. NÃO mandar redirect_uri
-      //    — o vínculo é via config_id do FB.login, não via redirect_uri. Esse é
-      //    o padrão usado em produção por Chatwoot, Bird e Y-Cloud.
+      //    troca por access_token via /oauth/access_token.
+      //
+      //    redirect_uri precisa ser EXATAMENTE a URL que originou o FB.login
+      //    (window.location.origin + pathname canônico, sem query/hash/trailing
+      //    slash) E estar cadastrada em "Valid OAuth Redirect URIs" do
+      //    Facebook Login for Business. Esse é o padrão usado em produção por
+      //    Sinch, Y-Cloud e Dualhook. Tentativas anteriores de mandar vazio ou
+      //    staticxx.facebook.com falharam — staticxx é subdomínio INTERNO do
+      //    JS SDK (iframe XD Arbiter pra postMessage cross-domain), nunca
+      //    aceito como redirect_uri em produção.
       //
       //    IMPORTANTE: code da Meta é one-time-use. Qualquer tentativa que falhe
       //    invalida o code; retries em sequência viram cascata de "Error
@@ -10061,19 +10089,23 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       //    falhar, propaga o erro literal da Meta pra o frontend.
       let token: string = access_token || '';
       if (!access_token && code) {
-        // ACHADO DO WORKFLOW: FB SDK usa xd_arbiter como redirect_uri implícito
-        // em popup mode, NÃO window.location.origin. Isso é hardcoded no
-        // bundle minificado de connect.facebook.net/en_US/sdk.js (XXdUrl).
-        // Não documentado oficialmente pela Meta. Override via env pra ajustar
-        // se a versão do xd_arbiter mudar (atualmente version=46).
-        const FB_XD_ARBITER = process.env.META_FB_XD_ARBITER_URL
-          || 'https://staticxx.facebook.com/x/connect/xd_arbiter/?version=46';
+        if (!launcher_url || typeof launcher_url !== 'string') {
+          return res.status(400).json({
+            error: 'launcher_url é obrigatório no body — envie window.location.origin + pathname (a URL que originou o FB.login).',
+          });
+        }
+        if (!isLauncherAllowed(launcher_url)) {
+          console.warn('[Meta] launcher_url REJEITADO (origem não permitida):', launcher_url);
+          return res.status(400).json({
+            error: 'launcher_url não permitido. Domínio precisa estar na allowlist do backend.',
+          });
+        }
 
         const exchangeParams = new URLSearchParams({
           client_id: META_APP_ID,
           client_secret: META_APP_SECRET,
           code,
-          redirect_uri: FB_XD_ARBITER,
+          redirect_uri: launcher_url,
         });
 
         // Versão alinhada com o FB.init do frontend (v21.0).
@@ -10084,7 +10116,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
         if (exchangeData.access_token) {
           token = exchangeData.access_token;
-          console.log('[Meta] code trocado por access_token com sucesso (sem redirect_uri, padrão v4 popup).');
+          console.log('[Meta] code trocado por access_token com sucesso. redirect_uri:', launcher_url);
         } else {
           // Log detalhado pra diferenciar redirect_uri mismatch (code 100) de
           // code já consumido (code 100 subcode 33) vs app_secret errado (code 1)
@@ -10123,11 +10155,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const wabaScope = (debugData.data?.granular_scopes || []).find(
         (s: any) => s.scope === 'whatsapp_business_management'
       );
-      const wabaId = wabaScope?.target_ids?.[0] || null;
+      // Plan B (System User Token): debug_token de app-scoped token nem sempre
+      // expõe granular_scopes — então aceita waba_id/phone_number_id vindos
+      // do body como override explícito.
+      const wabaId: string | null = wabaScope?.target_ids?.[0] || bodyWabaId || null;
       console.log('[Meta] WABA scope:', wabaScope, '| wabaId:', wabaId);
 
       // 3. Busca número de telefone do WABA
-      let phoneNumberId: string | null = null;
+      let phoneNumberId: string | null = bodyPhoneId || null;
       let phoneNumber: string | null = null;
       let displayName: string | null = null;
 
@@ -10137,7 +10172,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         );
         const phoneData = await phoneRes.json();
         if (phoneData.data?.length > 0) {
-          const phone = phoneData.data[0];
+          // Se body passou phone_number_id específico, prioriza ele; senão
+          // pega o primeiro retornado pela API.
+          const phone = bodyPhoneId
+            ? phoneData.data.find((p: any) => p.id === bodyPhoneId) || phoneData.data[0]
+            : phoneData.data[0];
           phoneNumberId = phone.id;
           phoneNumber = phone.display_phone_number;
           displayName = phone.verified_name;
