@@ -90,7 +90,6 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
   };
 
   const handleConnectWhatsApp = () => {
-    const appId = import.meta.env.VITE_META_APP_ID;
     const configId = import.meta.env.VITE_META_WA_CONFIG_ID;
 
     if (!configId) {
@@ -104,14 +103,17 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
       return;
     }
 
+    // Embedded Signup v4 — alinhado ao IntegracaoWhatsApp.tsx (cloud_api).
+    // Antes esse handler usava response_type: 'token' (v3 legacy) + featureType
+    // vazio, o que com config_id v4 gerava code inválido na primeira chamada.
     setWaConnecting(true);
     FB.login(
       (response: any) => {
-        if (response.authResponse?.accessToken) {
+        if (response.authResponse?.code) {
           authFetch('/api/meta/whatsapp/exchange-token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ access_token: response.authResponse.accessToken }),
+            body: JSON.stringify({ code: response.authResponse.code, mode: 'cloud_api' }),
           })
             .then((res) => res.json())
             .then((data) => {
@@ -127,15 +129,15 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
             })
             .finally(() => setWaConnecting(false));
         } else {
-          console.log('[Meta] Login cancelado ou sem token:', response);
+          console.log('[Meta] Login cancelado ou sem code:', response);
           setWaConnecting(false);
         }
       },
       {
         config_id: configId,
-        response_type: 'token',
+        response_type: 'code',
         override_default_response_type: true,
-        extras: { setup: {}, featureType: '', sessionInfoVersion: '3' },
+        extras: { setup: {}, sessionInfoVersion: 3 },
       }
     );
   };
