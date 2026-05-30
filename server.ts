@@ -10104,11 +10104,19 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           });
         }
 
+        // ACHADO EMPÍRICO (workflow #5 + fontes: Meta PHP SDK arquivada,
+        // Chatwoot, Bird, Twilio, Akash Tyagi 2026, Meta dev community
+        // thread 597333095976937): FB SDK em popup mode (response_type=code +
+        // config_id + override_default_response_type) NÃO faz redirect
+        // navegacional — o code volta via postMessage/xd_arbiter. Qualquer
+        // valor de redirect_uri no exchange gera subcode 36008 ("Error
+        // validating verification code"). Solução: OMITIR o parâmetro.
+        // launcher_url continua chegando pra auditoria/allowlist, mas não vai
+        // pro Meta.
         const exchangeParams = new URLSearchParams({
           client_id: META_APP_ID,
           client_secret: META_APP_SECRET,
           code,
-          redirect_uri: launcher_url,
         });
 
         // Versão alinhada com o FB.init do frontend (v21.0).
