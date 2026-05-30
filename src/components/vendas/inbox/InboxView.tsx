@@ -5,7 +5,7 @@ import { CrmPanel } from "./CrmPanel";
 import { ConnectChannelModal } from "../ConnectChannelModal";
 import { authFetch } from "../../../utils/authFetch";
 import { Deal, PipelineStage } from "../../../types";
-import { MessageCircle, RefreshCw, Wifi, WifiOff, Loader2 } from "lucide-react";
+import { MessageCircle, RefreshCw, Wifi, WifiOff, Loader2, AlertCircle } from "lucide-react";
 
 interface Props {
   deals: Deal[];
@@ -23,6 +23,7 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
   const [refreshing, setRefreshing] = useState(false);
   const [waStatus, setWaStatus] = useState<WaStatus>("checking");
   const [connectOpen, setConnectOpen] = useState(false);
+  const [metaDiag, setMetaDiag] = useState<{ state: 'ready' | 'provisioning' | 'error'; message: string } | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchConversations = useCallback(async (silent = false) => {
@@ -67,15 +68,31 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
     }
   }, []);
 
+  // Diagnóstico do Meta Cloud API — checa se o número já foi promovido pra
+  // CLOUD_API ou ainda está em ON_PREMISE aguardando App Review. Mudança rara,
+  // então busca uma vez no mount e atualiza só quando o user re-conecta.
+  const checkMetaDiag = useCallback(async () => {
+    try {
+      const res = await authFetch("/api/meta/whatsapp/diag");
+      if (!res.ok) { setMetaDiag(null); return; }
+      const data = await res.json();
+      if (!data?.connected) { setMetaDiag(null); return; }
+      setMetaDiag({ state: data.state, message: data.message });
+    } catch {
+      setMetaDiag(null);
+    }
+  }, []);
+
   useEffect(() => {
     checkWaStatus();
+    checkMetaDiag();
     fetchConversations();
     pollRef.current = setInterval(() => {
       fetchConversations(true);
       checkWaStatus();
     }, 4000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [fetchConversations, checkWaStatus]);
+  }, [fetchConversations, checkWaStatus, checkMetaDiag]);
 
   useEffect(() => {
     if (selected) {
@@ -163,6 +180,18 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
           {waStatus === "connected" ? "Gerenciar" : "Conectar"}
         </button>
       </div>
+
+      {/* Banner de provisionamento Meta Cloud API — só aparece quando o número
+          está conectado via Meta mas ainda em ON_PREMISE (aguardando App Review).
+          Esconde quando cloud_api_ready=true pra não poluir UI. */}
+      {metaDiag?.state === "provisioning" && (
+        <div className="flex items-start gap-2.5 px-5 py-2.5 text-xs flex-shrink-0 border-b bg-amber-50 dark:bg-amber-900/15 border-amber-200 dark:border-amber-800/40">
+          <AlertCircle size={14} className="flex-shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+          <span className="text-amber-800 dark:text-amber-200 leading-snug">
+            <strong>Cloud API em provisionamento.</strong> {metaDiag.message}
+          </span>
+        </div>
+      )}
 
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Lista de conversas */}
