@@ -10056,30 +10056,48 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       //    access_token (v3 legacy), usa direto sem trocar.
       let token: string = access_token || '';
       if (!access_token && code) {
-        // Meta v4 EXIGE redirect_uri batendo com o usado no FB.login. Pra popup
-        // do Embedded Signup, FB SDK usa o origin da página como redirect_uri
-        // implícito. Backend precisa ecoar o mesmo valor que o frontend mandou
-        // (window.location.origin). Se vier vazio, Meta rejeita com
-        // "Error validating verification code".
-        const exchangeParams = new URLSearchParams({
-          client_id: META_APP_ID,
-          client_secret: META_APP_SECRET,
-          code,
-        });
-        if (redirect_uri) exchangeParams.set('redirect_uri', redirect_uri);
+        // FB SDK no popup do Embedded Signup escolhe o redirect_uri implícito,
+        // que varia entre window.location.origin, window.location.href, ou
+        // um URI interno do FB. A Meta exige que o redirect_uri no exchange
+        // BATA com o usado no popup, mas a SDK não expõe qual foi. Estratégia:
+        // tenta as variações conhecidas em ordem, fica com a primeira que
+        // retornar access_token. Loga qual funcionou pra investigação.
+        const candidates: Array<string | undefined> = [];
+        if (redirect_uri) {
+          candidates.push(redirect_uri); // window.location.origin (do frontend)
+          // Algumas integrações Embedded Signup precisam de trailing slash
+          candidates.push(redirect_uri.endsWith('/') ? redirect_uri.slice(0, -1) : redirect_uri + '/');
+        }
+        candidates.push(undefined); // sem redirect_uri (alguns fluxos v4 funcionam assim)
 
-        const exchangeRes = await fetch(
-          `https://graph.facebook.com/v21.0/oauth/access_token?${exchangeParams.toString()}`
-        );
-        const exchangeData = await exchangeRes.json();
-        if (exchangeData.error || !exchangeData.access_token) {
-          console.error('[Meta] code->token exchange error:', JSON.stringify(exchangeData), 'redirect_uri usado:', redirect_uri || '(vazio)');
+        let lastError: any = null;
+        for (const candidate of candidates) {
+          const exchangeParams = new URLSearchParams({
+            client_id: META_APP_ID,
+            client_secret: META_APP_SECRET,
+            code,
+          });
+          if (candidate) exchangeParams.set('redirect_uri', candidate);
+
+          const exchangeRes = await fetch(
+            `https://graph.facebook.com/v21.0/oauth/access_token?${exchangeParams.toString()}`
+          );
+          const exchangeData = await exchangeRes.json();
+          if (exchangeData.access_token) {
+            token = exchangeData.access_token;
+            console.log('[Meta] code trocado por access_token com sucesso. redirect_uri vencedor:', candidate ?? '(omitido)');
+            break;
+          }
+          lastError = exchangeData;
+          console.warn('[Meta] tentativa redirect_uri=', candidate ?? '(omitido)', 'falhou:', exchangeData.error?.message);
+        }
+
+        if (!token) {
+          console.error('[Meta] todas as tentativas de exchange falharam. Último erro:', JSON.stringify(lastError));
           return res.status(400).json({
-            error: `Falha ao trocar code por token: ${exchangeData.error?.message || 'sem access_token na resposta'}`,
+            error: `Falha ao trocar code por token: ${lastError?.error?.message || 'sem access_token na resposta'}. Tentativas: ${candidates.length}.`,
           });
         }
-        token = exchangeData.access_token;
-        console.log('[Meta] code trocado por access_token com sucesso (redirect_uri:', redirect_uri || '(vazio)', ')');
       }
 
       // 1. Inspeciona o token para extrair WABA IDs autorizados
