@@ -10061,17 +10061,22 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       //    falhar, propaga o erro literal da Meta pra o frontend.
       let token: string = access_token || '';
       if (!access_token && code) {
+        // ACHADO DO WORKFLOW: FB SDK usa xd_arbiter como redirect_uri implícito
+        // em popup mode, NÃO window.location.origin. Isso é hardcoded no
+        // bundle minificado de connect.facebook.net/en_US/sdk.js (XXdUrl).
+        // Não documentado oficialmente pela Meta. Override via env pra ajustar
+        // se a versão do xd_arbiter mudar (atualmente version=46).
+        const FB_XD_ARBITER = process.env.META_FB_XD_ARBITER_URL
+          || 'https://staticxx.facebook.com/x/connect/xd_arbiter/?version=46';
+
         const exchangeParams = new URLSearchParams({
           client_id: META_APP_ID,
           client_secret: META_APP_SECRET,
           code,
+          redirect_uri: FB_XD_ARBITER,
         });
 
-        // Versão alinhada com o FB.init do frontend (v21.0). Erro
-        // "validating verification code" reproduzia com v22.0 porque o code
-        // é gerado pelo SDK em v21.0 e a Meta valida o pair (versão_dialog,
-        // versão_exchange) — todas as outras 25+ calls deste arquivo já
-        // estão em v21.0, esta era a única em v22.0.
+        // Versão alinhada com o FB.init do frontend (v21.0).
         const exchangeRes = await fetch(
           `https://graph.facebook.com/v21.0/oauth/access_token?${exchangeParams.toString()}`
         );
