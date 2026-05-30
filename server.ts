@@ -831,9 +831,12 @@ async function startServer() {
     const allowed = [
       'https://app-para-fotografos.vercel.app', // sempre permitido
       process.env.APP_URL,
+      process.env.APP_PUBLIC_URL, // custom domain (ex: https://crmtrilha.com.br)
       'http://localhost:5173',
       'http://localhost:3000',
-    ].filter(Boolean) as string[];
+    ]
+      .filter(Boolean)
+      .map(u => (u as string).replace(/\/$/, '')) as string[]; // normaliza trailing slash
     if (allowed.includes(origin) || origin.startsWith('chrome-extension://')) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Credentials', 'true');

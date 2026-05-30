@@ -25,3 +25,7 @@ server/processed/
 *.avi
 *.mkv
 *.bak
+
+# Scripts de diagnóstico ad-hoc (PII de clientes + side-effects em produção)
+wa-diag-*.mjs
+wa-try-*.mjs
