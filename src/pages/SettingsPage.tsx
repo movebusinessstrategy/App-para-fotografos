@@ -137,6 +137,7 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
         config_id: configId,
         response_type: 'code',
         override_default_response_type: true,
+        auth_type: 'rerequest',
         extras: { setup: {}, sessionInfoVersion: 3 },
       }
     );

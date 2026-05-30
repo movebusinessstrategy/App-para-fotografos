@@ -104,6 +104,11 @@ export default function IntegracaoWhatsApp() {
         config_id: configId,
         response_type: "code",
         override_default_response_type: true,
+        // 'rerequest' força a Meta a SEMPRE passar pelo wizard do Embedded
+        // Signup (seleção de WABA/número/Coexistence) mesmo se o user já
+        // autorizou o app antes. Sem isso, FB pode gerar code OAuth
+        // tradicional que exige redirect_uri e quebra o exchange.
+        auth_type: "rerequest",
         extras,
       }
     );
