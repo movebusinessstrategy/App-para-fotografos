@@ -85,30 +85,49 @@ export default function IntegracaoWhatsApp() {
       extras.featureType = "whatsapp_business_app_onboarding";
     }
 
-    // Captura a URL launcher ANTES de chamar FB.login. Se capturarmos no
-    // callback, o user pode ter navegado durante o popup e a URL fica
-    // ACHADO EMPÍRICO (curl direto na Graph API confirmou): Meta SÓ aceita
-    // redirect_uri = origin RAIZ (sem path). Testes:
-    //   ✅ https://app-para-fotografos.vercel.app       → passa domain check
-    //   ✅ https://app-para-fotografos.vercel.app/      → passa domain check
-    //   ❌ https://app-para-fotografos.vercel.app/configuracoes/...
-    //                                                    → "domain not in
-    //                                                       app's domains"
-    // Path tem que ficar de fora — Meta valida só o HOST contra app_domains.
     const launcherUrl = window.location.origin;
     console.log("[WA] launcher_url (origin sem path):", launcherUrl);
+
+    // ACHADO EMPÍRICO (URL capturada do popup real em 2026-05-30):
+    // O FB SDK em popup mode + response_type=code USA xd_arbiter COM HASH
+    // FRAGMENT ÚNICO POR CHAMADA como redirect_uri. Exemplo:
+    //   https://staticxx.facebook.com/x/connect/xd_arbiter/?version=46
+    //     #cb=f18729cd3f0d80b32        (callback ID, gerado fresh)
+    //     &domain=crmtrilha.com.br
+    //     &origin=https://crmtrilha.com.br/f841846589564be98  (path único)
+    //     &frame=f56e5d3f812eadfd6     (frame ID, gerado fresh)
+    // Meta assina o code com essa URL EXATA. Como cb/origin/frame mudam a
+    // cada chamada, o backend não consegue prever — só capturando aqui
+    // antes do FB.login e enviando junto. Sem isso → "Error validating
+    // verification code" (subcode 36008). Tentativas anteriores falharam
+    // (window.location.origin / xd_arbiter sem hash / omitir) porque
+    // nenhuma batia byte-a-byte com o que a Meta assinou.
+    let fbSdkRedirectUri = "";
+    const _originalOpen = window.open;
+    window.open = function (url: any, ...args: any[]) {
+      if (typeof url === "string" && url.includes("/dialog/oauth")) {
+        try {
+          const parsed = new URL(url);
+          const ru = parsed.searchParams.get("redirect_uri");
+          if (ru) {
+            fbSdkRedirectUri = ru;
+            console.log("[WA] capturado fb_sdk_redirect_uri:", ru);
+          }
+        } catch {
+          /* ignora URL inválida — só restaura comportamento default */
+        }
+      }
+      return _originalOpen.call(window, url, ...args);
+    };
 
     setConnecting(mode);
     FB.login(
       (response: any) => {
+        // Restaura window.open ANTES de qualquer await — evita vazar o
+        // monkey-patch pra outras partes do app.
+        window.open = _originalOpen;
+
         if (response.authResponse?.code) {
-          // No popup mode v4 o vínculo é via config_id, MAS a Meta valida
-          // o redirect_uri no exchange contra "Valid OAuth Redirect URIs"
-          // do Facebook Login for Business. Tem que mandar a MESMA URL que
-          // originou o FB.login (window.location.origin+pathname) — não
-          // pode ser vazio nem staticxx (subdomínio interno do JS SDK,
-          // nunca aceito em produção). Padrão usado por Sinch, Y-Cloud e
-          // Dualhook.
           authFetch("/api/meta/whatsapp/exchange-token", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -116,6 +135,7 @@ export default function IntegracaoWhatsApp() {
               code: response.authResponse.code,
               mode,
               launcher_url: launcherUrl,
+              fb_sdk_redirect_uri: fbSdkRedirectUri,
             }),
           })
             .then(r => r.json())
