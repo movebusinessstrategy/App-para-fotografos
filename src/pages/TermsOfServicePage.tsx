@@ -88,14 +88,29 @@ export default function TermsOfServicePage() {
             <section>
               <h2 className="text-lg font-semibold text-white mb-3">6. Integrações de Terceiros</h2>
               <p className="mb-3">
-                A CRM Trilha pode integrar com serviços de terceiros, incluindo WhatsApp Business (Meta). Ao usar essas integrações:
+                A CRM Trilha pode integrar com serviços de terceiros. Ao usar essas integrações, você concorda com os termos e políticas do respectivo serviço.
+              </p>
+              <h3 className="text-base font-semibold text-white mt-4 mb-2">6.1. WhatsApp Cloud API (Meta Platforms, Inc.)</h3>
+              <p className="mb-3">
+                A integração com a WhatsApp Cloud API permite que você gerencie conversas WhatsApp pelo CRM Trilha. Ao habilitar essa integração via Embedded Signup, você concorda com:
               </p>
               <ul className="list-disc list-inside space-y-2 pl-2">
-                <li>Você concorda com os termos de serviço e políticas do respectivo terceiro.</li>
-                <li>Você é responsável pelo uso adequado dessas integrações e pelo conteúdo das mensagens enviadas.</li>
-                <li>A CRM Trilha não se responsabiliza por suspensões ou penalidades aplicadas por plataformas de terceiros devido ao uso inadequado.</li>
-                <li>Mensagens via WhatsApp devem seguir as políticas de negócios da Meta, incluindo respeito à janela de 24 horas e uso de templates aprovados.</li>
+                <li>
+                  <a href="https://www.whatsapp.com/legal/business-policy/" target="_blank" rel="noopener noreferrer" className="text-[#D4A94A] hover:underline">WhatsApp Business Messaging Policy</a>,
+                  {" "}<a href="https://www.whatsapp.com/legal/business-terms/" target="_blank" rel="noopener noreferrer" className="text-[#D4A94A] hover:underline">WhatsApp Business Solution Terms</a> e
+                  {" "}<a href="https://www.whatsapp.com/legal/commerce-policy/" target="_blank" rel="noopener noreferrer" className="text-[#D4A94A] hover:underline">WhatsApp Commerce Policy</a>.
+                </li>
+                <li>Respeitar a <strong className="text-white">janela de atendimento de 24 horas</strong>: mensagens livres só podem ser enviadas até 24h após a última mensagem recebida do cliente. Fora dessa janela, apenas templates aprovados pela Meta podem ser usados.</li>
+                <li><strong className="text-white">Proibido enviar mensagens não solicitadas</strong> (spam), prospecção fria, marketing em massa não autorizado pelo destinatário, conteúdo enganoso ou que viole as <a href="https://www.whatsapp.com/legal/business-policy/" target="_blank" rel="noopener noreferrer" className="text-[#D4A94A] hover:underline">políticas comerciais da Meta</a>.</li>
+                <li><strong className="text-white">Consentimento opt-in obrigatório</strong>: você deve ter consentimento explícito (verbal, escrito ou via formulário) dos destinatários antes de iniciar conversas pelo WhatsApp.</li>
+                <li>Templates de mensagem submetidos via CRM Trilha são aprovados ou rejeitados exclusivamente pela Meta — a CRM Trilha não tem influência sobre o resultado da aprovação.</li>
+                <li>A Meta pode suspender, limitar ou banir números que violem suas políticas. A CRM Trilha <strong className="text-white">não tem ingerência</strong> sobre decisões da Meta e não é responsável por essas suspensões.</li>
+                <li>Em caso de uso comprovadamente abusivo da integração (spam massivo, denúncias recorrentes de usuários finais, violação manifesta das políticas Meta), a CRM Trilha reserva-se o direito de suspender a integração WhatsApp da sua conta independentemente de ação da Meta.</li>
               </ul>
+              <h3 className="text-base font-semibold text-white mt-4 mb-2">6.2. Outros serviços</h3>
+              <p>
+                Outras integrações disponíveis (Google Calendar, Asaas para cobrança, serviços de armazenamento de mídia) seguem o mesmo princípio: você é responsável pelo uso adequado e pela aceitação dos termos do respectivo terceiro. Detalhes específicos de cada integração são apresentados no momento da ativação.
+              </p>
             </section>
 
             <section>

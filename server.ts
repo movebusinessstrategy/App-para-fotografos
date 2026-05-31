@@ -850,6 +850,90 @@ async function startServer() {
   // Health check — used by frontend to warm up Render free tier
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
+  // ============ DATA DELETION (LGPD + Meta App Review requirement) ============
+  // 2 endpoints públicos (sem requireAuth) pra atender:
+  // 1. /api/data-deletion/request — formulário em /excluir-dados (UI pro user)
+  // 2. /api/data-deletion-callback — callback signed_request da Meta
+  //
+  // Por enquanto ambos só logam a solicitação e geram um ticket_id determinístico.
+  // Processamento manual (operador apaga via Supabase Studio + responde por email).
+  // TODO futuro: tabela data_deletion_requests + worker async + email automático.
+
+  const generateDeletionTicketId = (input: string): string => {
+    // Hash determinístico do input + slice — não vaza dados, só serve como protocolo único.
+    return 'DEL-' + crypto.createHash('sha256').update(input + (process.env.META_APP_SECRET || 'fallback')).digest('hex').slice(0, 12).toUpperCase();
+  };
+
+  app.post('/api/data-deletion/request', async (req, res) => {
+    const { email, reason, scope } = req.body || {};
+    if (!email || typeof email !== 'string' || !email.includes('@')) {
+      return res.status(400).json({ error: 'E-mail válido é obrigatório.' });
+    }
+    const requestedScope: 'all' | 'whatsapp_only' = scope === 'whatsapp_only' ? 'whatsapp_only' : 'all';
+    const ticketId = generateDeletionTicketId(email + ':' + new Date().toISOString().slice(0, 10));
+    // Log estruturado pro operador picar via grep nos logs do Render:
+    console.log('[DataDeletion] Nova solicitação:', JSON.stringify({
+      ticket_id: ticketId,
+      email,
+      scope: requestedScope,
+      reason: (reason || '').slice(0, 500),
+      received_at: new Date().toISOString(),
+      ip: req.ip || req.headers['x-forwarded-for'] || 'unknown',
+    }));
+    res.json({
+      ok: true,
+      ticket_id: ticketId,
+      message: `Solicitação registrada com protocolo ${ticketId}. Você receberá confirmação por e-mail em até 48 horas úteis. A exclusão completa será processada em até 15 dias úteis, conforme prazo da LGPD.`,
+    });
+  });
+
+  // Meta Data Deletion Callback — formato signed_request.
+  // Docs: https://developers.facebook.com/docs/development/create-an-app/app-dashboard/data-deletion-callback
+  app.post('/api/data-deletion-callback', async (req, res) => {
+    try {
+      const signedRequest: string | undefined = req.body?.signed_request;
+      if (!signedRequest || typeof signedRequest !== 'string' || !signedRequest.includes('.')) {
+        return res.status(400).json({ error: 'signed_request ausente ou inválido.' });
+      }
+      const [encodedSig, encodedPayload] = signedRequest.split('.', 2);
+      const appSecret = process.env.META_APP_SECRET;
+      if (!appSecret) {
+        console.error('[DataDeletion Meta] META_APP_SECRET não configurado');
+        return res.status(500).json({ error: 'Servidor não configurado.' });
+      }
+      // base64url → bytes (Meta usa base64url sem padding)
+      const b64urlToBuf = (s: string): Buffer => {
+        const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+        const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';
+        return Buffer.from(b64 + pad, 'base64');
+      };
+      const sigBuf = b64urlToBuf(encodedSig);
+      const expectedSig = crypto.createHmac('sha256', appSecret).update(encodedPayload).digest();
+      if (sigBuf.length !== expectedSig.length || !crypto.timingSafeEqual(sigBuf, expectedSig)) {
+        console.warn('[DataDeletion Meta] signed_request com assinatura inválida');
+        return res.status(403).json({ error: 'Assinatura inválida.' });
+      }
+      const payload = JSON.parse(b64urlToBuf(encodedPayload).toString('utf-8'));
+      const metaUserId: string = payload?.user_id || 'unknown';
+      const ticketId = generateDeletionTicketId('meta:' + metaUserId);
+      console.log('[DataDeletion Meta] Callback recebido:', JSON.stringify({
+        ticket_id: ticketId,
+        meta_user_id: metaUserId,
+        issued_at: payload?.issued_at,
+        received_at: new Date().toISOString(),
+      }));
+      // Resposta no formato exigido pela Meta: { url, confirmation_code }
+      const publicBase = (process.env.APP_PUBLIC_URL || 'https://crmtrilha.com.br').replace(/\/$/, '');
+      res.json({
+        url: `${publicBase}/excluir-dados?protocolo=${ticketId}`,
+        confirmation_code: ticketId,
+      });
+    } catch (e: any) {
+      console.error('[DataDeletion Meta] Erro processando callback:', e.message);
+      res.status(500).json({ error: 'Erro ao processar callback.' });
+    }
+  });
+
   // ============ PLATFORM ADMIN HELPERS ============
   // Checa se um auth.users.id pertence a um super-admin do SaaS.
   const isSuperAdmin = async (userId: string): Promise<boolean> => {

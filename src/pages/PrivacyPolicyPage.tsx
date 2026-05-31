@@ -54,7 +54,7 @@ export default function PrivacyPolicyPage() {
                 <li><strong className="text-white">Dados de cadastro:</strong> nome, e-mail e senha (armazenada de forma criptografada).</li>
                 <li><strong className="text-white">Dados de clientes e trabalhos:</strong> informações que você insere na plataforma sobre seus clientes, sessões fotográficas e negociações.</li>
                 <li><strong className="text-white">Dados de uso:</strong> registros de acesso, ações realizadas e preferências de configuração.</li>
-                <li><strong className="text-white">Dados de comunicação:</strong> caso integre com canais de mensagens (ex: WhatsApp Business), os conteúdos de mensagens enviadas via automação.</li>
+                <li><strong className="text-white">Dados da integração WhatsApp Cloud API (Meta):</strong> quando você conecta uma conta WhatsApp Business via Embedded Signup, coletamos: identificador da WABA (waba_id), identificador do número de telefone (phone_number_id), número exibido (display_phone_number), nome verificado (verified_name), token de acesso criptografado, conteúdo de mensagens trocadas (texto, mídia, metadados como timestamps e IDs), nome de contato fornecido pelo remetente e status de qualidade do número.</li>
               </ul>
             </section>
 
@@ -89,9 +89,23 @@ export default function PrivacyPolicyPage() {
             </section>
 
             <section>
-              <h2 className="text-lg font-semibold text-white mb-3">6. Integração com WhatsApp Business</h2>
+              <h2 className="text-lg font-semibold text-white mb-3">6. Integração com WhatsApp Cloud API (Meta)</h2>
+              <p className="mb-3">
+                A CRM Trilha integra-se à <strong className="text-white">WhatsApp Cloud API da Meta Platforms, Inc.</strong> exclusivamente quando você habilita explicitamente essa integração via fluxo de Embedded Signup. Ao habilitar:
+              </p>
+              <ul className="list-disc list-inside space-y-2 pl-2 mb-3">
+                <li><strong className="text-white">Dados acessados na Meta:</strong> WABAs e números de telefone que você possui ou tem acesso autorizado, perfil público do dono da conta (nome, foto), templates de mensagem cadastrados e mensagens recebidas e enviadas pelo número conectado.</li>
+                <li><strong className="text-white">Dados armazenados por nós:</strong> identificadores Meta (waba_id, phone_number_id, business_account_id), token de acesso criptografado em repouso com AES-256-GCM, conteúdo de mensagens (texto e mídia), nome do contato remetente e metadados das mensagens (timestamps, IDs únicos, status de entrega).</li>
+                <li><strong className="text-white">Onde armazenamos:</strong> banco de dados PostgreSQL gerenciado pelo Supabase, com criptografia em trânsito (TLS 1.2+) e em repouso. O conteúdo das mensagens fica restrito ao seu tenant — outros usuários da plataforma não têm acesso.</li>
+                <li><strong className="text-white">Tempo de retenção:</strong> enquanto sua integração estiver ativa. Após desconexão da integração ou encerramento da conta, todos os dados WhatsApp são excluídos em até 90 dias, exceto quando a retenção for exigida por lei.</li>
+                <li><strong className="text-white">Meta como sub-processador:</strong> a Meta Platforms, Inc. atua como sub-processadora dos dados de mensagens trocadas pela Cloud API. O processamento por parte da Meta segue a <a href="https://www.whatsapp.com/legal/business-policy/" target="_blank" rel="noopener noreferrer" className="text-[#D4A94A] hover:underline">WhatsApp Business Messaging Policy</a> e a <a href="https://privacycenter.instagram.com/policies/business-tools/" target="_blank" rel="noopener noreferrer" className="text-[#D4A94A] hover:underline">Política de Dados Comerciais da Meta</a>.</li>
+                <li><strong className="text-white">Não compartilhamos com terceiros:</strong> os dados de mensagens não são vendidos, alugados nem compartilhados com terceiros não listados nesta política, nem usados para fins de marketing ou treinamento de modelos de IA fora do escopo do seu uso individual.</li>
+              </ul>
+              <p className="mb-3">
+                As mensagens enviadas seguem as diretrizes da Meta, incluindo a janela de atendimento de 24 horas e o uso de templates aprovados. Você é responsável pelo conteúdo das mensagens enviadas e pelo cumprimento das políticas da Meta — violações podem resultar em suspensão pela própria Meta.
+              </p>
               <p>
-                Ao utilizar a funcionalidade de automação via WhatsApp, você concorda com os <strong className="text-white">Termos de Serviço do WhatsApp Business</strong> e com a <strong className="text-white">Política de Dados da Meta</strong>. As mensagens enviadas através dessa integração seguem as diretrizes da plataforma Meta, incluindo a janela de 24 horas e o uso de templates aprovados. A CRM Trilha não se responsabiliza por conteúdo enviado em desacordo com as políticas da Meta.
+                Para revogar essa integração a qualquer momento, vá em <strong className="text-white">Configurações → Integrações → WhatsApp → Desconectar</strong>. Para solicitar a exclusão completa dos dados coletados via WhatsApp, utilize a página de <Link to="/excluir-dados" className="text-[#D4A94A] hover:underline">exclusão de dados</Link>.
               </p>
             </section>
 
@@ -113,7 +127,9 @@ export default function PrivacyPolicyPage() {
                 <li>Solicitar a portabilidade dos dados.</li>
                 <li>Revogar o consentimento a qualquer momento.</li>
               </ul>
-              <p className="mt-3">Para exercer seus direitos, entre em contato pelo e-mail abaixo.</p>
+              <p className="mt-3">
+                Para exercer seus direitos, entre em contato pelo e-mail abaixo ou utilize a página dedicada de <Link to="/excluir-dados" className="text-[#D4A94A] hover:underline">exclusão de dados</Link>, onde você pode solicitar a remoção completa dos seus dados (incluindo dados WhatsApp Cloud API) sem precisar abrir um ticket.
+              </p>
             </section>
 
             <section>
