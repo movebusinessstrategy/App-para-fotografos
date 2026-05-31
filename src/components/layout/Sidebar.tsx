@@ -10,7 +10,6 @@ import {
   LayoutDashboard,
   Layers,
   ListChecks,
-  MessageCircle,
   Package,
   Settings,
   Shield,
@@ -29,7 +28,6 @@ import { useAuth } from "../../contexts/AuthContext";
 
 const ALL_NAV_ITEMS = [
   { to: "/dashboard",     label: "Dashboard",       icon: LayoutDashboard, end: true,  module: "dashboard" },
-  { to: "/whatsapp",      label: "WhatsApp",         icon: MessageCircle,   module: "whatsapp" },
   { to: "/clients",       label: "Clientes",         icon: Users,           module: "clients" },
   { to: "/jobs",          label: "Produção",         icon: Workflow,        module: "jobs" },
   { to: "/tarefas",       label: "Tarefas",          icon: ListChecks,      module: "jobs" },
