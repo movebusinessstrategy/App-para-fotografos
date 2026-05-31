@@ -28,6 +28,7 @@ const ContractsPage = lazy(() => import("./pages/ContractsPage"));
 const AdminPage = lazy(() => import("./pages/AdminPage"));
 const PrivacyPolicyPage = lazy(() => import("./pages/PrivacyPolicyPage"));
 const TermsOfServicePage = lazy(() => import("./pages/TermsOfServicePage"));
+const DataDeletionPage = lazy(() => import("./pages/DataDeletionPage"));
 const CatalogoPage = lazy(() => import("./pages/CatalogoPage"));
 const TasksPage = lazy(() => import("./pages/TasksPage"));
 const PlanosPage = lazy(() => import("./pages/PlanosPage"));
@@ -99,6 +100,7 @@ export default function App() {
               <Route path="/recuperar-senha" element={<RecuperarSenha />} />
               <Route path="/privacidade" element={<PrivacyPolicyPage />} />
               <Route path="/termos" element={<TermsOfServicePage />} />
+              <Route path="/excluir-dados" element={<DataDeletionPage />} />
 
               {/* Rotas protegidas */}
               <Route
