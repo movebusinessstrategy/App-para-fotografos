@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -sL \"https://api.github.com/repos/Gaurang200/whatsapp-embedded-signup/contents/\")",
+      "Bash(python3 -c \"import sys,json; [print\\(x['path']\\) for x in json.load\\(sys.stdin\\)]\")",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/facebookarchive/php-graph-sdk/5.x/src/Facebook/Authentication/OAuth2Client.php\" -o /tmp/wes-research/OAuth2Client.php)",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/facebookarchive/php-graph-sdk/5.x/src/Facebook/Helpers/FacebookSignedRequestFromInputHelper.php\" -o /tmp/wes-research/FBSRFIH.php)",
+      "Bash(curl -sL \"https://api.github.com/repos/Gaurang200/whatsapp-embedded-signup/contents/src\")",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/chatwoot/chatwoot/develop/app/services/whatsapp/facebook_apps_service.rb\")",
+      "Bash(curl -sL \"https://api.github.com/search/code?q=v21.0/oauth/access_token+repo:chatwoot/chatwoot\")",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/chatwoot/chatwoot/develop/app/controllers/api/v1/accounts/integrations/facebook_indicators_controller.rb\")",
+      "Bash(curl -sL \"https://api.github.com/repos/chatwoot/chatwoot/contents/app/services/whatsapp\")",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/chatwoot/chatwoot/develop/app/services/whatsapp/facebook_api_client.rb\" -o /tmp/wes-research/chatwoot_fb.rb)"
+    ]
+  }
+}
