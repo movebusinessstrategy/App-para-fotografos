@@ -759,7 +759,7 @@ const PHONE_RE = /\(?(\d{2})\)?[\s\-]?9?\s?(\d{4})[\s\-]?(\d{4})/g;
 
 const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) => {
   const auth = await getGoogleAuth(supabase, userId);
-  if (!auth) return { imported: 0, linked: 0, skipped: 0, by_phone: 0, by_name: 0 };
+  if (!auth) return { imported: 0, linked: 0, updated: 0, skipped: 0, by_phone: 0, by_name: 0 };
 
   // Carrega todos os clientes do tenant pra fazer matching local
   const { data: clientsList } = await supabase
@@ -793,19 +793,39 @@ const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) 
     });
 
     const events = response.data.items || [];
-    let imported = 0, linked = 0, skipped = 0, byPhone = 0, byName = 0;
+    let imported = 0, linked = 0, updated = 0, skipped = 0, byPhone = 0, byName = 0;
 
     for (const event of events) {
       if (!event.id) continue;
 
       const { data: existingJob } = await supabase
         .from('jobs')
-        .select('id')
+        .select('id, job_date, job_time, job_end_time')
         .eq('google_event_id', event.id)
         .eq('user_id', userId)
         .single();
 
-      if (existingJob) continue;
+      // Já vinculado: sincroniza horário/data se mudou no Google Calendar
+      if (existingJob) {
+        const start = event.start?.dateTime || event.start?.date;
+        const end = event.end?.dateTime || event.end?.date;
+        if (!start) { skipped++; continue; }
+
+        const newDate = start.split('T')[0];
+        const newTime = start.includes('T') ? start.split('T')[1].substring(0, 5) : null;
+        const newEnd = (end && end.includes('T')) ? end.split('T')[1].substring(0, 5) : null;
+
+        const changes: Record<string, string | null> = {};
+        if (newDate !== existingJob.job_date) changes.job_date = newDate;
+        if (newTime !== existingJob.job_time) changes.job_time = newTime;
+        if (newEnd !== existingJob.job_end_time) changes.job_end_time = newEnd;
+
+        if (Object.keys(changes).length > 0) {
+          await supabase.from('jobs').update(changes).eq('id', existingJob.id);
+          updated++;
+        }
+        continue;
+      }
 
       const summary = (event.summary || '').trim() || 'Sem Título';
       const description = (event.description || '').trim();
@@ -887,11 +907,11 @@ const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) 
       void startTime; void endTime;
     }
 
-    console.log(`[google-sync] user=${userId} imported=${imported} linked=${linked} skipped=${skipped} by_phone=${byPhone} by_name=${byName}`);
-    return { imported, linked, skipped, by_phone: byPhone, by_name: byName };
+    console.log(`[google-sync] user=${userId} imported=${imported} linked=${linked} updated=${updated} skipped=${skipped} by_phone=${byPhone} by_name=${byName}`);
+    return { imported, linked, updated, skipped, by_phone: byPhone, by_name: byName };
   } catch (error) {
     console.error('Error pulling from Google Calendar:', error);
-    return { imported: 0, linked: 0, skipped: 0, by_phone: 0, by_name: 0 };
+    return { imported: 0, linked: 0, updated: 0, skipped: 0, by_phone: 0, by_name: 0 };
   }
 };
 
