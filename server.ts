@@ -689,15 +689,24 @@ const syncJobToGoogleCalendar = async (supabase: SupabaseClient, jobId: number, 
   const calendar = google.calendar({ version: 'v3', auth });
   const client = job.clients as any;
 
-  const startDateTime = job.job_time
-    ? `${job.job_date}T${job.job_time}:00`
-    : `${job.job_date}T09:00:00`;
+  // CRÍTICO: NÃO usar new Date(...).toISOString() aqui — o Render roda em UTC,
+  // e Date("YYYY-MM-DDTHH:MM:SS") sem timezone é interpretado como UTC local.
+  // Resultado: 09:00 BRT virava 09:00 UTC = 06:00 BRT (3h mais cedo no Calendar).
+  // Solução: passar a string YYYY-MM-DDTHH:MM:SS DIRETO + timeZone — o Google
+  // interpreta o horário na timezone informada.
+  const startTime = job.job_time || '09:00';
+  const startDateTime = `${job.job_date}T${startTime}:00`;
 
-  let endDateTime;
+  let endDateTime: string;
   if (job.job_end_time) {
-    endDateTime = new Date(`${job.job_date}T${job.job_end_time}:00`).toISOString();
+    endDateTime = `${job.job_date}T${job.job_end_time}:00`;
   } else {
-    endDateTime = new Date(new Date(startDateTime).getTime() + 60 * 60 * 1000).toISOString();
+    // +1 hora sem conversão de timezone — parse manual da string HH:MM
+    const [hh, mm] = startTime.split(':').map(Number);
+    let endH = hh + 1;
+    let endM = mm;
+    if (endH >= 24) { endH = 23; endM = 59; }
+    endDateTime = `${job.job_date}T${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}:00`;
   }
 
   const summary = client?.name
@@ -707,7 +716,7 @@ const syncJobToGoogleCalendar = async (supabase: SupabaseClient, jobId: number, 
   const event = {
     summary,
     description: job.notes || (client?.name ? `Ensaio ${job.job_type} para ${client.name}` : job.job_type),
-    start: { dateTime: new Date(startDateTime).toISOString(), timeZone: 'America/Sao_Paulo' },
+    start: { dateTime: startDateTime, timeZone: 'America/Sao_Paulo' },
     end: { dateTime: endDateTime, timeZone: 'America/Sao_Paulo' },
     attendees: client?.email ? [{ email: client.email }] : [],
   };
