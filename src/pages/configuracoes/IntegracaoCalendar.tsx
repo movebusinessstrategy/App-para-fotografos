@@ -29,7 +29,7 @@ export default function IntegracaoCalendar() {
   useEffect(() => {
     Promise.all([checkStatus(), fetchConfig()]).finally(() => setLoading(false));
     const onMessage = (event: MessageEvent) => {
-      if (event.data?.type === "google_auth_success") checkStatus();
+      if (event.data?.type === "GOOGLE_AUTH_SUCCESS") checkStatus();
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
