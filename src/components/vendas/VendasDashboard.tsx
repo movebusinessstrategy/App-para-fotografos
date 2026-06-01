@@ -61,6 +61,17 @@ export function VendasDashboard() {
     }
   };
 
+  // Abre modal "Novo Lead" se chegar com ?novo=1 (atalho vindo de outras páginas, ex: Produção)
+  useEffect(() => {
+    if (searchParams.get("novo") === "1") {
+      setNewDealOpen(true);
+      // Limpa o param pra não reabrir em F5
+      const next = new URLSearchParams(searchParams);
+      next.delete("novo");
+      setSearchParams(next, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
   // Revalida automaticamente quando a aba volta a ficar visível (foco).
   // Cobre o caso de você ter mexido em outra aba/dispositivo/extensão.
   useEffect(() => {
