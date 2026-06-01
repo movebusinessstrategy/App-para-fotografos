@@ -12,12 +12,12 @@ export const DEFAULT_STAGES: PipelineStage[] = [
   { id: 'lost', name: 'Perdido', color: '#FEE2E2', position: 5, is_final: true, is_won: false },
 ];
 
-// IDs prefixados com "prod-" para distinguir de etapas de vendas na mesma tabela
+// IDs prefixados com "prod-" para distinguir de etapas de vendas na mesma tabela.
+// Padrão MÍNIMO pra contas novas: 2 etapas genéricas — o usuário renomeia/expande
+// como quiser depois. Contas existentes (que já têm etapas no banco) não são afetadas.
 export const DEFAULT_PRODUCTION_STAGES: PipelineStage[] = [
-  { id: 'prod-agendado', name: 'Agendado', color: '#22c55e', position: 0, is_final: false, is_won: false },
-  { id: 'prod-ensaio-realizado', name: 'Ensaio Realizado', color: '#fbbf24', position: 1, is_final: false, is_won: false },
-  { id: 'prod-em-edicao', name: 'Em Edição', color: '#3b82f6', position: 2, is_final: false, is_won: false },
-  { id: 'prod-entregue', name: 'Entregue', color: '#a855f7', position: 3, is_final: true, is_won: true },
+  { id: 'prod-etapa-1', name: 'Etapa 1', color: '#94a3b8', position: 0, is_final: false, is_won: false },
+  { id: 'prod-etapa-2', name: 'Etapa 2', color: '#22c55e', position: 1, is_final: true,  is_won: true  },
 ];
 
 const normalizeStage = (stage: any, fallback: PipelineStage): PipelineStage => ({
@@ -297,57 +297,20 @@ export interface ProductionStageDef {
   is_won: boolean;
 }
 
+// Padrão MÍNIMO pra contas novas: 1 processo genérico (o usuário renomeia/expande).
+// Os 6 processos detalhados antigos viraram nomes específicos demais —
+// melhor deixar o user montar do zero a estrutura que faz sentido pro estúdio dele.
 export const DEFAULT_PRODUCTION_PROCESSES: ProductionProcessDef[] = [
-  { id: 'proc-empresa',     name: 'Processo dentro da Empresa', position: 0, color: '#3b82f6' },
-  { id: 'proc-fotos',       name: 'Processo de Enviar Fotos',   position: 1, color: '#0ea5e9' },
-  { id: 'proc-edicao',      name: 'Processo de Edição',         position: 2, color: '#8b5cf6' },
-  { id: 'proc-finalizacao', name: 'Processo de Finalização',    position: 3, color: '#f59e0b' },
-  { id: 'proc-embalagem',   name: 'Processo de Embalagem',      position: 4, color: '#10b981' },
-  { id: 'proc-posvenda',    name: 'Processo de Pós Venda',      position: 5, color: '#f43f5e' },
+  { id: 'proc-1', name: 'Processo', position: 0, color: '#94a3b8' },
 ];
 
+// Padrão MÍNIMO pra contas novas: 2 etapas genéricas no processo único.
+// As 34 etapas anteriores eram opiniões fortes sobre fluxo (Fila de Edição,
+// Vídeo a fazer, Avisou cliente, etc) — cada estúdio tem o próprio jeito.
+// User configura/expande depois pelo Customizer.
 export const DEFAULT_PRODUCTION_STAGES_V2: ProductionStageDef[] = [
-  // Empresa
-  { id: 'prod-emp-1', name: 'Ensaio Vendido',    position: 0, process_id: 'proc-empresa', color: '#3b82f6', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-emp-2', name: 'Contrato',           position: 1, process_id: 'proc-empresa', color: '#3b82f6', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-emp-3', name: 'Alinhamento',        position: 2, process_id: 'proc-empresa', color: '#3b82f6', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-emp-4', name: 'Ensaio a Realizar',  position: 3, process_id: 'proc-empresa', color: '#3b82f6', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-emp-5', name: 'Ensaio Realizado',   position: 4, process_id: 'proc-empresa', color: '#22c55e', is_final: true,  is_won: true,  expected_hours: 0 },
-  // Enviar Fotos
-  { id: 'prod-foto-1', name: 'Importar foto no HD',              position: 0, process_id: 'proc-fotos', color: '#0ea5e9', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-foto-2', name: 'Fazer seleção',                    position: 1, process_id: 'proc-fotos', color: '#0ea5e9', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-foto-3', name: 'Enviado para cliente selecionar',  position: 2, process_id: 'proc-fotos', color: '#0ea5e9', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-foto-4', name: 'Cliente selecionou',               position: 3, process_id: 'proc-fotos', color: '#0ea5e9', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-foto-5', name: 'Pendência de pagamento',           position: 4, process_id: 'proc-fotos', color: '#0ea5e9', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-foto-6', name: 'Prontos para Editar',              position: 5, process_id: 'proc-fotos', color: '#22c55e', is_final: true,  is_won: true,  expected_hours: 0 },
-  // Edição
-  { id: 'prod-edit-1', name: 'Fila de Edição', position: 0, process_id: 'proc-edicao', color: '#8b5cf6', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-edit-2', name: 'Em Edição',       position: 1, process_id: 'proc-edicao', color: '#8b5cf6', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-edit-3', name: 'Editados',         position: 2, process_id: 'proc-edicao', color: '#8b5cf6', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-edit-4', name: 'Vídeo a fazer',    position: 3, process_id: 'proc-edicao', color: '#8b5cf6', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-edit-5', name: 'Revisado',         position: 4, process_id: 'proc-edicao', color: '#8b5cf6', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-edit-6', name: 'Aprovado',         position: 5, process_id: 'proc-edicao', color: '#8b5cf6', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-edit-7', name: 'Mandou Prévia',    position: 6, process_id: 'proc-edicao', color: '#22c55e', is_final: true,  is_won: true,  expected_hours: 0 },
-  // Finalização
-  { id: 'prod-final-1', name: 'Fila para Revelação',          position: 0, process_id: 'proc-finalizacao', color: '#f59e0b', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-final-2', name: 'Mandou Revelar',                position: 1, process_id: 'proc-finalizacao', color: '#f59e0b', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-final-3', name: 'Design sendo Desenvolvido',     position: 2, process_id: 'proc-finalizacao', color: '#f59e0b', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-final-4', name: 'Design Finalizar',              position: 3, process_id: 'proc-finalizacao', color: '#f59e0b', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-final-5', name: 'Enviado para o Cliente Aprovar', position: 4, process_id: 'proc-finalizacao', color: '#f59e0b', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-final-6', name: 'Aprovado',                      position: 5, process_id: 'proc-finalizacao', color: '#f59e0b', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-final-7', name: 'Mandou para a Produção',        position: 6, process_id: 'proc-finalizacao', color: '#f59e0b', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-final-8', name: 'Produto chegou no estúdio',     position: 7, process_id: 'proc-finalizacao', color: '#22c55e', is_final: true,  is_won: true,  expected_hours: 0 },
-  // Embalagem
-  { id: 'prod-emb-1', name: 'Aguardando Embalagem',         position: 0, process_id: 'proc-embalagem', color: '#10b981', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-emb-2', name: 'Embalado e Pronto',             position: 1, process_id: 'proc-embalagem', color: '#10b981', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-emb-3', name: 'Avisou cliente que está pronto', position: 2, process_id: 'proc-embalagem', color: '#10b981', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-emb-4', name: 'Combinou de Retirar',           position: 3, process_id: 'proc-embalagem', color: '#10b981', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-emb-5', name: 'Retirado',                      position: 4, process_id: 'proc-embalagem', color: '#22c55e', is_final: true,  is_won: true,  expected_hours: 0 },
-  // Pós Venda
-  { id: 'prod-pos-1', name: 'Perguntar se deu Certo as fotos',  position: 0, process_id: 'proc-posvenda', color: '#f43f5e', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-pos-2', name: 'Pedido de avaliação no Google',    position: 1, process_id: 'proc-posvenda', color: '#f43f5e', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-pos-3', name: 'Não pedimos avaliação',            position: 2, process_id: 'proc-posvenda', color: '#f43f5e', is_final: false, is_won: false, expected_hours: 0 },
-  { id: 'prod-pos-4', name: 'Avaliaram no Google',              position: 3, process_id: 'proc-posvenda', color: '#22c55e', is_final: true,  is_won: true,  expected_hours: 0 },
+  { id: 'prod-etapa-1', name: 'Etapa 1', position: 0, process_id: 'proc-1', color: '#94a3b8', is_final: false, is_won: false, expected_hours: 0 },
+  { id: 'prod-etapa-2', name: 'Etapa 2', position: 1, process_id: 'proc-1', color: '#22c55e', is_final: true,  is_won: true,  expected_hours: 0 },
 ];
 
 export const ensureProductionProcesses = async (supabase: SupabaseClient, userId: string): Promise<ProductionProcessDef[]> => {
