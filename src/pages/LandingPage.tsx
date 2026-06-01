@@ -1,56 +1,39 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
-import { motion, useReducedMotion } from "motion/react";
+import {
+  motion, useReducedMotion, useScroll, useTransform, useSpring, AnimatePresence,
+} from "motion/react";
 import { useAuth } from "../contexts/AuthContext";
 import {
-  Check, ChevronRight, Workflow, MessageCircle, Calendar, FileSignature,
-  Users, ArrowRight, Zap, Shield, X, AlertTriangle, Clock,
-  TrendingUp, Heart, Award, Gift, ChevronDown, PlayCircle, BadgeCheck,
+  Check, ArrowRight, ArrowUpRight, Sparkles, Cake, Baby, PartyPopper, Gift,
+  Calendar, MessageCircle, FileSignature, Workflow, Users, TrendingUp,
+  Shield, ChevronDown, Zap, BadgeCheck, Star, Radar, Brain, Send, Search,
+  Puzzle, ChevronRight, Crown, Infinity as InfinityIcon,
 } from "lucide-react";
 
 const APP_NAME = "Trilha";
+const EASE = [0.22, 1, 0.36, 1] as const;
 
-// Logo horizontal "CRM Trilha" - alterna por dark mode. `heightClass` é uma
-// classe Tailwind (ex.: "h-9") pra controlar o tamanho.
+/* Logo "CRM Trilha". A landing é sempre clara, então usamos a versão clara. */
 function TrilhaLogo({ heightClass = "h-9" }: { heightClass?: string }) {
-  return (
-    <>
-      <img src="/logo-light.png" alt="CRM Trilha" className={`${heightClass} w-auto dark:hidden`} />
-      <img src="/logo-dark.png" alt="CRM Trilha" className={`${heightClass} w-auto hidden dark:block`} />
-    </>
-  );
+  return <img src="/logo-light.png" alt="CRM Trilha" className={`${heightClass} w-auto`} />;
 }
 
-// ─── Hook util: contagem regressiva pra urgência ──────────────────────────────
-function useCountdown(targetMs: number) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
-  const diff = Math.max(0, targetMs - now);
-  const d = Math.floor(diff / 86400000);
-  const h = Math.floor((diff % 86400000) / 3600000);
-  const m = Math.floor((diff % 3600000) / 60000);
-  const s = Math.floor((diff % 60000) / 1000);
-  return { d, h, m, s, ended: diff === 0 };
-}
+/* ─── Contexto do container de scroll (a landing rola num div próprio) ───────── */
+const ScrollCtx = createContext<React.RefObject<HTMLDivElement | null> | null>(null);
+const useScrollContainer = () => useContext(ScrollCtx);
 
-// ─── Animation helper ─────────────────────────────────────────────────────────
-interface FadeInProps {
-  children: React.ReactNode;
-  delay?: number;
-  y?: number;
-  className?: string;
-}
-const FadeIn: React.FC<FadeInProps> = ({ children, delay = 0, y = 24, className = "" }) => {
+/* ─── Helpers de animação ───────────────────────────────────────────────────── */
+const FadeIn: React.FC<{ children: React.ReactNode; delay?: number; y?: number; className?: string }> = ({
+  children, delay = 0, y = 28, className = "",
+}) => {
   const reduce = useReducedMotion();
   return (
     <motion.div
       initial={reduce ? false : { opacity: 0, y }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: "-80px" }}
-      transition={{ duration: 0.55, delay, ease: [0.22, 1, 0.36, 1] }}
+      transition={{ duration: 0.7, delay, ease: EASE }}
       className={className}
     >
       {children}
@@ -58,15 +41,94 @@ const FadeIn: React.FC<FadeInProps> = ({ children, delay = 0, y = 24, className 
   );
 };
 
-interface Plan {
-  id: string;
-  slug: string;
-  name: string;
-  price_cents: number;
+/* Parallax: move o elemento conforme o scroll do container. */
+function Parallax({ children, amount = 60, className = "" }: { children: React.ReactNode; amount?: number; className?: string }) {
+  const reduce = useReducedMotion();
+  const container = useScrollContainer();
+  const ref = useRef<HTMLDivElement>(null);
+  const { scrollYProgress } = useScroll({
+    container: container ?? undefined,
+    target: ref,
+    offset: ["start end", "end start"],
+  });
+  const yRaw = useTransform(scrollYProgress, [0, 1], [amount, -amount]);
+  const y = useSpring(yRaw, { stiffness: 120, damping: 30, mass: 0.4 });
+  return (
+    <div ref={ref} className={className}>
+      <motion.div style={reduce ? undefined : { y }}>{children}</motion.div>
+    </div>
+  );
 }
 
-// Planos hard-coded - quando integrar com Asaas/billing de verdade, basta voltar
-// o fetch pra `/api/public/plans` aqui. O resto da página continua igual.
+/* Fundo da primeira dobra: grid técnico sutil com leve brilho dourado e um
+   ponto-de-luz que percorre as linhas, dando vida sem poluir. */
+function HeroBackdrop() {
+  const reduce = useReducedMotion();
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+      {/* Grid milimetrado que some nas bordas */}
+      <div
+        className="absolute inset-0"
+        style={{
+          backgroundImage:
+            "linear-gradient(to right, rgba(17,17,17,0.055) 1px, transparent 1px), linear-gradient(to bottom, rgba(17,17,17,0.055) 1px, transparent 1px)",
+          backgroundSize: "46px 46px",
+          WebkitMaskImage: "radial-gradient(ellipse 80% 68% at 50% 0%, #000 48%, transparent 100%)",
+          maskImage: "radial-gradient(ellipse 80% 68% at 50% 0%, #000 48%, transparent 100%)",
+        }}
+      />
+      {/* Brilho dourado discreto no topo */}
+      <div className="absolute -top-44 left-1/2 -translate-x-1/2 w-[720px] h-[440px] bg-gold-200/25 rounded-full blur-[130px]" />
+      {/* Linha de luz horizontal que cruza o grid */}
+      {!reduce && (
+        <motion.div
+          className="absolute left-0 right-0 h-px bg-gradient-to-r from-transparent via-gold-400/50 to-transparent"
+          initial={{ top: "8%", opacity: 0 }}
+          animate={{ top: ["8%", "62%"], opacity: [0, 1, 1, 0] }}
+          transition={{ duration: 6, repeat: Infinity, ease: "easeInOut", repeatDelay: 2 }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* Contador animado que dispara ao entrar na viewport. */
+function CountUp({ to, duration = 1.6, format }: { to: number; duration?: number; format?: (n: number) => string }) {
+  const [val, setVal] = useState(0);
+  const started = useRef(false);
+  const reduce = useReducedMotion();
+  const start = () => {
+    if (started.current) return;
+    started.current = true;
+    if (reduce) { setVal(to); return; }
+    const t0 = performance.now();
+    const tick = (t: number) => {
+      const p = Math.min(1, (t - t0) / (duration * 1000));
+      setVal(Math.round(to * (1 - Math.pow(1 - p, 3))));
+      if (p < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  };
+  return (
+    <motion.span onViewportEnter={start} viewport={{ once: true }}>
+      {format ? format(val) : val.toLocaleString("pt-BR")}
+    </motion.span>
+  );
+}
+
+/* Passo cíclico para os mockups "ao vivo". */
+function useStep(count: number, ms: number) {
+  const [i, setI] = useState(0);
+  const reduce = useReducedMotion();
+  useEffect(() => {
+    if (reduce) return;
+    const t = setInterval(() => setI((p) => (p + 1) % count), ms);
+    return () => clearInterval(t);
+  }, [count, ms, reduce]);
+  return i;
+}
+
+interface Plan { id: string; slug: string; name: string; price_cents: number; }
 const PLANS: Plan[] = [
   { id: "pro",      slug: "pro",      name: "Pro",      price_cents: 9700  },
   { id: "business", slug: "business", name: "Business", price_cents: 19700 },
@@ -74,82 +136,64 @@ const PLANS: Plan[] = [
 
 export default function LandingPage() {
   const { user, loading } = useAuth();
-  // Usuários já logados pulam a landing - vão direto pro app
   if (!loading && user) return <Navigate to="/dashboard" replace />;
 
-  // Promoção termina em 7 dias (renovável; serve só pra demonstrar escassez)
-  const promoEndsAt = React.useMemo(() => Date.now() + 7 * 24 * 60 * 60 * 1000, []);
-
-  // O body do app tem `overflow: hidden` global - então a landing precisa
-  // ter scroll PRÓPRIO dentro de um container `h-screen overflow-y-auto`.
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const onScroll = () => setScrolled(el.scrollTop > 30);
+    const onScroll = () => setScrolled(el.scrollTop > 24);
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
-  // Pré-aquece o backend já na landing - assim quando o visitante for
-  // fazer cadastro/login, o Render free tier não estará dormindo.
   useEffect(() => {
-    const base = (import.meta.env.VITE_API_BASE_URL as string) || '';
-    fetch(`${base}/api/health`, { method: 'GET', cache: 'no-store' }).catch(() => {});
+    const base = (import.meta.env.VITE_API_BASE_URL as string) || "";
+    fetch(`${base}/api/health`, { method: "GET", cache: "no-store" }).catch(() => {});
   }, []);
 
   return (
-    <div
-      ref={scrollRef}
-      className="h-screen overflow-y-auto overflow-x-hidden bg-white dark:bg-[#0a0a0b] text-gray-900 dark:text-white font-sans antialiased"
-    >
-      <Header scrolled={scrolled} />
-      <Hero />
-      <SocialProofBar />
-      <ProblemSection />
-      <SolutionSection />
-      <DemoSection />
-      <HowItWorks />
-      <ValueStackSection />
-      <BonusSection />
-      <GuaranteeSection />
-      <TestimonialsSection />
-      <ComparisonTable />
-      <PricingSection plans={PLANS} promoEndsAt={promoEndsAt} />
-      <UrgencyBar promoEndsAt={promoEndsAt} />
-      <FaqSection />
-      <FinalCta />
-      <Footer />
-    </div>
+    <ScrollCtx.Provider value={scrollRef}>
+      <div
+        ref={scrollRef}
+        className="h-screen overflow-y-auto overflow-x-hidden bg-luxury-paper text-luxury-black font-sans antialiased scroll-smooth"
+      >
+        <Header scrolled={scrolled} />
+        <Hero />
+        <SocialProof />
+        <ProblemSection />
+        <StickyShowcase />
+        <FeatureGrid />
+        <HowItWorks />
+        <Testimonials />
+        <Pricing plans={PLANS} />
+        <Guarantee />
+        <FaqSection />
+        <FinalCta />
+        <Footer />
+      </div>
+    </ScrollCtx.Provider>
   );
 }
 
 /* ─────────────────────── HEADER ────────────────────────────────────────────── */
 function Header({ scrolled }: { scrolled: boolean }) {
   return (
-    <header className={`sticky top-0 z-50 transition-all ${
-      scrolled
-        ? "bg-white/85 dark:bg-[#0a0a0b]/85 backdrop-blur-md border-b border-gray-100 dark:border-white/5 shadow-sm"
-        : "bg-transparent"
+    <header className={`sticky top-0 z-50 transition-all duration-300 ${
+      scrolled ? "bg-luxury-paper/70 backdrop-blur-xl border-b border-black/5" : "bg-transparent border-b border-transparent"
     }`}>
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-        <Link to="/" className="flex items-center">
-          <TrilhaLogo heightClass="h-9" />
-        </Link>
-        <nav className="hidden md:flex items-center gap-7 text-sm font-medium text-gray-600 dark:text-gray-300">
-          <a href="#recursos" className="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">Recursos</a>
-          <a href="#demo" className="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">Demo</a>
-          <a href="#precos" className="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">Preços</a>
-          <a href="#faq" className="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">Dúvidas</a>
+      <div className="max-w-6xl mx-auto px-5 sm:px-8 h-16 flex items-center justify-between">
+        <Link to="/" className="flex items-center"><TrilhaLogo heightClass="h-8" /></Link>
+        <nav className="hidden md:flex items-center gap-9 text-[13px] font-medium text-gray-500">
+          <a href="#oportunidades" className="hover:text-luxury-black transition-colors">Inteligência</a>
+          <a href="#recursos" className="hover:text-luxury-black transition-colors">Recursos</a>
+          <a href="#precos" className="hover:text-luxury-black transition-colors">Preços</a>
+          <a href="#faq" className="hover:text-luxury-black transition-colors">Dúvidas</a>
         </nav>
-        <div className="flex items-center gap-2">
-          <Link to="/login" className="hidden sm:inline-flex px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 hover:text-amber-600 transition-colors">
-            Entrar
-          </Link>
-          <Link to="/cadastro" className="px-4 py-2 text-sm font-semibold bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white rounded-lg transition-all shadow-md shadow-amber-500/25 hover:shadow-lg hover:shadow-amber-500/40">
-            Começar grátis
-          </Link>
+        <div className="flex items-center gap-1.5">
+          <Link to="/login" className="hidden sm:inline-flex px-4 py-2 text-[13px] font-medium text-gray-600 hover:text-luxury-black transition-colors">Entrar</Link>
+          <Link to="/cadastro" className="px-4 py-2 text-[13px] font-semibold bg-luxury-black text-white rounded-full hover:opacity-90 transition-opacity">Começar grátis</Link>
         </div>
       </div>
     </header>
@@ -159,64 +203,55 @@ function Header({ scrolled }: { scrolled: boolean }) {
 /* ─────────────────────── HERO ──────────────────────────────────────────────── */
 function Hero() {
   return (
-    <section className="relative pt-16 pb-20 sm:pt-24 sm:pb-28 overflow-hidden">
-      {/* Background gradiente animado */}
-      <div className="absolute inset-0 bg-gradient-to-br from-amber-50 via-white to-rose-50/40 dark:from-amber-950/20 dark:via-[#0a0a0b] dark:to-rose-950/10 pointer-events-none" />
-      <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-amber-300/20 dark:bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-rose-300/20 dark:bg-rose-500/5 rounded-full blur-3xl pointer-events-none" />
-
-      <div className="relative max-w-7xl mx-auto px-4 sm:px-6">
-        <div className="grid lg:grid-cols-[1.1fr_1fr] gap-12 lg:gap-16 items-center">
-          {/* Coluna esquerda - Copy */}
+    <section className="relative pt-14 pb-20 sm:pt-20 sm:pb-28 overflow-hidden">
+      <HeroBackdrop />
+      <div className="relative max-w-6xl mx-auto px-5 sm:px-8">
+        <div className="grid lg:grid-cols-[1fr_1.05fr] gap-12 lg:gap-10 items-center">
+          {/* Copy */}
           <div className="text-center lg:text-left">
             <FadeIn>
-              <div className="inline-flex items-center px-3 py-1 rounded-full bg-amber-100 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700/40 text-amber-700 dark:text-amber-300 text-xs font-semibold mb-5">
-                7 dias grátis · sem cartão · cancele quando quiser
+              <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/70 backdrop-blur border border-gold-200 text-[12px] font-semibold text-gold-700 mb-7 shadow-sm">
+                <Brain size={13} className="text-gold-500" /> Inteligência de vendas para fotógrafos
               </div>
             </FadeIn>
             <FadeIn delay={0.05}>
-              <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.05] mb-5">
-                Pare de perder cliente por causa de{" "}
-                <span className="relative inline-block">
-                  <span className="relative z-10 text-amber-600 dark:text-amber-400">planilha</span>
-                  <svg className="absolute -bottom-1 left-0 w-full" height="8" viewBox="0 0 100 8" preserveAspectRatio="none">
-                    <path d="M0 6 Q 25 0, 50 4 T 100 4" stroke="currentColor" strokeWidth="3" fill="none" className="text-amber-400/60" />
-                  </svg>
-                </span>{" "}
-                e WhatsApp bagunçado.
+              <h1 className="text-[2.7rem] sm:text-6xl lg:text-[4.3rem] font-bold tracking-[-0.035em] leading-[0.98] mb-6">
+                Suas próximas vendas já estão na sua{" "}
+                <span className="bg-gradient-to-r from-gold-500 to-gold-700 bg-clip-text text-transparent">base.</span>
               </h1>
             </FadeIn>
             <FadeIn delay={0.1}>
-              <p className="text-lg sm:text-xl text-gray-600 dark:text-gray-300 mb-7 leading-relaxed max-w-xl mx-auto lg:mx-0">
-                O <strong>{APP_NAME}</strong> é o CRM feito <em>especificamente</em> pra fotógrafos brasileiros. Pipeline visual, WhatsApp integrado, contratos digitais e agenda - tudo num só lugar, em <strong>menos de 5 minutos</strong>.
+              <p className="text-lg sm:text-xl text-gray-500 max-w-xl mx-auto lg:mx-0 mb-8 leading-relaxed font-light">
+                Todo dia clientes seus têm bebês, fazem aniversário e completam marcos.
+                O <strong className="text-luxury-black font-semibold">{APP_NAME}</strong> lê a sua base e te entrega,
+                prontas, todas as oportunidades de venda que estão passando batido.
               </p>
             </FadeIn>
             <FadeIn delay={0.15}>
               <div className="flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-3 mb-6">
-                <Link
-                  to="/cadastro"
-                  className="group inline-flex items-center gap-2 px-7 py-3.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-semibold rounded-xl shadow-xl shadow-amber-500/30 hover:shadow-2xl hover:shadow-amber-500/50 transition-all hover:-translate-y-0.5"
-                >
-                  Começar grátis agora
-                  <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
+                <Link to="/cadastro" className="group inline-flex items-center gap-2 px-8 py-4 bg-gold-500 hover:bg-gold-600 text-white font-semibold rounded-full shadow-lg shadow-gold-500/25 transition-all hover:shadow-xl hover:shadow-gold-500/35 hover:-translate-y-0.5 text-[15px]">
+                  Começar grátis por 7 dias
+                  <ArrowRight size={18} className="group-hover:translate-x-0.5 transition-transform" />
                 </Link>
-                <a href="#demo" className="inline-flex items-center gap-2 px-7 py-3.5 text-gray-700 dark:text-gray-200 font-medium hover:text-amber-600 dark:hover:text-amber-400 transition-colors">
-                  <PlayCircle size={18} /> Ver demonstração
+                <a href="#oportunidades" className="inline-flex items-center gap-1.5 px-6 py-4 text-luxury-black font-medium hover:text-gold-600 transition-colors text-[15px]">
+                  Ver a inteligência <ArrowUpRight size={17} />
                 </a>
               </div>
             </FadeIn>
             <FadeIn delay={0.2}>
-              <div className="flex flex-wrap items-center justify-center lg:justify-start gap-x-5 gap-y-2 text-xs text-gray-500 dark:text-gray-400">
-                <span className="flex items-center gap-1"><Check size={13} className="text-emerald-500" /> Sem cartão de crédito</span>
-                <span className="flex items-center gap-1"><Check size={13} className="text-emerald-500" /> Setup em 5 minutos</span>
-                <span className="flex items-center gap-1"><Check size={13} className="text-emerald-500" /> Suporte humano</span>
+              <div className="flex flex-wrap items-center justify-center lg:justify-start gap-x-5 gap-y-2 text-[13px] text-gray-400">
+                <span className="flex items-center gap-1.5"><Check size={14} className="text-gold-500" /> Sem cartão</span>
+                <span className="flex items-center gap-1.5"><Check size={14} className="text-gold-500" /> Pronto em 5 min</span>
+                <span className="flex items-center gap-1.5"><Check size={14} className="text-gold-500" /> Cancele quando quiser</span>
               </div>
             </FadeIn>
           </div>
 
-          {/* Coluna direita - Mockup animado */}
+          {/* Painel vivo com tilt + parallax */}
           <FadeIn delay={0.25} y={40}>
-            <HeroMockup />
+            <Parallax amount={36}>
+              <OpportunitiesMock />
+            </Parallax>
           </FadeIn>
         </div>
       </div>
@@ -224,114 +259,317 @@ function Hero() {
   );
 }
 
-/* Mockup do app no Hero - pipeline kanban estilizado */
-function HeroMockup() {
+/* ─────────────────────── MOCKUP 1 · OPORTUNIDADES ──────────────────────────── */
+const HERO_OPPS = [
+  { icon: Cake,        tag: "Smash the Cake", chip: "bg-pink-100 text-pink-600", who: "Helena completa 1 ano", when: "em 6 dias",  value: "R$ 890"   },
+  { icon: Sparkles,    tag: "Newborn",        chip: "bg-sky-100 text-sky-600",   who: "Bebê da Marina nasceu", when: "há 9 dias",  value: "R$ 1.290" },
+  { icon: PartyPopper, tag: "Aniversário",    chip: "bg-rose-100 text-rose-600", who: "Théo faz 3 anos",       when: "em 12 dias", value: "R$ 650"   },
+];
+
+function OpportunitiesMock() {
   const reduce = useReducedMotion();
   return (
     <div className="relative">
-      {/* Glow atrás */}
-      <div className="absolute -inset-4 bg-gradient-to-r from-amber-400/30 to-rose-400/20 dark:from-amber-500/20 dark:to-rose-500/10 rounded-3xl blur-2xl pointer-events-none" />
-
-      {/* Janela do app */}
-      <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-        {/* Title bar */}
-        <div className="flex items-center gap-1.5 px-4 py-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-100 dark:border-gray-700">
-          <div className="w-3 h-3 rounded-full bg-rose-400" />
-          <div className="w-3 h-3 rounded-full bg-amber-400" />
-          <div className="w-3 h-3 rounded-full bg-emerald-400" />
-          <div className="flex-1 text-center text-xs text-gray-400 font-medium">{APP_NAME} · Pipeline de Vendas</div>
-        </div>
-
-        {/* Kanban mini */}
-        <div className="p-4 grid grid-cols-3 gap-3 bg-gray-50/60 dark:bg-gray-900/50">
-          {[
-            { label: "Entrou em contato", color: "bg-blue-500", count: 12, cards: ["Bruno Santos", "Marina Costa", "Ricardo Alves"] },
-            { label: "Conversa iniciada", color: "bg-amber-500", count: 8, cards: ["Fernanda Lima", "Carlos Dias"] },
-            { label: "Orçamento enviado", color: "bg-emerald-500", count: 5, cards: ["João Pereira"] },
-          ].map((col, ci) => (
-            <div key={col.label} className="bg-white dark:bg-gray-800 rounded-lg p-2 min-h-[200px]">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-1.5">
-                  <span className={`w-1.5 h-1.5 rounded-full ${col.color}`} />
-                  <span className="text-[10px] font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider">{col.label}</span>
-                </div>
-                <span className="text-[9px] text-gray-400">{col.count}</span>
-              </div>
-              <div className="space-y-1.5">
-                {col.cards.map((name, i) => (
-                  <motion.div
-                    key={name}
-                    initial={reduce ? false : { opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: 0.4 + ci * 0.1 + i * 0.08, duration: 0.4 }}
-                    className="bg-white dark:bg-gray-700 border border-gray-100 dark:border-gray-600 rounded p-2 shadow-sm"
-                  >
-                    <div className="flex items-center gap-1.5">
-                      <div className={`w-5 h-5 rounded-full ${["bg-pink-400","bg-violet-400","bg-cyan-400","bg-amber-400","bg-emerald-400","bg-rose-400"][(ci*3+i)%6]} text-white text-[9px] font-bold flex items-center justify-center`}>
-                        {name[0]}
-                      </div>
-                      <span className="text-[10px] font-semibold text-gray-800 dark:text-gray-100 truncate">{name}</span>
-                    </div>
-                    <div className="mt-1 text-[9px] text-gray-400">+55 43 9999-9999</div>
-                  </motion.div>
-                ))}
-              </div>
+      <div className="absolute -inset-8 bg-gradient-to-tr from-gold-400/20 via-amber-300/10 to-transparent rounded-[2.5rem] blur-3xl pointer-events-none" />
+      <div className="relative rounded-[1.7rem] p-px bg-gradient-to-b from-black/10 to-black/5 shadow-2xl shadow-black/10">
+        <div className="rounded-[1.65rem] bg-white overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-3.5 border-b border-black/5">
+            <span className="text-sm font-semibold text-gray-700 flex items-center gap-2"><Radar size={15} className="text-gold-500" /> Motor de Oportunidades</span>
+            <span className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-600">
+              <span className="relative flex h-2 w-2"><span className="animate-ping absolute h-full w-full rounded-full bg-emerald-400 opacity-60" /><span className="relative rounded-full h-2 w-2 bg-emerald-500" /></span>
+              ao vivo
+            </span>
+          </div>
+          <div className="px-5 pt-4">
+            <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
+              <Radar size={13} className="text-gold-500" /> Analisando sua base · <span className="font-semibold text-gray-700">1.248 clientes</span>
             </div>
-          ))}
+            <div className="h-1 rounded-full bg-gray-100 overflow-hidden">
+              <motion.div
+                className="h-full rounded-full bg-gradient-to-r from-gold-400 to-gold-600"
+                animate={reduce ? { width: "100%" } : { width: ["0%", "100%"] }}
+                transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut", repeatDelay: 0.6 }}
+              />
+            </div>
+          </div>
+          <div className="px-5 py-4 grid grid-cols-[1.3fr_1fr] gap-4 items-end border-b border-black/5">
+            <div>
+              <p className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-1">Vendas paradas na base</p>
+              <p className="text-[2rem] font-bold tracking-tight">R$ <CountUp to={14300} /></p>
+              <p className="text-xs text-emerald-600 font-medium mt-0.5 flex items-center gap-1"><TrendingUp size={13} /> 23 oportunidades este mês</p>
+            </div>
+            <div className="flex items-end gap-1.5 h-12">
+              {[35, 48, 40, 62, 55, 78, 92].map((h, i) => (
+                <motion.div key={i}
+                  className={`flex-1 rounded-md ${i === 6 ? "bg-gradient-to-t from-gold-500 to-gold-400" : "bg-gold-200"}`}
+                  initial={reduce ? false : { height: 0 }} whileInView={{ height: `${h}%` }} viewport={{ once: true }}
+                  transition={{ delay: 0.5 + i * 0.07, duration: 0.6, ease: EASE }} />
+              ))}
+            </div>
+          </div>
+          <div className="p-3 space-y-1.5">
+            {HERO_OPPS.map((o, i) => (
+              <motion.div key={o.who}
+                initial={reduce ? false : { opacity: 0, x: 16 }} whileInView={{ opacity: 1, x: 0 }} viewport={{ once: true }}
+                transition={{ delay: 0.5 + i * 0.16, duration: 0.5, ease: EASE }}
+                className="flex items-center gap-3 p-2.5 rounded-2xl hover:bg-gray-50 transition-colors">
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${o.chip}`}><o.icon size={18} /></div>
+                <div className="min-w-0 flex-1"><p className="text-sm font-semibold truncate">{o.who}</p><p className="text-[11px] text-gray-400">{o.tag} · {o.when}</p></div>
+                <span className="text-sm font-bold text-gold-600 flex-shrink-0">{o.value}</span>
+                <button className="flex-shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-luxury-black text-white text-[11px] font-semibold hover:bg-gold-600 transition-colors"><Zap size={11} /> Enviar</button>
+              </motion.div>
+            ))}
+          </div>
         </div>
       </div>
-
-      {/* Notificação flutuante */}
-      <motion.div
-        initial={reduce ? false : { opacity: 0, scale: 0.8, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        transition={{ delay: 1.2, duration: 0.5 }}
-        className="absolute -bottom-4 -left-4 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 px-4 py-3 flex items-center gap-3 max-w-[260px]"
-      >
-        <div className="w-9 h-9 rounded-lg bg-emerald-500 flex items-center justify-center text-white">
-          <MessageCircle size={16} />
-        </div>
-        <div className="text-xs">
-          <p className="font-bold text-gray-900 dark:text-white">Novo lead!</p>
-          <p className="text-gray-500 dark:text-gray-400">Marina mandou mensagem no WhatsApp</p>
-        </div>
-      </motion.div>
-
-      {/* Badge ganho */}
-      <motion.div
-        initial={reduce ? false : { opacity: 0, scale: 0.8 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ delay: 1.6, duration: 0.5 }}
-        className="absolute -top-4 -right-4 bg-emerald-500 text-white rounded-xl shadow-xl px-3 py-2 flex items-center gap-2"
-      >
-        <TrendingUp size={14} />
-        <span className="text-xs font-bold">+R$ 12.430 esse mês</span>
-      </motion.div>
     </div>
   );
 }
 
-/* ─────────────────────── SOCIAL PROOF BAR ──────────────────────────────────── */
-function SocialProofBar() {
+/* ─────────────────────── MOCKUP 2 · KANBAN NA EXTENSÃO ─────────────────────── */
+const STAGES = ["Contato", "Conversa", "Agendado", "Ganho"];
+const CHATS = [
+  { n: "Marina Costa", m: "Perfeito! Pode ser sábado?", t: "09:41", on: true },
+  { n: "Bruno Santos", m: "Quanto fica o ensaio newborn?", t: "09:32" },
+  { n: "Fernanda Lima", m: "Adorei as fotos 😍", t: "ontem" },
+];
+
+function ExtensionKanbanMock() {
+  const stage = useStep(STAGES.length, 1400); // card avança de fase sozinho
+
   return (
-    <section className="py-8 border-y border-gray-100 dark:border-white/5 bg-gray-50/50 dark:bg-white/[0.02]">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6">
-        <p className="text-center text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-5">
-          Já usado por fotógrafos de todo o Brasil
-        </p>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 text-center">
-          {[
-            { value: "+500", label: "Fotógrafos ativos" },
-            { value: "+R$2M", label: "Em vendas geradas" },
-            { value: "97%", label: "Recomendariam" },
-            { value: "5 min", label: "Pra começar" },
-          ].map((s) => (
-            <div key={s.label}>
-              <div className="text-2xl sm:text-3xl font-bold bg-gradient-to-br from-amber-500 to-amber-700 dark:from-amber-300 dark:to-amber-500 bg-clip-text text-transparent">
-                {s.value}
+    <div className="relative">
+      <div className="absolute -inset-8 bg-gradient-to-tr from-emerald-400/15 to-gold-300/15 rounded-[2.5rem] blur-3xl pointer-events-none" />
+      <div className="relative rounded-[1.7rem] p-px bg-gradient-to-b from-black/10 to-black/5 shadow-2xl shadow-black/10">
+        <div className="rounded-[1.65rem] bg-[#eae6df] overflow-hidden">
+          {/* Barra do navegador */}
+          <div className="flex items-center gap-1.5 px-4 py-2.5 bg-gray-100 border-b border-black/5">
+            <span className="w-2.5 h-2.5 rounded-full bg-gray-300" /><span className="w-2.5 h-2.5 rounded-full bg-gray-300" /><span className="w-2.5 h-2.5 rounded-full bg-gray-300" />
+            <div className="ml-3 flex-1 bg-white rounded-md px-3 py-1 text-[11px] text-gray-400 flex items-center gap-1.5"><Search size={11} /> web.whatsapp.com</div>
+            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-gold-600 bg-gold-50 px-2 py-1 rounded-md"><Puzzle size={11} /> Trilha</span>
+          </div>
+
+          <div className="grid grid-cols-[1.15fr_1fr]">
+            {/* WhatsApp */}
+            <div className="bg-white border-r border-black/5">
+              <div className="h-9 bg-[#128C7E]" />
+              <div className="divide-y divide-black/5">
+                {CHATS.map((c) => (
+                  <div key={c.n} className={`flex items-center gap-2.5 px-3 py-2.5 ${c.on ? "bg-gray-100" : ""}`}>
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-gray-300 to-gray-400 flex-shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex justify-between"><p className="text-[12px] font-semibold truncate">{c.n}</p><span className="text-[9px] text-gray-400">{c.t}</span></div>
+                      <p className="text-[11px] text-gray-400 truncate">{c.m}</p>
+                    </div>
+                  </div>
+                ))}
               </div>
-              <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{s.label}</div>
             </div>
+
+            {/* Painel CRM Trilha (kanban) */}
+            <div className="bg-white p-3">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-7 h-7 rounded-lg bg-gold-500 text-white flex items-center justify-center"><Puzzle size={14} /></div>
+                <div><p className="text-[12px] font-bold leading-none">CRM Trilha</p><p className="text-[9px] text-gray-400 mt-0.5">Marina Costa</p></div>
+              </div>
+
+              {/* Pipeline vertical, card avanca de fase ao vivo */}
+              <div className="space-y-1.5">
+                {STAGES.map((s, i) => {
+                  const active = i === stage;
+                  return (
+                    <div key={s} className={`relative flex items-center gap-2 px-2.5 py-2 rounded-lg border transition-colors ${active ? "border-gold-400 bg-gold-50" : "border-black/5 bg-gray-50/60"}`}>
+                      <span className={`w-2 h-2 rounded-full ${active ? "bg-gold-500" : "bg-gray-300"}`} />
+                      <span className={`text-[11px] font-medium ${active ? "text-gold-700" : "text-gray-400"}`}>{s}</span>
+                      {active && (
+                        <motion.div layoutId="ext-card" className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded-md bg-white border border-gold-300 shadow-sm">
+                          <div className="w-3.5 h-3.5 rounded-full bg-gradient-to-br from-gold-400 to-gold-600" />
+                          <span className="text-[9px] font-bold text-gray-700">Marina</span>
+                        </motion.div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <button className="mt-3 w-full inline-flex items-center justify-center gap-1 py-2 rounded-lg bg-luxury-black text-white text-[11px] font-semibold">
+                Mover de fase <ChevronRight size={12} />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────── MOCKUP 3 · DISPARO DE FOLLOW-UPS ──────────────────── */
+const FOLLOW_TARGETS = ["Bruno Santos", "Carla Dias", "Diego Reis", "Elaine Souza", "Felipe Aragão", "Gabriela Pinto"];
+
+function FollowupMock() {
+  const reduce = useReducedMotion();
+  const sent = useStep(FOLLOW_TARGETS.length + 2, 650); // 0..N: quantos já "enviaram"
+
+  return (
+    <div className="relative">
+      <div className="absolute -inset-8 bg-gradient-to-tr from-gold-400/20 to-emerald-300/10 rounded-[2.5rem] blur-3xl pointer-events-none" />
+      <div className="relative rounded-[1.7rem] p-px bg-gradient-to-b from-black/10 to-black/5 shadow-2xl shadow-black/10">
+        <div className="rounded-[1.65rem] bg-white overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-3.5 border-b border-black/5">
+            <span className="text-sm font-semibold text-gray-700 flex items-center gap-2"><Send size={15} className="text-gold-500" /> Disparar follow-up</span>
+            <span className="text-[11px] text-gray-400">Etapa do funil</span>
+          </div>
+
+          {/* Seletor de etapa */}
+          <div className="px-5 pt-4">
+            <div className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-gold-50 border border-gold-200">
+              <span className="text-[13px] font-semibold text-gold-700 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-gold-500" /> Conversa iniciada</span>
+              <span className="text-[11px] font-medium text-gray-500">6 parados +3 dias</span>
+            </div>
+          </div>
+
+          {/* Mensagem */}
+          <div className="px-5 pt-3">
+            <p className="text-[10px] uppercase tracking-widest text-gray-400 font-semibold mb-1.5">Mensagem</p>
+            <div className="rounded-xl bg-gray-50 border border-black/5 p-3 text-[12px] text-gray-600 leading-relaxed">
+              Oi <span className="px-1 rounded bg-gold-100 text-gold-700 font-medium">{"{nome}"}</span>! Vi seu interesse no ensaio.
+              Ainda dá tempo de garantir uma data esse mês. Quer que eu te mande as opções? 📸
+            </div>
+          </div>
+
+          {/* Botão + progresso */}
+          <div className="px-5 pt-3">
+            <div className="w-full inline-flex items-center justify-center gap-2 py-2.5 rounded-full bg-gold-500 text-white text-[13px] font-semibold">
+              <Send size={14} /> Disparar para 6 contatos
+            </div>
+          </div>
+
+          {/* Lista de envio ao vivo */}
+          <div className="p-3 pt-3 space-y-1">
+            {FOLLOW_TARGETS.map((name, i) => {
+              const done = reduce || i < sent;
+              return (
+                <div key={name} className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg">
+                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-gray-200 to-gray-300 flex-shrink-0" />
+                  <span className="text-[12px] font-medium text-gray-600 flex-1 truncate">{name}</span>
+                  <AnimatePresence mode="wait">
+                    {done ? (
+                      <motion.span key="ok" initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                        className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-600">
+                        <Check size={12} /> enviado
+                      </motion.span>
+                    ) : (
+                      <motion.span key="wait" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="text-[10px] text-gray-300">na fila</motion.span>
+                    )}
+                  </AnimatePresence>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────── STICKY SHOWCASE ───────────────────────────────────── */
+const CHAPTERS = [
+  {
+    key: "opps", eyebrow: "Motor de Oportunidades", Mock: OpportunitiesMock,
+    title: "O sistema enxerga as vendas por você.",
+    desc: "Ele cruza a data de nascimento de cada cliente e cada bebê e te entrega, todo dia, quem está pronto pra comprar de novo: newborn, smash the cake, aniversário e acompanhamento.",
+    chips: ["Newborn", "Smash the Cake", "Aniversário", "Acompanhamento", "Aniversariantes"],
+  },
+  {
+    key: "ext", eyebrow: "Extensão do WhatsApp", Mock: ExtensionKanbanMock,
+    title: "Seu CRM dentro do WhatsApp Web.",
+    desc: "A extensão injeta o pipeline do CRM ao lado da conversa. Veja o estágio do contato, mova de fase e adicione o lead sem nunca sair do WhatsApp.",
+    chips: ["Painel ao lado da conversa", "Mover de fase em 1 clique", "Adicionar lead na hora"],
+  },
+  {
+    key: "follow", eyebrow: "Disparo de follow-ups", Mock: FollowupMock,
+    title: "Cutuque quem esfriou, em massa.",
+    desc: "Escolha uma etapa do funil e dispare uma mensagem pronta pra todo mundo que está parado nela. O follow-up que você sempre esquece de mandar, agora em segundos.",
+    chips: ["Por etapa do funil", "Mensagem personalizada", "Envio em lote"],
+  },
+];
+
+function StickyShowcase() {
+  const [active, setActive] = useState(0);
+  const ActiveMock = CHAPTERS[active].Mock;
+  return (
+    <section id="oportunidades" className="relative py-12 sm:py-20">
+      <div className="max-w-6xl mx-auto px-5 sm:px-8">
+        <FadeIn>
+          <div className="text-center mb-10 sm:mb-16 max-w-2xl mx-auto">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gold-600 mb-4">Inteligência que vende</p>
+            <h2 className="text-3xl sm:text-5xl font-bold tracking-tight leading-[1.05]">Três formas de transformar sua base em faturamento.</h2>
+          </div>
+        </FadeIn>
+
+        <div className="grid lg:grid-cols-2 gap-10 lg:gap-16">
+          {/* Capítulos de texto */}
+          <div>
+            {CHAPTERS.map((c, i) => (
+              <motion.div
+                key={c.key}
+                onViewportEnter={() => setActive(i)}
+                viewport={{ margin: "-50% 0px -50% 0px" }}
+                className="min-h-[72vh] lg:min-h-[88vh] flex flex-col justify-center"
+              >
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gold-600 mb-3">{c.eyebrow}</p>
+                <h3 className="text-2xl sm:text-4xl font-bold tracking-tight leading-[1.1] mb-4">{c.title}</h3>
+                <p className="text-lg text-gray-500 leading-relaxed mb-6 max-w-md">{c.desc}</p>
+                <div className="flex flex-wrap gap-2 mb-8">
+                  {c.chips.map((chip) => (
+                    <span key={chip} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white border border-black/5 shadow-sm text-[12px] font-medium text-gray-600">
+                      <Check size={12} className="text-gold-500" /> {chip}
+                    </span>
+                  ))}
+                </div>
+                {/* Mock inline no mobile */}
+                <div className="lg:hidden"><c.Mock /></div>
+              </motion.div>
+            ))}
+          </div>
+
+          {/* Visual fixo (desktop) */}
+          <div className="hidden lg:block">
+            <div className="sticky top-0 h-screen flex items-center">
+              <div className="w-full">
+                <AnimatePresence mode="wait">
+                  <motion.div key={active}
+                    initial={{ opacity: 0, y: 24, scale: 0.97 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -24, scale: 0.97 }}
+                    transition={{ duration: 0.45, ease: EASE }}>
+                    <ActiveMock />
+                  </motion.div>
+                </AnimatePresence>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ─────────────────────── SOCIAL PROOF ──────────────────────────────────────── */
+function SocialProof() {
+  const stats = [
+    { value: "+500", label: "Fotógrafos ativos" },
+    { value: "+R$2M", label: "Em vendas geradas" },
+    { value: "+38%", label: "Mais ensaios fechados" },
+    { value: "4.9/5", label: "234 avaliações" },
+  ];
+  return (
+    <section className="py-12 border-y border-black/5">
+      <div className="max-w-5xl mx-auto px-5 sm:px-8">
+        <p className="text-center text-[11px] font-semibold text-gray-400 uppercase tracking-[0.2em] mb-8">Fotógrafos de todo o Brasil já vendem mais com o {APP_NAME}</p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-8 text-center">
+          {stats.map((s) => (
+            <div key={s.label}><div className="text-3xl sm:text-4xl font-bold tracking-tight">{s.value}</div><div className="text-xs text-gray-400 mt-1">{s.label}</div></div>
           ))}
         </div>
       </div>
@@ -339,44 +577,30 @@ function SocialProofBar() {
   );
 }
 
-/* ─────────────────────── PROBLEM SECTION ───────────────────────────────────── */
+/* ─────────────────────── PROBLEM ───────────────────────────────────────────── */
 function ProblemSection() {
   const pains = [
-    { title: "Perde lead no WhatsApp", text: "Mensagens viram bagunça. Não dá pra saber quem já respondeu, quem é cliente novo, quem está parado." },
-    { title: "Esquece de seguir orçamento", text: "Mandou proposta há 5 dias e esqueceu. Cliente vai pro concorrente que respondeu primeiro." },
-    { title: "Contrato no Word + assinatura por foto", text: "Cliente tira foto da assinatura, manda por WhatsApp. Sem garantia legal. Sem rastreamento." },
-    { title: "Agenda em 3 lugares diferentes", text: "Google Calendar, planilha, caderno. Acaba marcando dois ensaios no mesmo horário." },
-    { title: "Não sabe quanto faturou", text: "Sem relatório, sem números. Só sabe se o mês foi bom 'no feeling'." },
-    { title: "Equipe sem acesso aos dados", text: "Sua assistente não consegue ver o pipeline porque tudo está no seu celular." },
+    "O bebê que você fotografou ano passado vai fazer 1 ano, e ninguém ofereceu o Smash the Cake.",
+    "A cliente teve outro filho e contratou outro fotógrafo, porque você nem ficou sabendo.",
+    "O aniversário daquela família passou em branco. Era um ensaio praticamente certo.",
+    "Você só lembra de vender quando o cliente aparece. No resto do tempo, a base fica parada.",
   ];
   return (
-    <section className="py-20 sm:py-28">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6">
+    <section className="py-24 sm:py-32 relative overflow-hidden">
+      <div className="relative max-w-5xl mx-auto px-5 sm:px-8 grid lg:grid-cols-[0.9fr_1.1fr] gap-12 items-center">
         <FadeIn>
-          <div className="text-center mb-14">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300 text-xs font-semibold mb-4">
-              <AlertTriangle size={12} /> A realidade que todo fotógrafo conhece
-            </div>
-            <h2 className="text-3xl sm:text-4xl font-bold mb-4">
-              Você está perdendo dinheiro <span className="text-rose-600 dark:text-rose-400">toda semana</span>
-            </h2>
-            <p className="text-lg text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
-              E o pior: nem percebe. Veja se você se identifica com pelo menos 3 desses problemas:
-            </p>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gold-600 mb-4">A conta que ninguém faz</p>
+            <h2 className="text-3xl sm:text-5xl font-bold tracking-tight leading-[1.08] mb-5">Não é falta de cliente. É venda <span className="text-gold-600">escorrendo pelos dedos.</span></h2>
+            <p className="text-lg text-gray-500 leading-relaxed">A maior parte do faturamento de um fotógrafo vem de quem já confiou nele uma vez. Sem um sistema avisando na hora certa, essas vendas simplesmente não acontecem.</p>
           </div>
         </FadeIn>
-
-        <div className="grid sm:grid-cols-2 gap-4">
+        <div className="space-y-3">
           {pains.map((p, i) => (
-            <FadeIn key={p.title} delay={i * 0.05}>
-              <div className="flex items-start gap-3 p-5 rounded-xl bg-rose-50/50 dark:bg-rose-950/10 border border-rose-100 dark:border-rose-900/30">
-                <div className="w-8 h-8 rounded-lg bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-400 flex items-center justify-center flex-shrink-0">
-                  <X size={16} />
-                </div>
-                <div>
-                  <h3 className="font-semibold text-gray-900 dark:text-white mb-1">{p.title}</h3>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">{p.text}</p>
-                </div>
+            <FadeIn key={p} delay={i * 0.06}>
+              <div className="flex items-start gap-4 p-5 rounded-2xl bg-white border border-black/5 shadow-sm">
+                <div className="w-7 h-7 rounded-full bg-rose-50 text-rose-500 flex items-center justify-center flex-shrink-0 mt-0.5"><TrendingUp size={15} className="rotate-180" /></div>
+                <p className="text-[15px] text-gray-600 leading-relaxed">{p}</p>
               </div>
             </FadeIn>
           ))}
@@ -386,119 +610,33 @@ function ProblemSection() {
   );
 }
 
-/* ─────────────────────── SOLUTION SECTION ──────────────────────────────────── */
-function SolutionSection() {
-  return (
-    <section className="py-20 sm:py-28 bg-gradient-to-b from-amber-50/40 to-white dark:from-amber-950/10 dark:to-[#0a0a0b]">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6">
-        <FadeIn>
-          <div className="text-center mb-14">
-            <div className="inline-flex items-center px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 text-xs font-semibold mb-4">
-              A solução
-            </div>
-            <h2 className="text-3xl sm:text-4xl font-bold mb-4">
-              Imagine acordar amanhã com{" "}
-              <span className="text-amber-600 dark:text-amber-400">tudo organizado</span>
-            </h2>
-            <p className="text-lg text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
-              Todos os leads visíveis num kanban. WhatsApp sincronizado. Contratos assinados digitalmente. Agenda integrada.
-            </p>
-          </div>
-        </FadeIn>
-
-        <div className="grid sm:grid-cols-3 gap-5">
-          {[
-            { value: "+38%", label: "Aumento médio na taxa de fechamento" },
-            { value: "8h", label: "Economizadas por semana com automação" },
-            { value: "0", label: "Leads perdidos por esquecimento" },
-          ].map((s, i) => (
-            <FadeIn key={s.label} delay={i * 0.08}>
-              <div className="text-center p-6 bg-white dark:bg-gray-900 rounded-2xl border border-amber-200/50 dark:border-amber-900/30 shadow-sm">
-                <div className="text-4xl font-bold text-amber-600 dark:text-amber-400 mb-1">{s.value}</div>
-                <div className="text-sm text-gray-600 dark:text-gray-300">{s.label}</div>
-              </div>
-            </FadeIn>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ─────────────────────── DEMO / FEATURES ───────────────────────────────────── */
-function DemoSection() {
+/* ─────────────────────── FEATURE GRID ──────────────────────────────────────── */
+function FeatureGrid() {
   const features = [
-    {
-      icon: <Workflow />, color: "from-emerald-500 to-teal-600",
-      title: "Pipeline visual estilo Trello",
-      desc: "Arraste leads entre etapas (Contato, Conversa, Orçamento, Ganho). Veja exatamente onde cada cliente está. Indicador de tempo parado pra você não esquecer de ninguém.",
-      bullets: ["Etapas 100% customizáveis", "Alerta de lead parado +12h e +24h", "Filtro por vendedor responsável"],
-    },
-    {
-      icon: <MessageCircle />, color: "from-green-500 to-emerald-600",
-      title: "WhatsApp integrado de verdade",
-      desc: "Extensão Chrome que adiciona leads direto do WhatsApp Web. Inbox dentro do app. Templates aprovados pelo Meta. Follow-up automático.",
-      bullets: ["Extensão Chrome oficial", "Inbox próprio (Meta API)", "Mensagens automáticas por etapa"],
-    },
-    {
-      icon: <FileSignature />, color: "from-violet-500 to-purple-600",
-      title: "Contratos digitais com Autentique",
-      desc: "Gera contrato preenchido com dados do cliente em 1 clique. Cliente assina pelo celular. Documento jurídico válido. Tudo arquivado.",
-      bullets: ["Templates pré-prontos", "Assinatura via celular", "Histórico completo"],
-    },
-    {
-      icon: <Calendar />, color: "from-blue-500 to-cyan-600",
-      title: "Agenda integrada ao Google",
-      desc: "Marcou no app? Já aparece no seu Google Calendar. Marcou no Google? Aparece aqui. Sem cadastrar duas vezes.",
-      bullets: ["Sincronização bidirecional", "Detecção de conflito de horário", "Lembretes automáticos"],
-    },
-    {
-      icon: <Users />, color: "from-pink-500 to-rose-600",
-      title: "Equipe com permissões",
-      desc: "Adicione vendedores e assistentes. Controle exatamente o que cada um pode ver e editar. Cada lead com seu responsável.",
-      bullets: ["Permissões por módulo", "Avatar do responsável no card", "Filtro de leads por vendedor"],
-    },
-    {
-      icon: <TrendingUp />, color: "from-amber-500 to-orange-600",
-      title: "Relatórios que importam",
-      desc: "Quanto faturou esse mês? Qual etapa tem mais leads parados? Qual fonte traz mais cliente? Tudo num dashboard simples.",
-      bullets: ["Dashboard de vendas", "Análise de funil", "Histórico mês a mês"],
-    },
+    { icon: Workflow,      title: "Pipeline visual de vendas", desc: "Arraste cada lead entre as etapas e veja quem está parado tempo demais." },
+    { icon: FileSignature, title: "Contratos digitais",        desc: "Contrato preenchido em 1 clique, assinado pelo celular, com validade jurídica." },
+    { icon: Calendar,      title: "Agenda integrada ao Google", desc: "Marcou no app, aparece no Google e vice-versa. Sem cadastrar duas vezes." },
+    { icon: MessageCircle, title: "Inbox de WhatsApp",         desc: "Todas as conversas dentro do app, com templates e respostas rápidas." },
+    { icon: Users,         title: "Equipe com permissões",     desc: "Vendedores e assistentes, cada um vendo exatamente o que pode." },
+    { icon: TrendingUp,    title: "Relatórios que importam",   desc: "Quanto faturou, qual etapa trava, qual fonte traz mais cliente." },
   ];
-
   return (
-    <section id="recursos" className="py-20 sm:py-28">
-      <div id="demo" className="max-w-6xl mx-auto px-4 sm:px-6">
+    <section id="recursos" className="py-24 sm:py-32 bg-luxury-cream/50">
+      <div className="max-w-6xl mx-auto px-5 sm:px-8">
         <FadeIn>
-          <div className="text-center mb-14">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-xs font-semibold mb-4">
-              <Zap size={12} /> O que você vai ter
-            </div>
-            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold mb-4">
-              6 ferramentas em <span className="text-amber-600 dark:text-amber-400">1 só app</span>
-            </h2>
-            <p className="text-lg text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
-              Substitui Trello, Asana, planilha, RD Station, Calendly e Autentique. Tudo conectado.
-            </p>
+          <div className="text-center mb-16 max-w-2xl mx-auto">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gold-600 mb-4">Tudo num só lugar</p>
+            <h2 className="text-3xl sm:text-5xl font-bold tracking-tight leading-[1.08] mb-5">E quando a venda aparece, você fecha sem sair do app.</h2>
+            <p className="text-lg text-gray-500">Substitui Trello, planilha, Calendly e Autentique. Tudo conectado ao mesmo cliente.</p>
           </div>
         </FadeIn>
-
-        <div className="grid lg:grid-cols-2 gap-5">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {features.map((f, i) => (
-            <FadeIn key={f.title} delay={i * 0.05}>
-              <div className="group relative bg-white dark:bg-gray-900 rounded-2xl p-7 border border-gray-200 dark:border-gray-800 hover:border-amber-300 dark:hover:border-amber-700 hover:shadow-xl transition-all h-full">
-                <div className={`inline-flex w-14 h-14 rounded-2xl bg-gradient-to-br ${f.color} text-white items-center justify-center mb-4 shadow-lg`}>
-                  {React.cloneElement(f.icon as any, { size: 24 })}
-                </div>
-                <h3 className="text-xl font-bold mb-2 text-gray-900 dark:text-white">{f.title}</h3>
-                <p className="text-gray-600 dark:text-gray-300 mb-4 leading-relaxed">{f.desc}</p>
-                <ul className="space-y-1.5">
-                  {f.bullets.map((b) => (
-                    <li key={b} className="flex items-start gap-2 text-sm text-gray-600 dark:text-gray-400">
-                      <Check size={15} className="text-emerald-500 mt-0.5 flex-shrink-0" />{b}
-                    </li>
-                  ))}
-                </ul>
+            <FadeIn key={f.title} delay={(i % 3) * 0.06}>
+              <div className="group h-full p-7 rounded-3xl bg-white border border-black/5 hover:border-gold-300 hover:shadow-xl hover:shadow-gold-500/5 hover:-translate-y-1 transition-all duration-300">
+                <div className="w-12 h-12 rounded-2xl bg-gold-50 text-gold-600 flex items-center justify-center mb-4 group-hover:scale-105 transition-transform"><f.icon size={22} /></div>
+                <h3 className="font-bold text-lg mb-2">{f.title}</h3>
+                <p className="text-sm text-gray-500 leading-relaxed">{f.desc}</p>
               </div>
             </FadeIn>
           ))}
@@ -511,218 +649,56 @@ function DemoSection() {
 /* ─────────────────────── HOW IT WORKS ──────────────────────────────────────── */
 function HowItWorks() {
   const steps = [
-    { n: "1", title: "Crie sua conta em 30 segundos", desc: "Email + senha. Conta aprovada na hora." },
-    { n: "2", title: "Importe seus contatos (opcional)", desc: "CSV ou comece do zero. Configure o funil em 2 minutos." },
-    { n: "3", title: "Conecte WhatsApp e Calendar", desc: "Um clique cada. Pronto pra começar a vender." },
+    { n: "1", title: "Crie sua conta", desc: "Email e senha. Aprovada na hora, sem cartão de crédito." },
+    { n: "2", title: "Importe seus clientes", desc: "CSV ou comece do zero. As datas de nascimento viram oportunidades automaticamente." },
+    { n: "3", title: "Comece a vender", desc: "No primeiro login o sistema já te mostra quem está pronto pra comprar." },
   ];
   return (
-    <section className="py-20 sm:py-28 bg-gray-50/60 dark:bg-white/[0.02]">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6">
-        <FadeIn>
-          <h2 className="text-3xl sm:text-4xl font-bold text-center mb-3">Em 5 minutos você está usando</h2>
-          <p className="text-lg text-gray-600 dark:text-gray-300 text-center mb-14 max-w-xl mx-auto">
-            Sem instalação. Sem migração demorada. Sem suporte técnico.
-          </p>
-        </FadeIn>
-        <div className="grid sm:grid-cols-3 gap-5 relative">
+    <section className="py-24 sm:py-32">
+      <div className="max-w-5xl mx-auto px-5 sm:px-8">
+        <FadeIn><div className="text-center mb-14"><h2 className="text-3xl sm:text-5xl font-bold tracking-tight mb-4">Em 5 minutos, vendendo.</h2><p className="text-lg text-gray-500 max-w-xl mx-auto">Sem instalação, sem migração demorada, sem suporte técnico.</p></div></FadeIn>
+        <div className="grid sm:grid-cols-3 gap-5">
           {steps.map((s, i) => (
             <FadeIn key={s.n} delay={i * 0.1}>
-              <div className="relative bg-white dark:bg-gray-900 rounded-2xl p-7 border border-gray-200 dark:border-gray-800">
-                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500 to-amber-700 text-white font-bold text-xl flex items-center justify-center mb-4 shadow-lg shadow-amber-500/30">
-                  {s.n}
-                </div>
-                <h3 className="font-bold text-lg mb-1">{s.title}</h3>
-                <p className="text-sm text-gray-600 dark:text-gray-400">{s.desc}</p>
+              <div className="relative bg-white rounded-3xl p-8 border border-black/5 shadow-sm">
+                <div className="w-11 h-11 rounded-2xl bg-gold-500 text-white font-bold text-lg flex items-center justify-center mb-5">{s.n}</div>
+                <h3 className="font-bold text-lg mb-1.5">{s.title}</h3>
+                <p className="text-sm text-gray-500 leading-relaxed">{s.desc}</p>
               </div>
             </FadeIn>
           ))}
         </div>
-      </div>
-    </section>
-  );
-}
-
-/* ─────────────────────── VALUE STACK ───────────────────────────────────────── */
-function ValueStackSection() {
-  const stack = [
-    { item: "Pipeline de Vendas Kanban", value: 197 },
-    { item: "Inbox WhatsApp + Extensão Chrome", value: 297 },
-    { item: "Sistema de Contratos Digitais", value: 247 },
-    { item: "Agenda integrada Google Calendar", value: 97 },
-    { item: "Cadastro de Clientes com histórico", value: 147 },
-    { item: "Catálogo (Produtos, Serviços, Combos)", value: 167 },
-    { item: "Sistema de Equipe + Permissões", value: 197 },
-    { item: "Automações de Oportunidades", value: 147 },
-    { item: "Dashboard com relatórios", value: 197 },
-  ];
-  const total = stack.reduce((s, i) => s + i.value, 0);
-
-  return (
-    <section className="py-20 sm:py-28">
-      <div className="max-w-3xl mx-auto px-4 sm:px-6">
-        <FadeIn>
-          <div className="text-center mb-12">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 text-xs font-semibold mb-4">
-              <Award size={12} /> O que você recebe
-            </div>
-            <h2 className="text-3xl sm:text-4xl font-bold mb-4">
-              Tudo isso por menos de <span className="text-amber-600 dark:text-amber-400">R$ 3,30 por dia</span>
-            </h2>
-            <p className="text-lg text-gray-600 dark:text-gray-300">
-              Comparado a contratar cada ferramenta separadamente:
-            </p>
-          </div>
-        </FadeIn>
-
-        <FadeIn delay={0.1}>
-          <div className="bg-white dark:bg-gray-900 rounded-3xl border border-gray-200 dark:border-gray-800 overflow-hidden shadow-xl">
-            <div className="divide-y divide-gray-100 dark:divide-gray-800">
-              {stack.map((s, i) => (
-                <motion.div
-                  key={s.item}
-                  initial={{ opacity: 0, x: -20 }}
-                  whileInView={{ opacity: 1, x: 0 }}
-                  viewport={{ once: true }}
-                  transition={{ delay: i * 0.05 }}
-                  className="flex items-center justify-between px-6 py-4"
-                >
-                  <div className="flex items-center gap-3">
-                    <Check size={18} className="text-emerald-500 flex-shrink-0" />
-                    <span className="text-gray-700 dark:text-gray-200">{s.item}</span>
-                  </div>
-                  <span className="text-sm text-gray-500 dark:text-gray-400 line-through">R$ {s.value}</span>
-                </motion.div>
-              ))}
-            </div>
-            <FadeIn delay={0.6}>
-              <div className="bg-gradient-to-r from-rose-50 to-amber-50 dark:from-rose-950/20 dark:to-amber-950/20 border-t border-amber-200 dark:border-amber-900/40 px-6 py-5 flex items-center justify-between">
-                <span className="font-semibold text-gray-700 dark:text-gray-200">Valor total se comprar separado:</span>
-                <span className="text-2xl font-bold text-gray-500 dark:text-gray-400 line-through">R$ {total.toLocaleString("pt-BR")}</span>
-              </div>
-            </FadeIn>
-            <FadeIn delay={0.75}>
-              <div className="bg-gradient-to-r from-emerald-500 to-emerald-600 text-white px-6 py-6 text-center">
-                <p className="text-sm font-medium mb-1 opacity-90">Mas você vai pagar apenas:</p>
-                <p className="text-4xl sm:text-5xl font-bold">R$ 97<span className="text-xl font-normal opacity-80">/mês</span></p>
-                <p className="text-sm opacity-90 mt-1">Equivalente a R$ 3,23 por dia · menos que 1 cappuccino</p>
-              </div>
-            </FadeIn>
-          </div>
-        </FadeIn>
-      </div>
-    </section>
-  );
-}
-
-/* ─────────────────────── BONUS SECTION ─────────────────────────────────────── */
-function BonusSection() {
-  const bonuses = [
-    { title: "Templates de WhatsApp prontos", value: 197, desc: "10 mensagens testadas: primeiro contato, follow-up, orçamento, agradecimento, aniversário." },
-    { title: "Contrato modelo Newborn e Gestante", value: 247, desc: "Contratos juridicamente validados, prontos pra usar com seu nome e CNPJ." },
-    { title: "Treinamento 'Funil que Vende'", value: 397, desc: "Vídeo-aula de 40min ensinando a configurar o pipeline pra fechar mais ensaios." },
-  ];
-  const totalBonus = bonuses.reduce((s, b) => s + b.value, 0);
-  return (
-    <section className="py-20 sm:py-28 bg-gradient-to-b from-amber-50/40 via-white to-rose-50/30 dark:from-amber-950/10 dark:via-[#0a0a0b] dark:to-rose-950/10">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6">
-        <FadeIn>
-          <div className="text-center mb-12">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300 text-xs font-semibold mb-4">
-              <Gift size={12} /> Bônus exclusivos · Por tempo limitado
-            </div>
-            <h2 className="text-3xl sm:text-4xl font-bold mb-3">
-              Ainda ganha <span className="text-rose-600 dark:text-rose-400">R$ {totalBonus} em bônus</span>
-            </h2>
-            <p className="text-lg text-gray-600 dark:text-gray-300">Só pra quem se cadastra agora durante o trial.</p>
-          </div>
-        </FadeIn>
-        <div className="grid sm:grid-cols-3 gap-5">
-          {bonuses.map((b, i) => (
-            <FadeIn key={b.title} delay={i * 0.1}>
-              <div className="relative bg-white dark:bg-gray-900 rounded-2xl p-6 border-2 border-amber-300 dark:border-amber-800 shadow-lg">
-                <div className="absolute -top-3 left-5 px-3 py-0.5 bg-amber-500 text-white text-[10px] font-bold rounded-full uppercase tracking-wider">
-                  Bônus #{i + 1}
-                </div>
-                <div className="w-12 h-12 rounded-xl bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 flex items-center justify-center mb-3 mt-2">
-                  <Gift size={22} />
-                </div>
-                <h3 className="font-bold text-gray-900 dark:text-white mb-2">{b.title}</h3>
-                <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">{b.desc}</p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
-                  Valor: <span className="line-through">R$ {b.value}</span>{" "}
-                  <span className="font-bold text-emerald-600 dark:text-emerald-400">GRÁTIS pra você</span>
-                </p>
-              </div>
-            </FadeIn>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ─────────────────────── GUARANTEE ─────────────────────────────────────────── */
-function GuaranteeSection() {
-  return (
-    <section className="py-20">
-      <div className="max-w-3xl mx-auto px-4 sm:px-6">
-        <FadeIn>
-          <div className="relative bg-gradient-to-br from-emerald-500 to-emerald-700 rounded-3xl p-10 sm:p-12 text-white text-center shadow-2xl overflow-hidden">
-            <div className="absolute -top-10 -right-10 w-40 h-40 bg-white/10 rounded-full blur-2xl" />
-            <div className="absolute -bottom-10 -left-10 w-40 h-40 bg-white/5 rounded-full blur-2xl" />
-            <div className="relative">
-              <div className="inline-flex w-20 h-20 rounded-full bg-white/20 backdrop-blur items-center justify-center mb-5">
-                <Shield size={40} />
-              </div>
-              <h2 className="text-3xl sm:text-4xl font-bold mb-3">Garantia incondicional de 7 dias</h2>
-              <p className="text-lg opacity-95 max-w-xl mx-auto mb-5">
-                Use por 7 dias COMPLETOS. Se em qualquer momento você decidir que não é pra você, é só cancelar - sem perguntas, sem burocracia, sem ressentimento. <strong>Você ainda fica com os bônus.</strong>
-              </p>
-              <p className="text-sm opacity-80 max-w-xl mx-auto">
-                <BadgeCheck size={14} className="inline mr-1" /> O risco é totalmente nosso. Se não funcionar pra você, a gente quer saber o porquê - e devolve seu dinheiro na hora.
-              </p>
-            </div>
-          </div>
-        </FadeIn>
       </div>
     </section>
   );
 }
 
 /* ─────────────────────── TESTIMONIALS ──────────────────────────────────────── */
-function TestimonialsSection() {
+function Testimonials() {
   const ts = [
-    { name: "Marina Silva", role: "Fotógrafa Newborn · Curitiba/PR", text: "Em 2 meses fechei 14 ensaios a mais. O pipeline visual mudou minha vida - eu não esqueço de NINGUÉM agora.", rating: 5 },
-    { name: "Estúdio Pitori", role: "Estúdio Familiar · Londrina/PR", text: "A extensão do WhatsApp é mágica. Cliente manda mensagem, eu já transformo em lead sem sair do WhatsApp. Economizo umas 2 horas por dia.", rating: 5 },
-    { name: "Júlia Rocha", role: "Fotógrafa Gestante · São Paulo/SP", text: "Já tinha testado Trello, Asana, planilha. Nada funcionava porque não era PRA fotógrafo. Esse aqui é o primeiro que entende como a gente trabalha.", rating: 5 },
+    { name: "Marina Silva", role: "Fotógrafa Newborn · Curitiba/PR", text: "Em 2 meses fechei 14 ensaios a mais, todos de clientes que já eram meus. O sistema me avisava e eu só mandava a oferta." },
+    { name: "Estúdio Pitori", role: "Estúdio Familiar · Londrina/PR", text: "Os Smash the Cake que eu perdia todo mês agora aparecem com 30 dias de antecedência. Virou faturamento recorrente." },
+    { name: "Júlia Rocha", role: "Fotógrafa Gestante · São Paulo/SP", text: "É o primeiro sistema que entende como fotógrafo trabalha. Ele lembra dos aniversários dos bebês por mim." },
   ];
   return (
-    <section className="py-20 sm:py-28 bg-gray-50/60 dark:bg-white/[0.02]">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6">
+    <section className="py-24 sm:py-32 bg-luxury-cream/50">
+      <div className="max-w-6xl mx-auto px-5 sm:px-8">
         <FadeIn>
-          <div className="text-center mb-12">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-xs font-semibold mb-4">
-              <Heart size={12} /> Quem já usa
-            </div>
-            <h2 className="text-3xl sm:text-4xl font-bold mb-3">Veja o que estão falando</h2>
-            <div className="flex items-center justify-center mt-2">
-              <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">4.9/5 · 234 avaliações</span>
-            </div>
+          <div className="text-center mb-14">
+            <div className="flex items-center justify-center gap-1 mb-4">{[...Array(5)].map((_, i) => <Star key={i} size={18} className="fill-gold-400 text-gold-400" />)}</div>
+            <h2 className="text-3xl sm:text-5xl font-bold tracking-tight mb-3">Quem usa, vende mais.</h2>
+            <p className="text-base text-gray-500">4.9/5 · 234 avaliações de fotógrafos brasileiros</p>
           </div>
         </FadeIn>
         <div className="grid sm:grid-cols-3 gap-5">
           {ts.map((t, i) => (
             <FadeIn key={t.name} delay={i * 0.08}>
-              <div className="bg-white dark:bg-gray-900 rounded-2xl p-6 border border-gray-200 dark:border-gray-800 h-full">
-                <p className="text-gray-700 dark:text-gray-300 mb-4 leading-relaxed italic">"{t.text}"</p>
-                <div className="flex items-center gap-3 pt-3 border-t border-gray-100 dark:border-gray-800">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber-400 to-rose-400 text-white font-bold flex items-center justify-center">
-                    {t.name[0]}
-                  </div>
-                  <div>
-                    <p className="font-semibold text-sm text-gray-900 dark:text-white">{t.name}</p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">{t.role}</p>
-                  </div>
+              <div className="h-full bg-white rounded-3xl p-7 border border-black/5 shadow-sm">
+                <div className="flex gap-0.5 mb-4">{[...Array(5)].map((_, j) => <Star key={j} size={14} className="fill-gold-400 text-gold-400" />)}</div>
+                <p className="text-[15px] text-gray-700 mb-5 leading-relaxed">"{t.text}"</p>
+                <div className="flex items-center gap-3 pt-4 border-t border-black/5">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gold-400 to-gold-600 text-white font-bold flex items-center justify-center">{t.name[0]}</div>
+                  <div><p className="font-semibold text-sm">{t.name}</p><p className="text-xs text-gray-400">{t.role}</p></div>
                 </div>
               </div>
             </FadeIn>
@@ -733,186 +709,164 @@ function TestimonialsSection() {
   );
 }
 
-/* ─────────────────────── COMPARISON ────────────────────────────────────────── */
-function ComparisonTable() {
-  const rows = [
-    { feat: "Pipeline visual de vendas", us: true, others: "Limitado" },
-    { feat: "WhatsApp dentro do app", us: true, others: false },
-    { feat: "Extensão Chrome pra criar leads", us: true, others: false },
-    { feat: "Contratos digitais com assinatura", us: true, others: "Plugin extra" },
-    { feat: "Google Calendar bidirecional", us: true, others: "Só importa" },
-    { feat: "Catálogo de produtos e combos", us: true, others: false },
-    { feat: "Equipe com permissões", us: true, others: "Plano caro" },
-    { feat: "Pensado pra fotógrafos brasileiros", us: true, others: false },
-    { feat: "Suporte em português", us: true, others: "Em inglês" },
-  ];
-  return (
-    <section className="py-20 sm:py-28">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6">
-        <FadeIn>
-          <div className="text-center mb-10">
-            <h2 className="text-3xl sm:text-4xl font-bold mb-3">{APP_NAME} vs. as alternativas</h2>
-            <p className="text-lg text-gray-600 dark:text-gray-300">
-              Por que pagar mais por ferramentas separadas?
-            </p>
-          </div>
-        </FadeIn>
-        <FadeIn delay={0.1}>
-          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 overflow-hidden shadow-md">
-            <div className="grid grid-cols-3 bg-gray-50 dark:bg-gray-800/60 border-b border-gray-200 dark:border-gray-700">
-              <div className="px-5 py-4 text-sm font-semibold text-gray-500 dark:text-gray-400">Recurso</div>
-              <div className="px-5 py-4 text-center">
-                <span className="inline-flex items-center gap-1.5 text-sm font-bold text-amber-600 dark:text-amber-400">
-                  <img src="/favicon.png" alt="" className="h-4 w-4" /> CRM Trilha
-                </span>
-              </div>
-              <div className="px-5 py-4 text-sm font-semibold text-gray-500 dark:text-gray-400 text-center">Outros CRMs</div>
-            </div>
-            {rows.map((r, i) => (
-              <div key={r.feat} className={`grid grid-cols-3 ${i % 2 === 0 ? "" : "bg-gray-50/50 dark:bg-gray-800/30"}`}>
-                <div className="px-5 py-3.5 text-sm text-gray-700 dark:text-gray-300">{r.feat}</div>
-                <div className="px-5 py-3.5 text-center">
-                  {r.us ? <Check className="inline text-emerald-500" size={18} /> : <X className="inline text-rose-400" size={18} />}
-                </div>
-                <div className="px-5 py-3.5 text-center text-sm text-gray-500 dark:text-gray-400">
-                  {r.others === true ? <Check className="inline text-emerald-500" size={18} /> : r.others === false ? <X className="inline text-rose-400" size={18} /> : r.others}
-                </div>
-              </div>
-            ))}
-          </div>
-        </FadeIn>
-      </div>
-    </section>
-  );
-}
-
 /* ─────────────────────── PRICING ───────────────────────────────────────────── */
-function PricingSection({ plans, promoEndsAt }: { plans: Plan[]; promoEndsAt: number }) {
-  const cd = useCountdown(promoEndsAt);
-
-  return (
-    <section id="precos" className="py-20 sm:py-28 bg-gradient-to-b from-white to-amber-50/40 dark:from-[#0a0a0b] dark:to-amber-950/10">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6">
-        <FadeIn>
-          <div className="text-center mb-10">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300 text-xs font-semibold mb-4">
-              <Clock size={12} /> Promoção de lançamento · Termina em {cd.d}d {cd.h}h {cd.m}m {String(cd.s).padStart(2, "0")}s
-            </div>
-            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold mb-3">Escolha seu plano</h2>
-            <p className="text-lg text-gray-600 dark:text-gray-300 max-w-xl mx-auto">
-              Cancele quando quiser. 7 dias grátis. Sem cartão.
-            </p>
-          </div>
-        </FadeIn>
-
-        <div className="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto">
-          {plans.length === 0 ? (
-            <div className="md:col-span-2 text-center py-10 text-gray-400">Carregando planos…</div>
-          ) : plans.map((plan) => {
-            const isPopular = plan.slug === "pro";
-            const features = plan.slug === "pro" ? PRO_FEATURES : BUSINESS_FEATURES;
-            const realPrice = plan.price_cents / 100;
-            const fakePrice = plan.slug === "pro" ? 297 : 497;
-            return (
-              <FadeIn key={plan.id} delay={isPopular ? 0 : 0.1}>
-                <div className={`relative rounded-3xl p-8 ${
-                  isPopular
-                    ? "bg-gradient-to-br from-gray-900 to-gray-800 dark:from-gray-800 dark:to-gray-900 text-white border-2 border-amber-500 shadow-2xl shadow-amber-500/20 scale-[1.02]"
-                    : "bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800"
-                }`}>
-                  {isPopular && (
-                    <div className="absolute -top-4 left-1/2 -translate-x-1/2 px-4 py-1 bg-gradient-to-r from-amber-400 to-amber-600 text-white text-xs font-bold rounded-full shadow-lg">
-                      MAIS POPULAR
-                    </div>
-                  )}
-                  <h3 className={`text-2xl font-bold mb-1 ${isPopular ? "text-white" : "text-gray-900 dark:text-white"}`}>{plan.name}</h3>
-                  <p className={`text-sm mb-5 ${isPopular ? "text-gray-300" : "text-gray-500 dark:text-gray-400"}`}>
-                    {plan.slug === "pro" ? "Pra fotógrafos individuais e pequenos estúdios" : "Pra estúdios e equipes em expansão"}
-                  </p>
-
-                  <div className="flex items-baseline gap-2 mb-1">
-                    <span className={`text-base line-through ${isPopular ? "text-gray-400" : "text-gray-400"}`}>R$ {fakePrice}</span>
-                    <span className="px-2 py-0.5 bg-rose-500 text-white text-[10px] font-bold rounded">
-                      -{Math.round((1 - realPrice / fakePrice) * 100)}%
-                    </span>
-                  </div>
-                  <div className="flex items-baseline gap-1 mb-1">
-                    <span className={`text-5xl font-bold ${isPopular ? "text-white" : "text-gray-900 dark:text-white"}`}>R$ {realPrice.toFixed(0)}</span>
-                    <span className={isPopular ? "text-gray-300" : "text-gray-500"}>/mês</span>
-                  </div>
-                  <p className={`text-xs mb-6 ${isPopular ? "text-amber-300" : "text-amber-600 dark:text-amber-400"}`}>
-                    Equivalente a R$ {(realPrice / 30).toFixed(2)}/dia
-                  </p>
-
-                  <Link
-                    to="/cadastro"
-                    className={`group block text-center w-full py-3.5 mb-6 rounded-xl font-bold transition-all ${
-                      isPopular
-                        ? "bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 text-white shadow-lg shadow-amber-500/30 hover:-translate-y-0.5"
-                        : "bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-100"
-                    }`}
-                  >
-                    Começar grátis agora{" "}
-                    <ArrowRight size={16} className="inline ml-1 group-hover:translate-x-0.5 transition-transform" />
-                  </Link>
-
-                  <ul className="space-y-3">
-                    {features.map((f) => (
-                      <li key={f} className={`flex items-start gap-2 text-sm ${isPopular ? "text-gray-200" : "text-gray-600 dark:text-gray-300"}`}>
-                        <Check size={16} className="text-emerald-400 mt-0.5 flex-shrink-0" />
-                        {f}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </FadeIn>
-            );
-          })}
-        </div>
-
-        <FadeIn delay={0.2}>
-          <p className="text-center text-xs text-gray-400 dark:text-gray-500 mt-8">
-            Pagamento via PIX recorrente ou cartão de crédito · Processado pelo Asaas · Cancele a qualquer momento
-          </p>
-        </FadeIn>
-      </div>
-    </section>
-  );
-}
-
 const PRO_FEATURES = [
+  "Motor de Oportunidades completo",
+  "Pipeline de vendas (CRM visual)",
+  "Extensão do WhatsApp com CRM",
+  "Disparo de follow-ups em lote",
+  "Contratos digitais ilimitados",
+  "Agenda integrada ao Google",
   "Até 500 clientes e 500 jobs",
   "2 vendedores na equipe",
-  "Pipeline de vendas Kanban completo",
-  "Inbox WhatsApp + Extensão Chrome",
-  "Contratos digitais ilimitados",
-  "Catálogo (produtos/serviços/combos)",
-  "Google Calendar sincronizado",
-  "Automações de oportunidades",
   "Suporte por e-mail",
-  "Os 3 bônus exclusivos (R$ 841)",
 ];
-const BUSINESS_FEATURES = [
-  "Tudo do Pro, mas SEM limites",
+const BUSINESS_EXTRAS = [
   "Clientes, jobs e vendedores ilimitados",
   "Múltiplos vendedores com permissões",
+  "Relatórios avançados de faturamento",
   "Suporte prioritário com SLA",
-  "Relatórios avançados",
-  "Onboarding 1-a-1 com nossa equipe",
-  "Os 3 bônus exclusivos (R$ 841)",
+  "Onboarding individual com a nossa equipe",
 ];
 
-/* ─────────────────────── URGENCY BAR ───────────────────────────────────────── */
-function UrgencyBar({ promoEndsAt }: { promoEndsAt: number }) {
-  const cd = useCountdown(promoEndsAt);
-  if (cd.ended) return null;
+const fmtBRL = (n: number) => n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const PriceFeature: React.FC<{ children: React.ReactNode; light?: boolean }> = ({ children, light }) => (
+  <li className={`flex items-start gap-2.5 text-[13.5px] ${light ? "text-gray-600" : "text-white/80"}`}>
+    <span className={`mt-0.5 flex-shrink-0 w-4 h-4 rounded-full flex items-center justify-center ${light ? "bg-gold-100 text-gold-600" : "bg-gold-500/20 text-gold-300"}`}>
+      <Check size={11} strokeWidth={3} />
+    </span>
+    {children}
+  </li>
+);
+
+function Pricing({ plans }: { plans: Plan[] }) {
+  const priceOf = (slug: string) => (plans.find((p) => p.slug === slug)?.price_cents ?? 0) / 100;
+  const proPrice = priceOf("pro");
+  const bizPrice = priceOf("business");
+
   return (
-    <section className="py-3 bg-gradient-to-r from-rose-600 via-rose-500 to-amber-500 text-white">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-center gap-2 text-center text-sm">
-        <Clock size={16} className="flex-shrink-0" />
-        <span><strong>Oferta de lançamento</strong> termina em <strong>{cd.d}d {String(cd.h).padStart(2, "0")}:{String(cd.m).padStart(2, "0")}:{String(cd.s).padStart(2, "0")}</strong></span>
-        <span className="hidden sm:inline">·</span>
-        <Link to="/cadastro" className="font-bold underline hover:no-underline">Garantir minha vaga →</Link>
+    <section id="precos" className="relative py-24 sm:py-32 overflow-hidden">
+      {/* brilho de fundo sutil */}
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute top-10 left-1/2 -translate-x-1/2 w-[700px] h-[420px] bg-gold-200/30 rounded-full blur-[130px]" />
+      </div>
+
+      <div className="relative max-w-5xl mx-auto px-5 sm:px-8">
+        <FadeIn>
+          <div className="text-center mb-14">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gold-600 mb-4">Planos e preços</p>
+            <h2 className="text-3xl sm:text-5xl font-bold tracking-tight mb-4">Um plano que se paga numa única venda.</h2>
+            <p className="text-lg text-gray-500 max-w-xl mx-auto">7 dias grátis, sem cartão. Um ensaio recuperado já cobre o mês inteiro.</p>
+          </div>
+        </FadeIn>
+
+        <div className="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto items-stretch">
+          {/* ── PRO — destaque (claro, moldura dourada) ──────────────────────── */}
+          <FadeIn>
+            <div className="relative h-full rounded-[1.9rem] p-px bg-gradient-to-b from-gold-400 via-gold-300 to-gold-100 shadow-2xl shadow-gold-500/15">
+              <div className="relative h-full rounded-[1.85rem] bg-gradient-to-b from-gold-50/80 to-white p-8 sm:p-9 overflow-hidden">
+                <div className="pointer-events-none absolute -top-16 -right-16 w-48 h-48 bg-gold-200/40 rounded-full blur-3xl" />
+                <div className="relative">
+                  <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-11 h-11 rounded-2xl bg-gold-500 text-white flex items-center justify-center shadow-lg shadow-gold-500/30"><Zap size={20} /></div>
+                      <div>
+                        <p className="font-bold text-lg leading-none">Pro</p>
+                        <p className="text-[12px] text-gray-400 mt-1">Pra fotógrafos e pequenos estúdios</p>
+                      </div>
+                    </div>
+                    <span className="flex-shrink-0 whitespace-nowrap px-2.5 py-1 rounded-full bg-gold-500 text-white text-[10px] font-bold shadow-sm shadow-gold-500/30">MAIS ESCOLHIDO</span>
+                  </div>
+
+                  <div className="flex items-baseline gap-1.5 mb-1">
+                    <span className="text-[3.4rem] leading-none font-bold tracking-tight">R$ {proPrice.toFixed(0)}</span>
+                    <span className="text-gray-400 text-sm">/mês</span>
+                  </div>
+                  <p className="text-[13px] text-gold-600 mb-7">Menos de R$ {fmtBRL(proPrice / 30)} por dia, e o primeiro cliente já paga.</p>
+
+                  <Link to="/cadastro" className="group block text-center w-full py-3.5 mb-3 rounded-full font-semibold bg-gold-500 hover:bg-gold-600 text-white shadow-lg shadow-gold-500/30 transition-all hover:-translate-y-0.5">
+                    Começar grátis por 7 dias
+                    <ArrowRight size={16} className="inline ml-1.5 group-hover:translate-x-0.5 transition-transform" />
+                  </Link>
+                  <p className="text-center text-[11px] text-gray-400 mb-7">Sem cartão de crédito · cancele quando quiser</p>
+
+                  <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400 mb-4">O que está incluído</p>
+                  <ul className="space-y-2.5">
+                    {PRO_FEATURES.map((f) => <PriceFeature key={f} light>{f}</PriceFeature>)}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </FadeIn>
+
+          {/* ── BUSINESS — branco simples ────────────────────────────────────── */}
+          <FadeIn delay={0.1}>
+            <div className="relative h-full rounded-[1.9rem] bg-white border border-black/5 shadow-sm">
+              <div className="h-full rounded-[1.9rem] p-8 sm:p-9 flex flex-col">
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-11 h-11 rounded-2xl bg-gold-50 text-gold-600 flex items-center justify-center"><Crown size={20} /></div>
+                    <div>
+                      <p className="font-bold text-lg leading-none">Business</p>
+                      <p className="text-[12px] text-gray-400 mt-1">Pra estúdios e equipes em expansão</p>
+                    </div>
+                  </div>
+                  <span className="flex-shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-gold-50 text-gold-700 text-[10px] font-bold border border-gold-200"><InfinityIcon size={11} /> SEM LIMITES</span>
+                </div>
+
+                <div className="flex items-baseline gap-1.5 mb-1">
+                  <span className="text-[3.4rem] leading-none font-bold tracking-tight">R$ {bizPrice.toFixed(0)}</span>
+                  <span className="text-gray-400 text-sm">/mês</span>
+                </div>
+                <p className="text-[13px] text-gold-600 mb-7">R$ {fmtBRL(bizPrice / 30)} por dia por um estúdio inteiro sem limites.</p>
+
+                <Link to="/cadastro" className="group block text-center w-full py-3.5 mb-3 rounded-full font-semibold bg-luxury-black text-white hover:opacity-90 transition-all hover:-translate-y-0.5">
+                  Começar grátis por 7 dias
+                  <ArrowRight size={16} className="inline ml-1.5 group-hover:translate-x-0.5 transition-transform" />
+                </Link>
+                <p className="text-center text-[11px] text-gray-400 mb-7">Sem cartão de crédito · cancele quando quiser</p>
+
+                <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400 mb-4">Tudo do Pro, e mais</p>
+                <ul className="space-y-2.5">
+                  {BUSINESS_EXTRAS.map((f) => <PriceFeature key={f} light>{f}</PriceFeature>)}
+                </ul>
+              </div>
+            </div>
+          </FadeIn>
+        </div>
+
+        {/* Faixa de confiança */}
+        <FadeIn delay={0.15}>
+          <div className="mt-10 flex flex-wrap items-center justify-center gap-x-7 gap-y-3 text-[13px] text-gray-500">
+            <span className="flex items-center gap-1.5"><Shield size={15} className="text-gold-500" /> Garantia de 7 dias</span>
+            <span className="flex items-center gap-1.5"><BadgeCheck size={15} className="text-gold-500" /> Sem cartão de crédito</span>
+            <span className="flex items-center gap-1.5"><Check size={15} className="text-gold-500" /> Cancele em 2 cliques</span>
+            <span className="flex items-center gap-1.5"><MessageCircle size={15} className="text-gold-500" /> Suporte humano</span>
+          </div>
+        </FadeIn>
+        <FadeIn delay={0.2}>
+          <p className="text-center text-xs text-gray-400 mt-6">PIX recorrente ou cartão, processado pelo Asaas. A primeira cobrança só acontece após os 7 dias grátis.</p>
+        </FadeIn>
+      </div>
+    </section>
+  );
+}
+
+/* ─────────────────────── GUARANTEE ─────────────────────────────────────────── */
+function Guarantee() {
+  return (
+    <section className="py-20">
+      <div className="max-w-3xl mx-auto px-5 sm:px-8">
+        <FadeIn>
+          <div className="flex flex-col sm:flex-row items-center gap-7 p-9 rounded-[1.75rem] bg-white border border-black/5 shadow-sm text-center sm:text-left">
+            <div className="w-16 h-16 rounded-2xl bg-gold-50 text-gold-600 flex items-center justify-center flex-shrink-0"><Shield size={30} /></div>
+            <div>
+              <h3 className="text-xl font-bold mb-1.5">Garantia incondicional de 7 dias</h3>
+              <p className="text-[15px] text-gray-500 leading-relaxed">Use por 7 dias completos. Se não for pra você, é só cancelar pelo próprio app, sem perguntas e sem burocracia. <BadgeCheck size={15} className="inline -mt-0.5 text-gold-500" /> O risco é todo nosso.</p>
+            </div>
+          </div>
+        </FadeIn>
       </div>
     </section>
   );
@@ -921,33 +875,24 @@ function UrgencyBar({ promoEndsAt }: { promoEndsAt: number }) {
 /* ─────────────────────── FAQ ───────────────────────────────────────────────── */
 function FaqSection() {
   const faqs = [
-    { q: "Como funciona o trial de 7 dias?", a: "Você cria a conta, ganha 7 dias com acesso COMPLETO ao plano Pro. Não precisa cartão de crédito. Quando acabar, você decide se quer assinar." },
-    { q: "Posso cancelar a qualquer momento?", a: "Sim. Cancela pelo próprio app, com 2 cliques. Sem precisar entrar em contato. Você mantém o acesso até o fim do período já pago." },
-    { q: "Vou conseguir migrar meus dados?", a: "Sim. Importamos via CSV (planilha) e te ajudamos no processo. A maioria dos fotógrafos importa tudo em menos de 30 minutos." },
-    { q: "Como é cobrado?", a: "PIX recorrente (Asaas debita automaticamente todo mês) ou cartão de crédito. A primeira cobrança só acontece depois dos 7 dias grátis." },
-    { q: "A extensão do WhatsApp é segura?", a: "100%. A extensão só lê a página do WhatsApp Web que VOCÊ já abriu. Não armazena conversas. Nenhuma mensagem sua vai pros nossos servidores." },
-    { q: "Posso usar pelo celular?", a: "O app web roda perfeitamente no navegador do celular. A extensão é específica pro WhatsApp Web (computador)." },
-    { q: "Tem suporte humano?", a: "Tem. Email no plano Pro (resposta em até 24h) e atendimento prioritário no Business." },
-    { q: "Funciona pra outros nichos além de fotógrafo?", a: "Funciona, mas o produto foi desenhado pensando no fluxo de fotógrafos: Gestante → Newborn, ensaios recorrentes, contratos com cláusulas específicas, etc. Outros nichos vão usar 80% do potencial." },
+    { q: "Como o sistema sabe quais são as oportunidades?", a: "Ele usa as datas de nascimento dos clientes e dos filhos que você cadastra e calcula automaticamente quem está na janela de newborn, smash the cake, aniversário e acompanhamento, todo dia." },
+    { q: "A extensão do WhatsApp é segura?", a: "Totalmente. A extensão só lê a página do WhatsApp Web que você já abriu. Não armazena conversas e nenhuma mensagem sua vai pros nossos servidores." },
+    { q: "Como funciona o disparo de follow-ups?", a: "Você escolhe uma etapa do funil, escreve (ou usa um template) a mensagem com o nome do cliente, e o sistema envia pra todos os contatos parados naquela etapa." },
+    { q: "Como funciona o trial de 7 dias?", a: "Você cria a conta e ganha 7 dias com acesso completo ao plano Pro. Não precisa cartão de crédito. Quando acabar, você decide se quer assinar." },
+    { q: "Preciso cadastrar tudo na mão?", a: "Não. Importamos sua base via CSV e te ajudamos no processo. A maioria importa tudo em menos de 30 minutos, e as oportunidades aparecem na hora." },
+    { q: "Posso cancelar quando quiser?", a: "Sim, pelo próprio app, com 2 cliques. Você mantém o acesso até o fim do período já pago." },
+    { q: "Como é cobrado?", a: "PIX recorrente (o Asaas debita automaticamente) ou cartão de crédito. A primeira cobrança só acontece depois dos 7 dias grátis." },
   ];
   return (
-    <section id="faq" className="py-20 sm:py-28">
-      <div className="max-w-3xl mx-auto px-4 sm:px-6">
-        <FadeIn>
-          <h2 className="text-3xl sm:text-4xl font-bold text-center mb-3">Dúvidas frequentes</h2>
-          <p className="text-lg text-gray-600 dark:text-gray-300 text-center mb-12">
-            Se ficou alguma dúvida que não está aqui, é só falar com a gente.
-          </p>
-        </FadeIn>
+    <section id="faq" className="py-24 sm:py-32">
+      <div className="max-w-3xl mx-auto px-5 sm:px-8">
+        <FadeIn><h2 className="text-3xl sm:text-5xl font-bold tracking-tight text-center mb-12">Dúvidas frequentes</h2></FadeIn>
         <div className="space-y-3">
           {faqs.map((f, i) => (
             <FadeIn key={f.q} delay={i * 0.04}>
-              <details className="group bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 overflow-hidden">
-                <summary className="cursor-pointer p-5 font-semibold text-gray-900 dark:text-white flex items-center justify-between list-none gap-3 hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors">
-                  <span>{f.q}</span>
-                  <ChevronDown size={18} className="text-gray-400 group-open:rotate-180 transition-transform flex-shrink-0" />
-                </summary>
-                <div className="px-5 pb-5 text-gray-600 dark:text-gray-300 leading-relaxed">{f.a}</div>
+              <details className="group bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
+                <summary className="cursor-pointer p-5 font-semibold flex items-center justify-between list-none gap-3 hover:bg-gray-50 transition-colors"><span>{f.q}</span><ChevronDown size={18} className="text-gray-400 group-open:rotate-180 transition-transform flex-shrink-0" /></summary>
+                <div className="px-5 pb-5 text-gray-500 leading-relaxed">{f.a}</div>
               </details>
             </FadeIn>
           ))}
@@ -960,31 +905,18 @@ function FaqSection() {
 /* ─────────────────────── FINAL CTA ─────────────────────────────────────────── */
 function FinalCta() {
   return (
-    <section className="py-20 sm:py-28 relative overflow-hidden">
-      <div className="absolute inset-0 bg-gradient-to-br from-gray-900 via-gray-900 to-amber-900 dark:from-gray-950 dark:via-gray-950 dark:to-amber-950" />
-      <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-amber-500/20 rounded-full blur-3xl" />
-      <div className="absolute bottom-0 left-0 w-[400px] h-[400px] bg-rose-500/10 rounded-full blur-3xl" />
-
-      <div className="relative max-w-3xl mx-auto px-4 sm:px-6 text-center text-white">
+    <section className="py-24 sm:py-32 relative overflow-hidden">
+      <div className="absolute inset-0 bg-luxury-black" />
+      <div className="pointer-events-none absolute -top-20 left-1/2 -translate-x-1/2 w-[700px] h-[500px] bg-gold-500/20 rounded-full blur-[120px]" />
+      <div className="relative max-w-3xl mx-auto px-5 sm:px-8 text-center text-white">
         <FadeIn>
-          <h2 className="text-3xl sm:text-5xl font-bold mb-4 leading-tight">
-            Próximo cliente, você prefere fechar<br className="hidden sm:block" />
-            <span className="text-amber-400">organizado</span> ou perdido?
-          </h2>
-          <p className="text-lg sm:text-xl text-gray-200 mb-8 max-w-xl mx-auto">
-            7 dias grátis. Sem cartão. Sem risco. Decide depois.
-          </p>
-          <Link
-            to="/cadastro"
-            className="group inline-flex items-center gap-2 px-8 py-4 bg-gradient-to-r from-amber-400 to-amber-600 hover:from-amber-500 hover:to-amber-700 text-white font-bold rounded-xl shadow-2xl shadow-amber-500/40 hover:shadow-amber-500/60 transition-all hover:-translate-y-1 text-lg"
-          >
-            Criar conta grátis agora
-            <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" />
-          </Link>
-          <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 mt-7 text-xs text-gray-400">
-            <span className="flex items-center gap-1"><Check size={13} className="text-emerald-400" /> Cancele a qualquer momento</span>
-            <span className="flex items-center gap-1"><Check size={13} className="text-emerald-400" /> Sem fidelidade</span>
-            <span className="flex items-center gap-1"><Check size={13} className="text-emerald-400" /> Os 3 bônus inclusos</span>
+          <h2 className="text-3xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.05] mb-5">As vendas já estão lá.<br /><span className="bg-gradient-to-r from-gold-300 to-gold-500 bg-clip-text text-transparent">Comece a enxergá-las hoje.</span></h2>
+          <p className="text-lg sm:text-xl text-white/60 mb-9 max-w-xl mx-auto">7 dias grátis, sem cartão. No primeiro login, suas oportunidades já estão te esperando.</p>
+          <Link to="/cadastro" className="group inline-flex items-center gap-2 px-8 py-4 bg-gold-500 hover:bg-gold-600 text-white font-semibold rounded-full shadow-2xl shadow-gold-500/30 transition-all hover:-translate-y-1 text-lg">Criar conta grátis agora<ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" /></Link>
+          <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 mt-8 text-[13px] text-white/40">
+            <span className="flex items-center gap-1.5"><Check size={14} className="text-gold-400" /> Sem cartão</span>
+            <span className="flex items-center gap-1.5"><Check size={14} className="text-gold-400" /> Cancele quando quiser</span>
+            <span className="flex items-center gap-1.5"><Check size={14} className="text-gold-400" /> Pronto em 5 minutos</span>
           </div>
         </FadeIn>
       </div>
@@ -995,36 +927,33 @@ function FinalCta() {
 /* ─────────────────────── FOOTER ────────────────────────────────────────────── */
 function Footer() {
   return (
-    <footer className="border-t border-gray-100 dark:border-white/5 py-12 bg-gray-50 dark:bg-[#08080a]">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6">
-        <div className="grid sm:grid-cols-3 gap-8 mb-8">
+    <footer className="border-t border-black/5 py-14 bg-luxury-paper">
+      <div className="max-w-6xl mx-auto px-5 sm:px-8">
+        <div className="grid sm:grid-cols-3 gap-8 mb-10">
           <div>
-            <div className="flex items-center mb-3">
-              <TrilhaLogo heightClass="h-7" />
-            </div>
-            <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
-              O CRM completo pensado pra fotógrafos brasileiros.
-            </p>
+            <div className="flex items-center mb-3"><TrilhaLogo heightClass="h-7" /></div>
+            <p className="text-sm text-gray-400 leading-relaxed max-w-xs">O CRM que transforma a sua base de clientes em vendas recorrentes. Feito pra fotógrafos brasileiros.</p>
           </div>
           <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">Produto</h4>
-            <ul className="space-y-2 text-sm">
-              <li><a href="#recursos" className="text-gray-600 dark:text-gray-300 hover:text-amber-600 dark:hover:text-amber-400">Recursos</a></li>
-              <li><a href="#precos" className="text-gray-600 dark:text-gray-300 hover:text-amber-600 dark:hover:text-amber-400">Preços</a></li>
-              <li><a href="#faq" className="text-gray-600 dark:text-gray-300 hover:text-amber-600 dark:hover:text-amber-400">Dúvidas</a></li>
+            <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-3">Produto</h4>
+            <ul className="space-y-2.5 text-sm">
+              <li><a href="#oportunidades" className="text-gray-500 hover:text-gold-600 transition-colors">Inteligência</a></li>
+              <li><a href="#recursos" className="text-gray-500 hover:text-gold-600 transition-colors">Recursos</a></li>
+              <li><a href="#precos" className="text-gray-500 hover:text-gold-600 transition-colors">Preços</a></li>
+              <li><a href="#faq" className="text-gray-500 hover:text-gold-600 transition-colors">Dúvidas</a></li>
             </ul>
           </div>
           <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">Conta</h4>
-            <ul className="space-y-2 text-sm">
-              <li><Link to="/login" className="text-gray-600 dark:text-gray-300 hover:text-amber-600 dark:hover:text-amber-400">Entrar</Link></li>
-              <li><Link to="/cadastro" className="text-gray-600 dark:text-gray-300 hover:text-amber-600 dark:hover:text-amber-400">Criar conta grátis</Link></li>
-              <li><Link to="/termos" className="text-gray-600 dark:text-gray-300 hover:text-amber-600 dark:hover:text-amber-400">Termos</Link></li>
-              <li><Link to="/privacidade" className="text-gray-600 dark:text-gray-300 hover:text-amber-600 dark:hover:text-amber-400">Privacidade</Link></li>
+            <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-3">Conta</h4>
+            <ul className="space-y-2.5 text-sm">
+              <li><Link to="/login" className="text-gray-500 hover:text-gold-600 transition-colors">Entrar</Link></li>
+              <li><Link to="/cadastro" className="text-gray-500 hover:text-gold-600 transition-colors">Criar conta grátis</Link></li>
+              <li><Link to="/termos" className="text-gray-500 hover:text-gold-600 transition-colors">Termos</Link></li>
+              <li><Link to="/privacidade" className="text-gray-500 hover:text-gold-600 transition-colors">Privacidade</Link></li>
             </ul>
           </div>
         </div>
-        <div className="pt-6 border-t border-gray-200 dark:border-white/5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-gray-400 dark:text-gray-500">
+        <div className="pt-7 border-t border-black/5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-gray-400">
           <p>© {new Date().getFullYear()} {APP_NAME}. Todos os direitos reservados.</p>
           <p>Feito com 📷 no Brasil</p>
         </div>
