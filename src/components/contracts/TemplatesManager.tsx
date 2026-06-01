@@ -24,6 +24,8 @@ const VARIABLES: Array<{ key: string; label: string; group: 'cliente' | 'servico
   { key: 'servico_endereco',  label: 'Endereço do evento', group: 'servico' },
   { key: 'valor_total',       label: 'Valor total',      group: 'pagamento' },
   { key: 'valor_extenso',     label: 'Valor por extenso', group: 'pagamento' },
+  { key: 'sinal',             label: 'Sinal (%)',        group: 'pagamento' },
+  { key: 'sinal_extenso',     label: 'Sinal por extenso', group: 'pagamento' },
   { key: 'autorizacao_imagem', label: 'Autorização de imagem (autoriza/NÃO autoriza)', group: 'outros' },
   { key: 'ano',               label: 'Ano',              group: 'outros' },
 ];
@@ -39,6 +41,8 @@ const SAMPLE_DATA: Record<string, string> = {
   servico_endereco: 'Buffet Funny Play',
   valor_total: '1.500,00',
   valor_extenso: 'Mil e quinhentos reais',
+  sinal: '30',
+  sinal_extenso: 'trinta',
   autorizacao_imagem: 'autoriza',
   ano: String(new Date().getFullYear()),
 };

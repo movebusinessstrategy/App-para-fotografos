@@ -23,6 +23,7 @@ export const TEMPLATE_VARIABLES = [
   'cliente_nome', 'cliente_cpf', 'cliente_endereco', 'cliente_telefone', 'cliente_email',
   'servico_data', 'servico_hora', 'servico_endereco',
   'valor_total', 'valor_extenso',
+  'sinal', 'sinal_extenso',
   'autorizacao_imagem', 'ano',
 ] as const;
 
