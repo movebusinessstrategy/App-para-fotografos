@@ -3135,22 +3135,29 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.get('/api/auth/google/callback', async (req, res) => {
     const { code, state: userId } = req.query;
     const redirectUri = getRedirectUri(req);
-    const supabase = createSupabaseClient();
 
     if (!userId || typeof userId !== 'string') {
       return res.status(400).send('User ID não encontrado.');
+    }
+    if (!supabaseAdmin) {
+      return res.status(500).send('Service role indisponível no servidor.');
     }
 
     try {
       const client = getOAuth2Client(redirectUri);
       const { tokens } = await client.getToken({ code: code as string, redirect_uri: redirectUri });
 
-      await supabase.from('google_auth').upsert({
+      // Usa supabaseAdmin (service_role) pra bypassar RLS — callback é anônimo
+      const { error: upsertError } = await supabaseAdmin.from('google_auth').upsert({
         user_id: userId,
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         expiry_date: tokens.expiry_date
       });
+      if (upsertError) {
+        console.error('[google-auth] Erro ao salvar token:', upsertError);
+        return res.status(500).send('Erro ao salvar credenciais Google.');
+      }
 
       res.send(`
         <html><body><script>
