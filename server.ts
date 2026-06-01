@@ -737,9 +737,37 @@ const syncJobToGoogleCalendar = async (supabase: SupabaseClient, jobId: number, 
   }
 };
 
+// Extrai dígitos do telefone, retorna últimos 10-11 chars (ignora DDI)
+const normalizePhone = (raw: string | null | undefined): string | null => {
+  if (!raw) return null;
+  const digits = String(raw).replace(/\D/g, '');
+  if (digits.length < 8) return null;
+  return digits.length >= 11 ? digits.slice(-11) : digits.slice(-10);
+};
+
+// Regex pra telefone BR: opcional DDD entre parens, espaços/hífens, opcional 9, depois 4+4 dígitos
+const PHONE_RE = /\(?(\d{2})\)?[\s\-]?9?\s?(\d{4})[\s\-]?(\d{4})/g;
+
 const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) => {
   const auth = await getGoogleAuth(supabase, userId);
-  if (!auth) return 0;
+  if (!auth) return { imported: 0, skipped: 0, by_phone: 0, by_name: 0 };
+
+  // Carrega todos os clientes do tenant pra fazer matching local
+  const { data: clientsList } = await supabase
+    .from('clients')
+    .select('id, name, phone')
+    .eq('user_id', userId);
+
+  const phoneIndex = new Map<string, { id: number; name: string }>();
+  const nameIndex = new Map<string, { id: number; name: string }>();
+  for (const c of clientsList || []) {
+    const np = normalizePhone(c.phone);
+    if (np) {
+      phoneIndex.set(np, c);
+      if (np.length >= 8) phoneIndex.set(np.slice(-8), c);
+    }
+    if (c.name) nameIndex.set(c.name.trim().toLowerCase(), c);
+  }
 
   const calendar = google.calendar({ version: 'v3', auth });
   try {
@@ -756,7 +784,7 @@ const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) 
     });
 
     const events = response.data.items || [];
-    let importedCount = 0;
+    let imported = 0, skipped = 0, byPhone = 0, byName = 0;
 
     for (const event of events) {
       if (!event.id) continue;
@@ -770,28 +798,74 @@ const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) 
 
       if (existingJob) continue;
 
-      const summary = event.summary || 'Sem Título';
-      const parts = summary.split(' - ');
-      const clientName = parts[0];
-      const jobType = parts.length > 1 ? parts[1] : 'Evento Externo';
+      const summary = (event.summary || '').trim() || 'Sem Título';
+      const description = (event.description || '').trim();
+      const text = `${summary}\n${description}`;
 
-      const { data: client } = await supabase
-        .from('clients')
-        .select('id')
-        .eq('name', clientName)
-        .eq('user_id', userId)
-        .single();
+      // 1) Tenta match por telefone (extrai do texto livre)
+      let matchedClient: { id: number; name: string } | null = null;
+      let matchType: 'phone' | 'name' | null = null;
+
+      PHONE_RE.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = PHONE_RE.exec(text)) !== null) {
+        const digits = m[1] + m[2] + m[3];
+        const candidate = phoneIndex.get(digits) || phoneIndex.get(digits.slice(-8));
+        if (candidate) {
+          matchedClient = candidate;
+          matchType = 'phone';
+          break;
+        }
+      }
+
+      // 2) Fallback: nome exato (formato "Nome - Tipo")
+      if (!matchedClient) {
+        const candidateName = summary.split(' - ')[0].trim().toLowerCase();
+        const byName2 = nameIndex.get(candidateName);
+        if (byName2) {
+          matchedClient = byName2;
+          matchType = 'name';
+        }
+      }
+
+      // 3) Fallback: nome do cliente aparece como substring no summary
+      if (!matchedClient) {
+        const sLow = summary.toLowerCase();
+        for (const [cname, cdata] of nameIndex.entries()) {
+          if (cname.length >= 8 && sLow.includes(cname)) {
+            matchedClient = cdata;
+            matchType = 'name';
+            break;
+          }
+        }
+      }
+
+      // Sem match → pula (não importa feriado/tarefa pessoal)
+      if (!matchedClient) {
+        skipped++;
+        continue;
+      }
 
       const start = event.start?.dateTime || event.start?.date;
       const end = event.end?.dateTime || event.end?.date;
-      if (!start) continue;
+      if (!start) { skipped++; continue; }
 
       const startDate = start.split('T')[0];
       const startTime = start.includes('T') ? start.split('T')[1].substring(0, 5) : null;
       const endTime = (end && end.includes('T')) ? end.split('T')[1].substring(0, 5) : null;
 
+      // Tenta extrair tipo de serviço do summary (formato "X / Tipo / Y" ou "Nome - Tipo")
+      let jobType = 'Evento';
+      if (summary.includes(' / ')) {
+        const segs = summary.split(' / ');
+        if (segs.length >= 2) jobType = segs[1].trim();
+      } else if (summary.includes(' - ')) {
+        const segs = summary.split(' - ');
+        if (segs.length >= 2) jobType = segs.slice(1).join(' - ').trim();
+      }
+
       await supabase.from('jobs').insert({
-        client_id: client?.id || null,
+        client_id: matchedClient.id,
         job_type: jobType,
         job_date: startDate,
         job_time: startTime,
@@ -799,16 +873,18 @@ const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) 
         job_name: summary,
         google_event_id: event.id,
         status: 'scheduled',
-        notes: event.description || '',
-        user_id: userId
+        notes: description,
+        user_id: userId,
       });
-      importedCount++;
+      imported++;
+      if (matchType === 'phone') byPhone++; else byName++;
     }
 
-    return importedCount;
+    console.log(`[google-sync] user=${userId} imported=${imported} skipped=${skipped} by_phone=${byPhone} by_name=${byName}`);
+    return { imported, skipped, by_phone: byPhone, by_name: byName };
   } catch (error) {
     console.error('Error pulling from Google Calendar:', error);
-    return 0;
+    return { imported: 0, skipped: 0, by_phone: 0, by_name: 0 };
   }
 };
 
@@ -3192,13 +3268,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!auth) return res.status(401).json({ error: 'Google account not connected' });
 
     try {
-      const importedCount = await pullFromGoogleCalendar(supabase, userId);
+      const pullResult = await pullFromGoogleCalendar(supabase, userId);
       const { data: jobs } = await supabase.from('jobs').select('id').eq('user_id', userId).neq('status', 'cancelled');
 
       for (const job of jobs || []) {
         await syncJobToGoogleCalendar(supabase, job.id, userId);
       }
-      res.json({ success: true, pushed: jobs?.length || 0, pulled: importedCount });
+      res.json({ success: true, pushed: jobs?.length || 0, ...pullResult });
     } catch (error) {
       console.error('Error syncing all jobs:', error);
       res.status(500).json({ error: 'Internal server error' });
