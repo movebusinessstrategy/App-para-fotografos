@@ -904,7 +904,7 @@ function SettingsForm({ onNotify }: { onNotify: (kind: ToastKind, message: strin
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className={labelCls}>Sinal padrão (%)</label>
-            <input type="number" className={inputCls} value={data.down_payment_percent} onChange={e => set('down_payment_percent', Number(e.target.value))} />
+            <input type="number" className={inputCls} value={data.down_payment_percent || ''} onChange={e => set('down_payment_percent', e.target.value === '' ? 0 : Number(e.target.value))} />
           </div>
           <div>
             <label className={labelCls}>Parcelamento máximo</label>

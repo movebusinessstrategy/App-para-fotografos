@@ -237,7 +237,7 @@ function ContractDocument({ d }: { d: ContractData }) {
       </p>
       <p style={ps}>
         Para confirmação da reserva da data, deverá ser efetuado pagamento antecipado correspondente a,
-        no mínimo, {d.downPaymentPercent || 30}% (trinta por cento) do valor total contratado, a título de
+        no mínimo, {d.downPaymentPercent || 30}% ({percentWord(d.downPaymentPercent || 30)} por cento) do valor total contratado, a título de
         sinal e bloqueio de agenda.
       </p>
       <p style={ps}>O saldo remanescente deverá ser quitado até a data da realização do ensaio.</p>
@@ -279,13 +279,13 @@ function ContractDocument({ d }: { d: ContractData }) {
       <p style={ps}>Persistindo a ausência de manifestação por período superior a 30 (trinta) dias, o contrato poderá ser considerado encerrado por abandono, não havendo devolução de valores pagos, considerando a reserva de agenda e a estrutura já disponibilizada.</p>
 
       <h3 style={h3s}>Cláusula 7ª - Do Cancelamento:</h3>
-      <p style={ps}>Para confirmação da reserva da data, a CONTRATANTE deverá efetuar o pagamento de {d.downPaymentPercent || 30}% (trinta por cento) do valor total contratado, a título de sinal e reserva de agenda.</p>
+      <p style={ps}>Para confirmação da reserva da data, a CONTRATANTE deverá efetuar o pagamento de {d.downPaymentPercent || 30}% ({percentWord(d.downPaymentPercent || 30)} por cento) do valor total contratado, a título de sinal e reserva de agenda.</p>
       <p style={ps}>Em caso de cancelamento por iniciativa da CONTRATANTE, o valor pago a título de sinal não será reembolsado, considerando tratar-se de compensação pela reserva da data, organização administrativa e indisponibilização da agenda para terceiros.</p>
-      <p style={ps}>Caso a CONTRATANTE já tenha efetuado o pagamento integral do valor contratado, será retido o montante correspondente a {d.downPaymentPercent || 30}% (trinta por cento), sendo o saldo eventualmente pago devolvido no prazo de até 10 (dez) dias úteis. Após a realização do ensaio, não haverá devolução de valores, por se tratar de serviço já prestado.</p>
+      <p style={ps}>Caso a CONTRATANTE já tenha efetuado o pagamento integral do valor contratado, será retido o montante correspondente a {d.downPaymentPercent || 30}% ({percentWord(d.downPaymentPercent || 30)} por cento), sendo o saldo eventualmente pago devolvido no prazo de até 10 (dez) dias úteis. Após a realização do ensaio, não haverá devolução de valores, por se tratar de serviço já prestado.</p>
 
       <h3 style={h3s}>Cláusula 8ª - Reagendamento:</h3>
       <p style={ps}>O reagendamento poderá ser solicitado pela CONTRATANTE com antecedência mínima de 10 (dez) dias da data previamente agendada, sem perda do valor pago a título de sinal, estando sujeito à disponibilidade da agenda da CONTRATADA.</p>
-      <p style={ps}>Caso o reagendamento seja solicitado com prazo inferior a 10 (dez) dias da data agendada, o valor pago a título de sinal será considerado perdido. Para confirmação da nova data, será necessário o pagamento de novo sinal correspondente a {d.downPaymentPercent || 30}% (trinta por cento) do valor total contratado.</p>
+      <p style={ps}>Caso o reagendamento seja solicitado com prazo inferior a 10 (dez) dias da data agendada, o valor pago a título de sinal será considerado perdido. Para confirmação da nova data, será necessário o pagamento de novo sinal correspondente a {d.downPaymentPercent || 30}% ({percentWord(d.downPaymentPercent || 30)} por cento) do valor total contratado.</p>
 
       <h3 style={h3s}>Cláusula 9ª - Atraso:</h3>
       <p style={ps}>A CONTRATANTE compromete-se a comparecer no horário previamente agendado para a realização do ensaio. Em caso de atraso superior a 10 (dez) minutos, o tempo da sessão poderá ser reduzido proporcionalmente, não cabendo qualquer desconto no valor contratado.</p>
@@ -332,6 +332,7 @@ function ContractDocument({ d }: { d: ContractData }) {
 function buildTemplateVariables(d: ContractData): Record<string, string | undefined> {
   const yearMatch = d.signingDate?.match(/(\d{4})/);
   const enderecoParts = [d.clientAddress, d.clientCEP ? `CEP: ${d.clientCEP}` : ''].filter(Boolean);
+  const pct = d.downPaymentPercent || 30;
   return {
     cliente_nome: d.clientName || undefined,
     cliente_cpf: d.clientCPF || undefined,
@@ -343,6 +344,8 @@ function buildTemplateVariables(d: ContractData): Record<string, string | undefi
     servico_endereco: d.sessionLocation || undefined,
     valor_total: d.serviceValue || undefined,
     valor_extenso: d.serviceValueWords || undefined,
+    sinal: String(pct),
+    sinal_extenso: percentWord(pct),
     // SEMPRE preenchido: 'NÃO' ou '' (vazio = "A CONTRATANTE  autoriza")
     autorizacao_imagem: d.imageAuthorization === 'NÃO autoriza' ? 'NÃO' : '',
     ano: yearMatch ? yearMatch[1] : String(new Date().getFullYear()),
@@ -351,7 +354,13 @@ function buildTemplateVariables(d: ContractData): Record<string, string | undefi
 
 function TemplateContractDocument({ d, body }: { d: ContractData; body: string }) {
   const rendered = useMemo(() => {
-    return substituteVariables(body, buildTemplateVariables(d));
+    // Templates antigos têm "30% (trinta por cento)" hardcoded; converte pra placeholder
+    // dinâmico antes de substituir, pra refletir o valor do form em tempo real.
+    const normalized = body.replace(
+      /\b\d{1,3}\s*%\s*\(\s*[a-zà-úÀ-Ú\s]+?\s+por\s+cento\s*\)/gi,
+      '{{sinal}}% ({{sinal_extenso}} por cento)',
+    );
+    return substituteVariables(normalized, buildTemplateVariables(d));
   }, [body, d]);
 
   // Layout ABNT: A4, Times New Roman 12pt, espaçamento 1.5,
@@ -468,6 +477,20 @@ function numWord(n: number): string {
     30: 'trinta', 60: 'sessenta', 90: 'noventa',
   };
   return words[n] || String(n);
+}
+
+function percentWord(n: number): string {
+  const units = ['', 'um', 'dois', 'três', 'quatro', 'cinco', 'seis', 'sete', 'oito', 'nove'];
+  const teens = ['dez', 'onze', 'doze', 'treze', 'quatorze', 'quinze', 'dezesseis', 'dezessete', 'dezoito', 'dezenove'];
+  const tens = ['', '', 'vinte', 'trinta', 'quarenta', 'cinquenta', 'sessenta', 'setenta', 'oitenta', 'noventa'];
+  if (!Number.isFinite(n) || n < 0) return String(n);
+  if (n === 100) return 'cem';
+  if (n < 10) return units[n] || 'zero';
+  if (n < 20) return teens[n - 10];
+  const t = Math.floor(n / 10);
+  const u = n % 10;
+  if (t > 9) return String(n);
+  return u === 0 ? tens[t] : `${tens[t]} e ${units[u]}`;
 }
 
 // ─── Form helpers ─────────────────────────────────────────────────────────────
@@ -983,7 +1006,7 @@ export function ContractGenerator({ contractId, onClose, onSaved, onDeleted }: C
                   <Field label="Valor por extenso"><input className={inputCls} value={form.serviceValueWords} onChange={e => set('serviceValueWords', e.target.value)} placeholder="Mil e cento e cinquenta reais" disabled={isSigned} /></Field>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                  <Field label="Sinal (%)"><input className={inputCls} type="number" value={form.downPaymentPercent} onChange={e => set('downPaymentPercent', Number(e.target.value))} disabled={isSigned} /></Field>
+                  <Field label="Sinal (%)"><input className={inputCls} type="number" value={form.downPaymentPercent || ''} onChange={e => set('downPaymentPercent', e.target.value === '' ? 0 : Number(e.target.value))} disabled={isSigned} /></Field>
                   <Field label="Parcelamento (x)"><input className={inputCls} type="number" value={form.installments} onChange={e => set('installments', Number(e.target.value))} disabled={isSigned} /></Field>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
