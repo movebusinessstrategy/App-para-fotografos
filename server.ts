@@ -3268,13 +3268,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!auth) return res.status(401).json({ error: 'Google account not connected' });
 
     try {
+      // SÓ pull (Google → CRM). Push em massa removido em 2026-05-31 porque
+      // criava centenas de eventos duplicados no Calendar do usuário. Push
+      // individual continua nas rotas POST/PATCH de jobs (push só quando user
+      // explicitamente cria/edita 1 job no CRM).
       const pullResult = await pullFromGoogleCalendar(supabase, userId);
-      const { data: jobs } = await supabase.from('jobs').select('id').eq('user_id', userId).neq('status', 'cancelled');
-
-      for (const job of jobs || []) {
-        await syncJobToGoogleCalendar(supabase, job.id, userId);
-      }
-      res.json({ success: true, pushed: jobs?.length || 0, ...pullResult });
+      res.json({ success: true, ...pullResult });
     } catch (error) {
       console.error('Error syncing all jobs:', error);
       res.status(500).json({ error: 'Internal server error' });
