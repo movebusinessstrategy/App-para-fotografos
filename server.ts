@@ -750,7 +750,7 @@ const PHONE_RE = /\(?(\d{2})\)?[\s\-]?9?\s?(\d{4})[\s\-]?(\d{4})/g;
 
 const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) => {
   const auth = await getGoogleAuth(supabase, userId);
-  if (!auth) return { imported: 0, skipped: 0, by_phone: 0, by_name: 0 };
+  if (!auth) return { imported: 0, linked: 0, skipped: 0, by_phone: 0, by_name: 0 };
 
   // Carrega todos os clientes do tenant pra fazer matching local
   const { data: clientsList } = await supabase
@@ -784,7 +784,7 @@ const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) 
     });
 
     const events = response.data.items || [];
-    let imported = 0, skipped = 0, byPhone = 0, byName = 0;
+    let imported = 0, linked = 0, skipped = 0, byPhone = 0, byName = 0;
 
     for (const event of events) {
       if (!event.id) continue;
@@ -854,6 +854,28 @@ const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) 
       const startTime = start.includes('T') ? start.split('T')[1].substring(0, 5) : null;
       const endTime = (end && end.includes('T')) ? end.split('T')[1].substring(0, 5) : null;
 
+      // Antes de criar Job novo, tenta linkar com Job existente do mesmo
+      // cliente na mesma data (criado manualmente pelo user). Evita duplicação.
+      const { data: existingMatch } = await supabase
+        .from('jobs')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('client_id', matchedClient.id)
+        .eq('job_date', startDate)
+        .is('google_event_id', null)
+        .limit(1)
+        .maybeSingle();
+
+      if (existingMatch) {
+        await supabase
+          .from('jobs')
+          .update({ google_event_id: event.id })
+          .eq('id', existingMatch.id);
+        linked++;
+        if (matchType === 'phone') byPhone++; else byName++;
+        continue;
+      }
+
       // Tenta extrair tipo de serviço do summary (formato "X / Tipo / Y" ou "Nome - Tipo")
       let jobType = 'Evento';
       if (summary.includes(' / ')) {
@@ -880,11 +902,11 @@ const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) 
       if (matchType === 'phone') byPhone++; else byName++;
     }
 
-    console.log(`[google-sync] user=${userId} imported=${imported} skipped=${skipped} by_phone=${byPhone} by_name=${byName}`);
-    return { imported, skipped, by_phone: byPhone, by_name: byName };
+    console.log(`[google-sync] user=${userId} imported=${imported} linked=${linked} skipped=${skipped} by_phone=${byPhone} by_name=${byName}`);
+    return { imported, linked, skipped, by_phone: byPhone, by_name: byName };
   } catch (error) {
     console.error('Error pulling from Google Calendar:', error);
-    return { imported: 0, skipped: 0, by_phone: 0, by_name: 0 };
+    return { imported: 0, linked: 0, skipped: 0, by_phone: 0, by_name: 0 };
   }
 };
 
