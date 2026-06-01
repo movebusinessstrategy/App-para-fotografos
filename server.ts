@@ -854,8 +854,8 @@ const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) 
       const startTime = start.includes('T') ? start.split('T')[1].substring(0, 5) : null;
       const endTime = (end && end.includes('T')) ? end.split('T')[1].substring(0, 5) : null;
 
-      // Antes de criar Job novo, tenta linkar com Job existente do mesmo
-      // cliente na mesma data (criado manualmente pelo user). Evita duplicação.
+      // Modo link-only: vincula Job existente do mesmo cliente na mesma data.
+      // NUNCA cria Job novo. Eventos sem Job correspondente são ignorados.
       const { data: existingMatch } = await supabase
         .from('jobs')
         .select('id')
@@ -866,40 +866,16 @@ const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) 
         .limit(1)
         .maybeSingle();
 
-      if (existingMatch) {
-        await supabase
-          .from('jobs')
-          .update({ google_event_id: event.id })
-          .eq('id', existingMatch.id);
-        linked++;
-        if (matchType === 'phone') byPhone++; else byName++;
-        continue;
-      }
+      if (!existingMatch) { skipped++; continue; }
 
-      // Tenta extrair tipo de serviço do summary (formato "X / Tipo / Y" ou "Nome - Tipo")
-      let jobType = 'Evento';
-      if (summary.includes(' / ')) {
-        const segs = summary.split(' / ');
-        if (segs.length >= 2) jobType = segs[1].trim();
-      } else if (summary.includes(' - ')) {
-        const segs = summary.split(' - ');
-        if (segs.length >= 2) jobType = segs.slice(1).join(' - ').trim();
-      }
-
-      await supabase.from('jobs').insert({
-        client_id: matchedClient.id,
-        job_type: jobType,
-        job_date: startDate,
-        job_time: startTime,
-        job_end_time: endTime,
-        job_name: summary,
-        google_event_id: event.id,
-        status: 'scheduled',
-        notes: description,
-        user_id: userId,
-      });
-      imported++;
+      await supabase
+        .from('jobs')
+        .update({ google_event_id: event.id })
+        .eq('id', existingMatch.id);
+      linked++;
       if (matchType === 'phone') byPhone++; else byName++;
+      // suprime warning "endTime declared but never used" — pode ser usado em futuro
+      void startTime; void endTime;
     }
 
     console.log(`[google-sync] user=${userId} imported=${imported} linked=${linked} skipped=${skipped} by_phone=${byPhone} by_name=${byName}`);
