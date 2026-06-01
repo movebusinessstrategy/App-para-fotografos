@@ -2,7 +2,7 @@ import type React from "react";
 import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "../integrations/supabase/client";
-import { Eye, EyeOff, Loader2 } from "lucide-react";
+import { Eye, EyeOff, Loader2, ArrowLeft, ArrowRight } from "lucide-react";
 
 const Login = () => {
   const [email, setEmail] = useState("");
@@ -51,110 +51,127 @@ const Login = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4" style={{ background: "linear-gradient(135deg, #1a1207 0%, #2d1f08 40%, #1a1207 100%)" }}>
-      <div className="w-full max-w-md bg-white dark:bg-gray-900 rounded-2xl shadow-2xl p-8 border border-gray-100 dark:border-gray-800">
-        {/* Header */}
-        <div className="text-center mb-7">
-          <div className="flex items-center justify-center gap-2.5 mb-5">
-            <svg width="40" height="40" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M17 4C17 4 7 5.5 4.5 17H17V4Z" fill="#F1C665"/>
-              <path d="M19 4C19 4 29 5.5 31.5 17H19V4Z" fill="#D4A94A"/>
-              <path d="M17 32C17 32 7 30.5 4.5 19H17V32Z" fill="#D4A94A"/>
-              <path d="M19 32C19 32 29 30.5 31.5 19H19V32Z" fill="#F1C665"/>
-            </svg>
-            <span className="text-2xl font-extrabold tracking-tight text-gray-900 dark:text-white">
-              Foto<span style={{ color: "#D4A94A" }}>MOVE</span>
-            </span>
-          </div>
-          <p className="text-gray-500 dark:text-gray-400 text-sm">
-            Entre na sua conta para continuar
-          </p>
-        </div>
+    <div className="min-h-screen relative flex items-center justify-center p-4 bg-luxury-paper text-luxury-black font-sans antialiased overflow-hidden">
+      {/* Fundo: grid técnico + brilho dourado (mesma identidade da landing) */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundImage:
+              "linear-gradient(to right, rgba(17,17,17,0.05) 1px, transparent 1px), linear-gradient(to bottom, rgba(17,17,17,0.05) 1px, transparent 1px)",
+            backgroundSize: "46px 46px",
+            WebkitMaskImage: "radial-gradient(ellipse 75% 70% at 50% 0%, #000 45%, transparent 100%)",
+            maskImage: "radial-gradient(ellipse 75% 70% at 50% 0%, #000 45%, transparent 100%)",
+          }}
+        />
+        <div className="absolute -top-40 left-1/2 -translate-x-1/2 w-[680px] h-[420px] bg-gold-200/30 rounded-full blur-[130px]" />
+      </div>
 
-        {/* Error Message */}
-        {error && (
-          <div className="mb-4 p-3 bg-red-100 dark:bg-red-500/20 border border-red-400 dark:border-red-500/30 text-red-700 dark:text-red-400 rounded-lg text-sm">
-            {error}
-          </div>
-        )}
+      {/* Voltar ao site */}
+      <Link
+        to="/"
+        className="absolute top-5 left-5 inline-flex items-center gap-1.5 text-sm font-medium text-gray-500 hover:text-luxury-black transition-colors"
+      >
+        <ArrowLeft size={16} /> Voltar ao site
+      </Link>
 
-        {/* Form */}
-        <form onSubmit={handleLogin} className="space-y-4">
-          <div>
-            <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Email
-            </label>
-            <input
-              id="email"
-              type="email"
-              placeholder="seu@email.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              disabled={loading}
-              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-gold-400 dark:focus:ring-gold-400 focus:border-transparent outline-none transition disabled:bg-gray-100 dark:disabled:bg-gray-800/50 disabled:cursor-not-allowed"
-            />
+      <div className="relative w-full max-w-md">
+        <div className="bg-white rounded-[1.75rem] shadow-xl shadow-black/[0.06] border border-black/5 p-8 sm:p-9">
+          {/* Header */}
+          <div className="text-center mb-7">
+            <div className="flex items-center justify-center mb-5">
+              <img src="/logo-light.png" alt="CRM Trilha" className="h-9 w-auto" />
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight mb-1">Bem-vindo de volta</h1>
+            <p className="text-gray-500 text-sm">Entre na sua conta para continuar</p>
           </div>
 
-          <div>
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Senha
-            </label>
-            <div className="relative">
+          {/* Error */}
+          {error && (
+            <div className="mb-4 p-3 bg-rose-50 border border-rose-200 text-rose-600 rounded-xl text-sm">
+              {error}
+            </div>
+          )}
+
+          {/* Form */}
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label htmlFor="email" className="block text-[13px] font-semibold text-gray-700 mb-1.5">
+                Email
+              </label>
               <input
-                id="password"
-                type={showPassword ? "text" : "password"}
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                id="email"
+                type="email"
+                placeholder="seu@email.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 required
                 disabled={loading}
-                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-gold-400 dark:focus:ring-gold-400 focus:border-transparent outline-none transition disabled:bg-gray-100 dark:disabled:bg-gray-800/50 disabled:cursor-not-allowed pr-10"
+                className="w-full px-4 py-2.5 border border-gray-200 rounded-xl bg-white text-luxury-black placeholder-gray-400 focus:ring-2 focus:ring-gold-400/50 focus:border-gold-400 outline-none transition disabled:bg-gray-50 disabled:cursor-not-allowed"
               />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
-              >
-                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
             </div>
-          </div>
 
-          <div className="text-right">
-            <Link
-              to="/recuperar-senha"
-              className="text-sm text-gold-500 dark:text-gold-400 hover:text-gold-600 dark:hover:text-gold-300 hover:underline transition-colors"
+            <div>
+              <label htmlFor="password" className="block text-[13px] font-semibold text-gray-700 mb-1.5">
+                Senha
+              </label>
+              <div className="relative">
+                <input
+                  id="password"
+                  type={showPassword ? "text" : "password"}
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  disabled={loading}
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl bg-white text-luxury-black placeholder-gray-400 focus:ring-2 focus:ring-gold-400/50 focus:border-gold-400 outline-none transition disabled:bg-gray-50 disabled:cursor-not-allowed pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700 transition-colors"
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            </div>
+
+            <div className="text-right">
+              <Link
+                to="/recuperar-senha"
+                className="text-[13px] font-medium text-gold-600 hover:text-gold-700 transition-colors"
+              >
+                Esqueceu a senha?
+              </Link>
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-3 px-4 bg-gold-500 hover:bg-gold-600 text-white font-semibold rounded-full shadow-lg shadow-gold-500/25 transition-all hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 flex items-center justify-center"
             >
-              Esqueceu a senha?
-            </Link>
-          </div>
+              {loading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Entrando...
+                </>
+              ) : (
+                <>
+                  Entrar
+                  <ArrowRight size={17} className="ml-1.5" />
+                </>
+              )}
+            </button>
+          </form>
+        </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full py-2 px-4 bg-gold-500 dark:bg-gold-400 hover:bg-gold-600 dark:hover:bg-gold-500 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
-          >
-            {loading ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Entrando...
-              </>
-            ) : (
-              "Entrar"
-            )}
-          </button>
-
-          <p className="text-sm text-center text-gray-600 dark:text-gray-400">
-            Não tem uma conta?{" "}
-            <Link
-              to="/cadastro"
-              className="text-gold-500 dark:text-gold-400 hover:text-gold-600 dark:hover:text-gold-300 hover:underline font-medium transition-colors"
-            >
-              Criar conta
-            </Link>
-          </p>
-        </form>
+        {/* Criar conta */}
+        <p className="text-center text-sm text-gray-500 mt-6">
+          Não tem uma conta?{" "}
+          <Link to="/cadastro" className="font-semibold text-gold-600 hover:text-gold-700 transition-colors">
+            Criar conta grátis
+          </Link>
+        </p>
       </div>
     </div>
   );
