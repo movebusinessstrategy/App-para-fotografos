@@ -18,11 +18,12 @@ import {
   Search, 
   Sparkles, 
   Trash2, 
-  Upload, 
+  Upload,
   X,
   Calendar,
   Award,
-  SlidersHorizontal
+  SlidersHorizontal,
+  FileDown
 } from "lucide-react";
 
 import ImportProgressModal, { ImportSummary } from "../components/ImportProgressModal";
@@ -321,6 +322,33 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
     URL.revokeObjectURL(url);
   };
 
+  // Modelo CSV pronto pra importação: colunas exatas que o import lê + uma
+  // linha de exemplo mostrando os formatos (datas dd/mm/aaaa, valor 1500,00).
+  const handleDownloadTemplate = () => {
+    const headers = [
+      "NOME", "Telefone", "E-MAIL", "CPF", "NASCIMENTO", "IDADE", "Instagram",
+      "Como Conheceu", "Filho(a)", "CEP", "Endereco", "Bairro", "Cidade", "UF",
+      "Data de Fechamento", "DATA DO ENSAIO", "HORÁRIO", "ENSAIO", "PACOTE", "VALOR", "VIDEO",
+    ];
+    const exemplo = [
+      "Maria Silva", "(43) 99999-9999", "maria@email.com", "123.456.789-00", "15/03/1990", "34", "@mariasilva",
+      "Indicação", "Helena", "86000-000", "Rua das Flores, 123", "Centro", "Londrina", "PR",
+      "10/01/2025", "20/01/2025", "14:00", "Newborn", "Premium", "1500,00", "Não",
+    ];
+    const esc = (v: string) => `"${String(v).replace(/"/g, '""')}"`;
+    const csv = [headers.map(esc).join(","), exemplo.map(esc).join(",")].join("\n");
+    // BOM (﻿) pra o Excel abrir os acentos corretamente.
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", "modelo_clientes.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   const getActivityDates = (client: Client) => {
     const dates: Date[] = [];
     const contactDate = parseDate(client.last_contact_date);
@@ -601,7 +629,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
         const row = rows[idx];
 
         try {
-          const name = (row['NOME'] || '').trim();
+          const name = (getVal(row, 'NOME') || '').trim();
           if (!name) {
             setImportProcessed(idx + 1);
             continue;
@@ -849,6 +877,14 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
               title="Exportar CSV"
             >
               <Download size={18} />
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadTemplate}
+              className="p-2 text-gray-500 dark:text-gray-400 hover:text-gold-600 dark:hover:text-gold-400 hover:bg-white dark:hover:bg-gray-700 rounded-lg transition-all"
+              title="Baixar modelo CSV (com as colunas e um exemplo)"
+            >
+              <FileDown size={18} />
             </button>
             <label className="p-2 text-gray-500 dark:text-gray-400 hover:text-gold-600 dark:hover:text-gold-400 hover:bg-white dark:hover:bg-gray-700 rounded-lg transition-all cursor-pointer" title="Importar CSV">
               <Upload size={18} />
