@@ -2,7 +2,23 @@ import type React from "react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../integrations/supabase/client";
-import { Loader2, ArrowLeft, Mail } from "lucide-react";
+import { Loader2, ArrowLeft, ArrowRight, Mail } from "lucide-react";
+
+const GridBackdrop = () => (
+  <div className="pointer-events-none absolute inset-0 overflow-hidden">
+    <div
+      className="absolute inset-0"
+      style={{
+        backgroundImage:
+          "linear-gradient(to right, rgba(17,17,17,0.05) 1px, transparent 1px), linear-gradient(to bottom, rgba(17,17,17,0.05) 1px, transparent 1px)",
+        backgroundSize: "46px 46px",
+        WebkitMaskImage: "radial-gradient(ellipse 75% 70% at 50% 0%, #000 45%, transparent 100%)",
+        maskImage: "radial-gradient(ellipse 75% 70% at 50% 0%, #000 45%, transparent 100%)",
+      }}
+    />
+    <div className="absolute -top-40 left-1/2 -translate-x-1/2 w-[680px] h-[420px] bg-gold-200/30 rounded-full blur-[130px]" />
+  </div>
+);
 
 const RecuperarSenha = () => {
   const [email, setEmail] = useState("");
@@ -34,93 +50,73 @@ const RecuperarSenha = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4" style={{ background: "linear-gradient(135deg, #1a1207 0%, #2d1f08 40%, #1a1207 100%)" }}>
-      <div className="w-full max-w-md bg-white dark:bg-gray-900 rounded-2xl shadow-2xl p-8 border border-gray-100 dark:border-gray-800">
-        {/* Header */}
-        <div className="text-center mb-6">
-          <div className="mx-auto mb-4 h-12 w-12 rounded-xl bg-gradient-to-br from-gold-500 to-gold-600 flex items-center justify-center shadow-lg shadow-gold-500/30">
-            {emailSent ? (
-              <Mail className="text-white" size={24} />
-            ) : (
-              <span className="text-white font-bold text-xl">FP</span>
-            )}
-          </div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-            {emailSent ? "Email enviado!" : "Recuperar senha"}
-          </h1>
-          <p className="text-gray-500 dark:text-gray-400 mt-1">
-            {emailSent
-              ? "Verifique sua caixa de entrada e siga as instruções para redefinir sua senha."
-              : "Digite seu email para receber o link de recuperação"}
-          </p>
-        </div>
+    <div className="min-h-screen relative flex items-center justify-center p-4 bg-luxury-paper text-luxury-black font-sans antialiased overflow-hidden">
+      <GridBackdrop />
 
-        {/* Error Message */}
-        {error && (
-          <div className="mb-4 p-3 bg-red-100 dark:bg-red-500/20 border border-red-400 dark:border-red-500/30 text-red-700 dark:text-red-400 rounded-lg text-sm">
-            {error}
-          </div>
-        )}
-
-        {!emailSent ? (
-          <form onSubmit={handleRecuperarSenha} className="space-y-4">
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Email
-              </label>
-              <input
-                id="email"
-                type="email"
-                placeholder="seu@email.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                disabled={loading}
-                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-gold-400 dark:focus:ring-gold-400 focus:border-transparent outline-none transition disabled:bg-gray-100 dark:disabled:bg-gray-800/50 disabled:cursor-not-allowed"
-              />
+      <div className="relative w-full max-w-md">
+        <div className="bg-white rounded-[1.75rem] shadow-xl shadow-black/[0.06] border border-black/5 p-8 sm:p-9">
+          {/* Header */}
+          <div className="text-center mb-7">
+            <div className="flex items-center justify-center mb-5">
+              <img src="/logo-light.png" alt="CRM Trilha" className="h-9 w-auto" />
             </div>
+            {emailSent && (
+              <div className="mx-auto mb-4 h-12 w-12 rounded-2xl bg-gold-50 text-gold-600 flex items-center justify-center"><Mail size={24} /></div>
+            )}
+            <h1 className="text-2xl font-bold tracking-tight mb-1">
+              {emailSent ? "Email enviado!" : "Recuperar senha"}
+            </h1>
+            <p className="text-gray-500 text-sm">
+              {emailSent
+                ? "Verifique sua caixa de entrada e siga o link para criar uma nova senha."
+                : "Digite seu email para receber o link de recuperação"}
+            </p>
+          </div>
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-2 px-4 bg-gold-500 dark:bg-gold-400 hover:bg-gold-600 dark:hover:bg-gold-500 text-white font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Enviando...
-                </>
-              ) : (
-                "Enviar link de recuperação"
-              )}
-            </button>
+          {/* Error */}
+          {error && (
+            <div className="mb-4 p-3 bg-rose-50 border border-rose-200 text-rose-600 rounded-xl text-sm">{error}</div>
+          )}
 
-            <Link
-              to="/login"
-              className="text-sm text-center text-gold-600 dark:text-gold-400 hover:text-gold-700 dark:hover:text-gold-300 hover:underline flex items-center justify-center gap-1 transition-colors"
-            >
-              <ArrowLeft size={16} />
-              Voltar para o login
-            </Link>
-          </form>
-        ) : (
-          <div className="space-y-4">
+          {!emailSent ? (
+            <form onSubmit={handleRecuperarSenha} className="space-y-4">
+              <div>
+                <label htmlFor="email" className="block text-[13px] font-semibold text-gray-700 mb-1.5">Email</label>
+                <input
+                  id="email"
+                  type="email"
+                  placeholder="seu@email.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  disabled={loading}
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl bg-white text-luxury-black placeholder-gray-400 focus:ring-2 focus:ring-gold-400/50 focus:border-gold-400 outline-none transition disabled:bg-gray-50 disabled:cursor-not-allowed"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-3 px-4 bg-gold-500 hover:bg-gold-600 text-white font-semibold rounded-full shadow-lg shadow-gold-500/25 transition-all hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 flex items-center justify-center"
+              >
+                {loading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Enviando…</>) : (<>Enviar link de recuperação<ArrowRight size={17} className="ml-1.5" /></>)}
+              </button>
+            </form>
+          ) : (
             <button
               onClick={() => setEmailSent(false)}
-              className="w-full py-2 px-4 border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 font-medium rounded-lg transition"
+              className="w-full py-3 px-4 border border-gray-200 hover:bg-gray-50 text-gray-700 font-medium rounded-full transition"
             >
               Enviar novamente
             </button>
+          )}
+        </div>
 
-            <Link
-              to="/login"
-              className="text-sm text-center text-gold-600 dark:text-gold-400 hover:text-gold-700 dark:hover:text-gold-300 hover:underline flex items-center justify-center gap-1 transition-colors"
-            >
-              <ArrowLeft size={16} />
-              Voltar para o login
-            </Link>
-          </div>
-        )}
+        <p className="text-center text-sm text-gray-500 mt-6">
+          <Link to="/login" className="inline-flex items-center gap-1.5 font-medium text-gray-500 hover:text-luxury-black transition-colors">
+            <ArrowLeft size={15} /> Voltar para o login
+          </Link>
+        </p>
       </div>
     </div>
   );
