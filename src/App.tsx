@@ -15,6 +15,7 @@ const LandingPage = lazy(() => import("./pages/LandingPage"));
 const Login = lazy(() => import("./pages/Login"));
 const Cadastro = lazy(() => import("./pages/Cadastro"));
 const RecuperarSenha = lazy(() => import("./pages/RecuperarSenha"));
+const RedefinirSenha = lazy(() => import("./pages/RedefinirSenha"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const ClientsPage = lazy(() => import("./pages/ClientsPage"));
 const JobsPage = lazy(() => import("./pages/JobsPage"));
@@ -98,6 +99,7 @@ export default function App() {
               <Route path="/login" element={<Login />} />
               <Route path="/cadastro" element={<Cadastro />} />
               <Route path="/recuperar-senha" element={<RecuperarSenha />} />
+              <Route path="/redefinir-senha" element={<RedefinirSenha />} />
               <Route path="/privacidade" element={<PrivacyPolicyPage />} />
               <Route path="/termos" element={<TermsOfServicePage />} />
               <Route path="/excluir-dados" element={<DataDeletionPage />} />
