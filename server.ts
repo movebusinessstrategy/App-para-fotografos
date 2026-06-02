@@ -747,7 +747,9 @@ const syncJobToGoogleCalendar = async (supabase: SupabaseClient, jobId: number, 
 };
 
 // Extrai dígitos do telefone, retorna últimos 10-11 chars (ignora DDI)
-const normalizePhone = (raw: string | null | undefined): string | null => {
+// Usado só pelo matching de Google Calendar — não confundir com o normalizePhone
+// "barebones" da linha 315 que é usado em outros lugares e retorna string vazia.
+const normalizePhoneForMatch = (raw: string | null | undefined): string | null => {
   if (!raw) return null;
   const digits = String(raw).replace(/\D/g, '');
   if (digits.length < 8) return null;
@@ -770,7 +772,7 @@ const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) 
   const phoneIndex = new Map<string, { id: number; name: string }>();
   const nameIndex = new Map<string, { id: number; name: string }>();
   for (const c of clientsList || []) {
-    const np = normalizePhone(c.phone);
+    const np = normalizePhoneForMatch(c.phone);
     if (np) {
       phoneIndex.set(np, c);
       if (np.length >= 8) phoneIndex.set(np.slice(-8), c);
