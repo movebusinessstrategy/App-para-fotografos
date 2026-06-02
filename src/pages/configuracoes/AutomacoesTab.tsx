@@ -112,7 +112,7 @@ function ValoresPorTipoSection() {
   );
 }
 
-function RuleModal({ rule, onClose, onSave }: { rule: OpportunityRule | null; onClose: () => void; onSave: () => void }) {
+export function RuleModal({ rule, onClose, onSave }: { rule: OpportunityRule | null; onClose: () => void; onSave: () => void }) {
   const [formData, setFormData] = useState({
     trigger_job_type: rule?.trigger_job_type || "Gestante",
     target_job_type:  rule?.target_job_type  || "Newborn",
