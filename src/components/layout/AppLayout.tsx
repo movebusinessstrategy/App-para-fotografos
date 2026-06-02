@@ -78,7 +78,7 @@ export default function AppLayout() {
   };
 
   return (
-    <div className="flex h-screen bg-[#F8F9FA] dark:bg-gray-950 text-[#1A1A1A] dark:text-gray-100 font-sans">
+    <div className="flex h-screen bg-luxury-paper dark:bg-[#070707] text-luxury-black dark:text-gray-100 font-sans">
       <Sidebar 
         isOpen={sidebarOpen} 
         onClose={() => setSidebarOpen(false)} 

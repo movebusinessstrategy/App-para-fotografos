@@ -16,7 +16,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem("theme") as Theme;
     if (saved) return saved;
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    // Padrão claro (estilo Apple/landing). Quem já escolheu um tema antes,
+    // inclusive dark, é respeitado — ninguém é forçado a mudar.
+    return "light";
   });
 
   const [waTheme, setWaTheme] = useState<ThemeMode>(() => {

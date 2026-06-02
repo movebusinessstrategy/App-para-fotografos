@@ -29,7 +29,7 @@ export default function Header({ title, userInitial, userEmail, onSignOut, onMen
   }, [menuOpen]);
 
   return (
-    <header className="h-16 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 px-4 md:px-8 flex items-center justify-between sticky top-0 z-30">
+    <header className="h-16 bg-luxury-paper/80 dark:bg-[#070707]/80 backdrop-blur-xl border-b border-black/5 dark:border-white/5 px-4 md:px-8 flex items-center justify-between sticky top-0 z-30">
       {/* Lado esquerdo */}
       <div className="flex items-center gap-3">
         {/* Botão Menu - apenas mobile */}
@@ -41,7 +41,7 @@ export default function Header({ title, userInitial, userEmail, onSignOut, onMen
           <Menu size={24} />
         </button>
 
-        <h2 className="text-lg font-semibold capitalize truncate text-gray-900 dark:text-white">{title}</h2>
+        <h2 className="text-lg font-bold tracking-tight capitalize truncate text-luxury-black dark:text-white">{title}</h2>
       </div>
 
       {/* Lado direito */}
@@ -52,7 +52,7 @@ export default function Header({ title, userInitial, userEmail, onSignOut, onMen
           <input
             type="text"
             placeholder="Buscar..."
-            className="pl-10 pr-4 py-2 bg-gray-100 dark:bg-gray-800 border-none rounded-full text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-gold-500 w-48 lg:w-64"
+            className="pl-10 pr-4 py-2 bg-black/[0.04] dark:bg-white/5 border-none rounded-full text-sm text-luxury-black dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-gold-400/50 w-48 lg:w-64"
           />
         </div>
 
@@ -86,7 +86,7 @@ export default function Header({ title, userInitial, userEmail, onSignOut, onMen
           </button>
 
           {menuOpen && (
-            <div className="absolute right-0 top-12 w-60 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 overflow-hidden z-40">
+            <div className="absolute right-0 top-12 w-60 bg-white dark:bg-[#161616] rounded-2xl shadow-xl shadow-black/10 border border-black/5 dark:border-white/10 overflow-hidden z-40">
               {/* Header do menu - info do usuário */}
               <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700">
                 <div className="text-xs text-gray-500 dark:text-gray-400">Logado como</div>
@@ -122,14 +122,14 @@ export default function Header({ title, userInitial, userEmail, onSignOut, onMen
 
       {/* Busca Mobile - Expandida */}
       {showMobileSearch && (
-        <div className="absolute top-full left-0 right-0 p-4 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 md:hidden">
+        <div className="absolute top-full left-0 right-0 p-4 bg-luxury-paper/95 dark:bg-[#070707]/95 backdrop-blur-xl border-b border-black/5 dark:border-white/5 md:hidden">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
             <input
               type="text"
               placeholder="Buscar..."
               autoFocus
-              className="w-full pl-10 pr-4 py-2 bg-gray-100 dark:bg-gray-800 border-none rounded-full text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-gold-500"
+              className="w-full pl-10 pr-4 py-2 bg-black/[0.04] dark:bg-white/5 border-none rounded-full text-sm text-luxury-black dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-gold-400/50"
             />
           </div>
         </div>
