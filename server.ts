@@ -3498,11 +3498,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Background sync
     pullFromGoogleCalendar(supabase, userId).catch(err => console.error('Background sync error:', err));
 
+    // Limit explícito acima do default PostgREST (1000) pra não cortar jobs
+    // antigos quando user tem muitos. Bug encontrado em 2026-06-02:
+    // a Pitori tinha 2696 jobs (a maioria lixo do pull antigo + reais antigos
+    // com production_stage). Sem limit, o cap default de 1000 retornava
+    // só os mais recentes (job_date desc), escondendo os jobs reais com
+    // production_stage e fazendo o board de Produção parecer vazio.
     const { data: jobs } = await supabase
       .from('jobs')
       .select('*, clients(name)')
       .eq('user_id', userId)
-      .order('job_date', { ascending: false });
+      .order('job_date', { ascending: false })
+      .limit(10000);
 
     // Agrega pagamentos por job (1 query extra para todos os jobs)
     const jobIds = (jobs || []).map((j: any) => j.id);
