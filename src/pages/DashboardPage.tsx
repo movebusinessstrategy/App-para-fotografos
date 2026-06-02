@@ -374,7 +374,7 @@ function Card({ children, onClick }: { children: React.ReactNode; onClick?: () =
     <Comp
       onClick={onClick}
       className={cn(
-        "relative overflow-hidden bg-white dark:bg-[#161616] border border-gray-200 dark:border-gray-800/80 rounded-2xl p-4 text-left transition-all w-full",
+        "relative overflow-hidden bg-white dark:bg-[#161616] border border-black/5 dark:border-white/5 rounded-2xl p-4 text-left transition-all w-full",
         onClick && "hover:border-gold-300 dark:hover:border-gold-500/50 cursor-pointer"
       )}
     >
@@ -447,7 +447,7 @@ function PendingCard({
   return (
     <button
       onClick={onOpen}
-      className="relative overflow-hidden bg-white dark:bg-[#161616] border border-gray-200 dark:border-gray-800/80 rounded-2xl p-4 text-left transition-all hover:border-gold-300 dark:hover:border-gold-500/50 group w-full"
+      className="relative overflow-hidden bg-white dark:bg-[#161616] border border-black/5 dark:border-white/5 rounded-2xl p-4 text-left transition-all hover:border-gold-300 dark:hover:border-gold-500/50 group w-full"
     >
       <span className="absolute top-0 left-0 h-px w-16 bg-gradient-to-r from-gold-500 to-transparent" aria-hidden />
       <span className="absolute top-0 left-0 w-px h-16 bg-gradient-to-b from-gold-500 to-transparent" aria-hidden />
@@ -628,7 +628,7 @@ function Stat({ label, value, tone }: { label: string; value: number; tone: 'red
     gray: 'text-gray-700 dark:text-gray-300',
   }[tone];
   return (
-    <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-800 rounded-xl px-3 py-2 text-center">
+    <div className="bg-black/[0.025] dark:bg-white/[0.04] border border-black/5 dark:border-white/5 rounded-xl px-3 py-2 text-center">
       <p className="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">{label}</p>
       <p className={cn("text-lg font-bold tabular-nums", valueCls)}>{value}</p>
     </div>

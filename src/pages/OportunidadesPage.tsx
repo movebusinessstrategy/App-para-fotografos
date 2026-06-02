@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Gift, RefreshCw, Cake, Baby, Target, Zap, Users, Sparkles, PartyPopper } from 'lucide-react';
+import { Gift, RefreshCw, Cake, Baby, Target, Zap, Users, Sparkles, PartyPopper, Settings2 } from 'lucide-react';
 import { DashboardCards } from '../components/oportunidades/DashboardCards';
 import { TotaisPorProduto } from '../components/oportunidades/TotaisPorProduto';
 import { FiltrosPeriodo } from '../components/oportunidades/FiltrosPeriodo';
@@ -8,6 +8,7 @@ import { OportunidadesList } from '../components/oportunidades/OportunidadesList
 import { GerarCupomModal } from '../components/oportunidades/GerarCupomModal';
 import { EnviarMensagemModal } from '../components/oportunidades/EnviarMensagemModal';
 import { GerenciarFilhosPanel } from '../components/oportunidades/GerenciarFilhosPanel';
+import OpportunityRulesModal from '../components/oportunidades/OpportunityRulesModal';
 import { useAniversariantes } from '../hooks/useAniversariantes';
 import { useOportunidades } from '../hooks/useOportunidades';
 import { oportunidadesApi } from '../services/api/oportunidades';
@@ -21,6 +22,7 @@ type Tab = 'aniversariantes' | 'newborn' | 'aniversario' | 'smash' | 'acompanham
 export default function OportunidadesPage() {
   const { isMember } = useAuth();
   const [tab, setTab] = useState<Tab>('aniversariantes');
+  const [rulesOpen, setRulesOpen] = useState(false);
   const [periodo, setPeriodo] = useState<'hoje' | 'semana' | 'mes'>('hoje');
   const [dashboard, setDashboard] = useState({ anivHoje: 0, anivSemana: 0, totalPendentes: 0, taxaConversao: 0 });
   const [dashLoading, setDashLoading] = useState(true);
@@ -124,13 +126,23 @@ export default function OportunidadesPage() {
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Oportunidades</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Newborn, Aniversário, Smash the Cake, Acompanhamentos e mais</p>
         </div>
-        <button
-          onClick={() => { refetchAniv(); refetchOps(); refetchDashboard(); }}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gold-600 hover:bg-gold-700 text-white text-sm font-medium transition-colors"
-        >
-          <RefreshCw size={15} />
-          Atualizar
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setRulesOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-black/10 dark:border-white/10 hover:bg-black/[0.03] dark:hover:bg-white/5 text-gray-700 dark:text-gray-200 text-sm font-medium transition-colors"
+            title="Criar e gerenciar regras que geram oportunidades automaticamente"
+          >
+            <Settings2 size={15} />
+            Regras
+          </button>
+          <button
+            onClick={() => { refetchAniv(); refetchOps(); refetchDashboard(); }}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gold-600 hover:bg-gold-700 text-white text-sm font-medium transition-colors"
+          >
+            <RefreshCw size={15} />
+            Atualizar
+          </button>
+        </div>
       </div>
 
       {/* Dashboard Cards */}
@@ -491,6 +503,8 @@ export default function OportunidadesPage() {
           onSuccess={c => setLastCupom(c.codigo)}
         />
       )}
+
+      {rulesOpen && <OpportunityRulesModal onClose={() => setRulesOpen(false)} />}
     </div>
   );
 }

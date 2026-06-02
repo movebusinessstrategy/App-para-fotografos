@@ -28,14 +28,14 @@ import { useAuth } from "../../contexts/AuthContext";
 
 const ALL_NAV_ITEMS = [
   { to: "/dashboard",     label: "Dashboard",       icon: LayoutDashboard, end: true,  module: "dashboard" },
+  { to: "/vendas",        label: "Vendas",           icon: Trello,          module: "vendas" },
+  { to: "/oportunidades", label: "Oportunidades",    icon: TrendingUp,      module: "oportunidades" },
   { to: "/clients",       label: "Clientes",         icon: Users,           module: "clients" },
   { to: "/jobs",          label: "Produção",         icon: Workflow,        module: "jobs" },
   { to: "/tarefas",       label: "Tarefas",          icon: ListChecks,      module: "jobs" },
-  { to: "/vendas",        label: "Vendas",           icon: Trello,          module: "vendas" },
-  { to: "/agente",        label: "Agente IA",        icon: Bot,             module: "agente" },
-  { to: "/calendar",      label: "Agenda",           icon: Calendar,        module: "calendar" },
   { to: "/finance",       label: "Financeiro",       icon: DollarSign,      module: "finance" },
-  { to: "/oportunidades", label: "Oportunidades",    icon: TrendingUp,      module: "oportunidades" },
+  { to: "/calendar",      label: "Agenda",           icon: Calendar,        module: "calendar" },
+  { to: "/agente",        label: "Agente IA",        icon: Bot,             module: "agente" },
   { to: "/contratos",     label: "Contratos",        icon: FileText,        module: "contratos" },
 ];
 
@@ -84,7 +84,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
       <aside
         className={cn(
           "fixed lg:static inset-y-0 left-0 z-50",
-          "w-64 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col",
+          "w-64 bg-white dark:bg-[#0d0d0d] border-r border-black/5 dark:border-white/5 flex flex-col",
           "transform transition-transform duration-300 ease-in-out",
           isOpen ? "translate-x-0" : "-translate-x-full",
           "lg:translate-x-0"
@@ -155,7 +155,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
               </button>
 
               {catalogoOpen && (
-                <div className="ml-5 mt-0.5 space-y-0.5 border-l-2 border-gray-100 dark:border-gray-800 pl-3">
+                <div className="ml-5 mt-0.5 space-y-0.5 border-l-2 border-black/5 dark:border-white/10 pl-3">
                   {CATALOGO_SUBITEMS.map((sub) => {
                     const isActive = isCatalogo && currentAba === sub.aba;
                     return (
@@ -182,7 +182,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
         </nav>
 
         {/* Rodapé */}
-        <div className="p-4 border-t border-gray-100 dark:border-gray-800 space-y-1">
+        <div className="p-4 border-t border-black/5 dark:border-white/5 space-y-1">
           {isPlatformAdmin && (
             <NavLink
               to="/platform-admin"
