@@ -28,14 +28,14 @@ import { useAuth } from "../../contexts/AuthContext";
 
 const ALL_NAV_ITEMS = [
   { to: "/dashboard",     label: "Dashboard",       icon: LayoutDashboard, end: true,  module: "dashboard" },
+  { to: "/vendas",        label: "Vendas",           icon: Trello,          module: "vendas" },
+  { to: "/oportunidades", label: "Oportunidades",    icon: TrendingUp,      module: "oportunidades" },
   { to: "/clients",       label: "Clientes",         icon: Users,           module: "clients" },
   { to: "/jobs",          label: "Produção",         icon: Workflow,        module: "jobs" },
   { to: "/tarefas",       label: "Tarefas",          icon: ListChecks,      module: "jobs" },
-  { to: "/vendas",        label: "Vendas",           icon: Trello,          module: "vendas" },
-  { to: "/agente",        label: "Agente IA",        icon: Bot,             module: "agente" },
-  { to: "/calendar",      label: "Agenda",           icon: Calendar,        module: "calendar" },
   { to: "/finance",       label: "Financeiro",       icon: DollarSign,      module: "finance" },
-  { to: "/oportunidades", label: "Oportunidades",    icon: TrendingUp,      module: "oportunidades" },
+  { to: "/calendar",      label: "Agenda",           icon: Calendar,        module: "calendar" },
+  { to: "/agente",        label: "Agente IA",        icon: Bot,             module: "agente" },
   { to: "/contratos",     label: "Contratos",        icon: FileText,        module: "contratos" },
 ];
 
