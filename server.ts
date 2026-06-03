@@ -13083,15 +13083,53 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
 
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const toDateOnly = (date: Date) => {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, '0');
+      const d = String(date.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    };
+    const dateOnlyToDate = (value: string) => {
+      const [y, m, d] = value.split('-').map(Number);
+      return new Date(y, (m || 1) - 1, d || 1);
+    };
+    const addDaysOnly = (value: string, days: number) => {
+      const d = dateOnlyToDate(value);
+      d.setDate(d.getDate() + days);
+      return toDateOnly(d);
+    };
+    const parseDateOnlyParam = (value: any): string | null => {
+      const raw = Array.isArray(value) ? value[0] : value;
+      if (!raw || !/^\d{4}-\d{2}-\d{2}$/.test(String(raw))) return null;
+      const parsed = dateOnlyToDate(String(raw));
+      if (Number.isNaN(parsed.getTime())) return null;
+      const normalized = toDateOnly(parsed);
+      return normalized === String(raw) ? normalized : null;
+    };
+    const inDateRange = (value: any, start: string, end: string) => {
+      if (!value) return false;
+      const day = String(value).slice(0, 10);
+      return day >= start && day <= end;
+    };
+
     const now = new Date();
-    const todayStr = now.toISOString().slice(0, 10);
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
-    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 10);
-    const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0).toISOString().slice(0, 10);
-    const next7DaysEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const last30Start = new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const futureLimit = new Date(now.getFullYear(), now.getMonth() + 3, 0).toISOString().slice(0, 10);
+    const todayStr = toDateOnly(now);
+    const monthStart = toDateOnly(new Date(now.getFullYear(), now.getMonth(), 1));
+    const monthEnd = toDateOnly(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+    const next7DaysEnd = addDaysOnly(todayStr, 7);
+    const futureLimit = toDateOnly(new Date(now.getFullYear(), now.getMonth() + 3, 0));
+
+    let periodStart = parseDateOnlyParam(req.query.from) || monthStart;
+    let periodEnd = parseDateOnlyParam(req.query.to) || monthEnd;
+    if (periodStart > periodEnd) [periodStart, periodEnd] = [periodEnd, periodStart];
+
+    const periodDays = Math.max(
+      1,
+      Math.round((dateOnlyToDate(periodEnd).getTime() - dateOnlyToDate(periodStart).getTime()) / DAY_MS) + 1,
+    );
+    const previousEnd = addDaysOnly(periodStart, -1);
+    const previousStart = addDaysOnly(previousEnd, -(periodDays - 1));
 
     try {
       const [
@@ -13136,13 +13174,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         (pmts || []).forEach((p: any) => {
           amountPaidByJob.set(p.job_id, (amountPaidByJob.get(p.job_id) || 0) + (p.amount || 0));
           if (p.payment_date) {
-            paymentsByDate.set(p.payment_date, (paymentsByDate.get(p.payment_date) || 0) + (p.amount || 0));
+            const paymentDay = String(p.payment_date).slice(0, 10);
+            paymentsByDate.set(paymentDay, (paymentsByDate.get(paymentDay) || 0) + (p.amount || 0));
           }
         });
       }
+      const sumPaymentsBetween = (start: string, end: string) => {
+        let total = 0;
+        for (const [day, value] of paymentsByDate.entries()) {
+          if (day >= start && day <= end) total += value;
+        }
+        return total;
+      };
 
       // ── JOBS metrics ───────────────────────────────────────────────────────
-      const jobsThisMonth = jobs.filter((j: any) => j.job_date >= monthStart && j.job_date <= monthEnd);
+      const jobsThisMonth = jobs.filter((j: any) => j.job_date >= periodStart && j.job_date <= periodEnd);
       const completedThisMonth = jobsThisMonth.filter((j: any) => j.status === 'completed' || (j.job_date < todayStr && j.status !== 'cancelled'));
       const scheduledThisMonth = jobsThisMonth.filter((j: any) => j.job_date >= todayStr && j.status === 'scheduled');
       const todayJobs = jobs.filter((j: any) => j.job_date === todayStr && j.status !== 'cancelled');
@@ -13212,8 +13258,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       });
 
       // ── SALES funnel (deals by stage) ──────────────────────────────────────
+      const dealInSelectedPeriod = (d: any) =>
+        inDateRange(d.converted_at || d.updated_at || d.created_at, periodStart, periodEnd);
       const dealsByStage = dealStages.map((stage: any) => {
-        const stageDeals = deals.filter((d: any) => d.stage === stage.id);
+        const stageDeals = deals.filter((d: any) =>
+          d.stage === stage.id && (!stage.is_final || dealInSelectedPeriod(d))
+        );
         return {
           id: stage.id,
           name: stage.name,
@@ -13302,12 +13352,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       };
 
       // ── FINANCE ────────────────────────────────────────────────────────────
-      const revenueThisMonth = jobsThisMonth
-        .filter((j: any) => j.status !== 'cancelled')
-        .reduce((acc: number, j: any) => acc + (amountPaidByJob.get(j.id) || 0), 0);
-      const revenueLastMonth = jobs
-        .filter((j: any) => j.job_date >= lastMonthStart && j.job_date <= lastMonthEnd && j.status !== 'cancelled')
-        .reduce((acc: number, j: any) => acc + (amountPaidByJob.get(j.id) || 0), 0);
+      const revenueThisMonth = sumPaymentsBetween(periodStart, periodEnd);
+      const revenueLastMonth = sumPaymentsBetween(previousStart, previousEnd);
       const futureRevenue = jobs
         .filter((j: any) => j.job_date >= todayStr && j.job_date <= futureLimit && j.status !== 'cancelled')
         .reduce((acc: number, j: any) => {
@@ -13317,8 +13363,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         }, 0);
 
       const dailyRevenue: Array<{ date: string; total: number }> = [];
-      for (let i = 29; i >= 0; i--) {
-        const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const chartDays = Math.min(periodDays, 370);
+      const chartStart = periodDays > chartDays ? addDaysOnly(periodEnd, -(chartDays - 1)) : periodStart;
+      for (let i = 0; i < chartDays; i++) {
+        const d = addDaysOnly(chartStart, i);
         dailyRevenue.push({ date: d, total: paymentsByDate.get(d) || 0 });
       }
 
@@ -13339,6 +13387,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       });
 
       res.json({
+        period: {
+          start_date: periodStart,
+          end_date: periodEnd,
+          previous_start_date: previousStart,
+          previous_end_date: previousEnd,
+          days: periodDays,
+        },
         attention,
         jobs: {
           today: { count: todayJobs.length, list: todayJobs.map(trim) },

@@ -1,13 +1,16 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
-import { format, parseISO } from "date-fns";
+import {
+  addDays, addMonths, endOfMonth, format, getDay, getDaysInMonth,
+  isSameDay, isWithinInterval, parseISO, startOfMonth, subDays,
+} from "date-fns";
 import { ptBR } from "date-fns/locale";
 import {
   Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import {
-  ArrowRight, Calendar as CalendarIcon, Camera, DollarSign,
-  Eye, EyeOff, FileClock, FileText, Sparkles, Target, TrendingUp, X,
+  ArrowRight, Calendar as CalendarIcon, Camera, Check, ChevronLeft, ChevronRight,
+  DollarSign, Eye, EyeOff, FileClock, FileText, Sparkles, Target, TrendingUp, X,
 } from "lucide-react";
 
 import { LayoutOutletContext } from "../components/layout/AppLayout";
@@ -28,6 +31,13 @@ interface JobLite {
 }
 
 interface Analytics {
+  period?: {
+    start_date: string;
+    end_date: string;
+    previous_start_date: string;
+    previous_end_date: string;
+    days: number;
+  };
   attention: number;
   jobs: {
     today: { count: number; list: JobLite[] };
@@ -62,6 +72,9 @@ interface Analytics {
   };
 }
 
+type DatePreset = "month" | "7d" | "15d" | "30d" | "custom";
+type DashboardDateRange = { from: string; to: string };
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const formatBRL = (value: number, hide: boolean) =>
@@ -73,6 +86,40 @@ const formatBRLShort = (value: number, hide: boolean) => {
   return `R$ ${(value || 0).toLocaleString("pt-BR", { maximumFractionDigits: 0 })}`;
 };
 
+const toDateOnly = (date: Date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+};
+
+const fromDateOnly = (value: string) => {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, (month || 1) - 1, day || 1);
+};
+
+function buildPresetRange(preset: DatePreset): DashboardDateRange {
+  const today = new Date();
+  if (preset === "7d") return { from: toDateOnly(subDays(today, 6)), to: toDateOnly(today) };
+  if (preset === "15d") return { from: toDateOnly(subDays(today, 14)), to: toDateOnly(today) };
+  if (preset === "30d") return { from: toDateOnly(subDays(today, 29)), to: toDateOnly(today) };
+  return { from: toDateOnly(startOfMonth(today)), to: toDateOnly(endOfMonth(today)) };
+}
+
+function formatRangeLabel(range: DashboardDateRange) {
+  const from = fromDateOnly(range.from);
+  const to = fromDateOnly(range.to);
+  if (range.from === range.to) return format(from, "dd 'de' MMMM yyyy", { locale: ptBR });
+  if (from.getFullYear() === to.getFullYear()) {
+    return `${format(from, "dd MMM", { locale: ptBR })} - ${format(to, "dd MMM yyyy", { locale: ptBR })}`;
+  }
+  return `${format(from, "dd MMM yyyy", { locale: ptBR })} - ${format(to, "dd MMM yyyy", { locale: ptBR })}`;
+}
+
+function formatRangeShort(range: DashboardDateRange) {
+  return `${format(fromDateOnly(range.from), "dd/MM/yy")} - ${format(fromDateOnly(range.to), "dd/MM/yy")}`;
+}
+
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
@@ -83,6 +130,8 @@ export default function DashboardPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [hideValues, setHideValues] = useState(() => localStorage.getItem("dashboard_hide_values") === "true");
+  const [datePreset, setDatePreset] = useState<DatePreset>("month");
+  const [dateRange, setDateRange] = useState<DashboardDateRange>(() => buildPresetRange("month"));
 
   const toggleHideValues = () => {
     setHideValues(prev => {
@@ -95,8 +144,9 @@ export default function DashboardPage() {
   const fetchAll = async () => {
     setLoading(true);
     try {
+      const qs = new URLSearchParams({ from: dateRange.from, to: dateRange.to });
       const [aRes, oRes, cRes] = await Promise.all([
-        authFetch("/api/dashboard/analytics"),
+        authFetch(`/api/dashboard/analytics?${qs.toString()}`),
         authFetch("/api/opportunities"),
         authFetch("/api/clients"),
       ]);
@@ -110,7 +160,17 @@ export default function DashboardPage() {
     }
   };
 
-  useEffect(() => { fetchAll(); }, []);
+  useEffect(() => { fetchAll(); }, [dateRange.from, dateRange.to]);
+
+  const applyPreset = (preset: DatePreset) => {
+    setDatePreset(preset);
+    if (preset !== "custom") setDateRange(buildPresetRange(preset));
+  };
+
+  const applyCustomRange = (range: DashboardDateRange) => {
+    setDatePreset("custom");
+    setDateRange(range);
+  };
 
   const removeOpportunityLocally = (oppId: number) =>
     setOpportunities(prev => prev.filter(o => o.id !== oppId));
@@ -147,24 +207,36 @@ export default function DashboardPage() {
   }
 
   const a = analytics;
-  const monthDelta = a.finance.revenueLastMonth > 0
+  const periodLabel = formatRangeLabel(dateRange);
+  const periodDelta = a.finance.revenueLastMonth > 0
     ? Math.round(((a.finance.revenueThisMonth - a.finance.revenueLastMonth) / a.finance.revenueLastMonth) * 100)
     : null;
 
   return (
     <div className="space-y-3">
       {/* Header */}
-      <div className="flex items-end justify-between gap-4">
-        <h1 className="text-xl font-bold tracking-tight text-gray-900 dark:text-white">
-          Visão geral
-        </h1>
-        <button
-          onClick={toggleHideValues}
-          className="p-1.5 rounded-full text-gray-400 hover:text-gold-500 hover:bg-gold-500/10 transition-colors"
-          title={hideValues ? "Mostrar valores" : "Esconder valores"}
-        >
-          {hideValues ? <EyeOff size={16} /> : <Eye size={16} />}
-        </button>
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight text-gray-900 dark:text-white">
+            Visão geral
+          </h1>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 capitalize">{periodLabel}</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <DashboardPeriodFilter
+            preset={datePreset}
+            range={dateRange}
+            onPreset={applyPreset}
+            onCustomRange={applyCustomRange}
+          />
+          <button
+            onClick={toggleHideValues}
+            className="p-2 rounded-full text-gray-400 hover:text-gold-500 hover:bg-gold-500/10 transition-colors"
+            title={hideValues ? "Mostrar valores" : "Esconder valores"}
+          >
+            {hideValues ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </div>
       </div>
 
       {/* Top: 4 KPIs + Funnel side-by-side */}
@@ -173,17 +245,17 @@ export default function DashboardPage() {
         <div className="space-y-3">
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
             <Card>
-              <CardHeader icon={<DollarSign size={16} />} title="Faturamento do mês" />
+              <CardHeader icon={<DollarSign size={16} />} title="Faturamento" />
               <CardValue value={formatBRL(a.finance.revenueThisMonth, hideValues)} />
-              {monthDelta !== null && (
-                <CardHint tone={monthDelta >= 0 ? 'pos' : 'neg'}>
-                  {monthDelta >= 0 ? '↑' : '↓'} {Math.abs(monthDelta)}% vs mês passado
+              {periodDelta !== null && (
+                <CardHint tone={periodDelta >= 0 ? 'pos' : 'neg'}>
+                  {periodDelta >= 0 ? '↑' : '↓'} {Math.abs(periodDelta)}% vs período anterior
                 </CardHint>
               )}
             </Card>
 
             <Card>
-              <CardHeader icon={<Camera size={16} />} title="Ensaios este mês" />
+              <CardHeader icon={<Camera size={16} />} title="Ensaios no período" />
               <CardValue value={String(a.jobs.thisMonth.total)} />
               <CardHint>{a.jobs.thisMonth.completed} feitos · {a.jobs.thisMonth.scheduled} agendados</CardHint>
             </Card>
@@ -217,7 +289,7 @@ export default function DashboardPage() {
           <Card>
             <div className="flex items-center justify-between mb-3">
               <CardHeader icon={<TrendingUp size={16} />} title="Linha do tempo" inline />
-              <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500">Últimos 30 dias</span>
+              <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500">{formatRangeShort(dateRange)}</span>
             </div>
             <div className="-mx-2">
               <ResponsiveContainer width="100%" height={140} minWidth={0}>
@@ -361,6 +433,256 @@ export default function DashboardPage() {
             onDismiss={handleDismissOpp}
           />
         </Card>
+      </div>
+    </div>
+  );
+}
+
+// ─── Dashboard period filter ─────────────────────────────────────────────────
+
+const PRESETS: Array<{ id: DatePreset; label: string }> = [
+  { id: "month", label: "Mês atual" },
+  { id: "7d", label: "7 dias" },
+  { id: "15d", label: "15 dias" },
+  { id: "30d", label: "30 dias" },
+];
+
+const WEEKDAYS = ["D", "S", "T", "Q", "Q", "S", "S"];
+
+function DashboardPeriodFilter({
+  preset, range, onPreset, onCustomRange,
+}: {
+  preset: DatePreset;
+  range: DashboardDateRange;
+  onPreset: (preset: DatePreset) => void;
+  onCustomRange: (range: DashboardDateRange) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <div className="inline-flex items-center rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-[#161616] p-1 shadow-sm">
+        {PRESETS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => onPreset(item.id)}
+            className={cn(
+              "px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap",
+              preset === item.id
+                ? "bg-gold-500/15 text-gold-700 dark:text-gold-300"
+                : "text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800"
+            )}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      <div ref={ref} className="relative">
+        <button
+          type="button"
+          onClick={() => setOpen(v => !v)}
+          className={cn(
+            "inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors shadow-sm",
+            preset === "custom"
+              ? "border-gold-300 bg-gold-500/15 text-gold-700 dark:border-gold-500/40 dark:text-gold-300"
+              : "border-gray-200 dark:border-gray-800 bg-white dark:bg-[#161616] text-gray-600 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-700"
+          )}
+        >
+          <CalendarIcon size={14} />
+          <span>{preset === "custom" ? formatRangeShort(range) : "Período"}</span>
+        </button>
+
+        {open && (
+          <DateRangePopover
+            range={range}
+            onApply={(next) => {
+              onCustomRange(next);
+              setOpen(false);
+            }}
+            onClose={() => setOpen(false)}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DateRangePopover({
+  range, onApply, onClose,
+}: {
+  range: DashboardDateRange;
+  onApply: (range: DashboardDateRange) => void;
+  onClose: () => void;
+}) {
+  const [cursor, setCursor] = useState(() => startOfMonth(fromDateOnly(range.from)));
+  const [draftFrom, setDraftFrom] = useState<Date | null>(() => fromDateOnly(range.from));
+  const [draftTo, setDraftTo] = useState<Date | null>(() => fromDateOnly(range.to));
+
+  const commitDay = (day: Date) => {
+    const clean = new Date(day.getFullYear(), day.getMonth(), day.getDate());
+    if (!draftFrom || draftTo) {
+      setDraftFrom(clean);
+      setDraftTo(null);
+      return;
+    }
+    if (clean < draftFrom) {
+      setDraftTo(draftFrom);
+      setDraftFrom(clean);
+      return;
+    }
+    setDraftTo(clean);
+  };
+
+  const canApply = !!draftFrom && !!draftTo;
+  const draftLabel = canApply
+    ? formatRangeLabel({ from: toDateOnly(draftFrom), to: toDateOnly(draftTo) })
+    : draftFrom
+    ? `${format(draftFrom, "dd/MM/yyyy")} - selecione o fim`
+    : "Selecione o início";
+
+  return (
+    <div className="absolute right-0 top-full z-50 mt-2 w-[min(92vw,640px)] rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-[#161616] shadow-2xl overflow-hidden">
+      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-gray-100 dark:border-gray-800">
+        <div className="min-w-0">
+          <p className="text-xs font-bold uppercase tracking-wider text-gold-600 dark:text-gold-400">Período personalizado</p>
+          <p className="text-sm text-gray-700 dark:text-gray-200 truncate capitalize">{draftLabel}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+          title="Fechar"
+        >
+          <X size={16} />
+        </button>
+      </div>
+
+      <div className="flex items-center justify-between px-4 py-3">
+        <button
+          type="button"
+          onClick={() => setCursor(c => addMonths(c, -1))}
+          className="p-2 rounded-lg text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+          title="Mês anterior"
+        >
+          <ChevronLeft size={16} />
+        </button>
+        <div className="text-sm font-semibold text-gray-900 dark:text-white capitalize">
+          {format(cursor, "MMMM yyyy", { locale: ptBR })}
+          <span className="hidden sm:inline text-gray-400 dark:text-gray-500"> / </span>
+          <span className="hidden sm:inline">{format(addMonths(cursor, 1), "MMMM yyyy", { locale: ptBR })}</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => setCursor(c => addMonths(c, 1))}
+          className="p-2 rounded-lg text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+          title="Próximo mês"
+        >
+          <ChevronRight size={16} />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 px-4 pb-4">
+        <RangeMonth month={cursor} from={draftFrom} to={draftTo} onPick={commitDay} />
+        <RangeMonth month={addMonths(cursor, 1)} from={draftFrom} to={draftTo} onPick={commitDay} className="hidden sm:block" />
+      </div>
+
+      <div className="flex items-center justify-between gap-3 px-4 py-3 bg-gray-50 dark:bg-gray-900/70 border-t border-gray-100 dark:border-gray-800">
+        <button
+          type="button"
+          onClick={() => {
+            const rawToday = new Date();
+            const today = new Date(rawToday.getFullYear(), rawToday.getMonth(), rawToday.getDate());
+            setDraftFrom(subDays(today, 6));
+            setDraftTo(today);
+            setCursor(startOfMonth(today));
+          }}
+          className="text-xs font-semibold text-gray-500 dark:text-gray-400 hover:text-gold-600 dark:hover:text-gold-300 transition-colors"
+        >
+          Usar últimos 7 dias
+        </button>
+        <button
+          type="button"
+          disabled={!canApply}
+          onClick={() => {
+            if (!draftFrom || !draftTo) return;
+            onApply({ from: toDateOnly(draftFrom), to: toDateOnly(draftTo) });
+          }}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gold-600 hover:bg-gold-700 disabled:opacity-40 disabled:hover:bg-gold-600 text-white text-xs font-bold transition-colors"
+        >
+          <Check size={14} />
+          Aplicar
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RangeMonth({
+  month, from, to, onPick, className,
+}: {
+  month: Date;
+  from: Date | null;
+  to: Date | null;
+  onPick: (day: Date) => void;
+  className?: string;
+}) {
+  const start = startOfMonth(month);
+  const daysInMonth = getDaysInMonth(month);
+  const startWeekday = getDay(start);
+  const totalCells = Math.ceil((startWeekday + daysInMonth) / 7) * 7;
+  const selectedInterval = from && to ? { start: from, end: to } : null;
+
+  return (
+    <div className={className}>
+      <p className="mb-2 text-center text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 capitalize">
+        {format(month, "MMMM", { locale: ptBR })}
+      </p>
+      <div className="grid grid-cols-7 mb-1">
+        {WEEKDAYS.map((d, idx) => (
+          <div key={`${d}-${idx}`} className="text-center text-[10px] font-bold text-gray-400 dark:text-gray-500 py-1">
+            {d}
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-7 gap-y-1">
+        {Array.from({ length: totalCells }).map((_, i) => {
+          const dayNum = i - startWeekday + 1;
+          if (dayNum < 1 || dayNum > daysInMonth) return <div key={i} className="h-9" />;
+
+          const day = new Date(month.getFullYear(), month.getMonth(), dayNum);
+          const isStart = !!from && isSameDay(day, from);
+          const isEnd = !!to && isSameDay(day, to);
+          const inRange = !!selectedInterval && isWithinInterval(day, selectedInterval);
+
+          return (
+            <button
+              key={i}
+              type="button"
+              onClick={() => onPick(day)}
+              className={cn(
+                "h-9 text-sm font-semibold transition-colors",
+                inRange ? "bg-gold-500/12 text-gold-800 dark:text-gold-200" : "text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800",
+                isStart && "rounded-l-full bg-gold-600 text-white hover:bg-gold-600 dark:text-white",
+                isEnd && "rounded-r-full bg-gold-600 text-white hover:bg-gold-600 dark:text-white",
+                isStart && isEnd && "rounded-full",
+              )}
+            >
+              {dayNum}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

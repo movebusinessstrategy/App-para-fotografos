@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { Deal, Client, PipelineStage } from "../../types";
 import { authFetch } from "../../utils/authFetch";
+import { celebrateSale } from "../../utils/saleCelebration";
 import { DealConversionModal } from "./DealConversionModal";
 
 interface DealDetailsModalProps {
@@ -390,6 +391,7 @@ export function DealDetailsModal({
           clients={clients}
           onClose={() => setShowConversionModal(false)}
           onConverted={() => {
+            celebrateSale();
             setShowConversionModal(false);
             onUpdated();
             onClose();

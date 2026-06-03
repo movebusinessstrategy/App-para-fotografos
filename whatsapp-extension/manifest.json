@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CRM Trilha para WhatsApp",
-  "version": "1.3.17",
+  "version": "1.3.18",
   "description": "Pipeline de vendas integrado ao WhatsApp Web",
   "icons": {
     "16": "icons/icon.png",
@@ -33,6 +33,12 @@
       "js": ["content.js", "agente.js"],
       "css": ["content.css"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["sounds/venda-realizada.webm"],
+      "matches": ["https://web.whatsapp.com/*"]
     }
   ],
   "background": {

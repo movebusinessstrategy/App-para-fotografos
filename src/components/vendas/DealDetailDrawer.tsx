@@ -11,6 +11,7 @@ import { Deal, Client, PipelineStage, DealActivity, StageHistoryEntry, Produto, 
 import { authFetch } from "../../utils/authFetch";
 import { useApi } from "../../utils/useApi";
 import { parseDate } from "../../utils/date";
+import { celebrateSale } from "../../utils/saleCelebration";
 import { DealConversionModal } from "../pipeline/DealConversionModal";
 import { useSellers } from "../../hooks/useSellers";
 import { SellerPicker } from "./SellerPicker";
@@ -1463,7 +1464,7 @@ export function DealDetailDrawer({
           deal={deal}
           clients={clients}
           onClose={() => setShowConversionModal(false)}
-          onConverted={() => { setShowConversionModal(false); onUpdate(); onClose(); }}
+          onConverted={() => { celebrateSale(); setShowConversionModal(false); onUpdate(); onClose(); }}
         />
       )}
 

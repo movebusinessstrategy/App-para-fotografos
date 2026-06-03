@@ -67,6 +67,57 @@
     toastT = setTimeout(() => el.classList.remove('on'), 2600);
   };
 
+  // ===== SALE CELEBRATION =====
+  const saleSoundUrl = () => {
+    try { return chrome.runtime.getURL('sounds/venda-realizada.webm'); }
+    catch { return ''; }
+  };
+  const ensureSaleCelebrationStyle = () => {
+    if (document.getElementById('fp-sale-celebration-style')) return;
+    const style = document.createElement('style');
+    style.id = 'fp-sale-celebration-style';
+    style.textContent = `
+      .fp-sale-confetti-layer{position:fixed;inset:0;z-index:2147483647;pointer-events:none;overflow:hidden}
+      .fp-sale-confetti-piece{position:absolute;left:50%;top:50%;width:var(--w);height:var(--h);border-radius:2px;background:var(--c);opacity:0;transform:translate(-50%,-50%) rotate(0deg);animation:fp-sale-confetti-burst var(--dur) cubic-bezier(.18,.75,.32,1) forwards;animation-delay:var(--delay);box-shadow:0 0 10px rgba(255,255,255,.24)}
+      @keyframes fp-sale-confetti-burst{0%{opacity:1;transform:translate(-50%,-50%) scale(.45) rotate(0deg)}72%{opacity:1}100%{opacity:0;transform:translate(calc(-50% + var(--tx)),calc(-50% + var(--ty))) scale(1) rotate(var(--rot))}}
+    `;
+    document.head.appendChild(style);
+  };
+  const celebrateSale = () => {
+    const src = saleSoundUrl();
+    if (src) {
+      try {
+        const audio = new Audio(src);
+        audio.volume = 0.78;
+        audio.play().catch(() => {});
+      } catch {}
+    }
+
+    ensureSaleCelebrationStyle();
+    const layer = document.createElement('div');
+    layer.className = 'fp-sale-confetti-layer';
+    document.body.appendChild(layer);
+    const colors = ['#F1C665', '#10B981', '#38BDF8', '#EC4899', '#F97316', '#8B5CF6', '#FFFFFF'];
+    for (let i = 0; i < 92; i += 1) {
+      const piece = document.createElement('span');
+      const angle = Math.random() * Math.PI * 2;
+      const distance = 140 + Math.random() * Math.max(window.innerWidth, window.innerHeight) * 0.58;
+      const tx = Math.cos(angle) * distance;
+      const ty = Math.sin(angle) * distance + 110 + Math.random() * 160;
+      piece.className = 'fp-sale-confetti-piece';
+      piece.style.setProperty('--tx', `${tx.toFixed(1)}px`);
+      piece.style.setProperty('--ty', `${ty.toFixed(1)}px`);
+      piece.style.setProperty('--rot', `${Math.round((Math.random() * 920) - 460)}deg`);
+      piece.style.setProperty('--dur', `${(1150 + Math.random() * 850).toFixed(0)}ms`);
+      piece.style.setProperty('--delay', `${(Math.random() * 120).toFixed(0)}ms`);
+      piece.style.setProperty('--w', `${(6 + Math.random() * 7).toFixed(1)}px`);
+      piece.style.setProperty('--h', `${(8 + Math.random() * 14).toFixed(1)}px`);
+      piece.style.setProperty('--c', colors[i % colors.length]);
+      layer.appendChild(piece);
+    }
+    setTimeout(() => layer.remove(), 2400);
+  };
+
   // ─── Tradução de status (vindo do backend em inglês) ─────────────────
   const STATUS_LABELS_PT = {
     scheduled:   'Agendado',
@@ -5321,6 +5372,7 @@
         chatDeal = { ...chatDeal, ...deal };
         injectChatStrip(chatDeal, chatStages.length ? chatStages : stages);
       }
+      celebrateSale();
       toast('Venda convertida com sucesso!');
     } catch (err) {
       toast(err.message, true);
