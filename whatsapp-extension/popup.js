@@ -33,48 +33,71 @@ async function checkApiHealth(apiBase) {
   }
 }
 
-function renderLogin(errorMsg, currentApiBase) {
-  // Hardcoda o servidor padrão. O bloco "Avançado" só fica visível pra dev/debug
-  // (auto-aberto quando há erro de conexão).
+function renderLogin(errorMsg, currentApiBase, savedEmail = '') {
   const apiBase = currentApiBase || DEFAULT_API_BASE;
+  // Bloco "Avançado" só aparece quando há erro de conexão (dev/debug)
   const showAdvanced = !!errorMsg && /servidor|conex/i.test(errorMsg);
   body.innerHTML = `
     <div class="field">
       <label>E-mail</label>
-      <input type="email" id="email-input" placeholder="seu@email.com" autocomplete="email" />
+      <input type="email" id="email-input" placeholder="seu@email.com" autocomplete="email" value="${escHtml(savedEmail)}" />
     </div>
     <div class="field">
       <label>Senha</label>
-      <input type="password" id="password-input" placeholder="••••••••" autocomplete="current-password" />
+      <div class="pwd-wrap">
+        <input type="password" id="password-input" placeholder="••••••••" autocomplete="current-password" />
+        <button type="button" class="pwd-toggle" id="pwd-toggle" aria-label="Mostrar senha" title="Mostrar senha">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12z"/>
+            <circle cx="12" cy="12" r="3"/>
+          </svg>
+        </button>
+      </div>
     </div>
+    <label class="remember-row">
+      <input type="checkbox" id="remember-email" ${savedEmail ? 'checked' : ''} />
+      Lembrar e-mail e manter conectado
+    </label>
     <button class="btn-primary" id="login-btn">Entrar</button>
     ${errorMsg ? `<div class="status error">${escHtml(errorMsg)}</div>` : ''}
-    <details id="advanced-toggle" ${showAdvanced ? 'open' : ''} style="margin-top:6px;">
+    ${showAdvanced ? `
+    <details id="advanced-toggle" open style="margin-top:6px;">
       <summary style="font-size:11px;color:#94a3b8;cursor:pointer;user-select:none;">Avançado</summary>
       <div class="field" style="margin-top:8px;">
         <label>URL do servidor</label>
         <input type="text" id="api-base-input" placeholder="${DEFAULT_API_BASE}" value="${escHtml(apiBase)}" autocomplete="off" />
         <span class="hint">Use o padrão. Só altere pra apontar pra outro backend (debug).</span>
       </div>
-    </details>
+    </details>` : ''}
   `;
 
   const loginBtn = document.getElementById('login-btn');
   const apiBaseInput = document.getElementById('api-base-input');
   const emailInput = document.getElementById('email-input');
   const passwordInput = document.getElementById('password-input');
+  const pwdToggle = document.getElementById('pwd-toggle');
+  const rememberEmail = document.getElementById('remember-email');
+
+  // Toggle olhinho da senha
+  pwdToggle.addEventListener('click', () => {
+    const isHidden = passwordInput.type === 'password';
+    passwordInput.type = isHidden ? 'text' : 'password';
+    pwdToggle.setAttribute('aria-label', isHidden ? 'Ocultar senha' : 'Mostrar senha');
+    pwdToggle.title = isHidden ? 'Ocultar senha' : 'Mostrar senha';
+  });
 
   passwordInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') loginBtn.click();
   });
 
   loginBtn.addEventListener('click', async () => {
-    const apiBase = normalizeApiBase(apiBaseInput.value) || DEFAULT_API_BASE;
+    const apiBase = normalizeApiBase(apiBaseInput?.value) || DEFAULT_API_BASE;
     const email = emailInput.value.trim();
     const password = passwordInput.value;
+    const remember = rememberEmail.checked;
 
     if (!email || !password) {
-      renderLogin('Preencha e-mail e senha.', apiBase);
+      renderLogin('Preencha e-mail e senha.', apiBase, savedEmail);
       return;
     }
 
@@ -84,7 +107,7 @@ function renderLogin(errorMsg, currentApiBase) {
     // 1) Valida que o backend responde
     const healthy = await checkApiHealth(apiBase);
     if (!healthy) {
-      renderLogin(`Servidor não respondeu em ${apiBase}/api/health. Confira a URL.`, apiBase);
+      renderLogin('Servidor não respondeu. Verifique sua conexão.', apiBase, savedEmail);
       return;
     }
 
@@ -107,26 +130,54 @@ function renderLogin(errorMsg, currentApiBase) {
       }
 
       const userName = data.user?.user_metadata?.full_name || data.user?.email || email;
+      const userEmail = data.user?.email || email;
       chrome.storage.local.set({
         fp_api_base: apiBase,
         fp_token: data.access_token,
         fp_refresh_token: data.refresh_token,
         fp_user_name: userName,
-        fp_user_email: data.user?.email || email,
+        fp_user_email: userEmail,
         fp_token_expires: Date.now() + (data.expires_in * 1000),
+        fp_remember_email: remember ? userEmail : '',
       }, () => {
-        renderLoggedIn(userName, data.user?.email || email, apiBase, true);
+        renderLoggedIn(userName, userEmail, apiBase, true);
       });
 
     } catch (err) {
-      renderLogin(err.message, apiBase);
+      renderLogin(err.message, apiBase, savedEmail);
     }
   });
 
-  setTimeout(() => emailInput.focus(), 50);
+  setTimeout(() => {
+    if (!emailInput.value) emailInput.focus();
+    else passwordInput.focus();
+  }, 50);
 }
 
 function renderLoggedIn(name, email, apiBase, justLoggedIn = false) {
+  // Acabou de logar: tela minimal "✓ Login realizado!" e auto-close em 900ms.
+  // Não mostra nome, email nem URL do servidor — pra ficar limpo.
+  if (justLoggedIn) {
+    body.innerHTML = `
+      <div class="success-only">
+        <div class="success-check">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+        </div>
+        <div class="success-text">Login realizado!</div>
+        <div class="success-hint">Fechando…</div>
+      </div>
+    `;
+    chrome.windows.getCurrent((win) => {
+      if (win && win.type === 'popup') {
+        setTimeout(() => window.close(), 900);
+      }
+    });
+    return;
+  }
+
+  // Já estava logado (reabriu o popup) — mostra estado conectado, sem URL/servidor.
   body.innerHTML = `
     <div class="logged-card">
       <div>
@@ -138,30 +189,19 @@ function renderLoggedIn(name, email, apiBase, justLoggedIn = false) {
         Conectado ao CRM
       </div>
     </div>
-    <div class="server-row">
-      <span class="server-label">Servidor:</span>
-      <code class="server-url">${escHtml(apiBase)}</code>
-    </div>
-    <div class="status ok">${justLoggedIn ? '✓ Login realizado! Fechando…' : '✓ Extensão pronta! Abra uma conversa no WhatsApp.'}</div>
-    <button class="btn-logout" id="logout-btn">Sair e mudar servidor</button>
+    <div class="status ok">✓ Extensão pronta! Abra uma conversa no WhatsApp.</div>
+    <button class="btn-logout" id="logout-btn">Sair</button>
   `;
 
   document.getElementById('logout-btn').addEventListener('click', () => {
-    chrome.storage.local.remove(
-      ['fp_token', 'fp_refresh_token', 'fp_user_name', 'fp_user_email', 'fp_token_expires'],
-      () => renderLogin(null, apiBase),
-    );
-  });
-
-  // Se este popup foi aberto como janela (chrome.windows.create do botão "Fazer login"
-  // dentro do WhatsApp Web), fecha automaticamente após o login.
-  if (justLoggedIn) {
-    chrome.windows.getCurrent((win) => {
-      if (win && win.type === 'popup') {
-        setTimeout(() => window.close(), 900);
-      }
+    chrome.storage.local.get(['fp_remember_email'], (s) => {
+      const savedEmail = s.fp_remember_email || '';
+      chrome.storage.local.remove(
+        ['fp_token', 'fp_refresh_token', 'fp_user_name', 'fp_user_email', 'fp_token_expires'],
+        () => renderLogin(null, apiBase, savedEmail),
+      );
     });
-  }
+  });
 }
 
 function escHtml(str) {
@@ -173,9 +213,10 @@ function escHtml(str) {
 
 // Boot
 chrome.storage.local.get(
-  ['fp_token', 'fp_user_name', 'fp_user_email', 'fp_token_expires', 'fp_api_base'],
+  ['fp_token', 'fp_user_name', 'fp_user_email', 'fp_token_expires', 'fp_api_base', 'fp_remember_email'],
   async (result) => {
     const apiBase = resolveApiBase(result.fp_api_base);
+    const savedEmail = result.fp_remember_email || '';
 
     // Se mudou de localhost → prod, persiste a correção pra não cair nesse ramo de novo
     if (apiBase !== normalizeApiBase(result.fp_api_base)) {
@@ -193,10 +234,10 @@ chrome.storage.local.get(
         renderLoggedIn(result.fp_user_name, result.fp_user_email, apiBase);
         return;
       } catch {
-        // refresh falhou, mostra login
+        // refresh falhou, mostra login (com email salvo, se houver)
       }
     }
-    renderLogin(null, apiBase);
+    renderLogin(null, apiBase, savedEmail);
   },
 );
 
