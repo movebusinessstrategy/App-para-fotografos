@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { type FormEvent, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft, AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 
@@ -23,7 +23,7 @@ export default function DataDeletionPage() {
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; ticketId?: string; message: string } | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!email) return;
     setSubmitting(true);

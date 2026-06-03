@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, Calendar, CheckCircle2, FileSignature, LogIn, Mail, MessageCircle, Pause, Play, Trash2, XCircle } from "lucide-react";
 import { authFetch } from "../../utils/authFetch";
@@ -469,7 +469,7 @@ function Metric({ label, value }: { label: string; value: number }) {
   );
 }
 
-function IntegrationStatus({ icon, label, connected, detail }: { icon: React.ReactNode; label: string; connected: boolean; detail: string }) {
+function IntegrationStatus({ icon, label, connected, detail }: { icon: ReactNode; label: string; connected: boolean; detail: string }) {
   return (
     <div className="flex items-start gap-2.5">
       <div className={`flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${connected ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300" : "bg-gray-100 text-gray-400 dark:bg-gray-800 dark:text-gray-500"}`}>
