@@ -1200,6 +1200,38 @@ async function startServer() {
   const authCache = new Map<string, AuthCacheEntry>();
   const AUTH_CACHE_TTL_MS = 30_000;
 
+  // Invalida todas as entradas de auth de um tenant (owner + members).
+  // Usado quando admin suspende/reativa/troca plano — pra refletir
+  // imediatamente sem esperar o TTL de 30s.
+  const invalidateAuthCacheForTenant = async (ownerUserId: string) => {
+    // Remove entradas onde o userId (real, sem impersonation) bate.
+    // Vai pegar tanto o owner quanto qualquer member desse tenant.
+    let removed = 0;
+    for (const [k, v] of authCache.entries()) {
+      if (v.userId === ownerUserId || v.realUserId === ownerUserId) {
+        authCache.delete(k);
+        removed++;
+        continue;
+      }
+    }
+    // Também busca members do tenant e remove o cache deles
+    if (supabaseAdmin) {
+      const { data: members } = await supabaseAdmin
+        .from('team_members')
+        .select('member_user_id')
+        .eq('owner_user_id', ownerUserId)
+        .not('member_user_id', 'is', null);
+      const memberIds = new Set((members ?? []).map((m: any) => m.member_user_id));
+      for (const [k, v] of authCache.entries()) {
+        if (memberIds.has(v.userId) || memberIds.has(v.realUserId)) {
+          authCache.delete(k);
+          removed++;
+        }
+      }
+    }
+    return removed;
+  };
+
   const requireAuth = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
@@ -7025,6 +7057,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const ownerId = req.params.ownerId;
 
     try {
+      // Fan-out de queries — todas independentes
       const [
         { data: userResp, error: userErr },
         { data: acct },
@@ -7032,17 +7065,31 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         { count: jobsCount },
         { count: dealsCount },
         { count: teamCount },
+        { count: contractsCount },
+        { data: recentJobs },
+        { data: recentDeals },
+        { data: recentContracts },
+        { data: googleAuth },
+        { data: studioSettings },
+        { data: whatsappInst },
       ] = await Promise.all([
         supabaseAdmin.auth.admin.getUserById(ownerId),
         supabaseAdmin
           .from('platform_accounts')
-          .select('owner_user_id, plan_id, status, suspended_reason, trial_ends_at, notes, created_at, updated_at')
+          .select('owner_user_id, plan_id, status, suspended_reason, trial_ends_at, notes, created_at, updated_at, subscription_status, trial_started_at')
           .eq('owner_user_id', ownerId)
           .maybeSingle(),
         supabaseAdmin.from('clients').select('id', { count: 'exact', head: true }).eq('user_id', ownerId),
         supabaseAdmin.from('jobs').select('id', { count: 'exact', head: true }).eq('user_id', ownerId),
         supabaseAdmin.from('deals').select('id', { count: 'exact', head: true }).eq('user_id', ownerId),
         supabaseAdmin.from('team_members').select('id', { count: 'exact', head: true }).eq('owner_user_id', ownerId),
+        supabaseAdmin.from('contracts').select('id', { count: 'exact', head: true }).eq('user_id', ownerId),
+        supabaseAdmin.from('jobs').select('id, job_name, job_date, status, created_at, client_id').eq('user_id', ownerId).order('created_at', { ascending: false }).limit(5),
+        supabaseAdmin.from('deals').select('id, title, value, stage, created_at').eq('user_id', ownerId).order('created_at', { ascending: false }).limit(5),
+        supabaseAdmin.from('contracts').select('id, status, created_at, signed_at, client_id').eq('user_id', ownerId).order('created_at', { ascending: false }).limit(5),
+        supabaseAdmin.from('google_auth').select('user_id, expiry_date').eq('user_id', ownerId).maybeSingle(),
+        supabaseAdmin.from('studio_settings').select('studio_name, autentique_api_key, asaas_customer_id').eq('user_id', ownerId).maybeSingle(),
+        supabaseAdmin.from('whatsapp_instances').select('phone_number_id, status, display_phone_number').eq('user_id', ownerId).maybeSingle(),
       ]);
 
       if (userErr || !userResp?.user) {
@@ -7051,6 +7098,25 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
       const { data: plans } = await supabaseAdmin.from('platform_plans').select('id, slug, name');
       const plan = acct?.plan_id ? plans?.find((p) => p.id === acct.plan_id) : null;
+
+      const integrations = {
+        google_calendar: {
+          connected: !!googleAuth,
+          expires_at: googleAuth?.expiry_date ? new Date(Number(googleAuth.expiry_date)).toISOString() : null,
+        },
+        autentique: {
+          connected: !!(studioSettings as any)?.autentique_api_key,
+        },
+        asaas: {
+          customer_id: (studioSettings as any)?.asaas_customer_id ?? null,
+        },
+        whatsapp: {
+          phone_number_id: whatsappInst?.phone_number_id ?? null,
+          status: whatsappInst?.status ?? null,
+          display_phone_number: whatsappInst?.display_phone_number ?? null,
+        },
+        studio_name: (studioSettings as any)?.studio_name ?? null,
+      };
 
       res.json({
         owner_user_id: ownerId,
@@ -7064,6 +7130,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           jobs: jobsCount ?? 0,
           deals: dealsCount ?? 0,
           team_members: teamCount ?? 0,
+          contracts: contractsCount ?? 0,
+        },
+        integrations,
+        recent: {
+          jobs: recentJobs ?? [],
+          deals: recentDeals ?? [],
+          contracts: recentContracts ?? [],
         },
       });
     } catch (err: any) {
@@ -7106,6 +7179,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     if (error) return res.status(500).json({ error: error.message });
 
+    // Invalida cache pra mudanças refletirem imediatamente (suspender,
+    // mudar plano, etc.) — senão o user fica até 30s usando estado antigo.
+    await invalidateAuthCacheForTenant(ownerId);
+
     await logAdminAction(adminId, 'tenant_update', ownerId, update, req.ip ?? null);
     res.json(data);
   });
@@ -7139,6 +7216,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('owner_user_id', ownerId);
     if (error) return res.status(500).json({ error: error.message });
 
+    await invalidateAuthCacheForTenant(ownerId);
     await logAdminAction(adminId, 'trial_extended', ownerId, { extraDays, newEndsAt: capped.toISOString() }, req.ip ?? null);
     res.json({ trial_ends_at: capped.toISOString() });
   });
@@ -7158,6 +7236,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     if (error) return res.status(500).json({ error: error.message });
 
+    await invalidateAuthCacheForTenant(ownerId);
     await logAdminAction(adminId, 'tenant_delete', ownerId, { reason }, req.ip ?? null);
     res.json({ success: true });
   });
