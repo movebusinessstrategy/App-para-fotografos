@@ -23,6 +23,8 @@ const ACTION_LABEL: Record<string, string> = {
   plan_create:       "Criou plano",
   plan_update:       "Atualizou plano",
   plan_delete:       "Excluiu plano",
+  admin_grant:       "Concedeu acesso admin",
+  admin_revoke:      "Removeu acesso admin",
 };
 
 const ACTION_COLOR: Record<string, string> = {
@@ -34,6 +36,8 @@ const ACTION_COLOR: Record<string, string> = {
   plan_create:       "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300",
   plan_update:       "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300",
   plan_delete:       "bg-red-100 text-red-700     dark:bg-red-900/30 dark:text-red-300",
+  admin_grant:       "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300",
+  admin_revoke:      "bg-red-100 text-red-700     dark:bg-red-900/30 dark:text-red-300",
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -80,6 +84,9 @@ function describeMetadata(action: string, meta: Record<string, any> | null | und
     if (meta.slug) out.push(`Slug: ${meta.slug}`);
     if (meta.name) out.push(`Nome: ${meta.name}`);
     if (typeof meta.price_cents === "number") out.push(`Preço: R$ ${(meta.price_cents / 100).toFixed(2)}`);
+  } else if (action === "admin_grant") {
+    if (meta.email) out.push(`E-mail: ${meta.email}`);
+    if (meta.role) out.push(`Função: ${meta.role}`);
   }
 
   return out;

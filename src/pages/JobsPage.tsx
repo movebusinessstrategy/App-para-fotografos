@@ -362,16 +362,16 @@ export default function JobsPage() {
             />
           ) : (
             <div className="flex flex-col items-center justify-center py-24 gap-3">
-              <p className="text-gray-500 dark:text-gray-400 text-sm font-medium">Processos não carregados</p>
-              <p className="text-gray-400 dark:text-gray-500 text-xs text-center max-w-sm">
-                Reinicie o servidor para ativar os novos endpoints de produção.<br/>
-                Depois, execute o SQL no Supabase para criar as tabelas necessárias.
+              <p className="text-gray-500 dark:text-gray-400 text-sm font-medium">Nenhum processo de produção configurado</p>
+              <p className="text-gray-400 dark:text-gray-500 text-xs text-center max-w-md">
+                Pra usar o quadro de produção, configure pelo menos um processo (etapa de fluxo) em Configurações → Produção.
+                Contas novas vêm com um processo padrão; se você apagou todos, recrie por lá.
               </p>
               <button
                 onClick={refreshAll}
                 className="mt-2 px-4 py-2 bg-gold-600 text-white text-sm rounded-xl hover:bg-gold-700 transition-colors"
               >
-                Tentar novamente
+                Recarregar
               </button>
             </div>
           )

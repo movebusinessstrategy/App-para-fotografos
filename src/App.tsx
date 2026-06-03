@@ -57,6 +57,7 @@ const PlatformDashboardPage = lazy(() => import("./pages/platform-admin/Platform
 const PlatformTenantsListPage = lazy(() => import("./pages/platform-admin/TenantsListPage"));
 const PlatformTenantDetailPage = lazy(() => import("./pages/platform-admin/TenantDetailPage"));
 const PlatformPlansPage = lazy(() => import("./pages/platform-admin/PlansPage"));
+const PlatformAdminsPage = lazy(() => import("./pages/platform-admin/AdminsPage"));
 const PlatformAuditLogPage = lazy(() => import("./pages/platform-admin/AuditLogPage"));
 
 export default function App() {
@@ -169,6 +170,7 @@ export default function App() {
                 <Route path="tenants" element={<PlatformTenantsListPage />} />
                 <Route path="tenants/:ownerId" element={<PlatformTenantDetailPage />} />
                 <Route path="plans" element={<PlatformPlansPage />} />
+                <Route path="admins" element={<PlatformAdminsPage />} />
                 <Route path="audit-log" element={<PlatformAuditLogPage />} />
               </Route>
             </Routes>

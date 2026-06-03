@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from "react";
+import { mutate as swrGlobalMutate } from "swr";
 import {
   authFetch,
   IMPERSONATION_STORAGE_KEY,
@@ -57,11 +58,22 @@ export function ImpersonationProvider({ children }: { children: ReactNode }) {
 
   const startAsOwner = useCallback(async (ownerId: string, ownerEmail?: string | null) => {
     // Loga ANTES de ativar o header - assim o registro fica no admin real.
-    await authFetch(`/api/platform/tenants/${ownerId}/impersonate-start`, { method: "POST" });
+    // CRÍTICO: se o backend recusa (não é super-admin, tenant deletado, etc),
+    // NÃO ativa o sessionStorage — senão o banner aparece mas todas as requisições
+    // batem 403 e a UI vê tudo vazio.
+    const res = await authFetch(`/api/platform/tenants/${ownerId}/impersonate-start`, { method: "POST" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(`Não consegui entrar como esse usuário: ${err.error ?? `HTTP ${res.status}`}`);
+      return;
+    }
     sessionStorage.removeItem(IMPERSONATION_MEMBER_STORAGE_KEY);
     sessionStorage.removeItem(MEMBER_LABEL_KEY);
     sessionStorage.setItem(IMPERSONATION_STORAGE_KEY, ownerId);
     if (ownerEmail) sessionStorage.setItem(OWNER_EMAIL_KEY, ownerEmail);
+    // Limpa todo o cache SWR antes do reload pra evitar dados do admin
+    // vazarem pra tela do impersonado.
+    await swrGlobalMutate(() => true, undefined, { revalidate: false });
     setState(readState());
     window.location.assign("/");
   }, []);
@@ -72,13 +84,18 @@ export function ImpersonationProvider({ children }: { children: ReactNode }) {
     ownerId: string,
     ownerEmail?: string | null,
   ) => {
-    await authFetch(`/api/platform/members/${memberId}/impersonate-start`, { method: "POST" });
+    const res = await authFetch(`/api/platform/members/${memberId}/impersonate-start`, { method: "POST" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(`Não consegui entrar como esse membro: ${err.error ?? `HTTP ${res.status}`}`);
+      return;
+    }
     sessionStorage.removeItem(IMPERSONATION_STORAGE_KEY);
     sessionStorage.setItem(IMPERSONATION_MEMBER_STORAGE_KEY, memberId);
     sessionStorage.setItem(MEMBER_LABEL_KEY, memberLabel);
-    // Guarda o owner também (pra exibir no banner)
     sessionStorage.setItem(OWNER_EMAIL_KEY, ownerEmail ?? "");
-    sessionStorage.setItem(IMPERSONATION_STORAGE_KEY, ownerId); // só pro display, header de member tem prioridade
+    sessionStorage.setItem(IMPERSONATION_STORAGE_KEY, ownerId);
+    await swrGlobalMutate(() => true, undefined, { revalidate: false });
     setState(readState());
     window.location.assign("/");
   }, []);
@@ -89,6 +106,8 @@ export function ImpersonationProvider({ children }: { children: ReactNode }) {
     sessionStorage.removeItem(IMPERSONATION_MEMBER_STORAGE_KEY);
     sessionStorage.removeItem(OWNER_EMAIL_KEY);
     sessionStorage.removeItem(MEMBER_LABEL_KEY);
+    // Limpa cache SWR pra não vazar dados do impersonado pra tela do admin.
+    await swrGlobalMutate(() => true, undefined, { revalidate: false });
     setState(readState());
     try {
       await authFetch("/api/platform/impersonate-stop", {

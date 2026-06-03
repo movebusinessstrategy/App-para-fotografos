@@ -1,12 +1,13 @@
 import { Suspense } from "react";
 import { NavLink, Outlet, Link } from "react-router-dom";
-import { ArrowLeft, BarChart3, FileClock, Layers, ShieldCheck, Users2 } from "lucide-react";
+import { ArrowLeft, BarChart3, FileClock, Layers, ShieldCheck, UserCog, Users2 } from "lucide-react";
 import { cn } from "../../utils/cn";
 
 const NAV = [
   { to: "/platform-admin",           label: "Visão geral", icon: BarChart3,   end: true },
   { to: "/platform-admin/tenants",   label: "Empresas",    icon: Users2 },
   { to: "/platform-admin/plans",     label: "Planos",      icon: Layers },
+  { to: "/platform-admin/admins",    label: "Admins",      icon: UserCog },
   { to: "/platform-admin/audit-log", label: "Auditoria",   icon: FileClock },
 ];
 

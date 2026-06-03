@@ -7368,6 +7368,90 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ success: true });
   });
 
+  // ---- SUPER ADMINS (gerenciar quem tem acesso ao painel admin) ----
+  app.get('/api/platform/admins', requireAuth, requireSuperAdmin, async (_req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    const { data: adminsRow, error } = await supabaseAdmin
+      .from('platform_admins')
+      .select('user_id, role, created_at, created_by')
+      .order('created_at');
+    if (error) return res.status(500).json({ error: error.message });
+    // Enriquece com email/last_sign_in via auth.admin
+    const enriched = await Promise.all((adminsRow ?? []).map(async (a: any) => {
+      try {
+        const { data: u } = await supabaseAdmin!.auth.admin.getUserById(a.user_id);
+        return {
+          ...a,
+          email: u?.user?.email ?? null,
+          last_sign_in_at: u?.user?.last_sign_in_at ?? null,
+        };
+      } catch {
+        return { ...a, email: null, last_sign_in_at: null };
+      }
+    }));
+    res.json(enriched);
+  });
+
+  // Body: { email: string, role?: 'super_admin' }
+  // Cria registro em platform_admins pra um usuário existente (lookup por email).
+  app.post('/api/platform/admins', requireAuth, requireSuperAdmin, async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    const adminId = (req as any).realUserId as string;
+    const email = (req.body?.email as string | undefined)?.trim().toLowerCase();
+    const role = (req.body?.role as string | undefined) || 'super_admin';
+    if (!email) return res.status(400).json({ error: 'email obrigatório' });
+
+    // Busca user_id por email (Supabase admin.listUsers não tem filtro por email,
+    // então paginamos buscando pelo match).
+    let target: any = null;
+    let page = 1;
+    while (page <= 10) {
+      const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: 200 });
+      if (error) return res.status(500).json({ error: error.message });
+      const match = data.users.find((u) => (u.email || '').toLowerCase() === email);
+      if (match) { target = match; break; }
+      if (data.users.length < 200) break;
+      page++;
+    }
+    if (!target) return res.status(404).json({ error: 'Usuário não encontrado com esse e-mail. Peça pra ele criar uma conta no app primeiro.' });
+
+    const { error: insErr } = await supabaseAdmin
+      .from('platform_admins')
+      .insert({ user_id: target.id, role, created_by: adminId });
+    if (insErr) {
+      if (/duplicate|unique/i.test(insErr.message)) {
+        return res.status(409).json({ error: 'Esse usuário já é admin.' });
+      }
+      return res.status(500).json({ error: insErr.message });
+    }
+    await logAdminAction(adminId, 'admin_grant', target.id, { email, role }, req.ip ?? null);
+    res.json({ user_id: target.id, email, role });
+  });
+
+  app.delete('/api/platform/admins/:userId', requireAuth, requireSuperAdmin, async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
+    const adminId = (req as any).realUserId as string;
+    const targetId = req.params.userId;
+    // Trava: não deixa remover o último admin (lockout)
+    const { count } = await supabaseAdmin
+      .from('platform_admins')
+      .select('user_id', { count: 'exact', head: true });
+    if ((count ?? 0) <= 1) {
+      return res.status(400).json({ error: 'Não é possível remover o último super-admin — o painel ficaria inacessível.' });
+    }
+    // Trava: não deixa o admin remover a si mesmo (precaução contra clique acidental)
+    if (targetId === adminId) {
+      return res.status(400).json({ error: 'Você não pode remover seu próprio acesso. Peça pra outro admin fazer isso.' });
+    }
+    const { error } = await supabaseAdmin
+      .from('platform_admins')
+      .delete()
+      .eq('user_id', targetId);
+    if (error) return res.status(500).json({ error: error.message });
+    await logAdminAction(adminId, 'admin_revoke', targetId, {}, req.ip ?? null);
+    res.json({ success: true });
+  });
+
   // ---- AUDIT LOG ----
   app.get('/api/platform/audit-log', requireAuth, requireSuperAdmin, async (req, res) => {
     if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
