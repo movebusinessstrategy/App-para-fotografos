@@ -101,7 +101,10 @@ async function _initSocket(session: Session, sessionDir: string) {
     logger: silentLogger as any,
     browser: Browsers.macOS('Desktop'),
     generateHighQualityLinkPreview: false,
-    syncFullHistory: false,
+    // true: ao (re)vincular, o WhatsApp envia um pacote grande de histórico via
+    // 'messaging-history.set' → handlers já gravam em wa_messages. Limite é do
+    // próprio WhatsApp (alguns meses, só 1-a-1; mídia antiga não baixa).
+    syncFullHistory: true,
     mobile: false,
     markOnlineOnConnect: false,
     connectTimeoutMs: 60_000,
@@ -153,33 +156,69 @@ async function _initSocket(session: Session, sessionDir: string) {
       const loggedOut = code === DisconnectReason.loggedOut;
       console.log(`[Baileys] Desconectado (código ${code}) — usuário ${userId}`);
 
+      // 401 (logout pelo celular) ou 500 (sessão inválida): as credenciais não
+      // servem mais — limpa tudo e para. ESTES são os ÚNICOS casos que apagam a
+      // credencial; qualquer outra queda preserva o QR já pareado (antes, quedas
+      // transitórias apagavam a sessão e forçavam escanear o QR de novo).
       if (loggedOut || code === DisconnectReason.badSession) {
-        // Logout explícito ou sessão inválida: limpa tudo e para
-        console.log(`[Baileys] ${loggedOut ? 'Logout' : 'Sessão inválida'} — removendo sessão de ${userId}`);
+        console.log(`[Baileys] ${loggedOut ? 'Logout pelo celular' : 'Sessão inválida (500)'} — removendo credenciais de ${userId}`);
         fs.rmSync(sessionDir, { recursive: true, force: true });
         sessions.delete(userId);
         return;
       }
 
-      // Guard: impede múltiplos _initSocket simultâneos (evita loop de erro 440)
+      // 515 restartRequired: ESPERADO logo após parear/registrar. Não é falha —
+      // reinicia o socket na hora, mantendo as credenciais (não gasta o
+      // orçamento de tentativas nem adiciona delay desnecessário).
+      if (code === DisconnectReason.restartRequired) {
+        if (session.reconnecting) return;
+        console.log(`[Baileys] Reinício solicitado (515) — reconectando já para ${userId}`);
+        session.reconnecting = true;
+        await new Promise(r => setTimeout(r, 1000));
+        if (sessions.get(userId) === session) {
+          session.reconnecting = false;
+          await _initSocket(session, sessionDir);
+        } else {
+          session.reconnecting = false;
+        }
+        return;
+      }
+
+      // 440 connectionReplaced: outra instância/aparelho assumiu ESTA sessão.
+      // Reconectar aqui gera "ping-pong" (um derruba o outro sem parar) — é
+      // exatamente o sintoma de "ora cai um, ora cai o outro". Paramos a
+      // auto-reconexão e PRESERVAMOS as credenciais; a sessão sai da memória
+      // (UI mostra desconectado) e o usuário reconecta pela UI sem QR novo.
+      // Em geral indica 2 servidores rodando na mesma sessão, ou outro aparelho.
+      if (code === DisconnectReason.connectionReplaced) {
+        console.log(`[Baileys] ⚠️ Conexão substituída (440) para ${userId} — outra instância/aparelho assumiu a sessão. Auto-reconexão pausada (credenciais preservadas). Verifique se não há 2 servidores rodando ou outro aparelho conectado.`);
+        sessions.delete(userId);
+        return;
+      }
+
+      // Guard: impede múltiplos _initSocket simultâneos (evita loop)
       if (session.reconnecting) {
         console.log(`[Baileys] Reconexão já em andamento para ${userId}, ignorando evento duplicado.`);
         return;
       }
 
+      // Demais quedas (408 conexão perdida, 428 fechada, 503, oscilação de rede):
+      // são transitórias. Reconecta com backoff e NUNCA apaga as credenciais.
       session.failCount = (session.failCount || 0) + 1;
       console.log(`[Baileys] Falha #${session.failCount} para ${userId} (código ${code})`);
 
-      // Após 5 falhas consecutivas: para de tentar, exige reconexão manual via UI
-      if (session.failCount >= 5) {
-        console.log(`[Baileys] ⛔ ${session.failCount} falhas para ${userId} — parando auto-reconexão. Reconecte manualmente pelo app.`);
-        fs.rmSync(sessionDir, { recursive: true, force: true });
-        sessions.delete(userId); // Remove da memória → UI vai mostrar "desconectado"
+      // Circuit breaker: após muitas falhas seguidas, PARA de tentar sozinho
+      // (não fica martelando), mas MANTÉM as credenciais no disco. A sessão sai
+      // da memória (UI mostra desconectado) e um reconnect manual — ou o restore
+      // no próximo boot — retoma SEM precisar de QR novo.
+      if (session.failCount >= 8) {
+        console.log(`[Baileys] ⛔ ${session.failCount} falhas seguidas para ${userId} — pausando auto-reconexão (credenciais preservadas). Reconecte pelo app.`);
+        sessions.delete(userId);
         return;
       }
 
-      // Delay progressivo: 3s, 6s, 10s, 15s...
-      const delayMs = Math.min(3000 * session.failCount, 15000);
+      // Backoff progressivo: 3s, 6s, 9s... com teto de 30s
+      const delayMs = Math.min(3000 * session.failCount, 30000);
       console.log(`[Baileys] Reconectando em ${delayMs / 1000}s...`);
       session.reconnecting = true;
       await new Promise(r => setTimeout(r, delayMs));
