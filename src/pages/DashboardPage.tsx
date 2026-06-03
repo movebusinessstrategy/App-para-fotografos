@@ -129,9 +129,11 @@ export default function DashboardPage() {
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [hideValues, setHideValues] = useState(() => localStorage.getItem("dashboard_hide_values") === "true");
   const [datePreset, setDatePreset] = useState<DatePreset>("month");
   const [dateRange, setDateRange] = useState<DashboardDateRange>(() => buildPresetRange("month"));
+  const fetchSeq = useRef(0);
 
   const toggleHideValues = () => {
     setHideValues(prev => {
@@ -142,7 +144,11 @@ export default function DashboardPage() {
   };
 
   const fetchAll = async () => {
-    setLoading(true);
+    const seq = fetchSeq.current + 1;
+    fetchSeq.current = seq;
+    const fullPageLoading = !analytics;
+    setLoading(fullPageLoading);
+    setRefreshing(!fullPageLoading);
     try {
       const qs = new URLSearchParams({ from: dateRange.from, to: dateRange.to });
       const [aRes, oRes, cRes] = await Promise.all([
@@ -150,13 +156,17 @@ export default function DashboardPage() {
         authFetch("/api/opportunities"),
         authFetch("/api/clients"),
       ]);
+      if (fetchSeq.current !== seq) return;
       if (aRes.ok) setAnalytics(await aRes.json());
       if (oRes.ok) setOpportunities(await oRes.json());
       if (cRes.ok) setClients(await cRes.json());
     } catch (err) {
       console.error(err);
     } finally {
-      setLoading(false);
+      if (fetchSeq.current === seq) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   };
 
@@ -221,6 +231,9 @@ export default function DashboardPage() {
             Visão geral
           </h1>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 capitalize">{periodLabel}</p>
+          {refreshing && (
+            <p className="text-[11px] text-gold-600 dark:text-gold-400 mt-1">Atualizando dados...</p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <DashboardPeriodFilter
