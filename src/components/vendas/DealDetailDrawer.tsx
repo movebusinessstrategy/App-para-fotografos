@@ -1,9 +1,10 @@
 // src/components/vendas/DealDetailDrawer.tsx
 import React, { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { format } from "date-fns";
 import {
   X, Trash2, CheckCircle, XCircle, User, Phone, Mail, Instagram,
-  Edit3, Link2, Trophy, Pencil, Search, Check, Package, Layers, Briefcase, ChevronDown, Plus, Tag
+  Edit3, Link2, MessageCircle, Trophy, Pencil, Search, Check, Package, Layers, Briefcase, ChevronDown, Plus, Tag
 } from "lucide-react";
 import { ConfirmModal } from "../ui/ConfirmModal";
 import { Deal, Client, PipelineStage, DealActivity, StageHistoryEntry, Produto, Servico, Combo, DealItem, PipelineLabel } from "../../types";
@@ -60,7 +61,10 @@ function ClientSearch({ clients, selectedId, onChange }: ClientSearchProps) {
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      // Ignora cliques na scrollbar (target = HTML/BODY) — só rola, não fecha
+      const target = e.target as Node;
+      if (target === document.documentElement || target === document.body) return;
+      if (ref.current && !ref.current.contains(target)) setOpen(false);
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
@@ -198,6 +202,7 @@ export function DealDetailDrawer({
 
   const [showConversionModal, setShowConversionModal] = useState(false);
   const [isEditingContact, setIsEditingContact] = useState(false);
+  const [, setSearchParams] = useSearchParams();
   const [contactData, setContactData] = useState({
     contact_name: "", contact_phone: "", contact_email: "", contact_instagram: "",
   });
@@ -265,7 +270,10 @@ export function DealDetailDrawer({
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (catalogRef.current && !catalogRef.current.contains(e.target as Node)) {
+      // Ignora cliques na scrollbar — scroll dentro da sanfona não deve fechar
+      const target = e.target as Node;
+      if (target === document.documentElement || target === document.body) return;
+      if (catalogRef.current && !catalogRef.current.contains(target)) {
         setCatalogOpen(false);
         setCatalogSearch('');
       }
@@ -486,10 +494,12 @@ export function DealDetailDrawer({
   // Label picker click-outside (info tab + header dropdown)
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (labelPickerRef.current && !labelPickerRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (target === document.documentElement || target === document.body) return;
+      if (labelPickerRef.current && !labelPickerRef.current.contains(target)) {
         setShowLabelPicker(false);
       }
-      if (headerLabelRef.current && !headerLabelRef.current.contains(e.target as Node)) {
+      if (headerLabelRef.current && !headerLabelRef.current.contains(target)) {
         setShowHeaderLabelDropdown(false);
       }
     };
@@ -676,6 +686,18 @@ export function DealDetailDrawer({
                 >
                   <XCircle size={13} /> Perdido
                 </button>
+                {chatPhone && (
+                  <button
+                    onClick={() => {
+                      onClose();
+                      setSearchParams({ tab: "inbox", phone: String(chatPhone).replace(/\D/g, "") });
+                    }}
+                    title="Abrir conversa no Inbox"
+                    className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-emerald-200 dark:border-emerald-800/40 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 text-xs font-semibold transition-colors"
+                  >
+                    <MessageCircle size={13} /> Mensagem
+                  </button>
+                )}
                 <button
                   onClick={deleteDeal}
                   title="Excluir negócio"
@@ -832,7 +854,7 @@ export function DealDetailDrawer({
                       className="w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded px-2 py-1 text-sm text-gray-900 dark:text-white outline-none focus:border-gold-400 dark:focus:border-gold-500"
                       onKeyDown={e => { if (e.key === "Enter") saveValue(); if (e.key === "Escape") setEditingValue(false); }}
                     />
-                    <div className="flex gap-1">
+                    <div className="flex gap-2">
                       <button onClick={saveValue} className="flex-1 py-1 bg-gold-600 hover:bg-gold-700 text-white text-xs rounded font-medium">✓</button>
                       <button onClick={() => setEditingValue(false)} className="flex-1 py-1 border border-gray-200 dark:border-gray-700 text-gray-500 text-xs rounded">✕</button>
                     </div>
@@ -871,7 +893,7 @@ export function DealDetailDrawer({
                       className="w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded px-2 py-1 text-xs text-gray-900 dark:text-white outline-none [color-scheme:light] dark:[color-scheme:dark]"
                       onKeyDown={e => { if (e.key === "Escape") setEditingDate(false); }}
                     />
-                    <div className="flex gap-1">
+                    <div className="flex gap-2">
                       <button onClick={saveDate} className="flex-1 py-1 bg-gold-600 hover:bg-gold-700 text-white text-xs rounded font-medium">✓</button>
                       <button onClick={() => setEditingDate(false)} className="flex-1 py-1 border border-gray-200 dark:border-gray-700 text-gray-500 text-xs rounded">✕</button>
                     </div>

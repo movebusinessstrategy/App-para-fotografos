@@ -3963,6 +3963,16 @@
 
   function injectChatStrip(deal, stgs) {
     removeChatStrip();
+    // Trava de segurança: se o telefone do deal não bate com o chat aberto,
+    // NÃO renderiza. Evita exibir dados de cliente errado se o caller passou
+    // deal incorreto por engano de matching.
+    const dealPhoneDigits = digits(deal?.contact_phone || '');
+    const chatPhoneDigits = digits(chatPhone || '');
+    if (deal && dealPhoneDigits && chatPhoneDigits && dealPhoneDigits !== chatPhoneDigits) {
+      console.warn('[fp-extension] injectChatStrip abortado — phone mismatch:',
+        { deal_phone: dealPhoneDigits, chat_phone: chatPhoneDigits });
+      return;
+    }
     const stage = stgs.find(s => s.id === deal?.stage);
     const c = C(stage?.position ?? 0);
 
@@ -4125,12 +4135,15 @@
 
     try {
       // Mostra a faixa NA HORA a partir do cache (o deal já veio do funil).
+      // CRÍTICO: usar APENAS match exato — match por 8 dígitos finais causava
+      // falso positivo entre dois clientes com finais iguais, e ao clicar
+      // "Ganho" a conversão saía pro deal errado. Bug reportado 2026-06-03.
       const stgsNow = chatStages.length ? chatStages : stages;
       const pd = digits(cleanPhone);
       const cachedDeal = stgsNow.length
         ? deals.find((d) => {
             const dd = digits(d.contact_phone || '');
-            return dd && pd && (dd === pd || dd.slice(-8) === pd.slice(-8));
+            return dd && pd && dd === pd;
           })
         : null;
       if (cachedDeal) {
@@ -4143,7 +4156,18 @@
       const result = await bg({ type: 'GET_DEAL_BY_PHONE', phone: cleanPhone });
       if (chatPhone !== cleanPhone) return; // trocou de chat enquanto carregava
       chatStages = result.stages || stages;
-      chatDeal = result.deal;
+
+      // Validação extra: o deal retornado precisa bater EXATAMENTE com o chat
+      // aberto. Se o backend retornou outro deal (raríssimo, mas possível),
+      // ignora pra não exibir/converter pessoa errada.
+      const returnedDealPhone = digits(result.deal?.contact_phone || '');
+      if (result.deal && returnedDealPhone && returnedDealPhone !== pd) {
+        console.warn('[fp-extension] deal-by-phone retornou phone diferente:',
+          { expected: pd, got: returnedDealPhone });
+        chatDeal = null;
+      } else {
+        chatDeal = result.deal;
+      }
       chatPendingTasks = result.pending_tasks || [];
 
       if (chatDeal) {
@@ -4153,8 +4177,8 @@
         // Contato sem deal — mostra strip mínima com botão "Adicionar"
         injectAddStrip(cleanPhone);
       }
-    } catch {
-      // silencia — não atrapalha o chat
+    } catch (err) {
+      console.warn('[fp-extension] onChatOpened falhou:', err);
     }
   }
 
@@ -5844,6 +5868,15 @@
         // não conseguiria responder.
         if (kanbanVisible) hideKanban();
         hideOverlaysForChatNav();
+        fastDetect();
+      }
+    }, true);
+
+    // ESC no WhatsApp Web tira o foco da conversa, mas o MutationObserver
+    // demora 500ms pra perceber e a barrinha do CRM fica órfã.
+    // Listener dedicado dispara fastDetect imediato.
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && document.getElementById('fp-chat-strip')) {
         fastDetect();
       }
     }, true);

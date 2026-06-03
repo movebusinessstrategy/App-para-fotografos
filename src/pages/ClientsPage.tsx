@@ -1316,6 +1316,8 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
 function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: { client: Client | null, onClose: () => void, onSave: () => void, onContactOpp: (opp: Opportunity, client: Client | null) => void }) {
   const [activeTab, setActiveTab] = useState<'info' | 'history' | 'opportunities'>('info');
   const [client, setClient] = useState<Client | null>(initialClient);
+  const { data: leadSourcesData } = useApi<string[]>("/api/lead-sources");
+  const leadSources = useMemo(() => Array.isArray(leadSourcesData) ? leadSourcesData : [], [leadSourcesData]);
   const [showJobModal, setShowJobModal] = useState(false);
   const [editingJob, setEditingJob] = useState<Job | null>(null);
   const [formData, setFormData] = useState({
@@ -1638,18 +1640,21 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Origem do Lead</label>
-                  <select 
+                  {/* Input livre com sugestões: escolha das opções salvas OU digite uma nova.
+                      A nova vira sugestão automática pros próximos cadastros (endpoint
+                      /api/lead-sources retorna defaults + DISTINCT do que já foi usado). */}
+                  <input
+                    list="lead-sources-options"
                     value={formData.lead_source}
                     onChange={e => setFormData({...formData, lead_source: e.target.value})}
+                    placeholder="Ex: Instagram, Indicação, ou digite novo..."
                     className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                  >
-                    <option>Instagram</option>
-                    <option>WhatsApp</option>
-                    <option>Patrocinado</option>
-                    <option>Indicação</option>
-                    <option>Google</option>
-                    <option>Outros</option>
-                  </select>
+                  />
+                  <datalist id="lead-sources-options">
+                    {leadSources.map((s) => (
+                      <option key={s} value={s} />
+                    ))}
+                  </datalist>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Status</label>

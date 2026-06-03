@@ -77,9 +77,13 @@ export function SearchableSelect({
   // Close on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
+      // Ignora cliques na scrollbar: o navegador joga target em HTML/BODY,
+      // que tecnicamente está "fora" do dropdown mas é só scroll, não fechar.
+      const target = e.target as Node;
+      if (target === document.documentElement || target === document.body) return;
       if (
-        triggerRef.current?.contains(e.target as Node) ||
-        dropdownRef.current?.contains(e.target as Node)
+        triggerRef.current?.contains(target) ||
+        dropdownRef.current?.contains(target)
       )
         return;
       setOpen(false);

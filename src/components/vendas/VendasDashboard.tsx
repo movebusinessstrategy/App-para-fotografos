@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { BarChart3, LayoutGrid, Plus, Settings, History, RefreshCw } from "lucide-react";
+import { BarChart3, LayoutGrid, MessageCircle, Plus, Settings, History, RefreshCw } from "lucide-react";
 import { FunilTab } from "./FunilTab";
 import { NewDealModal } from "./NewDealModal";
 import { StageCustomizer } from "./StageCustomizer";
@@ -104,6 +104,7 @@ export function VendasDashboard() {
 
   const TABS = [
     { id: "kanban" as Tab, label: "Kanban", icon: LayoutGrid },
+    { id: "inbox" as Tab, label: "Conversas", icon: MessageCircle },
     { id: "historico" as Tab, label: "Histórico", icon: History },
     { id: "analises" as Tab, label: "Análises", icon: BarChart3 },
   ];

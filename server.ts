@@ -3342,6 +3342,29 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // ============ CLIENTS ROUTES ============
+  // Lista origens de lead "como nos conheceu" — defaults + o que o user já
+  // cadastrou. Permite UI de combobox com sugestões dinâmicas (datalist).
+  app.get('/api/lead-sources', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const defaults = ['Instagram', 'WhatsApp', 'Patrocinado', 'Indicação', 'Google', 'Outros'];
+    const { data } = await supabase
+      .from('clients')
+      .select('lead_source')
+      .eq('user_id', userId)
+      .not('lead_source', 'is', null);
+    const used = new Set<string>();
+    (data ?? []).forEach((r: any) => {
+      const v = String(r.lead_source ?? '').trim();
+      if (v) used.add(v);
+    });
+    // Union: defaults primeiro, depois custom (alfabético)
+    const customSorted = Array.from(used)
+      .filter((v) => !defaults.includes(v))
+      .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    res.json([...defaults, ...customSorted]);
+  });
+
   app.get('/api/clients', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
