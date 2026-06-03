@@ -9170,14 +9170,62 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       return res.status(404).json({ error: 'Venda não encontrada' });
     }
 
+    let jobDeleted = false;
     // Apaga o job vinculado primeiro (se houver) — usa admin pra bypassar
-    // qualquer RLS quirky e garantir que sumiu mesmo.
+    // qualquer RLS quirky e garantir que sumiu mesmo. Limpa dependências
+    // conhecidas antes para não ficar preso em FK/registro auxiliar.
     if (deal.converted_job_id) {
+      const { data: job } = await adminClient
+        .from('jobs')
+        .select('id, google_event_id')
+        .eq('id', deal.converted_job_id)
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (job?.google_event_id) {
+        try {
+          await deleteGoogleCalendarEvent(supabase, job.google_event_id, userId);
+        } catch (e: any) {
+          console.warn('[cancel-sale] falha apagando evento do Calendar:', e?.message);
+        }
+      }
+
+      if (job?.id) {
+        try {
+          const { data: jobItems } = await adminClient
+            .from('job_items')
+            .select('id')
+            .eq('job_id', job.id);
+          const jobItemIds = (jobItems || []).map((it: any) => String(it.id));
+          if (jobItemIds.length > 0) {
+            await adminClient.from('compras').delete().in('job_item_id', jobItemIds);
+          }
+        } catch {
+          // compras/job_items podem não existir em todos os ambientes.
+        }
+
+        await Promise.allSettled([
+          adminClient.from('job_payments').delete().eq('job_id', job.id),
+          adminClient.from('job_items').delete().eq('job_id', job.id),
+          adminClient.from('job_stage_history').delete().eq('job_id', job.id),
+          adminClient.from('job_checklist').delete().eq('job_id', job.id),
+          adminClient.from('job_testimonials').delete().eq('job_id', job.id),
+          adminClient.from('opportunities').delete().eq('trigger_job_id', job.id).eq('user_id', userId),
+          adminClient.from('fin_receitas').update({ job_id: null }).eq('job_id', job.id).eq('user_id', userId),
+          adminClient.from('contracts').update({ job_id: null }).eq('job_id', job.id).eq('user_id', userId),
+        ]);
+      }
+
       const { error: jobErr } = await adminClient
         .from('jobs')
         .delete()
-        .eq('id', deal.converted_job_id);
-      if (jobErr) console.warn('[cancel-sale] falha apagando job:', jobErr.message);
+        .eq('id', deal.converted_job_id)
+        .eq('user_id', userId);
+      if (jobErr) {
+        console.error('[cancel-sale] falha apagando job:', jobErr.message);
+        return res.status(500).json({ error: `Falha ao excluir trabalho vinculado: ${jobErr.message}` });
+      }
+      jobDeleted = !!job?.id;
     }
 
     const nowIso = new Date().toISOString();
@@ -9218,7 +9266,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       console.warn('[cancel-sale] recordStageEvent falhou (não-bloqueante):', e?.message);
     }
 
-    res.json({ success: true, moved_to: lostStage.id, job_deleted: !!deal.converted_job_id });
+    res.json({ success: true, moved_to: lostStage.id, job_deleted: jobDeleted });
   });
 
   app.get('/api/extension/agenda', requireAuth, async (req, res) => {

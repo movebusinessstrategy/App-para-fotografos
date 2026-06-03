@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from "react";
-import { ArrowRight, Edit2, MoreVertical, Trash2, X, ChevronRight, XCircle } from "lucide-react";
+import { ArrowRight, Trash2, X, ChevronRight, XCircle } from "lucide-react";
 import { ProductionProcess, ProductionStageV2 } from "../../types";
 import { authFetch } from "../../utils/authFetch";
 import { cn } from "../../utils/cn";
@@ -54,7 +54,6 @@ export function SalesOverviewPanel({ processes, stages, onRefreshJobs }: Props) 
   const [period, setPeriod] = useState(7);
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(false);
-  const [openMenuFor, setOpenMenuFor] = useState<number | null>(null);
   const [movingSale, setMovingSale] = useState<Sale | null>(null);
   const [moveStageId, setMoveStageId] = useState<string>('');
   const [confirmRemove, setConfirmRemove] = useState<Sale | null>(null);
@@ -75,17 +74,6 @@ export function SalesOverviewPanel({ processes, stages, onRefreshJobs }: Props) 
   }
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [period]);
-
-  // Fecha menu ao clicar fora
-  useEffect(() => {
-    if (openMenuFor === null) return;
-    const onDoc = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest?.('[data-sales-menu]')) setOpenMenuFor(null);
-    };
-    document.addEventListener('mousedown', onDoc, true);
-    return () => document.removeEventListener('mousedown', onDoc, true);
-  }, [openMenuFor]);
 
   const counters = useMemo(() => {
     const pending = sales.filter(s => !s.in_production && s.job_id).length;
@@ -180,16 +168,24 @@ export function SalesOverviewPanel({ processes, stages, onRefreshJobs }: Props) 
   const doMove = async () => {
     if (!movingSale?.job_id || !moveStageId) return;
     try {
-      await authFetch(`/api/jobs/${movingSale.job_id}`, {
+      const r = await authFetch(`/api/jobs/${movingSale.job_id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ production_stage: moveStageId }),
       });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        alert(`Erro ao mover etapa: ${data.error || `erro ${r.status}`}`);
+        return;
+      }
       setMovingSale(null);
       setMoveStageId('');
       load();
       onRefreshJobs?.();
-    } catch (err) { console.error(err); }
+    } catch (err: any) {
+      console.error(err);
+      alert(`Erro inesperado: ${err?.message || err}`);
+    }
   };
 
   const allStageOptions = useMemo(() => {
@@ -290,66 +286,44 @@ export function SalesOverviewPanel({ processes, stages, onRefreshJobs }: Props) 
                     </span>
                   )}
 
-                  {/* Ação primária */}
-                  {hasNoJob ? (
-                    <span className="text-gray-300 dark:text-gray-700 text-xs px-3">-</span>
-                  ) : isInProd ? (
-                    <div className="relative" data-sales-menu>
+                  {/* Ações */}
+                  <div className="flex flex-wrap items-center justify-end gap-1.5 flex-shrink-0">
+                    {hasNoJob ? (
+                      <span className="text-gray-300 dark:text-gray-700 text-xs px-3">-</span>
+                    ) : isInProd ? (
+                      <>
+                        <button
+                          onClick={() => { setMovingSale(sale); setMoveStageId(sale.production_stage_id || ''); }}
+                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gold-400 hover:text-gold-600 transition-all"
+                          title="Mover para outra etapa da produção"
+                        >
+                          <ChevronRight size={12} /> Mover
+                        </button>
+                        <button
+                          onClick={() => setConfirmRemove(sale)}
+                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                          title="Tirar da produção sem cancelar a venda"
+                        >
+                          <Trash2 size={12} /> Tirar
+                        </button>
+                      </>
+                    ) : (
                       <button
-                        onClick={() => setOpenMenuFor(openMenuFor === sale.deal_id ? null : sale.deal_id)}
-                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gold-400 hover:text-gold-600 transition-all"
+                        onClick={() => sendToProduction(sale)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
                       >
-                        <Edit2 size={12} /> Editar
+                        <ArrowRight size={12} /> Enviar pra produção
                       </button>
-                      {openMenuFor === sale.deal_id && (
-                        <div className="absolute right-0 top-full mt-1.5 z-40 min-w-[210px] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg py-1.5">
-                          <button
-                            onClick={() => { setOpenMenuFor(null); setMovingSale(sale); setMoveStageId(sale.production_stage_id || ''); }}
-                            className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-2"
-                          >
-                            <ChevronRight size={13} /> Mover de etapa
-                          </button>
-                          <button
-                            onClick={() => { setOpenMenuFor(null); sendToProduction(sale); }}
-                            className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-2"
-                          >
-                            <ArrowRight size={13} /> Voltar pra fila de edição
-                          </button>
-                          <div className="border-t border-gray-100 dark:border-gray-700 my-1" />
-                          <button
-                            onClick={() => { setOpenMenuFor(null); setConfirmRemove(sale); }}
-                            className="w-full text-left px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"
-                          >
-                            <Trash2 size={13} /> Tirar da produção
-                          </button>
-                          <button
-                            onClick={() => { setOpenMenuFor(null); setConfirmCancel(sale); }}
-                            className="w-full text-left px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"
-                          >
-                            <XCircle size={13} /> Cancelar venda (duplicada)
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => sendToProduction(sale)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
-                    >
-                      <ArrowRight size={12} /> Enviar pra produção
-                    </button>
-                  )}
+                    )}
 
-                  {/* Cancelar venda - disponível em todas as linhas (pendente/sem job tem como botão direto; em produção tá no menu) */}
-                  {!isInProd && (
                     <button
                       onClick={() => setConfirmCancel(sale)}
-                      title="Cancelar venda (duplicada ou erro)"
-                      className="flex items-center justify-center w-8 h-8 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors flex-shrink-0"
+                      title="Cancelar venda duplicada ou criada por engano"
+                      className="flex items-center justify-center w-8 h-8 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
                     >
                       <XCircle size={16} />
                     </button>
-                  )}
+                  </div>
                 </div>
               );
             })}

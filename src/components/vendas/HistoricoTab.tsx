@@ -5,6 +5,8 @@ import { CheckCircle2, XCircle, Clock, Search, X, ExternalLink, Briefcase } from
 import { Deal, PipelineStage, Client } from "../../types";
 import { cn } from "../../utils/cn";
 import { normalizeText } from "../../utils/normalizeText";
+import { authFetch } from "../../utils/authFetch";
+import { ConfirmModal } from "../ui/ConfirmModal";
 
 type Filter = "todos" | "ativos" | "convertidos" | "perdidos";
 
@@ -13,6 +15,7 @@ interface HistoricoTabProps {
   stages: PipelineStage[];
   clients: Client[];
   onOpenDeal?: (deal: Deal) => void;
+  onUpdate?: () => void | Promise<void>;
 }
 
 function formatCurrency(value: number): string {
@@ -30,9 +33,11 @@ function getDealStatus(deal: Deal, stages: PipelineStage[]): "convertido" | "per
   return "ativo";
 }
 
-export function HistoricoTab({ deals, stages, clients, onOpenDeal }: HistoricoTabProps) {
+export function HistoricoTab({ deals, stages, clients, onOpenDeal, onUpdate }: HistoricoTabProps) {
   const [filter, setFilter] = useState<Filter>("todos");
   const [search, setSearch] = useState("");
+  const [cancelDeal, setCancelDeal] = useState<Deal | null>(null);
+  const [cancelling, setCancelling] = useState(false);
 
   const stageMap = useMemo(() => {
     const m = new Map<string, PipelineStage>();
@@ -92,6 +97,30 @@ export function HistoricoTab({ deals, stages, clients, onOpenDeal }: HistoricoTa
     { id: "convertidos", label: "Convertidos", count: counts.convertidos, icon: <CheckCircle2 size={12} /> },
     { id: "perdidos", label: "Perdidos", count: counts.perdidos, icon: <XCircle size={12} /> },
   ];
+
+  const cancelConvertedSale = async () => {
+    if (!cancelDeal || cancelling) return;
+    setCancelling(true);
+    try {
+      const res = await authFetch(`/api/deals/${cancelDeal.id}/cancel-sale`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "Cancelado pelo histórico de vendas" }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(`Não consegui cancelar a venda: ${data.error || `erro ${res.status}`}`);
+        return;
+      }
+      setCancelDeal(null);
+      await onUpdate?.();
+    } catch (err: any) {
+      console.error("[HistoricoTab] cancel sale error:", err);
+      alert(`Erro inesperado: ${err?.message || err}`);
+    } finally {
+      setCancelling(false);
+    }
+  };
 
   return (
     <div className="h-full flex flex-col p-6 gap-4">
@@ -204,6 +233,16 @@ export function HistoricoTab({ deals, stages, clients, onOpenDeal }: HistoricoTa
                           Job #{d.converted_job_id}
                         </a>
                       )}
+                      {status === "convertido" && (
+                        <button
+                          onClick={() => setCancelDeal(d)}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                          title="Cancelar venda duplicada ou criada por engano"
+                        >
+                          <XCircle size={11} />
+                          Cancelar venda
+                        </button>
+                      )}
                       {onOpenDeal && (
                         <button
                           onClick={() => onOpenDeal(d)}
@@ -235,6 +274,19 @@ export function HistoricoTab({ deals, stages, clients, onOpenDeal }: HistoricoTa
           </tbody>
         </table>
       </div>
+
+      <ConfirmModal
+        open={!!cancelDeal}
+        title="Cancelar venda?"
+        message={`A venda de "${cancelDeal?.contact_name || cancelDeal?.title || "cliente"}" será marcada como perdida e o trabalho vinculado será excluído. O cliente continua salvo.`}
+        confirmText={cancelling ? "Cancelando..." : "Cancelar venda"}
+        cancelText="Voltar"
+        variant="danger"
+        onConfirm={cancelConvertedSale}
+        onCancel={() => {
+          if (!cancelling) setCancelDeal(null);
+        }}
+      />
     </div>
   );
 }
