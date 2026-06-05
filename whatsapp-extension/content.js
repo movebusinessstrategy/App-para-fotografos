@@ -31,6 +31,7 @@
   // Pickers do modal "Novo Lead" — instâncias fpSelect
   let modalStageSel = null;
   let modalAssignSel = null;
+  let modalSourceSel = null;
   let draggingId = null;
   let draggingInboxIdx = null;
   let dragMoved = false;
@@ -39,12 +40,17 @@
   let contactPhotos = loadContactPhotos();
   let chatPhoneByName = loadChatPhoneByName();
   let suppressChatListClickUntil = 0;
+  // Após ESC, suprime a re-detecção da faixa do chat por um instante pra
+  // ela não voltar sozinha enquanto o WhatsApp fecha a conversa.
+  let suppressChatStripUntil = 0;
   let q = '';
   let kanbanVisible = true;
   // Filtro de período do Pipeline: 'all' | 'today' | '7d' | '30d' | 'custom'
   // Pra 'custom', usa kanbanCustomRange = { from, to }
   let kanbanPeriod = 'all';
   let kanbanCustomRange = null;
+
+  const LEAD_SOURCE_OPTIONS = ['WhatsApp', 'Anúncio', 'Indicação', 'Instagram', 'Facebook', 'Google', 'Site', 'Cliente antigo', 'Outro'];
 
   // ===== BG MESSAGES =====
   const bg = (msg) => new Promise((ok, fail) => {
@@ -457,6 +463,7 @@
         <div class="fp-mf"><label class="fp-ml">Nome</label><input class="fp-mi" id="fp-mn" placeholder="Nome do contato" /></div>
         <div class="fp-mf"><label class="fp-ml">Telefone</label><input class="fp-mi" id="fp-mp" placeholder="5511999999999" /></div>
         <div class="fp-mf"><label class="fp-ml">Valor (R$)</label><input class="fp-mi" id="fp-mv" type="number" placeholder="0" /></div>
+        <div class="fp-mf"><label class="fp-ml">Origem</label><div id="fp-msource-slot"></div></div>
         <div class="fp-mf"><label class="fp-ml">Etapa do funil</label><div id="fp-msid-slot"></div></div>
         <div class="fp-mf"><label class="fp-ml">Vendedor responsável</label><div id="fp-massign-slot"></div></div>
         <div class="fp-mrow">
@@ -514,7 +521,8 @@
       leftPx = side ? Math.round(side.right) : 380;
     }
     const left = leftPx;
-    // Expõe globalmente pra CSS poder calcular max-width do #main com fp-tasks-open
+    // Expõe globalmente a largura da sidebar do WA pros overlays (Pipeline,
+    // Produção, Tarefas, Agenda) começarem logo após ela (left: var(--fp-side-width)).
     document.documentElement.style.setProperty('--fp-side-width', left + 'px');
     document.getElementById('fp-kanban')?.style.setProperty('--fp-side-width', left + 'px');
     const k = document.getElementById('fp-kanban');
@@ -869,6 +877,54 @@
     return p.startsWith('55') || p.length > 11 ? p : `55${p}`;
   }
 
+  function phoneVariants(phone) {
+    const full = normalizeWhatsappPhone(phone);
+    const variants = new Set();
+    if (full) variants.add(full);
+    if (full.startsWith('55') && full.length === 13) {
+      variants.add(full.slice(0, 4) + full.slice(5));
+    }
+    if (full.startsWith('55') && full.length === 12) {
+      variants.add(full.slice(0, 4) + '9' + full.slice(4));
+    }
+    const raw = digits(phone);
+    if (raw) variants.add(raw);
+    return [...variants].filter(Boolean);
+  }
+
+  function phonesMatch(expected, actual) {
+    const expectedVariants = phoneVariants(expected);
+    const actualVariants = phoneVariants(actual);
+    if (!expectedVariants.length || !actualVariants.length) return false;
+    return expectedVariants.some((e) => actualVariants.includes(e));
+  }
+
+  function normalizeNameForMatch(name) {
+    return String(name || '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+
+  function namesMatch(expected, actual) {
+    const a = normalizeNameForMatch(expected);
+    const b = normalizeNameForMatch(actual);
+    if (!a || !b) return false;
+    if (a.length < 3 || b.length < 3) return false;
+    if (a === b) return true;
+    // Comparação por PALAVRA INTEIRA — nunca substring. Assim "Ana" casa com
+    // "Ana Silva", mas NÃO com "Luana"/"Mariana"/"Joana". Todos os tokens do
+    // nome mais curto precisam existir como palavra no mais longo, e ao menos
+    // um token com 3+ letras (evita casar só por "de"/"da").
+    const at = a.split(' ').filter(Boolean);
+    const bt = b.split(' ').filter(Boolean);
+    const [short, long] = at.length <= bt.length ? [at, bt] : [bt, at];
+    const longSet = new Set(long);
+    return short.every((t) => longSet.has(t)) && short.some((t) => t.length >= 3);
+  }
+
   function chatListItems() {
     return Array.from(document.querySelectorAll('#pane-side [role="listitem"], #pane-side [data-testid="cell-frame-container"], [data-testid="cell-frame-container"]'));
   }
@@ -908,15 +964,27 @@
   }
 
   function findChatItem(phoneFull, contactName, allowFirstPhoneResult = false) {
-    const phoneTail = digits(phoneFull).slice(-8);
-    const cleanName = String(contactName || '').trim().toLowerCase();
+    const wantName = normalizeNameForMatch(contactName);
     const items = chatListItems();
 
+    // 1) Match por TELEFONE — autoritativo. Extrai o número real do item
+    //    (JID / título / aria-label) e compara com phonesMatch (trata o 9º
+    //    dígito). NÃO usamos mais "includes" do final de 8 dígitos no texto da
+    //    linha, que casava por engano com dígitos da última mensagem/horário.
     for (const item of items) {
-      const text = item.textContent || '';
-      const textDigits = digits(text);
-      if (phoneTail && textDigits.includes(phoneTail)) return item;
-      if (cleanName && text.toLowerCase().includes(cleanName)) return item;
+      const itemPhone = extractPhoneFromChatListItem(item);
+      if (itemPhone && phonesMatch(phoneFull, itemPhone)) return item;
+    }
+
+    // 2) Fallback por NOME — SOMENTE igualdade exata do título da conversa.
+    //    Substring é proibido: "Ana" não pode abrir "Luana"/"Mariana"/"Joana".
+    //    (era a causa de clicar num card e abrir a conversa de outra pessoa.)
+    if (wantName && wantName.length >= 3) {
+      for (const item of items) {
+        const titleEl = item.querySelector('span[title]');
+        const itemName = normalizeNameForMatch(titleEl?.getAttribute('title') || titleEl?.textContent || '');
+        if (itemName && itemName === wantName) return item;
+      }
     }
 
     if (allowFirstPhoneResult && items.length === 1 && !chatItemLooksEmpty(items[0])) return items[0];
@@ -1497,25 +1565,161 @@
 
   // Tenta escrever um texto no compositor de mensagens do WhatsApp Web
   // (contenteditable). Preserva mensagem caso o user já estivesse digitando.
-  function setWhatsappComposer(text) {
-    if (!text) return false;
-    const composer =
+  function findWhatsappComposer() {
+    return (
       document.querySelector('#main footer div[contenteditable="true"]') ||
       document.querySelector('div[role="textbox"][contenteditable="true"][data-tab]') ||
-      document.querySelector('footer [contenteditable="true"]');
-    if (!composer) return false;
+      document.querySelector('footer [contenteditable="true"]')
+    );
+  }
+
+  function findWhatsappComposers() {
+    return [
+      ...document.querySelectorAll('#main footer div[contenteditable="true"], footer [contenteditable="true"]'),
+    ].filter(Boolean);
+  }
+
+  function selectEditableContents(el) {
+    const sel = window.getSelection?.();
+    if (!sel) return;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  function placeCursorAtEnd(el) {
+    const sel = window.getSelection?.();
+    if (!sel) return;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  function notifyComposerInput(composer, text, inputType = 'insertText') {
+    try {
+      composer.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        inputType,
+        data: text || null,
+      }));
+    } catch {
+      composer.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }
+
+  function clearWhatsappComposer(composer) {
     composer.focus();
     document.execCommand('selectAll', false, null);
     document.execCommand('delete', false, null);
-    // O compositor do WhatsApp Web não aceita quebra de linha injetada
-    // por script de forma confiável — manda em um parágrafo só
-    // (quebras de linha viram espaço, sem deixar o texto grudado).
-    document.execCommand(
-      'insertText',
-      false,
-      String(text).replace(/\s*\n+\s*/g, ' ').trim(),
-    );
-    return true;
+    selectEditableContents(composer);
+    document.execCommand('delete', false, null);
+    composer.textContent = '';
+    composer.innerHTML = '';
+    notifyComposerInput(composer, '', 'deleteContentBackward');
+  }
+
+  function setComposerDomWithBreaks(composer, text) {
+    const lines = String(text).split('\n');
+    composer.textContent = '';
+    lines.forEach((line, idx) => {
+      if (idx > 0) composer.appendChild(document.createElement('br'));
+      composer.appendChild(document.createTextNode(line));
+    });
+    placeCursorAtEnd(composer);
+  }
+
+  function composerPreservedLineBreaks(composer, text) {
+    if (!String(text).includes('\n')) return true;
+    const visibleText = String(composer.innerText || composer.textContent || '')
+      .replace(/\u00a0/g, ' ')
+      .replace(/\r\n?/g, '\n');
+    return visibleText.includes('\n') || !!composer.querySelector('br');
+  }
+
+  function composerPlainText(composer) {
+    let out = '';
+    const walk = (node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        out += node.nodeValue || '';
+        return;
+      }
+      if (node.nodeName === 'BR') {
+        out += '\n';
+        return;
+      }
+      node.childNodes?.forEach(walk);
+    };
+    walk(composer);
+    return out || String(composer.innerText || composer.textContent || '');
+  }
+
+  function composerMatchesText(composer, text) {
+    const expected = String(text || '').replace(/\r\n?/g, '\n').trim();
+    const actual = String(composerPlainText(composer))
+      .replace(/\u00a0/g, ' ')
+      .replace(/\r\n?/g, '\n')
+      .trim();
+    const compactExpected = expected.replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n');
+    const compactActual = actual.replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n');
+    return compactActual === compactExpected;
+  }
+
+  function compareMessageText(text) {
+    return String(text || '')
+      .replace(/\r\n?/g, '\n')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n[ \t]+/g, '\n')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function collapseRepeatedMessage(text) {
+    let current = String(text || '').replace(/\r\n?/g, '\n').trim();
+    for (let pass = 0; pass < 3; pass += 1) {
+      const len = current.length;
+      let changed = false;
+      for (let i = 1; i < len; i += 1) {
+        const left = current.slice(0, i).trim();
+        const right = current.slice(i).trim();
+        if (!left || !right) continue;
+        if (compareMessageText(left) !== compareMessageText(right)) continue;
+        const leftBreaks = (left.match(/\n/g) || []).length;
+        const rightBreaks = (right.match(/\n/g) || []).length;
+        current = rightBreaks > leftBreaks ? right : left;
+        changed = true;
+        break;
+      }
+      if (!changed) break;
+    }
+    return current;
+  }
+
+  async function setWhatsappComposer(text) {
+    const normalized = collapseRepeatedMessage(text);
+    if (!normalized) return false;
+    const composers = findWhatsappComposers();
+    const composer = findWhatsappComposer() || composers[0];
+    if (!composer) return false;
+
+    // O WhatsApp Web às vezes mantém estado interno depois de uma inserção via
+    // execCommand. Limpamos todos os editáveis do rodapé e escrevemos uma vez só.
+    (composers.length ? composers : [composer]).forEach(clearWhatsappComposer);
+    await sleep(80);
+    composer.focus();
+    setComposerDomWithBreaks(composer, normalized);
+    notifyComposerInput(composer, normalized);
+    await sleep(80);
+
+    const ok = composerMatchesText(composer, normalized) && composerPreservedLineBreaks(composer, normalized);
+    if (!ok) {
+      (composers.length ? composers : [composer]).forEach(clearWhatsappComposer);
+    }
+    return ok;
   }
 
   // Follow-up individual de 1 card: reaproveita o modal de massa pra dar UX
@@ -1528,7 +1732,7 @@
   }
 
   // Estado da fila de follow-up em massa
-  let massQueue = null; // { deals: [], message: string, idx: 0 }
+  let massQueue = null; // { deals: [], message: string, idx: 0, apiSend: boolean }
 
   function openMassFollowUpModal(stage, customDeals = null) {
     document.getElementById('fp-mass-modal')?.remove();
@@ -1536,7 +1740,7 @@
       .filter(d => d.contact_phone);
     if (!stageDeals.length) return toast('Nenhum lead com telefone', true);
 
-    const template = stage.follow_up_message?.trim() || `Oi {nome}, tudo bem? Passando pra ver se você tem alguma dúvida 😊`;
+    const template = collapseRepeatedMessage(stage.follow_up_message || '') || `Oi {nome}, tudo bem? Passando pra ver se você tem alguma dúvida 😊`;
     const singleMode = stageDeals.length === 1;
 
     const modal = document.createElement('div');
@@ -1677,8 +1881,12 @@
     // Salva o texto atual como mensagem padrão de follow-up da etapa.
     modal.querySelector('#fp-mass-save-default')?.addEventListener('click', async (e) => {
       const btn = e.currentTarget;
-      const msg = textarea.value.trim();
+      const msg = collapseRepeatedMessage(textarea.value);
       if (!msg) return toast('Mensagem vazia', true);
+      if (msg !== textarea.value.trim()) {
+        textarea.value = msg;
+        updatePreview();
+      }
       const original = btn.textContent;
       btn.disabled = true;
       btn.textContent = 'Salvando…';
@@ -1695,8 +1903,12 @@
     });
 
     modal.querySelector('#fp-mass-start')?.addEventListener('click', () => {
-      const message = textarea.value.trim();
+      const message = collapseRepeatedMessage(textarea.value);
       if (!message) return toast('Mensagem vazia', true);
+      if (message !== textarea.value.trim()) {
+        textarea.value = message;
+        updatePreview();
+      }
       const selected = singleMode
         ? stageDeals
         : Array.from(modal.querySelectorAll('.fp-mass-chk:checked'))
@@ -1710,7 +1922,14 @@
   }
 
   async function startMassFollowUpQueue(targetDeals, template, autoSend = false) {
-    massQueue = { deals: targetDeals, message: template, idx: 0, autoSend };
+    let apiSend = false;
+    if (autoSend) {
+      try {
+        const status = await bg({ type: 'GET_WHATSAPP_STATUS' });
+        apiSend = status?.connected === true || status?.whatsapp?.connected === true;
+      } catch {}
+    }
+    massQueue = { deals: targetDeals, message: collapseRepeatedMessage(template), idx: 0, autoSend, apiSend };
     showMassQueueWidget(autoSend);
     await openCurrentMassQueueLead();
   }
@@ -1770,6 +1989,47 @@
     prog.innerHTML = `${massQueue.idx + 1}/${massQueue.deals.length} · <strong>${esc(name)}</strong>`;
   }
 
+  async function waitForExpectedChat(deal, maxMs = 2800) {
+    const expectedPhone = deal?.contact_phone || '';
+    const expectedName = deal?.contact_name || deal?.title || '';
+    const started = Date.now();
+    let sawDifferentPhone = '';
+    let lastName = '';
+
+    while (Date.now() - started < maxMs) {
+      await sleep(160);
+      const openedPhone = getWAChatPhone();
+      const openedName = getWAChatName();
+      if (openedName) lastName = openedName;
+
+      if (openedPhone) {
+        if (phonesMatch(expectedPhone, openedPhone)) {
+          return { ok: true, confidence: 'phone', openedPhone, openedName };
+        }
+        sawDifferentPhone = openedPhone;
+      }
+
+      if (!openedPhone && expectedName && openedName && namesMatch(expectedName, openedName)) {
+        return { ok: true, confidence: 'name', openedPhone, openedName };
+      }
+    }
+
+    return {
+      ok: false,
+      openedPhone: sawDifferentPhone,
+      openedName: lastName,
+      reason: sawDifferentPhone
+        ? `Conversa aberta não bate com o telefone esperado (${sawDifferentPhone})`
+        : 'Não consegui confirmar a conversa aberta',
+    };
+  }
+
+  async function sendMassFollowupViaApi(deal, msg) {
+    const phone = deal?.contact_phone || '';
+    if (!phone) throw new Error('Lead sem telefone');
+    return bg({ type: 'SEND_WHATSAPP_TEXT', phone, text: msg });
+  }
+
   async function openCurrentMassQueueLead() {
     if (!massQueue) return;
     const deal = massQueue.deals[massQueue.idx];
@@ -1782,6 +2042,20 @@
       .replace(/\{primeiro_nome\}/gi, first)
       .replace(/\{name\}/gi, first);
 
+    if (massQueue?.autoSend && massQueue?.apiSend) {
+      try {
+        await sendMassFollowupViaApi(deal, msg);
+        toast(`✓ Enviado com segurança pra ${first || deal.contact_phone}`);
+        await sleep(1600);
+        if (!massQueue) return;
+        advanceMassQueue(false);
+      } catch (err) {
+        toast(err?.message || 'Falha no envio seguro — parei a fila', true);
+        stopMassQueue();
+      }
+      return;
+    }
+
     const ok = await openByNumberInApp(deal.contact_phone, deal.contact_name || '');
     if (!ok) {
       // Falhou em abrir o chat — em modo auto, pula pro próximo
@@ -1792,10 +2066,17 @@
       return;
     }
 
+    const checked = await waitForExpectedChat(deal);
+    if (!checked.ok) {
+      toast(`Travei por segurança: ${checked.reason}`, true);
+      stopMassQueue();
+      return;
+    }
+
     let composed = false;
     for (let i = 0; i < 12; i++) {
       await sleep(180);
-      if (setWhatsappComposer(msg)) { composed = true; break; }
+      if (await setWhatsappComposer(msg)) { composed = true; break; }
     }
     if (!composed) {
       toast('Não consegui colar a mensagem — pulando…', true);
@@ -1939,7 +2220,7 @@
           name: contact.name || contact.phone,
           phone: contact.phone,
           value: 0,
-          source: 'whatsapp-inbox',
+          source: 'WhatsApp',
           stage: createStage,
         },
       });
@@ -3232,37 +3513,30 @@
   }
 
   function showTasks() {
-    // Tarefas é painel lateral à direita — NÃO esconde o chat ativo nem
-    // é fechado quando o usuário clica num chat. Fica do lado pra você
-    // ler mensagens e olhar tarefas ao mesmo tempo.
+    // Tarefas ocupa a área toda do chat, igual aos demais overlays.
+    deselectWhatsappChat();
     kanbanVisible = false;
     hideAllOverlays();
     buildTasksOverlay();
-    adjustPosition(); // mantém o --fp-side-width atualizado pro cálculo do max-width
+    adjustPosition();
     document.getElementById('fp-tasks')?.classList.remove('fp-hidden');
-    document.body.classList.add('fp-tasks-open');
     setRailActive('fp-rail-tasks');
+    removeChatStrip();
     loadTasks();
     setTimeout(adjustPosition, 200);
   }
 
-  // Esconde Agenda/Produção quando o usuário clica num chat da sidebar
-  // do WhatsApp — assim ele consegue ler/responder sem que o overlay
-  // continue cobrindo o campo de mensagem.
-  // Tarefas (painel lateral) NÃO é fechado — fica do lado, não atrapalha.
+  // Esconde Agenda/Produção/Tarefas quando o usuário clica num chat da
+  // sidebar do WhatsApp — assim ele consegue ler/responder sem que o
+  // overlay continue cobrindo o campo de mensagem.
   // (Pipeline é tratado separadamente via hideKanban().)
   function hideOverlaysForChatNav() {
-    const agenda = document.getElementById('fp-agenda');
-    if (agenda && !agenda.classList.contains('fp-hidden')) {
-      agenda.classList.add('fp-hidden');
-    }
-    const production = document.getElementById('fp-production');
-    if (production && !production.classList.contains('fp-hidden')) {
-      production.classList.add('fp-hidden');
-    }
-    // Só limpa rail se nada mais visível além de Tarefas (Tarefas tem própria sinalização)
-    const tasksOpen = !document.getElementById('fp-tasks')?.classList.contains('fp-hidden');
-    if (!tasksOpen) setRailActive(null);
+    ['fp-agenda', 'fp-production', 'fp-tasks'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el && !el.classList.contains('fp-hidden')) el.classList.add('fp-hidden');
+    });
+    document.body.classList.remove('fp-tasks-open');
+    setRailActive(null);
   }
 
   // ============================================================
@@ -4137,6 +4411,7 @@
         <div class="fp-info-body">
           <div class="fp-info-row"><span class="fp-info-label">Telefone</span><span>${esc(phoneFmt)}</span></div>
           <div class="fp-info-row"><span class="fp-info-label">Valor</span><span>${esc(value)}</span></div>
+          ${deal.lead_source ? `<div class="fp-info-row"><span class="fp-info-label">Origem</span><span>${esc(deal.lead_source)}</span></div>` : ''}
           ${deal.lost_reason ? `<div class="fp-info-row"><span class="fp-info-label">Motivo da perda</span><span>${esc(deal.lost_reason)}</span></div>` : ''}
           <div class="fp-info-row"><span class="fp-info-label">Cadastrado em</span><span>${esc(created)}</span></div>
           <div class="fp-info-row"><span class="fp-info-label">Última atualização</span><span>${esc(updated)}</span></div>
@@ -4323,7 +4598,7 @@
       if (!currentMemberId) await loadTeamAndMe();
       await bg({
         type: 'CREATE_DEAL',
-        data: { name, phone: cleanPhone, value: 0, source: 'whatsapp-extension', stage: stageId, assigned_to: currentMemberId || null },
+        data: { name, phone: cleanPhone, value: 0, source: 'WhatsApp', stage: stageId, assigned_to: currentMemberId || null },
       });
       toast(stageName ? `Adicionado em "${stageName}"` : 'Adicionado ao pipeline');
       await loadKanban();
@@ -4479,7 +4754,7 @@
     }
   }
 
-  const LOST_REASONS = ['Preço', 'Concorrência', 'Sem resposta', 'Desistiu', 'Data indisponível', 'Outro'];
+  const LOST_REASONS = ['Não quis fechar', 'Preço', 'Concorrência', 'Sem resposta', 'Desistiu', 'Data indisponível', 'Outro'];
 
   function openLostDealModal(deal, stageId) {
     document.getElementById('fp-lost-modal')?.remove();
@@ -5855,8 +6130,7 @@
   let detectDebounce;
   function isFullscreenOverlayVisible() {
     if (kanbanVisible) return true;
-    // Tarefas é painel lateral — não conta, deixa o chat strip aparecer
-    const ids = ['fp-agenda', 'fp-production'];
+    const ids = ['fp-agenda', 'fp-production', 'fp-tasks'];
     return ids.some((id) => {
       const el = document.getElementById(id);
       return el && !el.classList.contains('fp-hidden');
@@ -5864,8 +6138,11 @@
   }
 
   function detectState() {
-    // Algum overlay TELA-CHEIA (Pipeline/Agenda/Produção) aberto = não
-    // monta strip do chat. Tarefas (painel lateral) não bloqueia.
+    // Logo após ESC, mantém a faixa escondida até a janela de supressão
+    // passar — assim ela não pisca de volta enquanto o chat fecha.
+    if (Date.now() < suppressChatStripUntil) { removeChatStrip(); return; }
+    // Algum overlay TELA-CHEIA (Pipeline/Agenda/Produção/Tarefas) aberto =
+    // não monta strip do chat.
     if (isFullscreenOverlayVisible()) return;
 
     if (isChatOpen()) {
@@ -5911,6 +6188,19 @@
       // Ignora clicks dentro do próprio kanban (cards, botões etc.)
       if (e.target.closest('#fp-kanban, #fp-modal, #fp-deal-edit-modal, #fp-fab, #fp-chat-strip, #fp-stage-menu')) return;
 
+      // Clique no ícone "Conversas/Chats" nativo do WhatsApp → fecha
+      // qualquer overlay do CRM e volta pras mensagens. Sem isso, estando
+      // no Pipeline (ou Tarefas/Produção/Agenda) o ícone do WhatsApp não
+      // trocava de tela — o overlay continuava por cima.
+      const chatsNav = e.target.closest('[aria-label*="onversas" i], [aria-label*="hats" i]');
+      if (chatsNav && !e.target.closest('#fp-rail-mounted')) {
+        suppressChatStripUntil = 0;
+        if (kanbanVisible) hideKanban();
+        hideOverlaysForChatNav();
+        fastDetect();
+        return;
+      }
+
       const item = e.target.closest('[role="listitem"], [data-testid="cell-frame-container"]');
       if (item) {
         if (Date.now() < suppressChatListClickUntil) return;
@@ -5918,18 +6208,25 @@
         // overlay aberto (Pipeline, Tarefas, Agenda, Produção). Sem isso
         // o overlay continuaria cobrindo o campo de mensagem e o usuário
         // não conseguiria responder.
+        suppressChatStripUntil = 0;
         if (kanbanVisible) hideKanban();
         hideOverlaysForChatNav();
         fastDetect();
       }
     }, true);
 
-    // ESC no WhatsApp Web tira o foco da conversa, mas o MutationObserver
-    // demora 500ms pra perceber e a barrinha do CRM fica órfã.
-    // Listener dedicado dispara fastDetect imediato.
+    // ESC no WhatsApp Web fecha a conversa — esconde a faixa do CRM junto.
+    // Remove na hora e suprime a re-detecção por um instante pra ela não
+    // voltar sozinha enquanto o WhatsApp termina de fechar o chat.
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && document.getElementById('fp-chat-strip')) {
-        fastDetect();
+        suppressChatStripUntil = Date.now() + 1200;
+        chatKey = null;
+        chatPhone = null;
+        chatDeal = null;
+        if (detectPoll) { clearInterval(detectPoll); detectPoll = null; }
+        clearTimeout(detectDebounce);
+        removeChatStrip();
       }
     }, true);
 
@@ -6019,6 +6316,30 @@
     else slot._fpSel = sel;
   }
 
+  function populateSourceSelect(currentValue) {
+    const slot = document.getElementById('fp-msource-slot');
+    if (!slot) return;
+    const value = currentValue || '';
+    const items = [{ value: '', label: 'Sem origem definida' }]
+      .concat(LEAD_SOURCE_OPTIONS.map((source) => ({ value: source, label: source })));
+
+    if (modalSourceSel) {
+      modalSourceSel.setItems(items);
+      modalSourceSel.setValue(value);
+      return;
+    }
+
+    const sel = fpSelect({
+      items,
+      value,
+      placeholder: 'Escolher origem',
+      searchable: false,
+    });
+    slot.innerHTML = '';
+    slot.appendChild(sel.element);
+    modalSourceSel = sel;
+  }
+
   function openModal(phone, name, stageId, fromChat = false) {
     const m = document.getElementById('fp-modal');
     if (!m) return;
@@ -6036,6 +6357,7 @@
     if (phoneInput) phoneInput.value = phone ? digits(phone) : '';
     if (nameInput) nameInput.value = name || '';
     refreshModalStages(stageId);
+    populateSourceSelect(fromChat ? 'WhatsApp' : '');
     // Vendedor: default no usuário logado se já conhecido, e re-carrega lista em background
     populateAssigneeSelect('fp-massign', currentMemberId);
     loadTeamAndMe().then(() => populateAssigneeSelect('fp-massign', currentMemberId));
@@ -6048,6 +6370,7 @@
     if (!m) return;
     m.classList.add('fp-hidden');
     ['fp-mn', 'fp-mp', 'fp-mv'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    modalSourceSel?.setValue('');
     modalContext = { fromChat: false };
   }
 
@@ -6055,6 +6378,7 @@
     let name = document.getElementById('fp-mn')?.value.trim();
     const phone = digits(document.getElementById('fp-mp')?.value || '');
     const value = Number(document.getElementById('fp-mv')?.value) || 0;
+    const source = modalSourceSel?.getValue() || (modalContext.fromChat ? 'WhatsApp' : null);
     const stage = modalStageSel?.getValue() || undefined;
     const assigned_to = modalAssignSel?.getValue() || null;
     if (!name && phone) name = phone;
@@ -6069,7 +6393,7 @@
         (digits(getWAChatPhone() || '').includes(phone.slice(-8)));
 
       if (shouldRefreshChat) rememberContactPhoto(phone, getWAChatPhoto());
-      await bg({ type: 'CREATE_DEAL', data: { name, phone, value, source: 'whatsapp-extension', stage, assigned_to } });
+      await bg({ type: 'CREATE_DEAL', data: { name, phone, value, source, stage, assigned_to } });
       toast('Lead criado!');
       closeModal();
       await loadKanban();

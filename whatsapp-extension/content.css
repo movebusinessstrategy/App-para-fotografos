@@ -1790,37 +1790,20 @@ body.fp-kanban-open #pane-side { display: none !important; }
 /* ============================================================ */
 /* ===== TAREFAS - painel lateral à direita (não cobre chat) === */
 /* ============================================================ */
-/* Diferente do Funil/Agenda: Tarefas é um painel "auxiliar" - você
- * quer abrir e continuar lendo as mensagens. Por isso vai pra direita
- * em vez de tomar a área toda do chat. */
+/* Tarefas ocupa a área toda do chat, igual Funil/Produção/Agenda. */
 #fp-tasks {
   position: fixed;
   top: 0;
+  left: var(--fp-side-width, 380px);
   right: 0;
   bottom: 0;
-  left: auto;
-  width: 420px;
-  max-width: 45vw;
-  min-width: 340px;
   z-index: 500;
   display: flex;
   flex-direction: column;
   background: #f9fafb;
-  border-left: 1px solid #e5e7eb;
-  box-shadow: -8px 0 30px rgba(0, 0, 0, 0.06);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 14px;
   color: #111b21;
-}
-/* Quando o painel de Tarefas está aberto, encolhe o #main do WA pra
- * não ficar coberto. A própria UI do WA reflowa as mensagens. */
-body.fp-tasks-open #main {
-  max-width: calc(100vw - var(--fp-side-width, 380px) - 420px) !important;
-}
-@media (max-width: 1100px) {
-  body.fp-tasks-open #main {
-    max-width: calc(55vw - var(--fp-side-width, 380px)) !important;
-  }
 }
 #fp-tk-h {
   display: flex;
