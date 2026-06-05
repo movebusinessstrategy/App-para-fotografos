@@ -13,6 +13,9 @@ coverage/
 # WhatsApp sessions (dados sensíveis)
 baileys_sessions/
 sessions/
+# Backups de sessões/credenciais — nunca versionar (contêm dados sensíveis)
+*_sessions.backup_*
+baileys_sessions.backup*
 
 # Uploads do editor de vídeo (arquivos grandes)
 server/uploads/
@@ -25,6 +28,9 @@ server/processed/
 *.avi
 *.mkv
 *.bak
+# Backups de código (.backup) e arquivos temporários
+*.backup
+*.orig
 
 # Scripts de diagnóstico ad-hoc (PII de clientes + side-effects em produção)
 wa-diag-*.mjs
