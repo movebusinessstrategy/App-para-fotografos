@@ -23,6 +23,7 @@ interface Conta { id: string; nome: string; }
 interface OFXImportResult {
   importadas: number;
   duplicadas: number;
+  conciliadas?: number;
   total?: number;
   erros?: number;
 }
@@ -95,10 +96,11 @@ export default function Conciliacao() {
       // lotes e mostrar progresso "X de N". Se não casar nada, manda inteiro.
       const blocos = text.match(/<STMTTRN>[\s\S]*?<\/STMTTRN>/g) || [];
       const total = blocos.length;
-      const acc: OFXImportResult = { importadas: 0, duplicadas: 0, total: 0 };
+      const acc: OFXImportResult = { importadas: 0, duplicadas: 0, conciliadas: 0, total: 0 };
       const somar = (d: OFXImportResult) => {
         acc.importadas += d.importadas || 0;
         acc.duplicadas += d.duplicadas || 0;
+        acc.conciliadas = (acc.conciliadas || 0) + (d.conciliadas || 0);
         acc.total = (acc.total || 0) + (d.total || 0);
       };
 
@@ -224,6 +226,7 @@ export default function Conciliacao() {
             <span className="font-semibold">OFX importado:</span>{' '}
             {importResult.importadas} nova{importResult.importadas !== 1 ? 's' : ''},{' '}
             {importResult.duplicadas} duplicada{importResult.duplicadas !== 1 ? 's' : ''} ignorada{importResult.duplicadas !== 1 ? 's' : ''}.
+            {importResult.conciliadas ? ` ${importResult.conciliadas} conciliada${importResult.conciliadas !== 1 ? 's' : ''} automaticamente.` : ''}
             {importResult.erros > 0 && ` ${importResult.erros} erro(s).`}
           </div>
           <button onClick={() => setImportResult(null)} className="ml-auto text-emerald-500 hover:text-emerald-700">

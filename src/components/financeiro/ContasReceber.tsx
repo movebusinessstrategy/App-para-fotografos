@@ -54,18 +54,22 @@ export default function ContasReceber() {
   const [editando, setEditando] = useState<Receita | null>(null);
   const [receberFor, setReceberFor] = useState<Receita | null>(null);
   const [dataReceb, setDataReceb] = useState('');
+  const [contas, setContas] = useState<{ id: string; nome: string }[]>([]);
+  const [contaReceb, setContaReceb] = useState('');
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const [rRes, cRes, mRes] = await Promise.all([
+      const [rRes, cRes, mRes, ctRes] = await Promise.all([
         authFetch('/api/fin/receitas'),
         authFetch('/api/fin/categorias?tipo=receita'),
         authFetch('/api/fin/meios'),
+        authFetch('/api/fin/contas'),
       ]);
       if (rRes.ok) setReceitas(await rRes.json());
       if (cRes.ok) setCategorias(await cRes.json());
       if (mRes.ok) setMeios(await mRes.json());
+      if (ctRes.ok) setContas(await ctRes.json());
     } finally {
       if (!silent) setLoading(false);
     }
@@ -82,11 +86,17 @@ export default function ContasReceber() {
     })();
   }, [load]);
 
-  const marcarRecebido = async (id: string, data: string) => {
+  // Ao abrir o modal de recebimento, já pré-seleciona a conta do lançamento
+  // (ou a primeira disponível).
+  useEffect(() => {
+    if (receberFor) setContaReceb((receberFor as any).conta_id || contas[0]?.id || '');
+  }, [receberFor, contas]);
+
+  const marcarRecebido = async (id: string, data: string, contaId: string) => {
     const res = await authFetch(`/api/fin/receitas/${id}/receber`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data_pagamento: data }),
+      body: JSON.stringify({ data_pagamento: data, conta_id: contaId || null }),
     });
     if (res.ok) {
       setReceitas(prev => prev.map(r =>
@@ -371,11 +381,24 @@ export default function ContasReceber() {
                 <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Data do recebimento</label>
                 <DatePicker value={dataReceb} onChange={setDataReceb} />
               </div>
-              <p className="text-xs text-gray-400">Coloque a data real em que o dinheiro entrou - assim o faturamento conta no mês certo.</p>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Banco / conta que recebeu</label>
+                <FinSelect
+                  value={contaReceb}
+                  onChange={setContaReceb}
+                  options={contas.map(c => ({ value: c.id, label: c.nome }))}
+                  placeholder={contas.length ? 'Selecione a conta' : 'Crie uma conta em Configurações'}
+                />
+              </div>
+              <p className="text-xs text-gray-400">Informe a data e o banco em que o dinheiro entrou — assim, ao importar o extrato, a conciliação é automática.</p>
             </div>
             <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100 dark:border-gray-700">
               <button onClick={() => setReceberFor(null)} className="px-4 py-2 text-sm font-medium rounded-lg text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">Cancelar</button>
-              <button onClick={() => { if (dataReceb) marcarRecebido(receberFor.id, dataReceb); }} className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">Confirmar</button>
+              <button
+                onClick={() => { if (dataReceb) marcarRecebido(receberFor.id, dataReceb, contaReceb); }}
+                disabled={!dataReceb || (contas.length > 0 && !contaReceb)}
+                className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+              >Confirmar</button>
             </div>
           </div>
         </div>

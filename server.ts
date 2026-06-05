@@ -8994,6 +8994,46 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // ─── OFX ───────────────────────────────────────────────────────────────────
+  // Tenta conciliar automaticamente uma transação recém-importada do extrato
+  // com um lançamento já baixado: MESMO banco, MESMO valor e MESMA data (exata).
+  // Crédito → receita recebida (valor_liquido); débito → despesa paga.
+  async function autoConciliarOfxTx(supabase: any, userId: string, tx: any): Promise<boolean> {
+    if (!tx?.conta_id) return false;
+    const valorBate = (v: any) => Math.abs(Number(v) - Number(tx.valor)) < 0.005;
+    if (tx.tipo === 'credito') {
+      const { data: rs } = await supabase.from('fin_receitas')
+        .select('id, valor_liquido, valor_bruto')
+        .eq('user_id', userId).eq('conta_id', tx.conta_id)
+        .eq('status', 'recebido').eq('data_recebimento_real', tx.data);
+      for (const r of rs || []) {
+        if (!valorBate(r.valor_liquido ?? r.valor_bruto)) continue;
+        const { data: ja } = await supabase.from('fin_transacoes_ofx')
+          .select('id').eq('user_id', userId).eq('receita_id', r.id).limit(1);
+        if (ja && ja.length) continue; // já ligada a outra transação
+        await supabase.from('fin_transacoes_ofx')
+          .update({ status_conciliacao: 'conciliado', receita_id: r.id })
+          .eq('id', tx.id).eq('user_id', userId);
+        return true;
+      }
+      return false;
+    }
+    const { data: ds } = await supabase.from('fin_despesas')
+      .select('id, valor')
+      .eq('user_id', userId).eq('conta_id', tx.conta_id)
+      .eq('status', 'pago').eq('data_pagamento', tx.data);
+    for (const d of ds || []) {
+      if (!valorBate(d.valor)) continue;
+      const { data: ja } = await supabase.from('fin_transacoes_ofx')
+        .select('id').eq('user_id', userId).eq('despesa_id', d.id).limit(1);
+      if (ja && ja.length) continue;
+      await supabase.from('fin_transacoes_ofx')
+        .update({ status_conciliacao: 'conciliado', despesa_id: d.id })
+        .eq('id', tx.id).eq('user_id', userId);
+      return true;
+    }
+    return false;
+  }
+
   app.post('/api/fin/ofx/import', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
     const { conteudo, conta_id } = req.body;
@@ -9015,12 +9055,17 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       transacoes.push({ user_id: userId, conta_id, fit_id: fitId, tipo, valor: Math.abs(trnAmt), data, descricao: memo });
     }
 
-    let importadas = 0; let duplicadas = 0;
+    let importadas = 0; let duplicadas = 0; let conciliadas = 0;
     for (const t of transacoes) {
-      const { error } = await supabase.from('fin_transacoes_ofx').insert(t);
-      if (error?.code === '23505') duplicadas++; else if (!error) importadas++;
+      const { data: ins, error } = await supabase
+        .from('fin_transacoes_ofx').insert(t).select('id,conta_id,tipo,valor,data').single();
+      if (error?.code === '23505') { duplicadas++; continue; }
+      if (error) continue;
+      importadas++;
+      try { if (await autoConciliarOfxTx(supabase, userId, ins)) conciliadas++; }
+      catch { /* falha de auto-conciliação não derruba o import */ }
     }
-    res.json({ importadas, duplicadas, total: transacoes.length });
+    res.json({ importadas, duplicadas, conciliadas, total: transacoes.length });
   });
 
   app.get('/api/fin/ofx/transacoes', requireAuth, async (req, res) => {
