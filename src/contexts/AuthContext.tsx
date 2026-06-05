@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, ReactNode } from "react";
 import { User, Session } from "@supabase/supabase-js";
 import { supabase } from "../integrations/supabase/client";
 import { authFetch } from "../utils/authFetch";
@@ -45,6 +45,10 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   const [permissions, setPermissions] = useState<Record<string, boolean> | null>(null);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [isProductionOnly, setIsProductionOnly] = useState(false);
+  // Qual usuário já teve as permissões carregadas — evita re-fetch em refresh de
+  // token e, principalmente, garante que NÃO renderizamos o app antes de saber
+  // as permissões (senão o menu pisca "tudo liberado" por alguns segundos).
+  const loadedForUser = useRef<string | null>(null);
 
   const fetchMe = async () => {
     try {
@@ -63,29 +67,46 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     }
   };
 
+  const resetAuthState = () => {
+    loadedForUser.current = null;
+    setIsMember(false);
+    setPermissions(null);
+    setIsPlatformAdmin(false);
+    setIsProductionOnly(false);
+  };
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
       if (session) {
-        fetchMe(); // loading=false só depois do fetchMe
+        // Só busca se ainda não buscou pra esse usuário (evita corrida com
+        // onAuthStateChange). loading começa true, então o app já espera.
+        if (loadedForUser.current !== session.user.id) {
+          loadedForUser.current = session.user.id;
+          fetchMe();
+        }
       } else {
         setLoading(false);
       }
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+      async (_event, session) => {
+        const newUserId = session?.user?.id ?? null;
         setSession(session);
         setUser(session?.user ?? null);
-        if (session) {
-          fetchMe(); // loading=false dentro do fetchMe
-        } else {
-          setIsMember(false);
-          setPermissions(null);
-          setIsPlatformAdmin(false);
-          setIsProductionOnly(false);
+        if (!session) {
+          resetAuthState();
           setLoading(false);
+          return;
+        }
+        // Usuário NOVO (login ou troca de conta): segura o app no "Carregando"
+        // até as permissões chegarem. Mesmo usuário (refresh de token): ignora.
+        if (loadedForUser.current !== newUserId) {
+          loadedForUser.current = newUserId;
+          setLoading(true);
+          fetchMe();
         }
       }
     );
@@ -103,10 +124,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     await supabase.auth.signOut();
     setUser(null);
     setSession(null);
-    setIsMember(false);
-    setPermissions(null);
-    setIsPlatformAdmin(false);
-    setIsProductionOnly(false);
+    resetAuthState();
   };
 
   return (
