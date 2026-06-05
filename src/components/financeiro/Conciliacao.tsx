@@ -12,15 +12,19 @@ interface Transacao {
   valor: number;
   tipo: 'credito' | 'debito';
   conciliado: boolean;
-  receita_id: string | null;
-  despesa_id: string | null;
-  origem: string;
+  status_conciliacao?: string;
+  receita_id?: string | null;
+  despesa_id?: string | null;
+  origem?: string;
 }
+
+interface Conta { id: string; nome: string; }
 
 interface OFXImportResult {
   importadas: number;
   duplicadas: number;
-  erros: number;
+  total?: number;
+  erros?: number;
 }
 
 export default function Conciliacao() {
@@ -28,38 +32,65 @@ export default function Conciliacao() {
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<OFXImportResult | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const [filtro, setFiltro] = useState<'todas' | 'pendentes' | 'conciliadas'>('pendentes');
+  const [contas, setContas] = useState<Conta[]>([]);
+  const [contaId, setContaId] = useState<string>('');
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const res = await authFetch('/api/fin/ofx/transacoes');
-      if (res.ok) setTransacoes(await res.json());
+      if (res.ok) {
+        const rows = await res.json();
+        setTransacoes((rows || []).map((r: any) => ({
+          ...r,
+          conciliado: r.conciliado ?? r.status_conciliacao === 'conciliado',
+        })));
+      }
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  const loadContas = useCallback(async () => {
+    const res = await authFetch('/api/fin/contas');
+    if (!res.ok) return;
+    const data: Conta[] = await res.json();
+    setContas(data || []);
+    setContaId(prev => prev || data?.[0]?.id || '');
+  }, []);
+
+  useEffect(() => { load(); loadContas(); }, [load, loadContas]);
 
   const importarOFX = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!contaId) {
+      setImportError('Selecione (ou crie em Configurações) uma conta antes de importar o OFX.');
+      if (fileRef.current) fileRef.current.value = '';
+      return;
+    }
     setImporting(true);
     setImportResult(null);
+    setImportError(null);
     try {
       const text = await file.text();
       const res = await authFetch('/api/fin/ofx/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ofxContent: text }),
+        body: JSON.stringify({ conteudo: text, conta_id: contaId }),
       });
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        const data = await res.json();
         setImportResult(data);
         await load();
+      } else {
+        setImportError(data?.error || `Falha ao importar (erro ${res.status}).`);
       }
+    } catch {
+      setImportError('Não foi possível ler ou enviar o arquivo OFX.');
     } finally {
       setImporting(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -99,7 +130,17 @@ export default function Conciliacao() {
             {pendentes} transaç{pendentes !== 1 ? 'ões' : 'ão'} pendente{pendentes !== 1 ? 's' : ''}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          {contas.length > 0 && (
+            <select
+              value={contaId}
+              onChange={(e) => setContaId(e.target.value)}
+              title="Conta de destino do extrato"
+              className="text-sm px-2 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200"
+            >
+              {contas.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+            </select>
+          )}
           <input
             ref={fileRef}
             type="file"
@@ -109,7 +150,8 @@ export default function Conciliacao() {
           />
           <button
             onClick={() => fileRef.current?.click()}
-            disabled={importing}
+            disabled={importing || !contaId}
+            title={!contaId ? 'Crie uma conta em Configurações para importar' : undefined}
             className="flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
           >
             {importing ? (
@@ -133,6 +175,17 @@ export default function Conciliacao() {
             {importResult.erros > 0 && ` ${importResult.erros} erro(s).`}
           </div>
           <button onClick={() => setImportResult(null)} className="ml-auto text-emerald-500 hover:text-emerald-700">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Erro import */}
+      {importError && (
+        <div className="flex items-start gap-3 p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+          <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-red-700 dark:text-red-300">{importError}</div>
+          <button onClick={() => setImportError(null)} className="ml-auto text-red-500 hover:text-red-700">
             <X className="w-4 h-4" />
           </button>
         </div>
