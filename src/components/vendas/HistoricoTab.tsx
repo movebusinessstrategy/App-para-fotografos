@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { CheckCircle2, XCircle, Clock, Search, X, ExternalLink, Briefcase } from "lucide-react";
@@ -14,6 +14,7 @@ interface HistoricoTabProps {
   deals: Deal[];
   stages: PipelineStage[];
   clients: Client[];
+  initialFilter?: Filter;
   onOpenDeal?: (deal: Deal) => void;
   onUpdate?: () => void | Promise<void>;
 }
@@ -33,11 +34,15 @@ function getDealStatus(deal: Deal, stages: PipelineStage[]): "convertido" | "per
   return "ativo";
 }
 
-export function HistoricoTab({ deals, stages, clients, onOpenDeal, onUpdate }: HistoricoTabProps) {
-  const [filter, setFilter] = useState<Filter>("todos");
+export function HistoricoTab({ deals, stages, clients, initialFilter = "todos", onOpenDeal, onUpdate }: HistoricoTabProps) {
+  const [filter, setFilter] = useState<Filter>(initialFilter);
   const [search, setSearch] = useState("");
   const [cancelDeal, setCancelDeal] = useState<Deal | null>(null);
   const [cancelling, setCancelling] = useState(false);
+
+  useEffect(() => {
+    setFilter(initialFilter);
+  }, [initialFilter]);
 
   const stageMap = useMemo(() => {
     const m = new Map<string, PipelineStage>();
@@ -80,7 +85,10 @@ export function HistoricoTab({ deals, stages, clients, onOpenDeal, onUpdate }: H
             || normalizeText(d.contact_name || "").includes(q)
             || normalizeText(clientName || "").includes(q)
             || normalizeText(d.contact_phone || "").includes(q)
-            || normalizeText(d.contact_email || "").includes(q);
+            || normalizeText(d.contact_email || "").includes(q)
+            || normalizeText(d.lead_source || "").includes(q)
+            || normalizeText(d.lost_reason || "").includes(q)
+            || normalizeText(d.lost_notes || "").includes(q);
       });
     }
     // ordena por data de conversão/atualização desc
@@ -178,6 +186,7 @@ export function HistoricoTab({ deals, stages, clients, onOpenDeal, onUpdate }: H
               <th className="px-5 py-3 font-semibold">Etapa atual</th>
               <th className="px-5 py-3 font-semibold">Valor</th>
               <th className="px-5 py-3 font-semibold">Status</th>
+              <th className="px-5 py-3 font-semibold">Motivo da perda</th>
               <th className="px-5 py-3 font-semibold">Criado em</th>
               <th className="px-5 py-3 font-semibold">Convertido em</th>
               <th className="px-5 py-3 font-semibold text-right">Ação</th>
@@ -213,6 +222,22 @@ export function HistoricoTab({ deals, stages, clients, onOpenDeal, onUpdate }: H
                   </td>
                   <td className="px-5 py-3">
                     <StatusBadge status={status} />
+                  </td>
+                  <td className="px-5 py-3 min-w-[180px]">
+                    {status === "perdido" ? (
+                      <div>
+                        <p className="text-xs font-semibold text-rose-700 dark:text-rose-300">
+                          {d.lost_reason?.trim() || "Sem motivo informado"}
+                        </p>
+                        {d.lost_notes?.trim() && (
+                          <p className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400 line-clamp-2">
+                            {d.lost_notes}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-gray-400">-</span>
+                    )}
                   </td>
                   <td className="px-5 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
                     {d.created_at ? format(new Date(d.created_at), "dd/MM/yyyy", { locale: ptBR }) : "-"}
@@ -260,7 +285,7 @@ export function HistoricoTab({ deals, stages, clients, onOpenDeal, onUpdate }: H
 
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-6 py-16 text-center text-sm text-gray-400 dark:text-gray-500">
+                <td colSpan={8} className="px-6 py-16 text-center text-sm text-gray-400 dark:text-gray-500">
                   {search
                     ? "Nenhum negócio encontrado para esta busca."
                     : filter === "convertidos"

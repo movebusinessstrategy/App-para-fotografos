@@ -25,6 +25,7 @@ function TabFallback() {
 }
 
 type Tab = "inbox" | "kanban" | "historico" | "analises";
+type HistoryFilter = "todos" | "ativos" | "convertidos" | "perdidos";
 
 export function VendasDashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -32,6 +33,7 @@ export function VendasDashboard() {
   const initialPhone = searchParams.get("phone") || "";
 
   const [tab, setTab] = useState<Tab>(initialTab);
+  const [historyInitialFilter, setHistoryInitialFilter] = useState<HistoryFilter>("todos");
   const [newDealOpen, setNewDealOpen] = useState(false);
   const [customizerOpen, setCustomizerOpen] = useState(false);
 
@@ -155,7 +157,10 @@ export function VendasDashboard() {
         {TABS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
-            onClick={() => setTab(id)}
+            onClick={() => {
+              if (id === "historico") setHistoryInitialFilter("todos");
+              setTab(id);
+            }}
             className={`flex items-center gap-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-colors ${
               tab === id
                 ? "bg-gold-50 dark:bg-gold-900/30 text-gold-700 dark:text-gold-300"
@@ -198,11 +203,22 @@ export function VendasDashboard() {
                 deals={deals}
                 stages={stages}
                 clients={clients}
+                initialFilter={historyInitialFilter}
                 onUpdate={() => fetchData({ silent: true })}
               />
             ) : (
               <div className="h-full overflow-y-auto p-6">
-                <AnalisesTab deals={deals} stages={stages} />
+                <AnalisesTab
+                  deals={deals}
+                  stages={stages}
+                  onOpenHistory={() => {
+                    setHistoryInitialFilter("perdidos");
+                    setTab("historico");
+                    const next = new URLSearchParams(searchParams);
+                    next.set("tab", "historico");
+                    setSearchParams(next, { replace: true });
+                  }}
+                />
               </div>
             )}
           </Suspense>

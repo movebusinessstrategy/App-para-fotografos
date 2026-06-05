@@ -1,13 +1,14 @@
 import React, { useMemo } from "react";
 import { Deal, PipelineStage } from "../../types";
-import { TrendingUp, TrendingDown, Clock, DollarSign, Target, BarChart3 } from "lucide-react";
+import { TrendingUp, TrendingDown, Clock, DollarSign, Target, BarChart3, XCircle, ExternalLink } from "lucide-react";
 
 interface AnalisesTabProps {
   deals: Deal[];
   stages: PipelineStage[];
+  onOpenHistory?: () => void;
 }
 
-export function AnalisesTab({ deals, stages }: AnalisesTabProps) {
+export function AnalisesTab({ deals, stages, onOpenHistory }: AnalisesTabProps) {
   const stats = useMemo(() => {
     const activeStages = stages.filter((s) => !s.is_final);
     const wonStage = stages.find((s) => s.is_final && s.is_won);
@@ -40,6 +41,20 @@ export function AnalisesTab({ deals, stages }: AnalisesTabProps) {
       };
     });
 
+    const lostReasonMap = new Map<string, { count: number; value: number; notes: number }>();
+    lostDeals.forEach((deal) => {
+      const reason = deal.lost_reason?.trim() || "Sem motivo informado";
+      const current = lostReasonMap.get(reason) || { count: 0, value: 0, notes: 0 };
+      current.count += 1;
+      current.value += deal.value || 0;
+      if (deal.lost_notes?.trim()) current.notes += 1;
+      lostReasonMap.set(reason, current);
+    });
+
+    const lostReasons = Array.from(lostReasonMap.entries())
+      .map(([reason, data]) => ({ reason, ...data }))
+      .sort((a, b) => b.count - a.count || b.value - a.value);
+
     // Previsão por mês
     const byMonth: Record<string, { count: number; value: number }> = {};
     activeDeals.forEach((d) => {
@@ -61,6 +76,7 @@ export function AnalisesTab({ deals, stages }: AnalisesTabProps) {
       winRate,
       avgDealValue,
       byStage,
+      lostReasons,
       byMonth: Object.entries(byMonth)
         .sort(([a], [b]) => a.localeCompare(b))
         .slice(0, 6),
@@ -115,6 +131,56 @@ export function AnalisesTab({ deals, stages }: AnalisesTabProps) {
           <div className="text-2xl font-bold text-gray-900 dark:text-white">{stats.winRate.toFixed(1)}%</div>
           <div className="text-sm text-gray-500 dark:text-gray-400">ganhos/total fechados</div>
         </div>
+      </div>
+
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-2 min-w-0">
+            <XCircle size={18} className="text-red-600 dark:text-red-400 flex-shrink-0" />
+            <h3 className="font-semibold text-gray-900 dark:text-white">Motivos de Perda</h3>
+          </div>
+          {onOpenHistory && (
+            <button
+              type="button"
+              onClick={onOpenHistory}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            >
+              <ExternalLink size={12} />
+              Ver no histórico
+            </button>
+          )}
+        </div>
+
+        {stats.lostReasons.length > 0 ? (
+          <div className="space-y-3">
+            {stats.lostReasons.map((item) => {
+              const width = Math.max(8, (item.count / Math.max(...stats.lostReasons.map((r) => r.count), 1)) * 100);
+              return (
+                <div key={item.reason}>
+                  <div className="flex items-center justify-between gap-3 mb-1">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-gray-800 dark:text-gray-100 truncate">{item.reason}</p>
+                      <p className="text-[11px] text-gray-400 dark:text-gray-500">
+                        {item.count} negócio{item.count === 1 ? "" : "s"}
+                        {item.notes > 0 ? ` · ${item.notes} com observação` : ""}
+                      </p>
+                    </div>
+                    <span className="text-sm font-semibold text-gray-900 dark:text-white whitespace-nowrap">
+                      {formatCurrency(item.value)}
+                    </span>
+                  </div>
+                  <div className="h-2 bg-red-50 dark:bg-red-900/20 rounded-full overflow-hidden">
+                    <div className="h-full bg-red-500 dark:bg-red-400 rounded-full" style={{ width: `${width}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-6">
+            Nenhum negócio perdido com motivo registrado ainda.
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

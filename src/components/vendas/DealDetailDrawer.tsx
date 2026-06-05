@@ -13,6 +13,7 @@ import { useApi } from "../../utils/useApi";
 import { parseDate } from "../../utils/date";
 import { celebrateSale } from "../../utils/saleCelebration";
 import { DealConversionModal } from "../pipeline/DealConversionModal";
+import { LostDealModal } from "../pipeline/LostDealModal";
 import { useSellers } from "../../hooks/useSellers";
 import { SellerPicker } from "./SellerPicker";
 
@@ -202,6 +203,7 @@ export function DealDetailDrawer({
   const [historyError, setHistoryError] = useState(false);
 
   const [showConversionModal, setShowConversionModal] = useState(false);
+  const [showLostModal, setShowLostModal] = useState(false);
   const [isEditingContact, setIsEditingContact] = useState(false);
   const [, setSearchParams] = useSearchParams();
   const [contactData, setContactData] = useState({
@@ -462,9 +464,9 @@ export function DealDetailDrawer({
 
   const markAsWon = () => setShowConversionModal(true);
 
-  const markAsLost = async () => {
-    const lostStage = stages.find(s => s.is_final && !s.is_won);
-    if (lostStage) { await updateDeal({ stage: lostStage.id }); onClose(); }
+  const lostStage = stages.find(s => s.is_final && !s.is_won);
+  const markAsLost = () => {
+    if (lostStage) setShowLostModal(true);
   };
 
   const saveContactData = async () => { await updateDeal(contactData); setIsEditingContact(false); };
@@ -1465,6 +1467,15 @@ export function DealDetailDrawer({
           clients={clients}
           onClose={() => setShowConversionModal(false)}
           onConverted={() => { celebrateSale(); setShowConversionModal(false); onUpdate(); onClose(); }}
+        />
+      )}
+
+      {showLostModal && (
+        <LostDealModal
+          deal={deal}
+          stageId={lostStage?.id}
+          onClose={() => setShowLostModal(false)}
+          onSaved={() => { setShowLostModal(false); onUpdate(); onClose(); }}
         />
       )}
 

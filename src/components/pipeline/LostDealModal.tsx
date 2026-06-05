@@ -12,7 +12,7 @@ interface LostDealModalProps {
   onSaved: () => void;
 }
 
-const REASONS = ["Preço", "Concorrência", "Sem resposta", "Desistiu", "Outro"];
+const REASONS = ["Não quis fechar", "Preço", "Concorrência", "Sem resposta", "Desistiu", "Data indisponível", "Outro"];
 
 export function LostDealModal({ deal, stageId, onClose, onSaved }: LostDealModalProps) {
   const [reason, setReason] = useState(REASONS[0]);
