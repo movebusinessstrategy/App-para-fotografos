@@ -131,3 +131,23 @@ rtk init --global       # Add RTK to ~/.claude/CLAUDE.md
 
 Overall average: **60-90% token reduction** on common development operations.
 <!-- /rtk-instructions -->
+
+# Código limpo — Complexidade Ciclomática
+
+Ao **escrever ou editar** código, mantenha cada função com complexidade ciclomática
+baixa — alvo de **no máximo ~10** caminhos (cada `if`, `else if`, `for`, `while`,
+`case`, `&&`, `||`, `?:` conta como um caminho). Quanto menor, mais fácil de ler,
+testar e manter.
+
+**Como manter baixo:**
+- Extraia blocos ramificados em funções auxiliares com nome claro.
+- Prefira *early return* (guard clauses) a `if/else` aninhado.
+- Use tabelas/mapas de lookup no lugar de cadeias longas de `if/switch`.
+- Quebre funções que fazem várias coisas em funções menores e focadas.
+
+**Limites importantes (alinhado à preferência do projeto de não refatorar o que já funciona):**
+- Vale **daqui pra frente**, para código novo ou trechos que você já está alterando.
+- **Não** saia refatorando funções antigas que funcionam só para baixar a complexidade —
+  faça isso apenas se já estiver mexendo naquele código por outro motivo, ou se o usuário pedir.
+- É uma diretriz de escrita, não um lint que trava build. (Se um dia quiser checagem
+  automática, a regra `complexity` do ESLint faz isso — mas o projeto hoje não usa ESLint.)
