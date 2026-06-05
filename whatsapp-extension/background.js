@@ -106,6 +106,15 @@ async function handleMessage(message) {
       const encoded = encodeURIComponent(message.phone);
       return apiFetch(`/api/extension/deal-by-phone?phone=${encoded}`);
     }
+    case 'GET_WHATSAPP_STATUS': {
+      return apiFetch('/api/whatsapp/status');
+    }
+    case 'SEND_WHATSAPP_TEXT': {
+      return apiFetch('/api/inbox/send', {
+        method: 'POST',
+        body: JSON.stringify({ phone: message.phone, text: message.text }),
+      });
+    }
     case 'MOVE_STAGE': {
       return apiFetch(`/api/extension/deals/${message.dealId}/stage`, {
         method: 'PATCH',
