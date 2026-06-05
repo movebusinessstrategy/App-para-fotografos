@@ -10,6 +10,7 @@ interface AuthContextType {
   isMember: boolean;
   permissions: Record<string, boolean> | null;
   isPlatformAdmin: boolean;
+  isProductionOnly: boolean;
   canAccess: (module: string) => boolean;
   signOut: () => Promise<void>;
 }
@@ -21,6 +22,7 @@ const AuthContext = createContext<AuthContextType>({
   isMember: false,
   permissions: null,
   isPlatformAdmin: false,
+  isProductionOnly: false,
   canAccess: () => true,
   signOut: async () => {},
 });
@@ -42,6 +44,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   const [isMember, setIsMember] = useState(false);
   const [permissions, setPermissions] = useState<Record<string, boolean> | null>(null);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
+  const [isProductionOnly, setIsProductionOnly] = useState(false);
 
   const fetchMe = async () => {
     try {
@@ -51,6 +54,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         setIsMember(data.isMember ?? false);
         setPermissions(data.permissions ?? null);
         setIsPlatformAdmin(data.isPlatformAdmin ?? false);
+        setIsProductionOnly(data.productionOnly ?? false);
       }
     } catch {
       // silencia - se falhar, trata como dono
@@ -80,6 +84,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
           setIsMember(false);
           setPermissions(null);
           setIsPlatformAdmin(false);
+          setIsProductionOnly(false);
           setLoading(false);
         }
       }
@@ -101,10 +106,11 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     setIsMember(false);
     setPermissions(null);
     setIsPlatformAdmin(false);
+    setIsProductionOnly(false);
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, isMember, permissions, isPlatformAdmin, canAccess, signOut }}>
+    <AuthContext.Provider value={{ user, session, loading, isMember, permissions, isPlatformAdmin, isProductionOnly, canAccess, signOut }}>
       {children}
     </AuthContext.Provider>
   );

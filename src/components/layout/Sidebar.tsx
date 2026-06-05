@@ -60,14 +60,17 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
-  const { canAccess, isMember, isPlatformAdmin } = useAuth();
+  const { canAccess, isMember, isPlatformAdmin, isProductionOnly } = useAuth();
   const location = useLocation();
 
   const isCatalogo = location.pathname === "/catalogo";
   const [catalogoOpen, setCatalogoOpen] = useState(isCatalogo);
 
-  const navItems = ALL_NAV_ITEMS.filter(item => canAccess(item.module));
-  const bottomItems = isMember ? MEMBER_BOTTOM_ITEMS : OWNER_ITEMS;
+  // Papel de produção: vê SÓ "Produção", nada mais (sem catálogo/config/tarefas).
+  const navItems = isProductionOnly
+    ? ALL_NAV_ITEMS.filter(item => item.to === "/jobs")
+    : ALL_NAV_ITEMS.filter(item => canAccess(item.module));
+  const bottomItems = isProductionOnly ? [] : (isMember ? MEMBER_BOTTOM_ITEMS : OWNER_ITEMS);
 
   const currentAba = new URLSearchParams(location.search).get("aba") ?? "produtos";
 
@@ -135,7 +138,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
           ))}
 
           {/* Pasta Catálogo */}
-          {canAccess("catalogo") && (
+          {!isProductionOnly && canAccess("catalogo") && (
             <div>
               <button
                 onClick={() => setCatalogoOpen((v) => !v)}

@@ -1,5 +1,5 @@
 import React, { Suspense, useEffect, useMemo, useState } from "react";
-import { Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation, Navigate } from "react-router-dom";
 
 import Sidebar from "./Sidebar";
 import Header from "./Header";
@@ -53,7 +53,7 @@ const TITLE_MAP: Record<string, string> = {
 };
 
 export default function AppLayout() {
-  const { user, signOut } = useAuth();
+  const { user, signOut, isProductionOnly } = useAuth();
   const location = useLocation();
   const [contactModal, setContactModal] = useState<ContactModalPayload | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -67,6 +67,11 @@ export default function AppLayout() {
 
   const openContactModal = (payload: ContactModalPayload) => setContactModal(payload);
   const closeContactModal = () => setContactModal(null);
+
+  // Papel de produção: trancado na tela de Produção. Qualquer outra rota volta pra lá.
+  if (isProductionOnly && location.pathname !== "/jobs") {
+    return <Navigate to="/jobs" replace />;
+  }
 
   const handleDiscard = async (oppId: number) => {
     await authFetch(`/api/opportunities/${oppId}`, {

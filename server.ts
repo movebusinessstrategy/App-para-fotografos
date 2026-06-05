@@ -1529,6 +1529,28 @@ async function startServer() {
     });
   }
 
+  // ============ PAPEL "PRODUÇÃO RESTRITA" ============
+  // Membro que só enxerga o board de Produção e NUNCA valores monetários.
+  // Marcado via flag permissions.production_role (sem mudar o schema). O bloqueio
+  // de valores acontece no BACKEND — a UI esconder não basta (vazaria pela rede).
+  function isProductionOnly(req: express.Request): boolean {
+    if (!(req as any).isMember) return false;
+    if ((req as any).isPlatformAdmin) return false;
+    return ((req as any).memberPermissions || {}).production_role === true;
+  }
+  // Bloqueia rotas que expõem/alteram valores pra esse papel.
+  function denyProductionOnly(req: express.Request, res: express.Response, next: express.NextFunction) {
+    if (isProductionOnly(req)) {
+      return res.status(403).json({ error: 'Sem acesso a informações financeiras.', production_blocked: true });
+    }
+    next();
+  }
+  // Remove campos monetários de um job antes de enviar pro papel de produção.
+  function stripJobMoney(job: any) {
+    const { amount, amount_paid, payment_status, payment_method, ...rest } = job;
+    return rest;
+  }
+
   // ============ SUPER-ADMIN MIDDLEWARE ============
   // Requer requireAuth antes. Bloqueia se o REAL user (não o impersonado) não for super-admin.
   const requireSuperAdmin = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -3365,6 +3387,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json([...defaults, ...customSorted]);
   });
 
+  // Papel de produção: trancado fora da Produção TAMBÉM no backend (frontend não
+  // basta — vazaria via API direta). Bloqueia módulos que expõem valores/dados:
+  // clientes, vendas, oportunidades, contratos. (/api/fin já cai em requirePermission('finance').)
+  for (const prefix of ['/api/clients', '/api/opportunities', '/api/deals', '/api/contracts']) {
+    app.use(prefix, requireAuth, denyProductionOnly);
+  }
+
   app.get('/api/clients', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
@@ -3591,7 +3620,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       amount_paid: amountPaidByJob.get(j.id) || 0,
     }));
 
-    res.json(jobsFormatted);
+    const safe = isProductionOnly(req) ? jobsFormatted.map(stripJobMoney) : jobsFormatted;
+    res.json(safe);
   });
 
   app.post('/api/jobs', requireAuth, async (req, res) => {
@@ -3731,9 +3761,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (job_time !== undefined) updatePayload.job_time = job_time || null;
     if (job_end_time !== undefined) updatePayload.job_end_time = job_end_time || null;
     if (job_name !== undefined) updatePayload.job_name = job_name;
-    if (amount !== undefined) updatePayload.amount = amount;
-    if (payment_method !== undefined) updatePayload.payment_method = payment_method;
-    if (payment_status !== undefined) updatePayload.payment_status = payment_status;
+    // Papel de produção NUNCA grava valores (mesmo que o front mande).
+    const prodOnly = isProductionOnly(req);
+    if (amount !== undefined && !prodOnly) updatePayload.amount = amount;
+    if (payment_method !== undefined && !prodOnly) updatePayload.payment_method = payment_method;
+    if (payment_status !== undefined && !prodOnly) updatePayload.payment_status = payment_status;
     if (status !== undefined) updatePayload.status = status || oldJob.status;
     if (notes !== undefined) updatePayload.notes = notes;
     if (production_stage !== undefined) {
@@ -4043,7 +4075,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // ============ JOB FINANCEIRO ============
 
   // GET /api/jobs/:id/financeiro — itens do deal vinculado + job_items + pagamentos
-  app.get('/api/jobs/:id/financeiro', requireAuth, async (req, res) => {
+  app.get('/api/jobs/:id/financeiro', requireAuth, denyProductionOnly, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -4159,7 +4191,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // - Job com negócio vinculado (sem deal_items): edita o pacote no deal
   //   (nome, valor, desconto) ou troca por outro do catálogo.
   // - Job sem negócio: edita só o valor base (job.amount).
-  app.put('/api/jobs/:id/package', requireAuth, async (req, res) => {
+  app.put('/api/jobs/:id/package', requireAuth, denyProductionOnly, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -4205,7 +4237,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // POST /api/jobs/:id/payments — registrar um pagamento
-  app.post('/api/jobs/:id/payments', requireAuth, async (req, res) => {
+  app.post('/api/jobs/:id/payments', requireAuth, denyProductionOnly, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -4260,7 +4292,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // POST /api/jobs/:id/items — adicionar item ao job
-  app.post('/api/jobs/:id/items', requireAuth, async (req, res) => {
+  app.post('/api/jobs/:id/items', requireAuth, denyProductionOnly, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -6635,6 +6667,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       isPlatformAdmin: (req as any).isPlatformAdmin ?? false,
       isImpersonating: (req as any).isImpersonating ?? false,
       impersonatingOwnerId: (req as any).isImpersonating ? (req as any).userId : null,
+      productionOnly: isProductionOnly(req),
       currentMember,
     });
   });

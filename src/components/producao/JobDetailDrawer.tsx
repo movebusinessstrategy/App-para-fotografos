@@ -10,6 +10,7 @@ import { SearchableSelect } from "../ui/SearchableSelect";
 import { ContractGenerator } from "../contracts/ContractGenerator";
 import { TemplatePickerModal } from "../contracts/TemplatePickerModal";
 import { authFetch } from "../../utils/authFetch";
+import { useAuth } from "../../contexts/AuthContext";
 import { useApi } from "../../utils/useApi";
 import { parseDate } from "../../utils/date";
 import { cn } from "../../utils/cn";
@@ -130,6 +131,7 @@ const formatDuration = (ms: number | null | undefined) => {
 };
 
 export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsChange, onRemoveFromProduction, onJobUpdate }: JobDetailDrawerProps) {
+  const { isProductionOnly } = useAuth();
   const [tab, setTab] = useState<"details" | "financeiro" | "testimonials">("details");
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [client, setClient] = useState<ClientDetail | null>(null);
@@ -323,7 +325,9 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
     setDealItems([]); setJobItems([]); setPayments([]);
     setShowAddJobItem(false); setJobItemQty(1);
 
-    if (job.client_id) {
+    // Papel de produção não acessa /api/clients (bloqueado no backend). O nome do
+    // cliente já vem em job.client_name — não buscamos o detalhe.
+    if (job.client_id && !isProductionOnly) {
       setLoadingClient(true);
       authFetch(`/api/clients/${job.client_id}`)
         .then(r => r.ok ? r.json() : null)
@@ -342,7 +346,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
       .then(setTestimonials)
       .catch(() => {});
 
-    loadFinanceiro(job.id);
+    if (!isProductionOnly) loadFinanceiro(job.id);
 
     authFetch(`/api/jobs/${job.id}/stage-history`)
       .then(r => r.ok ? r.json() : [])
@@ -668,19 +672,21 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
           <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
             <ChevronRight size={12} /> {currentStageName}
           </span>
-          <span className="text-sm font-bold text-gray-800 dark:text-gray-100">
-            {(() => {
-              const amountPaid = job.amount_paid || 0;
-              const restante = job.amount - amountPaid;
-              if (job.payment_status === 'paid') return formatCurrency(job.amount);
-              return formatCurrency(restante >= 0 ? restante : job.amount);
-            })()}
-          </span>
+          {!isProductionOnly && (
+            <span className="text-sm font-bold text-gray-800 dark:text-gray-100">
+              {(() => {
+                const amountPaid = job.amount_paid || 0;
+                const restante = job.amount - amountPaid;
+                if (job.payment_status === 'paid') return formatCurrency(job.amount);
+                return formatCurrency(restante >= 0 ? restante : job.amount);
+              })()}
+            </span>
+          )}
         </div>
 
         {/* Tabs */}
         <div className="flex border-b border-gray-200 dark:border-gray-700">
-          {(["details", "financeiro", "testimonials"] as const).map((t) => {
+          {(["details", "financeiro", "testimonials"] as const).filter((t) => t !== "financeiro" || !isProductionOnly).map((t) => {
             const totalPago = payments.reduce((s, p) => s + p.amount, 0);
             const tabLabels: Record<string, string> = {
               details: "Detalhes",
@@ -746,6 +752,12 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                         {client.notes}
                       </p>
                     )}
+                  </div>
+                ) : isProductionOnly && job.client_name ? (
+                  <div className="space-y-2 rounded-xl border border-gray-200 p-4 dark:border-gray-700">
+                    <p className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+                      <User size={14} className="text-gray-400" /> {job.client_name}
+                    </p>
                   </div>
                 ) : (
                   <p className="text-sm text-gray-400">Sem cliente vinculado.</p>

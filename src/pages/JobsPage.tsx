@@ -19,6 +19,7 @@ import { cn } from "../utils/cn";
 import { parseDate } from "../utils/date";
 import { normalizeText } from "../utils/normalizeText";
 import { Client, Job, ProductionProcess, ProductionStageV2, TeamMember } from "../types";
+import { useAuth } from "../contexts/AuthContext";
 import UsageBar from "../components/UsageBar";
 
 const LABEL_COLORS = ['#6366f1','#ec4899','#f59e0b','#10b981','#0ea5e9','#f43f5e','#8b5cf6','#22c55e'];
@@ -29,6 +30,7 @@ function getLabelColor(label: string) {
 }
 
 export default function JobsPage() {
+  const { isProductionOnly } = useAuth();
   // SWR: dados ficam em cache, navegar entre páginas e voltar = instantâneo.
   const { data: jobsData, isLoading: jobsLoading, mutate: mutateJobs } =
     useApi<JobWithProduction[]>("/api/jobs");
@@ -384,7 +386,7 @@ export default function JobsPage() {
                   <th className="px-6 py-3 font-semibold">Cliente</th>
                   <th className="px-6 py-3 font-semibold">Tipo</th>
                   <th className="px-6 py-3 font-semibold">Data</th>
-                  <th className="px-6 py-3 font-semibold">Valor</th>
+                  {!isProductionOnly && <th className="px-6 py-3 font-semibold">Valor</th>}
                   <th className="px-6 py-3 font-semibold">Etapa</th>
                   <th className="px-6 py-3 font-semibold">Etiquetas</th>
                   <th className="px-6 py-3 font-semibold">Status</th>
@@ -411,9 +413,11 @@ export default function JobsPage() {
                         {jobDate ? format(jobDate, "dd/MM/yyyy", { locale: ptBR }) : "-"}
                         {job.job_time && <span className="text-xs text-gray-400"> · {job.job_time}</span>}
                       </td>
-                      <td className="px-6 py-4 font-semibold text-gray-900 dark:text-white text-sm">
-                        R$ {(job.amount ?? 0).toLocaleString("pt-BR")}
-                      </td>
+                      {!isProductionOnly && (
+                        <td className="px-6 py-4 font-semibold text-gray-900 dark:text-white text-sm">
+                          R$ {(job.amount ?? 0).toLocaleString("pt-BR")}
+                        </td>
+                      )}
                       <td className="px-6 py-4">
                         {stageInfo ? (
                           <div>

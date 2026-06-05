@@ -29,6 +29,20 @@ const COLORS = [
   "#f97316", "#06b6d4",
 ];
 
+// Papel "Produção restrita": só enxerga o board de Produção, NUNCA valores.
+// A flag production_role é lida no backend pra bloquear/limpar dados financeiros.
+const PRODUCTION_PRESET: Record<string, boolean> = {
+  production_role: true, jobs: true,
+  dashboard: false, clients: false, vendas: false, calendar: false,
+  finance: false, oportunidades: false, contratos: false,
+  catalogo: false, whatsapp: false, agente: false,
+};
+// Acesso padrão de um membro normal (igual ao default do backend).
+const FULL_PRESET: Record<string, boolean> = {
+  dashboard: true, clients: true, jobs: true, vendas: true,
+  calendar: true, finance: true, oportunidades: true, contratos: true,
+};
+
 function getInitials(name: string) {
   return name.trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
 }
@@ -48,6 +62,7 @@ function MemberModal({ member, onSave, onClose, saving }: MemberModalProps) {
   const [color, setColor] = useState(member?.color || COLORS[0]);
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [productionRole, setProductionRole] = useState(!!member?.permissions?.production_role);
 
   const isEdit = !!member?.id;
 
@@ -139,6 +154,20 @@ function MemberModal({ member, onSave, onClose, saving }: MemberModalProps) {
               ))}
             </div>
           </div>
+
+          {/* Papel de produção restrita */}
+          <label className="flex items-start gap-2.5 cursor-pointer rounded-xl border border-gray-200 dark:border-gray-700 p-3">
+            <input
+              type="checkbox"
+              checked={productionRole}
+              onChange={e => setProductionRole(e.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-gold-600"
+            />
+            <span>
+              <span className="block text-sm font-medium text-gray-800 dark:text-gray-100">Acesso só de Produção (editor)</span>
+              <span className="block text-xs text-gray-500 dark:text-gray-400">Vê apenas o board de Produção, move cards, etiquetas, checklist e fotos. Nunca vê valores nem o resto do sistema.</span>
+            </span>
+          </label>
         </div>
 
         <div className="px-5 pb-5 flex gap-2">
@@ -146,7 +175,13 @@ function MemberModal({ member, onSave, onClose, saving }: MemberModalProps) {
             Cancelar
           </button>
           <button
-            onClick={() => onSave({ ...member, name, email, color, ...(password ? { password } : {}) })}
+            onClick={() => onSave({
+              ...member, name, email, color,
+              ...(password ? { password } : {}),
+              permissions: productionRole
+                ? PRODUCTION_PRESET
+                : (member?.permissions?.production_role ? FULL_PRESET : member?.permissions),
+            })}
             disabled={!name.trim() || saving || (!isEdit && password.length > 0 && password.length < 6)}
             className="flex-1 py-2 text-sm bg-gold-600 hover:bg-gold-700 text-white rounded-xl font-semibold disabled:opacity-50 transition-colors"
           >
