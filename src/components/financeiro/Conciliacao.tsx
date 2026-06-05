@@ -33,6 +33,7 @@ export default function Conciliacao() {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<OFXImportResult | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
   const [filtro, setFiltro] = useState<'todas' | 'pendentes' | 'conciliadas'>('pendentes');
   const [contas, setContas] = useState<Conta[]>([]);
   const [contaId, setContaId] = useState<string>('');
@@ -75,24 +76,50 @@ export default function Conciliacao() {
     setImporting(true);
     setImportResult(null);
     setImportError(null);
+    setImportProgress(null);
     try {
       const text = await file.text();
-      const res = await authFetch('/api/fin/ofx/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conteudo: text, conta_id: contaId }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        setImportResult(data);
-        await load();
+
+      const enviarLote = async (conteudo: string) => {
+        const res = await authFetch('/api/fin/ofx/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ conteudo, conta_id: contaId }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error || `Falha ao importar (erro ${res.status}).`);
+        return data as OFXImportResult;
+      };
+
+      // Conta as transações (mesmo padrão do parser do backend) p/ enviar em
+      // lotes e mostrar progresso "X de N". Se não casar nada, manda inteiro.
+      const blocos = text.match(/<STMTTRN>[\s\S]*?<\/STMTTRN>/g) || [];
+      const total = blocos.length;
+      const acc: OFXImportResult = { importadas: 0, duplicadas: 0, total: 0 };
+      const somar = (d: OFXImportResult) => {
+        acc.importadas += d.importadas || 0;
+        acc.duplicadas += d.duplicadas || 0;
+        acc.total = (acc.total || 0) + (d.total || 0);
+      };
+
+      if (total === 0) {
+        somar(await enviarLote(text));
       } else {
-        setImportError(data?.error || `Falha ao importar (erro ${res.status}).`);
+        const LOTE = 25;
+        setImportProgress({ done: 0, total });
+        for (let i = 0; i < total; i += LOTE) {
+          somar(await enviarLote(blocos.slice(i, i + LOTE).join('\n')));
+          setImportProgress({ done: Math.min(i + LOTE, total), total });
+        }
       }
-    } catch {
-      setImportError('Não foi possível ler ou enviar o arquivo OFX.');
+
+      setImportResult(acc);
+      await load();
+    } catch (err: any) {
+      setImportError(err?.message || 'Não foi possível ler ou enviar o arquivo OFX.');
     } finally {
       setImporting(false);
+      setImportProgress(null);
       if (fileRef.current) fileRef.current.value = '';
     }
   };
@@ -122,6 +149,31 @@ export default function Conciliacao() {
 
   return (
     <div className="space-y-4">
+      {/* Popup de progresso da importação */}
+      {importing && (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40">
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 w-80 max-w-[90vw] shadow-xl text-center">
+            <RefreshCw className="w-8 h-8 text-violet-600 animate-spin mx-auto mb-3" />
+            <p className="font-semibold text-gray-900 dark:text-white mb-1">Importando extrato…</p>
+            {importProgress && importProgress.total > 0 ? (
+              <>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+                  {importProgress.done} de {importProgress.total} transações
+                </p>
+                <div className="w-full h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-violet-600 transition-all duration-200"
+                    style={{ width: `${Math.round((importProgress.done / importProgress.total) * 100)}%` }}
+                  />
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-gray-500 dark:text-gray-400">Processando arquivo…</p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
