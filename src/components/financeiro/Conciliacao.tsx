@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
-  Upload, Link2, Check, X, AlertCircle, RefreshCw, FileText,
+  Upload, Link2, Check, X, AlertCircle, RefreshCw, FileText, Plus,
 } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
 import { fmtBRL, fmtDate } from './finUtils';
+import { FinSelect } from './FinInputs';
 
 interface Transacao {
   id: string;
@@ -38,6 +39,16 @@ export default function Conciliacao() {
   const [filtro, setFiltro] = useState<'todas' | 'pendentes' | 'conciliadas'>('pendentes');
   const [contas, setContas] = useState<Conta[]>([]);
   const [contaId, setContaId] = useState<string>('');
+  // Conciliação manual
+  const [conciliarFor, setConciliarFor] = useState<Transacao | null>(null);
+  const [modo, setModo] = useState<'vincular' | 'criar'>('vincular');
+  const [categorias, setCategorias] = useState<{ id: string; nome: string }[]>([]);
+  const [lancamentos, setLancamentos] = useState<any[]>([]);
+  const [novaDesc, setNovaDesc] = useState('');
+  const [novaCategoria, setNovaCategoria] = useState('');
+  const [buscaLanc, setBuscaLanc] = useState('');
+  const [savingConc, setSavingConc] = useState(false);
+  const [concError, setConcError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -126,17 +137,69 @@ export default function Conciliacao() {
     }
   };
 
-  const conciliar = async (transacaoId: string, tipo: 'receita' | 'despesa', lancamentoId: string) => {
+  // Ao abrir o modal de conciliação manual, carrega categorias + candidatos.
+  useEffect(() => {
+    if (!conciliarFor) return;
+    const isCredito = conciliarFor.tipo === 'credito';
+    setModo('vincular');
+    setNovaDesc(conciliarFor.descricao || '');
+    setNovaCategoria('');
+    setBuscaLanc('');
+    setConcError(null);
+    (async () => {
+      const [catRes, lancRes] = await Promise.all([
+        authFetch(`/api/fin/categorias?tipo=${isCredito ? 'receita' : 'despesa'}`),
+        authFetch(isCredito ? '/api/fin/receitas' : '/api/fin/despesas'),
+      ]);
+      if (catRes.ok) setCategorias(await catRes.json());
+      if (lancRes.ok) {
+        const all = await lancRes.json();
+        setLancamentos((all || []).filter((l: any) => l.status !== 'cancelado'));
+      }
+    })();
+  }, [conciliarFor]);
+
+  const valorLanc = (l: any) => Number(l.valor_liquido ?? l.valor_bruto ?? l.valor ?? 0);
+  const descLanc = (l: any) => l.descricao || l.cliente_nome || '—';
+
+  const vincularExistente = async (lancId: string) => {
+    if (!conciliarFor) return;
+    setSavingConc(true); setConcError(null);
+    try {
+      const body = conciliarFor.tipo === 'credito'
+        ? { transacao_id: conciliarFor.id, receita_id: lancId }
+        : { transacao_id: conciliarFor.id, despesa_id: lancId };
+      const res = await authFetch('/api/fin/ofx/conciliar', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) { setConciliarFor(null); await load(); }
+      else setConcError(data?.error || 'Falha ao conciliar.');
+    } catch { setConcError('Falha ao conciliar.'); }
+    finally { setSavingConc(false); }
+  };
+
+  const criarLancamento = async () => {
+    if (!conciliarFor) return;
+    setSavingConc(true); setConcError(null);
+    try {
+      const res = await authFetch('/api/fin/ofx/criar-lancamento', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transacao_id: conciliarFor.id, descricao: novaDesc, categoria_id: novaCategoria || null }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) { setConciliarFor(null); await load(); }
+      else setConcError(data?.error || 'Falha ao criar lançamento.');
+    } catch { setConcError('Falha ao criar lançamento.'); }
+    finally { setSavingConc(false); }
+  };
+
+  const ignorarTransacao = async (t: Transacao) => {
     const res = await authFetch('/api/fin/ofx/conciliar', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ transacao_id: transacaoId, tipo, lancamento_id: lancamentoId }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transacao_id: t.id, ignorar: true }),
     });
-    if (res.ok) {
-      setTransacoes(prev => prev.map(t =>
-        t.id === transacaoId ? { ...t, conciliado: true } : t
-      ));
-    }
+    if (res.ok) await load();
   };
 
   const filtradas = transacoes.filter(t => {
@@ -310,6 +373,7 @@ export default function Conciliacao() {
                 <th className="text-left px-4 py-3 font-medium">Descrição</th>
                 <th className="text-right px-4 py-3 font-medium">Valor</th>
                 <th className="text-center px-4 py-3 font-medium">Status</th>
+                <th className="text-center px-4 py-3 font-medium">Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -340,12 +404,127 @@ export default function Conciliacao() {
                       </span>
                     )}
                   </td>
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
+                    {!t.conciliado && (
+                      <div className="flex items-center gap-1 justify-center">
+                        <button
+                          onClick={() => setConciliarFor(t)}
+                          className="text-xs px-2 py-1 rounded-md bg-violet-600 text-white hover:bg-violet-700"
+                        >Conciliar</button>
+                        <button
+                          onClick={() => ignorarTransacao(t)}
+                          title="Ignorar esta transação"
+                          className="text-xs px-2 py-1 rounded-md text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700"
+                        >Ignorar</button>
+                      </div>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       ) : null}
+
+      {/* Modal: conciliação manual (vincular a existente ou criar novo) */}
+      {conciliarFor && (() => {
+        const isCredito = conciliarFor.tipo === 'credito';
+        const q = buscaLanc.trim().toLowerCase();
+        const candidatos = lancamentos
+          .filter(l => !q || descLanc(l).toLowerCase().includes(q))
+          .sort((a, b) => Math.abs(valorLanc(a) - conciliarFor.valor) - Math.abs(valorLanc(b) - conciliarFor.valor))
+          .slice(0, 50);
+        return (
+          <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 p-4" onClick={() => setConciliarFor(null)}>
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+              <div className="flex items-start justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-700">
+                <div className="min-w-0">
+                  <h3 className="font-semibold text-gray-900 dark:text-white">Conciliar transação</h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                    {fmtDate(conciliarFor.data)} · {conciliarFor.descricao} ·{' '}
+                    <span className={isCredito ? 'text-emerald-600' : 'text-red-600'}>
+                      {isCredito ? '+' : '-'}{fmtBRL(conciliarFor.valor)}
+                    </span>
+                  </p>
+                </div>
+                <button onClick={() => setConciliarFor(null)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400"><X className="w-4 h-4" /></button>
+              </div>
+
+              <div className="flex gap-1 px-5 pt-3">
+                <button onClick={() => setModo('vincular')} className={`text-xs px-3 py-1.5 rounded-lg border font-medium ${modo === 'vincular' ? 'bg-violet-600 border-violet-600 text-white' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}>
+                  <Link2 className="w-3 h-3 inline mr-1" />Vincular a existente
+                </button>
+                <button onClick={() => setModo('criar')} className={`text-xs px-3 py-1.5 rounded-lg border font-medium ${modo === 'criar' ? 'bg-violet-600 border-violet-600 text-white' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}>
+                  <Plus className="w-3 h-3 inline mr-1" />Criar {isCredito ? 'receita' : 'despesa'}
+                </button>
+              </div>
+
+              {concError && (
+                <p className="mx-5 mt-3 text-xs text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{concError}</p>
+              )}
+
+              <div className="px-5 py-4 overflow-y-auto">
+                {modo === 'vincular' ? (
+                  <>
+                    <input
+                      value={buscaLanc}
+                      onChange={e => setBuscaLanc(e.target.value)}
+                      placeholder={`Buscar ${isCredito ? 'receita' : 'despesa'}...`}
+                      className="w-full mb-3 px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-200"
+                    />
+                    {candidatos.length === 0 ? (
+                      <p className="text-sm text-gray-400 text-center py-6">Nenhum lançamento encontrado.</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {candidatos.map(l => {
+                          const exato = Math.abs(valorLanc(l) - conciliarFor.valor) < 0.005;
+                          return (
+                            <button
+                              key={l.id}
+                              disabled={savingConc}
+                              onClick={() => vincularExistente(l.id)}
+                              className={`w-full flex items-center justify-between gap-3 px-3 py-2 rounded-lg border text-left hover:bg-gray-50 dark:hover:bg-gray-700/40 disabled:opacity-50 ${exato ? 'border-emerald-300 dark:border-emerald-700' : 'border-gray-200 dark:border-gray-700'}`}
+                            >
+                              <span className="min-w-0">
+                                <span className="block text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{descLanc(l)}</span>
+                                <span className="block text-xs text-gray-400">{[l.data_vencimento ? fmtDate(l.data_vencimento) : null, l.status].filter(Boolean).join(' · ')}</span>
+                              </span>
+                              <span className="text-sm font-semibold whitespace-nowrap text-gray-700 dark:text-gray-200">
+                                {fmtBRL(valorLanc(l))}{exato && <Check className="w-3 h-3 inline ml-1 text-emerald-500" />}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Descrição</label>
+                      <input value={novaDesc} onChange={e => setNovaDesc(e.target.value)} className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-200" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Categoria</label>
+                      <FinSelect value={novaCategoria} onChange={setNovaCategoria} options={categorias.map(c => ({ value: c.id, label: c.nome }))} placeholder="Selecione a categoria" />
+                    </div>
+                    <div className="flex gap-4 text-sm text-gray-500 dark:text-gray-400">
+                      <div>Valor: <span className="font-semibold text-gray-800 dark:text-gray-200">{fmtBRL(conciliarFor.valor)}</span></div>
+                      <div>Data: <span className="font-semibold text-gray-800 dark:text-gray-200">{fmtDate(conciliarFor.data)}</span></div>
+                    </div>
+                    <p className="text-xs text-gray-400">Cria {isCredito ? 'uma receita recebida' : 'uma despesa paga'} na conta do extrato e concilia automaticamente.</p>
+                    <div className="flex justify-end">
+                      <button onClick={criarLancamento} disabled={savingConc || !novaCategoria} className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50">
+                        {savingConc ? 'Criando...' : 'Criar e conciliar'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

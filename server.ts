@@ -9084,17 +9084,52 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       return res.json({ success: true });
     }
     const updates: any = { status_conciliacao: 'conciliado' };
-    const { data: tx } = await supabase.from('fin_transacoes_ofx').select('data,valor').eq('id', transacao_id).single();
+    const { data: tx } = await supabase.from('fin_transacoes_ofx').select('data,valor,conta_id').eq('id', transacao_id).eq('user_id', userId).single();
     if (receita_id) {
       updates.receita_id = receita_id;
-      await supabase.from('fin_receitas').update({ status: 'recebido', data_pagamento: tx?.data, updated_at: new Date().toISOString() }).eq('id', receita_id).eq('user_id', userId);
+      // Vincula a receita: marca recebida na data/banco do extrato. data_recebimento_real
+      // = data do extrato pra bater com a conciliação automática.
+      await supabase.from('fin_receitas').update({ status: 'recebido', data_pagamento: tx?.data, data_recebimento_real: tx?.data, conta_id: tx?.conta_id || null, updated_at: new Date().toISOString() }).eq('id', receita_id).eq('user_id', userId);
     }
     if (despesa_id) {
       updates.despesa_id = despesa_id;
-      await supabase.from('fin_despesas').update({ status: 'pago', data_pagamento: tx?.data, updated_at: new Date().toISOString() }).eq('id', despesa_id).eq('user_id', userId);
+      await supabase.from('fin_despesas').update({ status: 'pago', data_pagamento: tx?.data, conta_id: tx?.conta_id || null, updated_at: new Date().toISOString() }).eq('id', despesa_id).eq('user_id', userId);
     }
     await supabase.from('fin_transacoes_ofx').update(updates).eq('id', transacao_id).eq('user_id', userId);
     res.json({ success: true });
+  });
+
+  // Cria uma receita/despesa NOVA a partir de uma transação do extrato e já
+  // vincula (concilia). Usado quando o lançamento ainda não existe no sistema.
+  app.post('/api/fin/ofx/criar-lancamento', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { transacao_id, descricao, categoria_id } = req.body;
+    if (!transacao_id) return res.status(400).json({ error: 'transacao_id obrigatório' });
+    const { data: tx } = await supabase.from('fin_transacoes_ofx').select('*').eq('id', transacao_id).eq('user_id', userId).single();
+    if (!tx) return res.status(404).json({ error: 'Transação não encontrada' });
+    const desc = (descricao && String(descricao).trim()) || tx.descricao || (tx.tipo === 'credito' ? 'Receita (extrato)' : 'Despesa (extrato)');
+
+    if (tx.tipo === 'credito') {
+      const { data: rec, error } = await supabase.from('fin_receitas').insert({
+        user_id: userId, descricao: desc,
+        valor_bruto: tx.valor, valor_liquido: tx.valor, status: 'recebido',
+        data_vencimento: tx.data, data_pagamento: tx.data, data_recebimento_real: tx.data,
+        conta_id: tx.conta_id || null, categoria_id: categoria_id || null,
+      }).select('id').single();
+      if (error) return res.status(500).json({ error: error.message });
+      await supabase.from('fin_transacoes_ofx').update({ status_conciliacao: 'conciliado', receita_id: rec.id }).eq('id', transacao_id).eq('user_id', userId);
+      return res.json({ success: true, receita_id: rec.id });
+    }
+
+    const { data: desp, error } = await supabase.from('fin_despesas').insert({
+      user_id: userId, descricao: desc,
+      valor: tx.valor, status: 'pago',
+      data_vencimento: tx.data, data_pagamento: tx.data,
+      conta_id: tx.conta_id || null, categoria_id: categoria_id || null,
+    }).select('id').single();
+    if (error) return res.status(500).json({ error: error.message });
+    await supabase.from('fin_transacoes_ofx').update({ status_conciliacao: 'conciliado', despesa_id: desp.id }).eq('id', transacao_id).eq('user_id', userId);
+    return res.json({ success: true, despesa_id: desp.id });
   });
 
   // ─── Grupos DRE ────────────────────────────────────────────────────────────
