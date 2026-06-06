@@ -9104,6 +9104,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     // Parser OFX simples
     const transacoes: any[] = [];
+    let ignoradasSaldo = 0;
     const stmtMatches = conteudo.matchAll(/<STMTTRN>([\s\S]*?)<\/STMTTRN>/g);
     for (const match of stmtMatches) {
       const block = match[1];
@@ -9113,6 +9114,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const dtPosted = get('DTPOSTED');
       const trnAmt = parseFloat(get('TRNAMT').replace(',', '.')) || 0;
       const memo = get('MEMO') || get('NAME') || '';
+      // Linhas de SALDO (ex: "SALDO TOTAL DISPONÍVEL DIA", "S A L D O") são fotos
+      // do saldo do dia, NÃO movimentação. Importá-las inflaria a conciliação.
+      const memoNorm = memo.toUpperCase().replace(/\s+/g, ' ').trim();
+      if (/^SALDO\b/.test(memoNorm) || memoNorm.replace(/\s/g, '').startsWith('SALDO')) { ignoradasSaldo++; continue; }
       const data = dtPosted ? `${dtPosted.slice(0,4)}-${dtPosted.slice(4,6)}-${dtPosted.slice(6,8)}` : new Date().toISOString().slice(0,10);
       const tipo = trnAmt >= 0 ? 'credito' : 'debito';
       transacoes.push({ user_id: userId, conta_id, fit_id: fitId, tipo, valor: Math.abs(trnAmt), data, descricao: memo });
@@ -9128,7 +9133,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       try { if (await autoConciliarOfxTx(supabase, userId, ins)) conciliadas++; }
       catch { /* falha de auto-conciliação não derruba o import */ }
     }
-    res.json({ importadas, duplicadas, conciliadas, total: transacoes.length });
+    res.json({ importadas, duplicadas, conciliadas, ignoradas_saldo: ignoradasSaldo, total: transacoes.length });
   });
 
   app.get('/api/fin/ofx/transacoes', requireAuth, async (req, res) => {
