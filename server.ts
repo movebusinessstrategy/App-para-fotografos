@@ -8908,6 +8908,24 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const receitaBruta = (receitas || []).reduce((s: number, r: any) => s + (r.valor_bruto || 0), 0);
     const taxasTotal = (receitas || []).reduce((s: number, r: any) => s + (r.taxa_meio || 0), 0);
 
+    // "Catch-all": lançamentos cuja categoria NÃO está ligada a nenhum grupo da
+    // DRE (ou sem categoria) somem do relatório. Pior: despesas assim nunca eram
+    // subtraídas → resultado inflado. Aqui captamos esses como "Outros".
+    const grupoIds = new Set((grupos || []).map((g: any) => g.id));
+    const catMapeada = new Set(
+      (categorias || []).filter((c: any) => c.grupo_dre_id && grupoIds.has(c.grupo_dre_id)).map((c: any) => c.id)
+    );
+    const ehMapeada = (catId: any) => !!catId && catMapeada.has(catId);
+    const receitasNaoMapeadas = (receitas || []).filter((r: any) => !ehMapeada(r.categoria_id)).reduce((s: number, r: any) => s + (r.valor_bruto || 0), 0);
+    const despesasNaoMapeadas = (despesas || []).filter((d: any) => !ehMapeada(d.categoria_id)).reduce((s: number, d: any) => s + (d.valor || 0), 0);
+    // Onde encaixar os "Outros": receita bruta (entradas) e despesas operacionais (saídas).
+    const grupoReceitaBrutaId = ((grupos || []).find((g: any) => g.nome === '(+) Receita Bruta') || (grupos || []).find((g: any) => g.tipo === 'receita'))?.id ?? null;
+    const grupoOutrasDespesasId = (
+      (grupos || []).find((g: any) => g.nome === '(-) Despesas Operacionais') ||
+      (grupos || []).find((g: any) => g.tipo === 'despesa' && g.operacao === 'subtrai') ||
+      (grupos || []).find((g: any) => g.operacao === 'subtrai' && !(g.campos_automaticos || []).includes('taxas_recebimento'))
+    )?.id ?? null;
+
     const linhas: any[] = [];
     const totais_parciais: Record<string, number> = {};
     let acumulado = receitaBruta;
@@ -8930,6 +8948,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           : (despesas || []).filter((d: any) => d.categoria_id === cat.id).reduce((s: number, d: any) => s + (d.valor || 0), 0);
         categoriasLinha.push({ categoria_id: cat.id, categoria_nome: cat.nome, total });
         total_grupo += total;
+      }
+
+      // Catch-all: entradas não categorizadas vão na Receita Bruta (já contam no
+      // acumulado, então é só exibir); saídas não categorizadas vão em Despesas
+      // Operacionais (entram no total_grupo → passam a ser subtraídas).
+      if (grupo.id === grupoReceitaBrutaId && receitasNaoMapeadas > 0) {
+        categoriasLinha.push({ categoria_id: null, categoria_nome: 'Outros (não categorizado)', total: receitasNaoMapeadas });
+        total_grupo += receitasNaoMapeadas;
+      }
+      if (grupo.id === grupoOutrasDespesasId && despesasNaoMapeadas > 0) {
+        categoriasLinha.push({ categoria_id: null, categoria_nome: 'Outros (não categorizado)', total: despesasNaoMapeadas });
+        total_grupo += despesasNaoMapeadas;
       }
 
       linhas.push({

@@ -319,15 +319,24 @@ export default function Conciliacao() {
 
       {/* KPIs pendentes */}
       {pendentes > 0 && (
-        <div className="grid grid-cols-2 gap-4">
-          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-            <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Créditos pendentes</p>
-            <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">{fmtBRL(totalCredito)}</p>
+        <div>
+          <div className="grid grid-cols-3 gap-4">
+            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Pendentes</p>
+              <p className="text-lg font-bold text-gray-800 dark:text-gray-100">{pendentes}</p>
+            </div>
+            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Entradas a conciliar</p>
+              <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">{fmtBRL(totalCredito)}</p>
+            </div>
+            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Saídas a conciliar</p>
+              <p className="text-lg font-bold text-red-600 dark:text-red-400">{fmtBRL(totalDebito)}</p>
+            </div>
           </div>
-          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-            <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Débitos pendentes</p>
-            <p className="text-lg font-bold text-red-600 dark:text-red-400">{fmtBRL(totalDebito)}</p>
-          </div>
+          <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+            Soma de toda a movimentação ainda não conciliada (inclui transferências e aplicações). Não é o saldo da conta.
+          </p>
         </div>
       )}
 
