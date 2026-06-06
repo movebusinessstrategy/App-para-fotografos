@@ -202,6 +202,14 @@ export default function Conciliacao() {
     if (res.ok) await load();
   };
 
+  const desfazer = async (t: Transacao) => {
+    const res = await authFetch('/api/fin/ofx/desconciliar', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transacao_id: t.id }),
+    });
+    if (res.ok) await load();
+  };
+
   const filtradas = transacoes.filter(t => {
     if (filtro === 'pendentes') return !t.conciliado;
     if (filtro === 'conciliadas') return t.conciliado;
@@ -417,6 +425,13 @@ export default function Conciliacao() {
                           className="text-xs px-2 py-1 rounded-md text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700"
                         >Ignorar</button>
                       </div>
+                    )}
+                    {t.conciliado && (
+                      <button
+                        onClick={() => desfazer(t)}
+                        title="Desfazer a conciliação — volta a transação para pendente"
+                        className="text-xs px-2 py-1 rounded-md text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700"
+                      >Desfazer</button>
                     )}
                   </td>
                 </tr>

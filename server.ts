@@ -9165,6 +9165,20 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return res.json({ success: true, despesa_id: desp.id });
   });
 
+  // Desfaz a conciliação (ou o "ignorar") de uma transação: volta pra pendente e
+  // desfaz os vínculos. NÃO altera o lançamento vinculado — se ele foi marcado
+  // recebido/pago ou criado por engano, isso é ajustado na tela dele (A Receber/Pagar).
+  app.post('/api/fin/ofx/desconciliar', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    const { transacao_id } = req.body;
+    if (!transacao_id) return res.status(400).json({ error: 'transacao_id obrigatório' });
+    const { error } = await supabase.from('fin_transacoes_ofx')
+      .update({ status_conciliacao: 'pendente', receita_id: null, despesa_id: null })
+      .eq('id', transacao_id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
   // ─── Grupos DRE ────────────────────────────────────────────────────────────
   app.get('/api/fin/grupos-dre', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
