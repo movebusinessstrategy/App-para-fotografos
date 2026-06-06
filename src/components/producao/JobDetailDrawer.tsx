@@ -180,7 +180,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
 
   // Load existing contract for this job (if any) so we can show status + reuse instead of duplicating.
   useEffect(() => {
-    if (!job) {
+    if (!job || isProductionOnly) {
       setJobContract(null);
       return;
     }
@@ -633,22 +633,24 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
             </p>
           </div>
           <div className="flex items-center gap-1">
-            <button
-              onClick={handleOpenContract}
-              disabled={creatingContract}
-              className={cn(
-                "flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors disabled:opacity-60",
-                jobContract
-                  ? "text-gold-600 dark:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-500/10"
-                  : "text-gold-600 dark:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-500/10"
-              )}
-              title={jobContract ? 'Ver contrato existente' : 'Gerar contrato'}
-            >
-              <FileText size={14} />
-              {jobContract ? 'Ver contrato' : 'Gerar contrato'}
-              {jobContract && <ContractStatusPill status={jobContract.status} signers={jobContract.signers} />}
-            </button>
-            {onRemoveFromProduction && (
+            {!isProductionOnly && (
+              <button
+                onClick={handleOpenContract}
+                disabled={creatingContract}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors disabled:opacity-60",
+                  jobContract
+                    ? "text-gold-600 dark:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-500/10"
+                    : "text-gold-600 dark:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-500/10"
+                )}
+                title={jobContract ? 'Ver contrato existente' : 'Gerar contrato'}
+              >
+                <FileText size={14} />
+                {jobContract ? 'Ver contrato' : 'Gerar contrato'}
+                {jobContract && <ContractStatusPill status={jobContract.status} signers={jobContract.signers} />}
+              </button>
+            )}
+            {!isProductionOnly && onRemoveFromProduction && (
               <button
                 onClick={() => setConfirmRemove(true)}
                 className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
