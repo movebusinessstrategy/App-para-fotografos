@@ -406,6 +406,10 @@
         <button id="fp-kh-add">+ Novo Lead</button>
         <button id="fp-kh-logout" title="Sair da conta">⏻</button>
       </div>
+      <div id="fp-wa-banner" class="fp-hidden">
+        <span class="fp-wa-banner-msg">⚠️ WhatsApp não conectado — o envio de follow-up por API fica indisponível.</span>
+        <button id="fp-wa-banner-btn">Conectar via QR</button>
+      </div>
       <div id="fp-kpi">
         <div id="fp-kpi-period">
           <span class="fp-kpi-period-label">Período:</span>
@@ -474,8 +478,29 @@
     `;
     document.body.appendChild(m);
 
+    // Modal de conexão do WhatsApp (Baileys/QR)
+    const qrm = document.createElement('div');
+    qrm.id = 'fp-qr-modal';
+    qrm.classList.add('fp-hidden');
+    qrm.innerHTML = `
+      <div class="fp-mbox">
+        <h3>Conectar WhatsApp</h3>
+        <p class="fp-qr-sub">No celular: WhatsApp → Aparelhos conectados → Conectar um aparelho, e aponte para o código.</p>
+        <div id="fp-qr-body"><div class="fp-spin"></div><span style="font-size:12px;color:#667781">Gerando QR...</span></div>
+        <div class="fp-mrow">
+          <button class="fp-btn-w" id="fp-qr-close">Fechar</button>
+          <button class="fp-btn-g" id="fp-qr-refresh">Gerar novo QR</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(qrm);
+
     // Eventos base — addEventListener (não .onclick) para sobreviver à CSP do WA
     document.getElementById('fp-kh-refresh').addEventListener('click', () => loadKanban());
+    document.getElementById('fp-wa-banner-btn').addEventListener('click', openQrModal);
+    document.getElementById('fp-qr-close').addEventListener('click', closeQrModal);
+    document.getElementById('fp-qr-refresh').addEventListener('click', openQrModal);
+    qrm.addEventListener('click', (e) => { if (e.target === qrm) closeQrModal(); });
     document.getElementById('fp-kh-add').addEventListener('click', () => openModal());
     document.getElementById('fp-kh-logout').addEventListener('click', confirmLogout);
     document.getElementById('fp-q').addEventListener('input', (e) => { q = e.target.value.toLowerCase(); renderBoard(); });
@@ -625,6 +650,7 @@
   }
 
   // ===== KANBAN =====
+  let lastBoardSig = '';
   async function loadKanban(opts) {
     const silent = !!(opts && opts.silent === true);
     if (!silent) showBoardState('<div class="fp-spin"></div><span>Carregando pipeline...</span>');
@@ -635,10 +661,19 @@
         bg({ type: 'GET_TEAM_MEMBERS' }).catch(() => []),
         bg({ type: 'GET_ME' }).catch(() => null),
       ]);
-      deals = dr || [];
-      stages = sr || [];
-      teamMembers = Array.isArray(tm) ? tm.filter(m => m.is_active !== false) : [];
-      currentMemberId = me?.currentMember?.id || null;
+      const nextDeals = dr || [];
+      const nextStages = sr || [];
+      const nextMembers = Array.isArray(tm) ? tm.filter(m => m.is_active !== false) : [];
+      const nextMemberId = me?.currentMember?.id || null;
+      // No refresh silencioso (polling de 5s), só rebuilda o board se algo
+      // mudou de fato — evita flash/reset de rolagem quando nada mudou.
+      const sig = JSON.stringify([nextDeals, nextStages, nextMembers, nextMemberId]);
+      if (silent && sig === lastBoardSig) return;
+      lastBoardSig = sig;
+      deals = nextDeals;
+      stages = nextStages;
+      teamMembers = nextMembers;
+      currentMemberId = nextMemberId;
       renderBoard();
     } catch (err) {
       if (silent) return; // refresh em segundo plano falhou — mantém o board atual
@@ -687,6 +722,9 @@
   function renderBoard() {
     const b = document.getElementById('fp-board');
     if (!b) return;
+    // Guarda a rolagem: um refresh em 2º plano não deve jogar o board pro início.
+    const prevScrollLeft = b.scrollLeft;
+    const prevScrollTop = b.scrollTop;
     renderKpi();
     const all = orderedStages(stages);
     if (!all.length) { showBoardState('<p>Nenhuma etapa encontrada.</p>'); return; }
@@ -741,6 +779,8 @@
     }).join('');
 
     b.innerHTML = inboxHtml + stagesHtml;
+    b.scrollLeft = prevScrollLeft;
+    b.scrollTop = prevScrollTop;
 
     // Drag/drop por dataset (CSP-safe — sem onclick/ondrop inline)
     bindBoardDragScroll(b);
@@ -6408,6 +6448,125 @@
   }
 
   // ===== INIT =====
+  // ===== CONEXÃO WHATSAPP (Baileys/QR) — gate suave =====
+  // Mostra um banner "WhatsApp não conectado" quando a sessão Baileys/API está
+  // fora, com botão que abre uma janela de QR. Não trava o funil (que funciona
+  // sem a API); só sinaliza que o envio por API fica indisponível.
+  let waConnected = null;   // null = desconhecido; true/false = último status
+  let qrPollTimer = null;
+
+  function isWaStatusConnected(s) {
+    return s?.connected === true || s?.whatsapp?.connected === true;
+  }
+
+  function updateWaBanner() {
+    const banner = document.getElementById('fp-wa-banner');
+    if (!banner) return;
+    // Só mostra o aviso quando SABEMOS que está desconectado (evita banner falso
+    // enquanto o status ainda é desconhecido ou após falha de rede).
+    banner.classList.toggle('fp-hidden', waConnected !== false);
+  }
+
+  async function checkWaConnection() {
+    let s;
+    try { s = await bg({ type: 'GET_WHATSAPP_STATUS' }); }
+    catch { return; } // falha de rede: mantém o estado conhecido, sem banner falso
+    waConnected = isWaStatusConnected(s);
+    updateWaBanner();
+  }
+
+  function qrBody(html) {
+    const el = document.getElementById('fp-qr-body');
+    if (el) el.innerHTML = html;
+  }
+
+  function extractQr(data) {
+    if (typeof data?.base64 === 'string' && data.base64.length > 20) return data.base64;
+    if (typeof data?.qrcode?.base64 === 'string') return data.qrcode.base64;
+    if (typeof data?.instance?.qrcode?.base64 === 'string') return data.instance.qrcode.base64;
+    return null;
+  }
+
+  function stopQrPoll() {
+    if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
+  }
+
+  function onWaConnected() {
+    stopQrPoll();
+    waConnected = true;
+    updateWaBanner();
+    qrBody('<span class="fp-qr-ok">✓ WhatsApp conectado!</span>');
+    toast('WhatsApp conectado via API');
+    setTimeout(closeQrModal, 1200);
+  }
+
+  function closeQrModal() {
+    stopQrPoll();
+    document.getElementById('fp-qr-modal')?.classList.add('fp-hidden');
+  }
+
+  async function openQrModal() {
+    const modal = document.getElementById('fp-qr-modal');
+    if (!modal) return;
+    modal.classList.remove('fp-hidden');
+    stopQrPoll();
+    qrBody('<div class="fp-spin"></div><span style="font-size:12px;color:#667781">Verificando conexão...</span>');
+    try {
+      // Guarda: se JÁ está conectado, NÃO reinicia a sessão — startSession derruba
+      // o socket atual. Só inicia quando confirmamos que está desconectado.
+      const s0 = await bg({ type: 'GET_WHATSAPP_STATUS' });
+      if (isWaStatusConnected(s0)) { onWaConnected(); return; }
+
+      qrBody('<div class="fp-spin"></div><span style="font-size:12px;color:#667781">Gerando QR...</span>');
+      const resp = await bg({ type: 'START_WHATSAPP_INSTANCE' });
+      if (resp?.state === 'open' || isWaStatusConnected(resp)) { onWaConnected(); return; }
+
+      let qr = extractQr(resp);
+      if (!qr) {
+        const qrResp = await bg({ type: 'GET_WHATSAPP_QR' });
+        if (qrResp?.state === 'open') { onWaConnected(); return; }
+        qr = extractQr(qrResp);
+      }
+      if (!qr) {
+        qrBody('<span class="fp-qr-err">Não foi possível gerar o QR agora. Tente "Gerar novo QR".</span>');
+        return;
+      }
+      const src = qr.startsWith('data:') ? qr : `data:image/png;base64,${qr}`;
+      qrBody(`<img src="${esc(src)}" alt="QR Code WhatsApp" /><span style="font-size:12px;color:#667781">Aguardando leitura...</span>`);
+
+      // Polling do status até conectar (a janela fica aberta enquanto isso).
+      qrPollTimer = setInterval(async () => {
+        try {
+          const s = await bg({ type: 'GET_WHATSAPP_STATUS' });
+          if (isWaStatusConnected(s)) onWaConnected();
+        } catch {}
+      }, 3000);
+    } catch (err) {
+      qrBody(`<span class="fp-qr-err">${esc(err.message || 'Falha ao iniciar conexão')}</span>`);
+    }
+  }
+
+  // Auto-refresh (tempo real): a cada 5s atualiza em silêncio o funil aberto,
+  // pra refletir mudanças feitas no app/por outra pessoa sem recarregar a página.
+  // Pausa durante arraste de card (o rebuild do DOM cortaria o drag) e quando a
+  // aba do navegador está oculta. O loadKanban silencioso só rebuilda se mudou.
+  let liveRefreshTimer = null;
+  let liveTick = 0;
+  function startLiveRefresh() {
+    if (liveRefreshTimer) return;
+    liveRefreshTimer = setInterval(() => {
+      if (document.hidden) return;
+      // Revalida o status da conexão a cada ~20s (liga/desliga o banner). Pula
+      // enquanto a janela de QR está aberta (ela já faz seu próprio polling).
+      if (++liveTick % 4 === 0 && !qrPollTimer) checkWaConnection();
+      if (pointerDrag !== null || draggingId !== null || draggingInboxIdx !== null) return;
+      const kanbanEl = document.getElementById('fp-kanban');
+      if (kanbanEl && !kanbanEl.classList.contains('fp-hidden')) {
+        loadKanban({ silent: true });
+      }
+    }, 5000);
+  }
+
   function init() {
     build();
     startObserver();
@@ -6418,6 +6577,8 @@
     setTimeout(adjustPosition, 4000);
     // Carrega vendedores em background — modal e "Adicionar ao Pipeline" já abrem com o valor certo
     loadTeamAndMe();
+    startLiveRefresh();
+    checkWaConnection(); // status inicial da conexão (liga o banner se desconectado)
   }
 
   if (document.readyState === 'complete') setTimeout(init, 1800);

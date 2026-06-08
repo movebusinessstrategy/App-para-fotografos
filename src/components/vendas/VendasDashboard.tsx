@@ -4,7 +4,7 @@ import { BarChart3, LayoutGrid, MessageCircle, Plus, Settings, History, RefreshC
 import { FunilTab } from "./FunilTab";
 import { NewDealModal } from "./NewDealModal";
 import { StageCustomizer } from "./StageCustomizer";
-import { useApi, refreshApi } from "../../utils/useApi";
+import { useApi, refreshApi, liveRefresh } from "../../utils/useApi";
 import { Deal, PipelineStage, Client } from "../../types";
 
 // Lazy: cada tab vira um chunk próprio, baixado só quando o usuário clicar.
@@ -37,7 +37,9 @@ export function VendasDashboard() {
   const [newDealOpen, setNewDealOpen] = useState(false);
   const [customizerOpen, setCustomizerOpen] = useState(false);
 
-  const { data: dealsData, isLoading: dealsLoading, mutate: mutateDeals } = useApi<Deal[]>("/api/deals");
+  // Atualiza sozinho a cada 5s (tempo real). O FunilTab segura o board
+  // durante/logo após um arraste pra um poll antigo não "puxar" o card de volta.
+  const { data: dealsData, isLoading: dealsLoading, mutate: mutateDeals } = useApi<Deal[]>("/api/deals", liveRefresh);
   const { data: stagesData } = useApi<PipelineStage[]>("/api/pipeline/stages");
   const { data: clientsData } = useApi<Client[]>("/api/clients");
 

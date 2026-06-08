@@ -109,6 +109,15 @@ async function handleMessage(message) {
     case 'GET_WHATSAPP_STATUS': {
       return apiFetch('/api/whatsapp/status');
     }
+    case 'START_WHATSAPP_INSTANCE': {
+      // Inicia a sessão Baileys (gera QR). CUIDADO: derruba o socket atual se
+      // houver — o content.js só chama isto depois de confirmar que está desconectado.
+      return apiFetch('/api/whatsapp/instance', { method: 'POST' });
+    }
+    case 'GET_WHATSAPP_QR': {
+      // Aguarda e devolve o QR ({ base64: "data:image/png..." }).
+      return apiFetch('/api/whatsapp/qrcode');
+    }
     case 'SEND_WHATSAPP_TEXT': {
       return apiFetch('/api/inbox/send', {
         method: 'POST',

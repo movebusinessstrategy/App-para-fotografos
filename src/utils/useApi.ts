@@ -21,6 +21,13 @@ export function useApi<T = unknown>(
   return useSWR<T, Error>(url, defaultFetcher, config);
 }
 
+// Config p/ telas "ao vivo" (Produção, Vendas): revalida a cada 5s pra
+// dar sensação de tempo real. O dedupingInterval baixo (2s) é OBRIGATÓRIO:
+// o SWRConfig global usa dedupingInterval de 60s, que engoliria o polling
+// (o FETCH dedupado só refetcharia ~1x/min). Aqui sobrescrevemos só nesses
+// hooks. O SWR já pausa o polling sozinho quando a aba está oculta.
+export const liveRefresh: SWRConfiguration = { refreshInterval: 5000, dedupingInterval: 2000 };
+
 // Helper pra invalidar cache de uma URL (chama após POST/PUT/DELETE).
 export function refreshApi(url: string) {
   return globalMutate(url);

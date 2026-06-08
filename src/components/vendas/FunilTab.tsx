@@ -43,6 +43,11 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
   const [pipelineLabels, setPipelineLabels] = useState<PipelineLabel[]>([]);
   const [sellerFilter, setSellerFilter] = useState<string | 'all' | 'none'>('all');
   const boardRef = useRef<HTMLDivElement>(null);
+  // Polling de 5s do parent: enquanto o usuário arrasta (ou nos ~2s seguintes
+  // a um movimento local), não deixamos o board ser resetado por um poll com
+  // dado antigo — senão o card "pula" de volta antes do servidor confirmar.
+  const isDraggingRef = useRef(false);
+  const lastLocalMoveRef = useRef(0);
 
   const { sellers, byId: sellerById } = useSellers();
 
@@ -51,11 +56,16 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
   );
 
   useEffect(() => {
-    setLocalDeals(deals);
+    // Mantém o drawer (selectedDeal) sempre sincronizado com o dado novo.
     setSelectedDeal((prev) => {
       if (!prev) return prev;
       return deals.find((d) => d.id === prev.id) ?? prev;
     });
+    // Não sobrescreve o board no meio de um arraste, nem por ~2s após um
+    // movimento local (janela pra o PUT confirmar e o poll trazer o estado certo).
+    if (isDraggingRef.current) return;
+    if (Date.now() - lastLocalMoveRef.current < 2000) return;
+    setLocalDeals(deals);
   }, [deals]);
 
   useEffect(() => {
@@ -104,11 +114,13 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
   }, [filteredDeals, activeStages]);
 
   const handleDragStart = (event: DragStartEvent) => {
+    isDraggingRef.current = true;
     const deal = localDeals.find((d) => String(d.id) === String(event.active.id));
     setActiveDeal(deal || null);
   };
 
   const handleDragEnd = async (event: DragEndEvent) => {
+    isDraggingRef.current = false;
     setActiveDeal(null);
     const { active, over } = event;
     if (!over) return;
@@ -124,6 +136,7 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
     if (!deal || !targetStage || deal.stage === newStageId) return;
 
     const previousDeals = localDeals.map((d) => ({ ...d }));
+    lastLocalMoveRef.current = Date.now();
     setLocalDeals((prev) =>
       prev.map((d) => (String(d.id) === dealId ? { ...d, stage: newStageId } : d))
     );

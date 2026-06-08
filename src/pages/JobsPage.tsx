@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -14,7 +14,7 @@ import { ProductionCustomizer } from "../components/producao/ProductionCustomize
 import { JobDetailDrawer } from "../components/producao/JobDetailDrawer";
 import { SalesOverviewPanel } from "../components/producao/SalesOverviewPanel";
 import { authFetch } from "../utils/authFetch";
-import { useApi, refreshApi } from "../utils/useApi";
+import { useApi, refreshApi, liveRefresh } from "../utils/useApi";
 import { cn } from "../utils/cn";
 import { parseDate } from "../utils/date";
 import { normalizeText } from "../utils/normalizeText";
@@ -31,9 +31,19 @@ function getLabelColor(label: string) {
 
 export default function JobsPage() {
   const { isProductionOnly } = useAuth();
-  // SWR: dados ficam em cache, navegar entre páginas e voltar = instantâneo.
+  // Auto-refresh (tempo real): /api/jobs revalida a cada 5s. Pausa por ~2.5s
+  // após uma ação local (boardBusy) pra um poll com dado antigo não desfazer
+  // visualmente a mudança otimista — o card "voltando" sozinho. O drag é HTML5
+  // nativo com key estável, então um re-render do poll não corta o arraste.
+  const [boardBusy, setBoardBusy] = useState(false);
+  const boardBusyTimer = useRef<number | null>(null);
+  const holdRefresh = () => {
+    setBoardBusy(true);
+    if (boardBusyTimer.current) clearTimeout(boardBusyTimer.current);
+    boardBusyTimer.current = window.setTimeout(() => setBoardBusy(false), 2500);
+  };
   const { data: jobsData, isLoading: jobsLoading, mutate: mutateJobs } =
-    useApi<JobWithProduction[]>("/api/jobs");
+    useApi<JobWithProduction[]>("/api/jobs", { ...liveRefresh, refreshInterval: boardBusy ? 0 : 5000 });
   const { data: clientsData } = useApi<Client[]>("/api/clients");
   const { data: processesData } = useApi<ProductionProcess[]>("/api/production/processes");
   const { data: stagesData, mutate: mutateStages } =
@@ -88,6 +98,7 @@ export default function JobsPage() {
   }), [jobs, filters, searchQuery]);
 
   const handleAssigneeChange = async (jobId: number, assigneeId: string | null) => {
+    holdRefresh();
     // Optimistic update via SWR mutate
     mutateJobs(
       prev => (prev || []).map(j => j.id === jobId ? { ...j, assignee_id: assigneeId } : j),
@@ -106,6 +117,7 @@ export default function JobsPage() {
   };
 
   const handleStageChange = async (jobId: number, stageId: string) => {
+    holdRefresh();
     mutateJobs(
       prev => (prev || []).map(j => j.id === jobId
         ? { ...j, production_stage: stageId, production_stage_entered_at: new Date().toISOString() }
@@ -126,6 +138,7 @@ export default function JobsPage() {
   };
 
   const handleRemoveFromProduction = async (jobId: number) => {
+    holdRefresh();
     mutateJobs(
       prev => (prev || []).map(j => j.id === jobId
         ? { ...j, production_stage: null, production_stage_entered_at: null }
@@ -152,6 +165,7 @@ export default function JobsPage() {
       message: "Deseja excluir este trabalho? Esta ação não pode ser desfeita.",
       variant: "danger",
       onConfirm: async () => {
+        holdRefresh();
         await authFetch(`/api/jobs/${id}`, { method: "DELETE" });
         mutateJobs();
       },
@@ -346,6 +360,7 @@ export default function JobsPage() {
               onAssigneeChange={handleAssigneeChange}
               onRemoveFromProduction={handleRemoveFromProduction}
               onReorderInStage={async (stageId, orderedJobIds) => {
+                holdRefresh();
                 // Optimista: aplica nova ordem no cache local imediatamente
                 mutateJobs(prev => (prev || []).map(j => {
                   const idx = orderedJobIds.indexOf(j.id);
