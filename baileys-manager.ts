@@ -13,7 +13,12 @@ import path from 'path';
 import fs from 'fs';
 import pino from 'pino';
 
-const SESSIONS_DIR = path.join(process.cwd(), 'baileys_sessions');
+// Caminho das credenciais do WhatsApp (Baileys). Em produção, aponte
+// BAILEYS_SESSIONS_DIR para um DISCO PERSISTENTE do Render (ex.:
+// /var/data/baileys_sessions) — senão o disco do container é zerado a cada
+// deploy/reinício e a sessão do WhatsApp é perdida (precisa reescanear o QR).
+// Sem a env, mantém o comportamento atual (disco local, não persistente).
+const SESSIONS_DIR = process.env.BAILEYS_SESSIONS_DIR || path.join(process.cwd(), 'baileys_sessions');
 const silentLogger = pino({ level: 'silent' });
 
 type Socket = ReturnType<typeof makeWASocket>;
