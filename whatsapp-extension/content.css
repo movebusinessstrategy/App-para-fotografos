@@ -816,6 +816,39 @@ body.fp-kanban-open #pane-side { display: none !important; }
   opacity: 0.45;
   cursor: grabbing;
 }
+/* Sinalização de tempo parado na etapa — espelha a pipeline de vendas do app (12h = amarelo, 24h = vermelho) */
+.fpc-card.fpc-stale-warning {
+  border-color: #f59e0b;
+  background: rgba(254, 243, 199, 0.4);
+}
+.fpc-card.fpc-stale-urgent {
+  border-color: #ef4444;
+  background: rgba(254, 226, 226, 0.4);
+  animation: fp-pulse-red 2s ease-in-out infinite;
+}
+.fpc-av-wrap { position: relative; flex-shrink: 0; line-height: 0; }
+.fpc-stale-dot {
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-sizing: border-box;
+}
+.fpc-stale-dot-warning { background: #fbbf24; }
+.fpc-stale-dot-urgent { background: #ef4444; }
+.fpc-stale-tag {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+}
+.fpc-stale-tag-warning { background: #fef3c7; color: #92400e; }
+.fpc-stale-tag-urgent { background: #fee2e2; color: #b91c1c; }
 .fpc-card-ghost {
   position: fixed;
   z-index: 2147483003;
@@ -849,7 +882,7 @@ body.fp-kanban-open #pane-side { display: none !important; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .fpc-sub { font-size: 11px; color: #667781; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.fpc-date { font-size: 10px; color: #aaa; flex-shrink: 0; margin-top: 1px; }
+.fpc-date { font-size: 10px; color: #aaa; flex-shrink: 0; margin-top: 1px; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 
 .fpc-card-bot {
   display: flex;

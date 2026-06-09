@@ -19,6 +19,14 @@
   const digits = (s) => String(s || '').replace(/\D/g, '');
   const initials = (n) => { const w = String(n || '?').trim().split(/\s+/); return (w[0][0] + (w[1]?.[0] || '')).toUpperCase(); };
   const fmtDate = (s) => { try { return new Date(s).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }); } catch { return ''; } };
+  // Tempo parado na etapa do funil — mesmos limites da pipeline de vendas do app (12h = atenção/amarelo, 24h = atrasado/vermelho)
+  const staleness = (enteredAt) => {
+    if (!enteredAt) return null;
+    const hours = (Date.now() - new Date(enteredAt).getTime()) / 3_600_000;
+    if (hours >= 24) return 'urgent';
+    if (hours >= 12) return 'warning';
+    return null;
+  };
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
   // ===== STATE =====
@@ -1387,22 +1395,27 @@
     const type = getDealShootType(d);
     const phoneLabel = phone ? `+${digits(phone).replace(/(\d{2})(\d{2})(\d{5})(\d{4})/, '$1 ($2) $3-$4')}` : '';
     const sub = [type, phoneLabel || stripDealMetaFromNotes(d.notes)?.substring(0, 40)].filter(Boolean).join(' · ');
-    const avatar = photo
+    const st = staleness(d.current_stage_entered_at);
+    const avatarInner = photo
       ? `<div class="fpc-av fpc-av-img"><img src="${esc(photo)}" alt="" /></div>`
       : `<div class="fpc-av" style="background:${c.dot}">${esc(initials(name))}</div>`;
+    const avatar = `<div class="fpc-av-wrap">${avatarInner}${st ? `<span class="fpc-stale-dot fpc-stale-dot-${st}"></span>` : ''}</div>`;
+    const staleTag = st
+      ? `<span class="fpc-stale-tag fpc-stale-tag-${st}" title="Parado nesta etapa há ${st === 'urgent' ? '24h ou mais' : '12h ou mais'}">${st === 'urgent' ? '+24h' : '+12h'}</span>`
+      : '';
     const seller = d.assigned_to ? teamMembers.find(m => m.id === d.assigned_to) : null;
     const sellerBadge = seller
       ? `<span class="fpc-seller" style="background:${esc(seller.color || '#6366f1')}" title="${esc(seller.name)}">${esc(initials(seller.name))}</span>`
       : '';
     return `
-      <div class="fpc-card" data-id="${d.id}" data-phone="${esc(phone)}">
+      <div class="fpc-card${st ? ` fpc-stale-${st}` : ''}" data-id="${d.id}" data-phone="${esc(phone)}">
         <div class="fpc-card-top">
           ${avatar}
           <div class="fpc-info">
             <div class="fpc-name">${esc(name)}</div>
             <div class="fpc-sub">${esc(sub)}</div>
           </div>
-          <div class="fpc-date">${fmtDate(d.updated_at || d.created_at)}</div>
+          <div class="fpc-date">${staleTag}<span>${fmtDate(d.updated_at || d.created_at)}</span></div>
         </div>
         <div class="fpc-card-bot">
           <span class="fpc-val">${d.value ? brl.format(d.value) : '—'}</span>
