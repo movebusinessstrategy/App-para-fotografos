@@ -1735,12 +1735,12 @@ body.fp-kanban-open #pane-side { display: none !important; }
 #fp-toast.err { background: #e53935; }
 
 /* Modal */
-#fp-modal, #fp-qr-modal {
+#fp-modal {
   position: fixed; inset: 0; z-index: 2147483002;
   background: rgba(0,0,0,0.38);
   display: flex; align-items: center; justify-content: center;
 }
-#fp-modal.fp-hidden, #fp-qr-modal.fp-hidden { display: none; }
+#fp-modal.fp-hidden { display: none; }
 .fp-mbox {
   background: #fff; border-radius: 14px; padding: 22px;
   width: 340px; max-width: 92vw;
@@ -1778,29 +1778,6 @@ body.fp-kanban-open #pane-side { display: none !important; }
   border: 2px solid #e9edef; border-top-color: #00a884;
   border-radius: 50%; animation: fpspin 0.7s linear infinite;
 }
-
-/* ===== Banner + janela de conexão WhatsApp (Baileys/QR) ===== */
-#fp-wa-banner {
-  display: flex; align-items: center; gap: 10px;
-  margin: 8px 12px 0; padding: 8px 12px;
-  background: #fff4e5; border: 1px solid #ffd8a8; border-radius: 10px;
-  font-size: 12px; color: #9a3412;
-}
-#fp-wa-banner .fp-wa-banner-msg { flex: 1; font-weight: 600; line-height: 1.35; }
-#fp-wa-banner-btn {
-  flex-shrink: 0; background: #00a884; color: #fff; border: none;
-  border-radius: 7px; padding: 6px 12px; font-size: 12px; font-weight: 700;
-  cursor: pointer; font-family: inherit; transition: background 0.15s;
-}
-#fp-wa-banner-btn:hover { background: #008f6f; }
-.fp-qr-sub { font-size: 12px; color: #667781; margin: 0; line-height: 1.4; }
-#fp-qr-body {
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 10px; min-height: 240px;
-}
-#fp-qr-body img { width: 240px; height: 240px; image-rendering: pixelated; border-radius: 8px; }
-.fp-qr-ok { color: #00a884; font-weight: 700; font-size: 15px; }
-.fp-qr-err { color: #e53935; font-size: 12px; text-align: center; line-height: 1.4; }
 
 /* Loading/empty state no board */
 .fp-board-state {
