@@ -307,9 +307,21 @@ interface LiveWhatsAppMessage {
 }
 
 const LIVE_MESSAGE_CACHE_LIMIT = 400;
+// ISOLAMENTO POR CONTA (LGPD): o cache de mensagens "ao vivo" é POR CONTA —
+// a chave é `${userId}::${phone}`. NUNCA leia/itere por telefone sem o userId,
+// senão vaza conversa entre contas. Use liveKey() e liveEntriesForUser().
 const liveWhatsAppMessagesByPhone = new Map<string, LiveWhatsAppMessage[]>();
 const readUpToTimestampByPhone = new Map<string, number>();
 const qrCodeByInstance = new Map<string, string>();
+const liveKey = (userId: string, phone: string) => `${userId}::${phone}`;
+const liveEntriesForUser = (userId: string): Array<[string, LiveWhatsAppMessage[]]> => {
+  const prefix = `${userId}::`;
+  const out: Array<[string, LiveWhatsAppMessage[]]> = [];
+  for (const [k, v] of liveWhatsAppMessagesByPhone.entries()) {
+    if (k.startsWith(prefix)) out.push([k.slice(prefix.length), v]);
+  }
+  return out;
+};
 
 
 const normalizePhone = (value: unknown) => {
@@ -417,20 +429,22 @@ const extractWebhookText = (payload: any): string | null => {
 };
 
 const cacheLiveWhatsAppMessage = (message: LiveWhatsAppMessage, userId?: string) => {
-  const existing = liveWhatsAppMessagesByPhone.get(message.phone) || [];
+  // Sem userId não há como isolar por conta → NÃO cacheia em memória (evita
+  // vazamento entre contas). Só persiste no banco (scoped por user_id) quando há.
+  if (!userId) return;
+
+  const key = liveKey(userId, message.phone);
+  const existing = liveWhatsAppMessagesByPhone.get(key) || [];
   const alreadyExists = existing.some((item) => item.id === message.id);
   if (!alreadyExists) {
     existing.push(message);
     if (existing.length > LIVE_MESSAGE_CACHE_LIMIT) {
       existing.splice(0, existing.length - LIVE_MESSAGE_CACHE_LIMIT);
     }
-    liveWhatsAppMessagesByPhone.set(message.phone, existing);
+    liveWhatsAppMessagesByPhone.set(key, existing);
   }
 
-  // Persistir no Supabase se userId disponível
-  if (userId) {
-    persistMessageToSupabase(userId, message).catch(() => {});
-  }
+  persistMessageToSupabase(userId, message).catch(() => {});
 };
 
 async function persistMessageToSupabase(userId: string, message: LiveWhatsAppMessage) {
@@ -505,8 +519,8 @@ async function persistMessageToSupabase(userId: string, message: LiveWhatsAppMes
   }
 }
 
-const getLiveMessagesByPhone = (phone: string, limit = 50) => {
-  const all = liveWhatsAppMessagesByPhone.get(phone) || [];
+const getLiveMessagesByPhone = (userId: string, phone: string, limit = 50) => {
+  const all = liveWhatsAppMessagesByPhone.get(liveKey(userId, phone)) || [];
   return all.slice(Math.max(0, all.length - limit));
 };
 
@@ -2194,7 +2208,7 @@ async function startServer() {
           headers: zapiHeaders(),
         });
         const parsed = await parseHttpResponse(response);
-        const liveMessages = getLiveMessagesByPhone(normalizedJid, limit);
+        const liveMessages = getLiveMessagesByPhone(userId, normalizedJid, limit);
 
         if (!response.ok && liveMessages.length === 0) {
           return res.status(response.status).json({
@@ -2224,7 +2238,7 @@ async function startServer() {
 
     // Evolution API — retorna mensagens do cache em memória (recebidas via webhook)
     const phone = normalizePhone(jid);
-    const messages = getLiveMessagesByPhone(phone, limit);
+    const messages = getLiveMessagesByPhone(userId, phone, limit);
     return res.json({ messages, provider: 'evolution' });
   });
 
@@ -2564,10 +2578,11 @@ async function startServer() {
   });
 
   // Retorna todos os contatos que enviaram mensagens via webhook (cache em memória)
-  app.get('/api/whatsapp/live-contacts', requireAuth, async (_req, res) => {
-    const contacts = [...liveWhatsAppMessagesByPhone.entries()].map(([phone, messages]) => {
+  app.get('/api/whatsapp/live-contacts', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const contacts = liveEntriesForUser(userId).map(([phone, messages]) => {
       const latest = messages[messages.length - 1];
-      const readUntil = readUpToTimestampByPhone.get(phone) ?? 0;
+      const readUntil = readUpToTimestampByPhone.get(liveKey(userId, phone)) ?? 0;
       const unread = messages.filter((m) => !m.fromMe && m.timestamp > readUntil).length;
       const name = messages.map((m) => m.name).find((n) => n) || undefined;
       return {
@@ -2635,7 +2650,7 @@ async function startServer() {
 
       // Merge com cache em memória (conversas chegadas mas ainda não persistidas)
       const dbPhones = new Set(rows.map((c: any) => c.phone));
-      const memContacts = [...liveWhatsAppMessagesByPhone.entries()]
+      const memContacts = liveEntriesForUser(userId)
         .filter(([phone]) => !dbPhones.has(phone))
         .map(([phone, messages]) => {
           const latest = messages[messages.length - 1];
@@ -2656,8 +2671,8 @@ async function startServer() {
       return res.json([...rows, ...memContacts]);
     } catch (err: any) {
       console.error('[Inbox] Exceção em /conversations:', err?.message || err);
-      // Fallback: cache em memória
-      const contacts = [...liveWhatsAppMessagesByPhone.entries()].map(([phone, messages]) => {
+      // Fallback: cache em memória (só desta conta)
+      const contacts = liveEntriesForUser(userId).map(([phone, messages]) => {
         const latest = messages[messages.length - 1];
         return {
           phone,
@@ -2719,7 +2734,7 @@ async function startServer() {
 
       // Merge com cache em memória
       const dbIds = new Set((data || []).map((m: any) => m.message_id));
-      const memMessages = getLiveMessagesByPhone(phone12, limit)
+      const memMessages = getLiveMessagesByPhone(userId, phone12, limit)
         .filter((m) => !dbIds.has(m.id))
         .map((m) => ({
           message_id: m.id,
@@ -2745,7 +2760,7 @@ async function startServer() {
         .map((m: any) => ({ ...m, waveform: parseWf(m.waveform) }));
       return res.json(all);
     } catch {
-      const msgs = getLiveMessagesByPhone(phone12, limit).map((m) => ({
+      const msgs = getLiveMessagesByPhone(userId, phone12, limit).map((m) => ({
         message_id: m.id,
         body: m.text,
         from_me: m.fromMe,
@@ -2764,7 +2779,7 @@ async function startServer() {
   app.post('/api/inbox/mark-read/:phone', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const phone = normalizeBrazilianPhone(req.params.phone.replace(/\D/g, ''));
-    readUpToTimestampByPhone.set(phone, Date.now());
+    readUpToTimestampByPhone.set(liveKey(userId, phone), Date.now());
     try {
       const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
       await db
@@ -3153,7 +3168,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const instanceName = getInstanceName(userId);
     const limit = Number(req.query.limit) || 30; // últimas 30 conversas
 
-    const total = liveWhatsAppMessagesByPhone.size;
+    const total = liveEntriesForUser(userId).length;
     res.json({ synced: total, total, note: 'Mensagens recebidas via webhook da Evolution API / Z-API' });
   });
 
@@ -3209,13 +3224,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   // Marca mensagens de um contato como lidas
   app.post('/api/whatsapp/mark-read/:phone', requireAuth, (req, res) => {
+    const userId = (req as any).userId;
     const phone = req.params.phone;
-    const messages = liveWhatsAppMessagesByPhone.get(phone);
+    const messages = liveWhatsAppMessagesByPhone.get(liveKey(userId, phone));
     if (messages && messages.length > 0) {
       const latest = messages[messages.length - 1];
-      readUpToTimestampByPhone.set(phone, latest.timestamp);
+      readUpToTimestampByPhone.set(liveKey(userId, phone), latest.timestamp);
     } else {
-      readUpToTimestampByPhone.set(phone, Date.now());
+      readUpToTimestampByPhone.set(liveKey(userId, phone), Date.now());
     }
     res.json({ ok: true });
   });
@@ -9990,12 +10006,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     let hasProductCol = true;
     {
       const r = await supabase.from('opportunities')
-        .select('produto_id, estimated_value, status, type')
+        .select('produto_id, estimated_value, status, type, client_id')
         .eq('user_id', userId);
       if (r.error) {
         hasProductCol = false;
         const r2 = await supabase.from('opportunities')
-          .select('estimated_value, status, type')
+          .select('estimated_value, status, type, client_id')
           .eq('user_id', userId);
         if (r2.error) return res.status(500).json({ error: r2.error.message });
         opsRows = r2.data || [];
@@ -10065,6 +10081,28 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     };
     const buckets = new Map<string, Bucket>();
 
+    // Valor REAL fechado por cliente = soma dos negócios GANHOS (deals.value).
+    // O "convertido" passa a usar isto, e NÃO mais o estimated_value/pacote base.
+    // O elo oportunidade→negócio é o client_id (quando um deal é ganho, as
+    // oportunidades daquele cliente viram 'converted').
+    const realPorCliente = new Map<string, number>();
+    {
+      const dr = await supabase.from('deals')
+        .select('client_id, converted_client_id, value, converted')
+        .eq('user_id', userId).eq('converted', true).limit(10000);
+      (dr.data || []).forEach((d: any) => {
+        const v = Number(d.value) || 0;
+        if (v <= 0) return;
+        const cids = [...new Set(
+          [d.converted_client_id, d.client_id].filter((x: any) => x != null).map((x: any) => String(x))
+        )];
+        cids.forEach(k => realPorCliente.set(k, (realPorCliente.get(k) || 0) + v));
+      });
+    }
+    // Conta cada cliente uma única vez no convertido (várias oportunidades do
+    // mesmo cliente não inflam o total nem a contagem de "fechadas").
+    const clientesContados = new Set<string>();
+
     for (const op of opsRows) {
       const tipo = (op.type || '').toString();
       const hasProd = hasProductCol && op.produto_id;
@@ -10098,15 +10136,22 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       };
 
       const valorReal = Number(op.estimated_value) || 0;
-      const valor = valorReal > 0 ? valorReal : precoBase;
-      if (valorReal <= 0 && precoBase > 0) bucket.usando_estimativa = true;
+      const valorPend = valorReal > 0 ? valorReal : precoBase;
 
       if (PENDING.has(op.status)) {
-        bucket.total_estimado += valor;
+        // "Pra vender" (em aberto): segue usando o valor estimado/pacote base.
+        bucket.total_estimado += valorPend;
         bucket.qtd_aberta += 1;
+        if (valorReal <= 0 && precoBase > 0) bucket.usando_estimativa = true;
       } else if (CONVERTED.has(op.status)) {
-        bucket.total_convertido += valor;
-        bucket.qtd_convertida += 1;
+        // "Convertido": valor REAL do negócio ganho do cliente, 1x por cliente.
+        const cid = op.client_id != null ? String(op.client_id) : '';
+        const real = cid ? (realPorCliente.get(cid) || 0) : 0;
+        if (cid && real > 0 && !clientesContados.has(cid)) {
+          clientesContados.add(cid);
+          bucket.total_convertido += real;
+          bucket.qtd_convertida += 1;
+        }
       }
       buckets.set(key, bucket);
     }
