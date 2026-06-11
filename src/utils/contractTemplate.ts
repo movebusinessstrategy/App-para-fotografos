@@ -25,6 +25,11 @@ export const TEMPLATE_VARIABLES = [
   'valor_total', 'valor_extenso',
   'sinal', 'sinal_extenso',
   'autorizacao_imagem', 'ano',
+  // Dados do estúdio (CONTRATADA) — preenchidos pelos settings da conta
+  // (Configurações de contrato). Usados também pelo saneamento de modelos
+  // legados que tinham esses dados em texto fixo.
+  'studio_nome', 'studio_cnpj', 'studio_responsavel', 'studio_responsavel_cpf',
+  'studio_endereco', 'studio_cidade',
 ] as const;
 
 export type TemplateVariable = typeof TEMPLATE_VARIABLES[number];

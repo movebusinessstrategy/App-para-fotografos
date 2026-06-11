@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Plus, Trash2, Copy, Save, Loader2, FileText, AlertCircle, CheckCheck,
-  Search, Eye, EyeOff,
+  Search, Eye, EyeOff, Upload,
 } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
 import { cn } from '../../utils/cn';
@@ -28,6 +28,12 @@ const VARIABLES: Array<{ key: string; label: string; group: 'cliente' | 'servico
   { key: 'sinal_extenso',     label: 'Sinal por extenso', group: 'pagamento' },
   { key: 'autorizacao_imagem', label: 'Autorização de imagem (autoriza/NÃO autoriza)', group: 'outros' },
   { key: 'ano',               label: 'Ano',              group: 'outros' },
+  { key: 'studio_nome',            label: 'Nome do estúdio',        group: 'outros' },
+  { key: 'studio_cnpj',            label: 'CNPJ do estúdio',        group: 'outros' },
+  { key: 'studio_responsavel',     label: 'Responsável do estúdio', group: 'outros' },
+  { key: 'studio_responsavel_cpf', label: 'CPF do responsável',     group: 'outros' },
+  { key: 'studio_endereco',        label: 'Endereço do estúdio',    group: 'outros' },
+  { key: 'studio_cidade',          label: 'Cidade do estúdio',      group: 'outros' },
 ];
 
 const SAMPLE_DATA: Record<string, string> = {
@@ -45,6 +51,12 @@ const SAMPLE_DATA: Record<string, string> = {
   sinal_extenso: 'trinta',
   autorizacao_imagem: 'autoriza',
   ano: String(new Date().getFullYear()),
+  studio_nome: 'Meu Estúdio Fotográfico',
+  studio_cnpj: '00.000.000/0001-00',
+  studio_responsavel: 'Nome do Responsável',
+  studio_responsavel_cpf: '000.000.000-00',
+  studio_endereco: 'Rua Exemplo, 100, Centro, Cidade/UF',
+  studio_cidade: 'Cidade/UF',
 };
 
 function renderPreview(body: string, defaults: Record<string, any>): string {
@@ -152,6 +164,53 @@ export function TemplatesManager({ onNotify }: TemplatesManagerProps) {
     onNotify('success', 'Modelo excluído.');
   };
 
+  // ── Importar Word (.docx) / PDF como modelo editável ──
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  const handleImportFile = async (file: File) => {
+    setImporting(true);
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result || '').split(',')[1] || '');
+        fr.onerror = () => reject(new Error('Falha ao ler o arquivo'));
+        fr.readAsDataURL(file);
+      });
+      const res = await authFetch('/api/contract-templates/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: file.name, file_base64: base64 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        onNotify('error', data.error || 'Erro ao importar o arquivo');
+        return;
+      }
+      setTemplates(prev => [...prev, data]);
+      setSelectedId(data.id);
+      onNotify('success', `"${data.name}" importado! Revise o texto e troque os dados pelos placeholders {{...}}.`);
+    } catch (err: any) {
+      onNotify('error', err?.message || 'Erro ao importar o arquivo');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const fileInput = (
+    <input
+      ref={fileInputRef}
+      type="file"
+      accept=".docx,.pdf"
+      className="hidden"
+      onChange={e => {
+        const f = e.target.files?.[0];
+        e.target.value = '';
+        if (f) handleImportFile(f);
+      }}
+    />
+  );
+
   // Empty state: oferece importar
   if (!loading && templates.length === 0) {
     return (
@@ -172,6 +231,15 @@ export function TemplatesManager({ onNotify }: TemplatesManagerProps) {
             <Plus size={14} />
             Criar primeiro modelo
           </button>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing}
+            className="inline-flex items-center gap-2 px-4 py-2 border border-gold-300 dark:border-gold-700 text-gold-700 dark:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-900/10 text-sm font-semibold rounded-xl transition-colors disabled:opacity-60"
+          >
+            {importing ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+            Importar Word/PDF
+          </button>
+          {fileInput}
         </div>
         {selectedId === -1 && (
           <div className="w-full mt-8">
@@ -204,12 +272,21 @@ export function TemplatesManager({ onNotify }: TemplatesManagerProps) {
             />
           </div>
           <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing}
+            title="Importar Word/PDF como modelo"
+            className="p-1.5 rounded-lg border border-gold-300 dark:border-gold-700 text-gold-700 dark:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-900/10 disabled:opacity-60"
+          >
+            {importing ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+          </button>
+          <button
             onClick={createNew}
             title="Novo modelo"
             className="p-1.5 rounded-lg bg-gold-600 hover:bg-gold-700 text-white"
           >
             <Plus size={14} />
           </button>
+          {fileInput}
         </div>
         <div className="flex-1 overflow-y-auto p-2 space-y-3">
           {loading ? (

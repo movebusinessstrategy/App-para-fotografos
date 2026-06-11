@@ -349,6 +349,14 @@ function buildTemplateVariables(d: ContractData): Record<string, string | undefi
     // SEMPRE preenchido: 'NÃO' ou '' (vazio = "A CONTRATANTE  autoriza")
     autorizacao_imagem: d.imageAuthorization === 'NÃO autoriza' ? 'NÃO' : '',
     ano: yearMatch ? yearMatch[1] : String(new Date().getFullYear()),
+    // Dados do estúdio (CONTRATADA) — vêm dos settings da conta (já carregados
+    // no form). undefined mantém o placeholder visível = "preencha em Configurações".
+    studio_nome: d.studioName || undefined,
+    studio_cnpj: d.studioCNPJ || undefined,
+    studio_responsavel: d.studioResponsible || undefined,
+    studio_responsavel_cpf: d.studioResponsibleCPF || undefined,
+    studio_endereco: d.studioAddress || undefined,
+    studio_cidade: d.studioCity || undefined,
   };
 }
 
