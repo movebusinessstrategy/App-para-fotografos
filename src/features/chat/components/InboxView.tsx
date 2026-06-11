@@ -118,6 +118,39 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
     if (initialPhone && !selectedPhone) setSelectedPhone(initialPhone);
   }, [initialPhone]);
 
+  // Marca como lida ao ABRIR a conversa e tira o badge da lista na hora
+  // (antes ninguém chamava o mark-read aqui — o badge nunca sumia).
+  useEffect(() => {
+    if (!selectedPhone) return;
+    const clean = selectedPhone.replace(/\D/g, '');
+    authFetch(`/api/inbox/mark-read/${clean}`, { method: 'POST' })
+      .then(() => refresh())
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPhone]);
+
+  // Mensagem nova chegou COM a conversa aberta → já marca como lida também
+  // (igual ao WhatsApp: conversa aberta não acumula "não lida").
+  const lastMsg = messages.length ? (messages[messages.length - 1] as any) : null;
+  const lastIncomingId = lastMsg && !(lastMsg.from_me ?? lastMsg.fromMe) ? lastMsg.message_id : null;
+  useEffect(() => {
+    if (!selectedPhone || !lastIncomingId) return;
+    const clean = selectedPhone.replace(/\D/g, '');
+    authFetch(`/api/inbox/mark-read/${clean}`, { method: 'POST' })
+      .then(() => refresh())
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastIncomingId]);
+
+  // ESC volta pra lista de conversas (como no WhatsApp Web)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSelectedPhone(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // Fecha emoji picker ao clicar fora do picker
   useEffect(() => {
     if (!showEmoji) return;
