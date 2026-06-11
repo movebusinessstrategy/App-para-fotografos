@@ -14,6 +14,8 @@ import * as BaileysManager from './baileys-manager.js';
 import * as Asaas from './asaas-client.js';
 import { initSentry } from './sentry-server.js';
 import { encryptIfNeeded, decryptIfNeeded } from './lib/wa-token-crypto.js';
+import { signGallerySession, verifyGallerySession, type GallerySessionPayload } from './lib/gallery-session.js';
+import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 
 // Não bloqueia o boot — roda em paralelo
@@ -7353,6 +7355,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       if (body.status === 'sent') patch.sent_at = new Date().toISOString();
       if (body.status === 'selected') patch.selected_at = new Date().toISOString();
     }
+    if (body.require_login !== undefined) patch.require_login = !!body.require_login;
+    if (body.download_mode !== undefined && ['off', 'with_watermark', 'clean'].includes(body.download_mode)) {
+      patch.download_mode = body.download_mode;
+    }
+    if (body.pricing_mode !== undefined &&
+        ['no_charge', 'extra_avulso', 'upgrade_packs', 'sell_all'].includes(body.pricing_mode)) {
+      patch.pricing_mode = body.pricing_mode;
+    }
+    if (body.cart_discount !== undefined) patch.cart_discount = Math.max(0, Number(body.cart_discount) || 0);
+    if (body.lock_after_deadline !== undefined) patch.lock_after_deadline = !!body.lock_after_deadline;
     return patch;
   }
 
@@ -7641,10 +7653,259 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return { selected_count, extra_count, amount: extra_count * Number(extraPrice || 0) };
   }
 
+  // ── Acesso & auditoria (Fase 1) ────────────────────────────────────────────
+
+  // Extrai IP + UA pro log de auditoria.
+  function reqIpUa(req: express.Request): { ip: string; ua: string } {
+    const ip = String(
+      req.headers['x-forwarded-for']?.toString().split(',')[0].trim() ||
+      req.headers['x-real-ip'] ||
+      req.socket.remoteAddress || '',
+    ).slice(0, 64);
+    const ua = String(req.headers['user-agent'] || '').slice(0, 300);
+    return { ip, ua };
+  }
+
+  // Insere um evento no log da galeria — best-effort, NUNCA quebra a request.
+  async function logGalleryEvent(
+    galleryId: string,
+    accessUserId: string | null,
+    event: string,
+    req: express.Request,
+    extra?: { photoId?: string; detail?: string },
+  ): Promise<void> {
+    if (!supabaseAdmin) return;
+    try {
+      const { ip, ua } = reqIpUa(req);
+      await supabaseAdmin.from('gallery_access_log').insert({
+        gallery_id: galleryId,
+        access_user_id: accessUserId,
+        event,
+        photo_id: extra?.photoId || null,
+        detail: extra?.detail || null,
+        ip, user_agent: ua,
+      });
+    } catch (e: any) {
+      console.warn('[galeria] log falhou:', e?.message);
+    }
+  }
+
+  // Lê o session token do header Authorization e devolve o payload OU null
+  // (token ausente / inválido / expirado). Não confere se ainda pertence à
+  // galeria — quem chamar deve comparar com gallery.id.
+  function sessionFromReq(req: express.Request): GallerySessionPayload | null {
+    const auth = req.headers.authorization || '';
+    if (!auth.startsWith('Bearer ')) return null;
+    return verifyGallerySession(auth.slice(7));
+  }
+
+  // Garante que a galeria está acessível: se require_login=true, exige
+  // uma session válida do mesmo gallery_id. Se ok, devolve o access_user
+  // (ou null quando galeria é pública). Caso contrário responde 401/403
+  // e retorna undefined.
+  async function ensureGalleryAccess(
+    req: express.Request,
+    res: express.Response,
+    gallery: any,
+  ): Promise<{ accessUserId: string | null } | undefined> {
+    if (!gallery.require_login) {
+      const sess = sessionFromReq(req);
+      // Se passou session ainda assim, respeita; senão acesso anônimo.
+      return { accessUserId: sess && sess.gid === gallery.id ? sess.aid : null };
+    }
+    const sess = sessionFromReq(req);
+    if (!sess || sess.gid !== gallery.id) {
+      res.status(401).json({ error: 'login_required' });
+      return undefined;
+    }
+    return { accessUserId: sess.aid };
+  }
+
+  // ── Rotas autenticadas: estúdio gerencia logins da galeria ────────────────
+
+  app.get('/api/galleries/:id/access', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const { data: gallery } = await supabase
+      .from('galleries').select('id, require_login').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+    const { data, error } = await supabase
+      .from('gallery_access_users')
+      .select('id, email, name, role, last_login_at, login_count, created_at')
+      .eq('gallery_id', gallery.id)
+      .order('created_at');
+    if (error) {
+      return galleryTableMissing(error) ? galleryMigrationError(res) : res.status(500).json({ error: error.message });
+    }
+    res.json({ users: data || [], require_login: !!gallery.require_login });
+  });
+
+  app.post('/api/galleries/:id/access', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const { data: gallery } = await supabase
+      .from('galleries').select('id').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    const name = req.body?.name ? String(req.body.name).trim() : null;
+    const role: 'owner' | 'guest' = req.body?.role === 'guest' ? 'guest' : 'owner';
+    if (!email.includes('@')) return res.status(400).json({ error: 'E-mail inválido' });
+    if (password.length < 4) return res.status(400).json({ error: 'Senha curta demais (mínimo 4)' });
+
+    const password_hash = await bcrypt.hash(password, 10);
+    const { data, error } = await supabase
+      .from('gallery_access_users')
+      .insert({ gallery_id: gallery.id, email, password_hash, name, role, invited_by: userId })
+      .select('id, email, name, role, created_at')
+      .single();
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'Esse e-mail já tem acesso à galeria.' });
+      return res.status(500).json({ error: error.message });
+    }
+    res.json({ user: data });
+  });
+
+  app.put('/api/galleries/:id/access/:userId', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const { data: gallery } = await supabase
+      .from('galleries').select('id').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+
+    const patch: any = { updated_at: new Date().toISOString() };
+    if (req.body?.name !== undefined) patch.name = req.body.name ? String(req.body.name).trim() : null;
+    if (req.body?.role === 'owner' || req.body?.role === 'guest') patch.role = req.body.role;
+    if (typeof req.body?.password === 'string' && req.body.password.length >= 4) {
+      patch.password_hash = await bcrypt.hash(req.body.password, 10);
+    }
+    const { error } = await supabase
+      .from('gallery_access_users').update(patch).eq('id', req.params.userId).eq('gallery_id', gallery.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+  });
+
+  app.delete('/api/galleries/:id/access/:userId', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const { data: gallery } = await supabase
+      .from('galleries').select('id').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+    const { error } = await supabase
+      .from('gallery_access_users').delete().eq('id', req.params.userId).eq('gallery_id', gallery.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+  });
+
+  // Log de auditoria + sumário pras abas "Atividades do cliente" e
+  // "Histórico de atividades" (Fase 1D).
+  app.get('/api/galleries/:id/audit', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const { data: gallery } = await supabase
+      .from('galleries').select('id').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+
+    const [logQ, usersQ, photosQ, selQ] = await Promise.all([
+      supabase
+        .from('gallery_access_log')
+        .select('id, event, photo_id, detail, ip, user_agent, created_at, access_user_id')
+        .eq('gallery_id', gallery.id)
+        .order('created_at', { ascending: false })
+        .limit(500),
+      supabase
+        .from('gallery_access_users')
+        .select('id, email, name, role, last_login_at, login_count')
+        .eq('gallery_id', gallery.id),
+      supabase.from('gallery_photos').select('id, file_name').eq('gallery_id', gallery.id),
+      supabase.from('gallery_selections').select('photo_id, selected, client_comment')
+        .eq('gallery_id', gallery.id).eq('selected', true),
+    ]);
+    if (logQ.error && galleryTableMissing(logQ.error)) return galleryMigrationError(res);
+
+    const usersById = new Map<string, any>();
+    for (const u of usersQ.data || []) usersById.set(u.id, u);
+    const photosById = new Map<string, string>();
+    for (const p of photosQ.data || []) photosById.set(p.id, p.file_name);
+
+    const events = (logQ.data || []).map((e: any) => ({
+      id: e.id,
+      event: e.event,
+      detail: e.detail,
+      ip: e.ip,
+      user_agent: e.user_agent,
+      created_at: e.created_at,
+      photo_id: e.photo_id,
+      photo_name: e.photo_id ? photosById.get(e.photo_id) || null : null,
+      user: e.access_user_id ? {
+        id: e.access_user_id,
+        email: usersById.get(e.access_user_id)?.email || null,
+        name: usersById.get(e.access_user_id)?.name || null,
+      } : null,
+    }));
+
+    const summary = {
+      total_users: (usersQ.data || []).length,
+      total_views: events.filter((e) => e.event === 'view_gallery').length,
+      total_logins: events.filter((e) => e.event === 'login').length,
+      total_login_fails: events.filter((e) => e.event === 'login_fail').length,
+      selected_count: (selQ.data || []).length,
+      comments_count: (selQ.data || []).filter((s: any) => !!s.client_comment).length,
+      last_event_at: events[0]?.created_at || null,
+      finalized_at: events.find((e) => e.event === 'finalize')?.created_at || null,
+    };
+    res.json({ users: usersQ.data || [], events, summary });
+  });
+
+  // ── Login público da cliente / convidado ──────────────────────────────────
+
+  app.post('/api/public/gallery/:token/login', async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
+    const gallery = await findGalleryByToken(req.params.token);
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    if (!email || !password) return res.status(400).json({ error: 'E-mail e senha são obrigatórios.' });
+
+    const { data: user } = await supabaseAdmin
+      .from('gallery_access_users')
+      .select('id, email, name, role, password_hash, login_count')
+      .eq('gallery_id', gallery.id)
+      .eq('email', email)
+      .maybeSingle();
+
+    if (!user) {
+      await logGalleryEvent(gallery.id, null, 'login_fail', req, { detail: `email=${email}` });
+      return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
+    }
+    const ok = await bcrypt.compare(password, user.password_hash);
+    if (!ok) {
+      await logGalleryEvent(gallery.id, user.id, 'login_fail', req);
+      return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
+    }
+
+    await supabaseAdmin
+      .from('gallery_access_users')
+      .update({ last_login_at: new Date().toISOString(), login_count: (user.login_count || 0) + 1 })
+      .eq('id', user.id);
+    await logGalleryEvent(gallery.id, user.id, 'login', req);
+
+    const session = signGallerySession({ gid: gallery.id, aid: user.id, role: user.role });
+    res.json({
+      session_token: session,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+    });
+  });
+
   app.get('/api/public/gallery/:token', async (req, res) => {
     if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
     const gallery = await findGalleryByToken(req.params.token);
     if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+
+    const access = await ensureGalleryAccess(req, res, gallery);
+    if (access === undefined) return;
 
     const [settings, studioName, photosQ, selQ] = await Promise.all([
       getGallerySettings(gallery.user_id),
@@ -7667,6 +7928,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         .from('galleries')
         .update({ view_count: (gallery.view_count || 0) + 1, last_viewed_at: new Date().toISOString() })
         .eq('id', gallery.id);
+      await logGalleryEvent(gallery.id, access.accessUserId, 'view_gallery', req);
     }
 
     const selections: Record<string, { selected: boolean; comment: string | null }> = {};
@@ -7681,6 +7943,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         extra_price: Number(gallery.extra_price || 0),
         category: gallery.category,
         studio_name: studioName,
+        require_login: !!gallery.require_login,
+        download_mode: gallery.download_mode || 'off',
         protection: {
           enabled: prot.right_click !== false || prot.drag !== false,
           notice: prot.notice !== false,
@@ -7696,11 +7960,29 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     });
   });
 
+  // Login info — frontend chama esse endpoint LEVE pra saber se precisa
+  // pedir login antes de mostrar a galeria (sem expor as fotos).
+  app.get('/api/public/gallery/:token/login-info', async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
+    const gallery = await findGalleryByToken(req.params.token);
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+    const studioName = await getStudioNameForGallery(gallery.user_id);
+    res.json({
+      title: gallery.title,
+      studio_name: studioName,
+      require_login: !!gallery.require_login,
+      status: gallery.status,
+    });
+  });
+
   app.post('/api/public/gallery/:token/select', async (req, res) => {
     if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
     const gallery = await findGalleryByToken(req.params.token);
     if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
     if (gallery.status === 'delivered') return res.status(409).json({ error: 'Galeria já entregue' });
+
+    const access = await ensureGalleryAccess(req, res, gallery);
+    if (access === undefined) return;
 
     const { photo_id, selected, comment } = req.body || {};
     if (!photo_id) return res.status(400).json({ error: 'photo_id obrigatório' });
@@ -7708,17 +7990,32 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .from('gallery_photos').select('id').eq('id', photo_id).eq('gallery_id', gallery.id).maybeSingle();
     if (!photo) return res.status(404).json({ error: 'Foto não encontrada' });
 
+    const cleanComment = typeof comment === 'string' && comment.trim() ? comment.trim() : null;
     const { error } = await supabaseAdmin.from('gallery_selections').upsert(
       {
         gallery_id: gallery.id,
         photo_id,
         selected: !!selected,
-        client_comment: typeof comment === 'string' && comment.trim() ? comment.trim() : null,
+        client_comment: cleanComment,
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'gallery_id,photo_id' },
     );
     if (error) return res.status(500).json({ error: error.message });
+
+    await logGalleryEvent(
+      gallery.id,
+      access.accessUserId,
+      selected ? 'select_photo' : 'unselect_photo',
+      req,
+      { photoId: photo_id },
+    );
+    if (cleanComment) {
+      await logGalleryEvent(gallery.id, access.accessUserId, 'comment_photo', req, {
+        photoId: photo_id,
+        detail: cleanComment.slice(0, 240),
+      });
+    }
 
     const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price);
     res.json({ ok: true, ...totals });
@@ -7828,6 +8125,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
     if (gallery.status === 'delivered') return res.status(409).json({ error: 'Galeria já entregue' });
 
+    const access = await ensureGalleryAccess(req, res, gallery);
+    if (access === undefined) return;
+
     const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price);
     await supabaseAdmin
       .from('galleries')
@@ -7836,6 +8136,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     let payment: { payment_url: string | null; order_code: string | null } = { payment_url: null, order_code: null };
     if (totals.amount > 0) payment = await createGalleryPayment(gallery, totals);
+
+    await logGalleryEvent(gallery.id, access.accessUserId, 'finalize', req, {
+      detail: `selecionadas=${totals.selected_count} extras=${totals.extra_count} valor=${totals.amount}`,
+    });
 
     notifyStudioSelectionDone(gallery, totals).catch((e: any) =>
       console.warn('[galeria] notificação ao estúdio falhou:', e?.message));
