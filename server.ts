@@ -36,6 +36,8 @@ import {
   recordStageEvent,
   stageIdOrDefault,
 } from './pipeline-helpers.js';
+import { processGalleryPhoto } from './gallery-image.js';
+import { isMailerConfigured, sendGalleryReadyEmail, sendSelectionDoneEmail } from './gallery-mailer.js';
 
 dotenv.config();
 
@@ -3828,6 +3830,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       } catch (_) {}
     }
 
+    // Galeria de proofing: job entrou em etapa final de produção → cria galeria
+    // draft automaticamente. Best-effort: falha aqui NUNCA quebra o PUT.
+    if (production_stage !== undefined && production_stage !== oldJob.production_stage) {
+      maybeCreateGalleryForJob(supabase, userId, Number(req.params.id), production_stage)
+        .catch((e: any) => console.warn('[galeria] gancho job→galeria falhou:', e?.message));
+    }
+
     const jobId = Number(req.params.id);
 
     if (client_id) {
@@ -6876,6 +6885,981 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('is_active', true)
       .order('sort_order');
     res.json(data || []);
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // GALERIA DE PROOFING — seleção de fotos pelo cliente final
+  // Tabelas: galleries, gallery_photos, gallery_selections, gallery_payments,
+  // gallery_settings (migrations/026_galleries.sql).
+  // Buckets: galeria-originais (privado) + galeria-previews (público, com
+  // marca d'água queimada — original nunca sai do bucket privado).
+  // Rotas públicas (/api/public/gallery/*) validam pelo share_token, sem auth.
+  // ════════════════════════════════════════════════════════════════════════
+
+  const GALLERY_ORIGINALS_BUCKET = 'galeria-originais';
+  const GALLERY_PREVIEWS_BUCKET = 'galeria-previews';
+  const GALLERY_STATUSES = ['draft', 'sent', 'selected', 'delivered'];
+
+  let galleryBucketsReady = false;
+  async function ensureGalleryBuckets() {
+    if (galleryBucketsReady || !supabaseAdmin) return;
+    try {
+      const { data: buckets } = await supabaseAdmin.storage.listBuckets();
+      const names = new Set((buckets || []).map((b: any) => b.name));
+      if (!names.has(GALLERY_ORIGINALS_BUCKET)) {
+        await supabaseAdmin.storage.createBucket(GALLERY_ORIGINALS_BUCKET, {
+          public: false,
+          fileSizeLimit: 52_428_800, // 50MB por original
+        });
+      }
+      if (!names.has(GALLERY_PREVIEWS_BUCKET)) {
+        await supabaseAdmin.storage.createBucket(GALLERY_PREVIEWS_BUCKET, { public: true });
+      }
+      galleryBucketsReady = true;
+    } catch (e: any) {
+      console.error('[galeria] erro criando buckets:', e?.message);
+    }
+  }
+
+  const galleryPublicBase = () =>
+    (process.env.APP_PUBLIC_URL || 'https://crmtrilha.com.br').replace(/\/$/, '');
+  const galleryLink = (token: string) => `${galleryPublicBase()}/g/${token}`;
+  const newGalleryToken = () => crypto.randomBytes(18).toString('base64url');
+
+  const previewPublicUrl = (p: string | null | undefined): string | null => {
+    if (!p || !supabaseAdmin) return null;
+    return supabaseAdmin.storage.from(GALLERY_PREVIEWS_BUCKET).getPublicUrl(p).data.publicUrl || null;
+  };
+
+  const galleryTableMissing = (error: any) => error?.code === '42P01';
+  const galleryMigrationError = (res: express.Response) =>
+    res.status(400).json({ error: 'Tabelas da galeria não existem. Rode a migration 026_galleries.sql no Supabase.' });
+
+  const GALLERY_SETTINGS_DEFAULTS = {
+    watermark_type: 'text',
+    watermark_text: null as string | null,
+    watermark_logo_path: null as string | null,
+    watermark_opacity: 0.3,
+    watermark_include_client: false,
+    sender_email: null as string | null,
+    notify_studio_whatsapp: true,
+    mp_access_token: null as string | null,
+    categories: ['Gestante', 'Newborn', 'Casamento', 'Família'],
+    protection: { right_click: true, drag: true, notice: true },
+    custom_domain: null as string | null,
+  };
+
+  async function getGallerySettings(userId: string): Promise<any> {
+    if (!supabaseAdmin) return { ...GALLERY_SETTINGS_DEFAULTS };
+    const { data } = await supabaseAdmin
+      .from('gallery_settings')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+    return { ...GALLERY_SETTINGS_DEFAULTS, ...(data || {}) };
+  }
+
+  async function getStudioNameForGallery(userId: string): Promise<string> {
+    if (!supabaseAdmin) return 'Estúdio';
+    const { data } = await supabaseAdmin
+      .from('studio_settings')
+      .select('studio_name')
+      .eq('user_id', userId)
+      .maybeSingle();
+    return data?.studio_name || 'Estúdio';
+  }
+
+  // Preço default da foto extra vem do studio_settings ('35,00' → 35).
+  async function getDefaultExtraPrice(userId: string): Promise<number> {
+    if (!supabaseAdmin) return 35;
+    const { data } = await supabaseAdmin
+      .from('studio_settings')
+      .select('extra_photo_price')
+      .eq('user_id', userId)
+      .maybeSingle();
+    const n = Number(String(data?.extra_photo_price ?? '').replace(',', '.'));
+    return Number.isFinite(n) && n > 0 ? n : 35;
+  }
+
+  // Agrega contagens/valores que os cards do kanban mostram.
+  async function decorateGalleries(supabase: SupabaseClient, rows: any[]): Promise<any[]> {
+    if (rows.length === 0) return [];
+    const ids = rows.map((g) => g.id);
+    const [photosQ, selectionsQ, paymentsQ] = await Promise.all([
+      supabase.from('gallery_photos').select('id, gallery_id, thumb_path, sort_order, created_at').in('gallery_id', ids),
+      supabase.from('gallery_selections').select('gallery_id, selected').in('gallery_id', ids).eq('selected', true),
+      supabase.from('gallery_payments').select('gallery_id, amount, status').in('gallery_id', ids),
+    ]);
+
+    const photoCount = new Map<string, number>();
+    const coverThumb = new Map<string, string>();
+    const sortedPhotos = (photosQ.data || []).sort(
+      (a: any, b: any) => (a.sort_order - b.sort_order) || String(a.created_at).localeCompare(String(b.created_at)),
+    );
+    for (const p of sortedPhotos) {
+      photoCount.set(p.gallery_id, (photoCount.get(p.gallery_id) || 0) + 1);
+      if (!coverThumb.has(p.gallery_id) && p.thumb_path) coverThumb.set(p.gallery_id, p.thumb_path);
+    }
+
+    const selCount = new Map<string, number>();
+    for (const s of selectionsQ.data || []) selCount.set(s.gallery_id, (selCount.get(s.gallery_id) || 0) + 1);
+
+    const paidBy = new Map<string, number>();
+    for (const p of paymentsQ.data || []) {
+      if (p.status === 'paid') paidBy.set(p.gallery_id, (paidBy.get(p.gallery_id) || 0) + Number(p.amount || 0));
+    }
+
+    return rows.map((g) => {
+      const photo_count = photoCount.get(g.id) || 0;
+      const selected_count = selCount.get(g.id) || 0;
+      const extra_count = Math.max(0, selected_count - (g.included_count || 0));
+      const paid_amount = paidBy.get(g.id) || 0;
+      const extraTotal = extra_count * Number(g.extra_price || 0);
+      return {
+        ...g,
+        extra_price: Number(g.extra_price || 0),
+        photo_count,
+        selected_count,
+        extra_count,
+        paid_amount,
+        pending_amount: Math.max(0, extraTotal - paid_amount),
+        cover_thumb_url: previewPublicUrl(coverThumb.get(g.id)),
+      };
+    });
+  }
+
+  // Gancho do PUT /api/jobs/:id: job entrou em etapa FINAL de produção →
+  // cria galeria draft automaticamente (1 por job, idempotente).
+  async function maybeCreateGalleryForJob(
+    supabase: SupabaseClient,
+    userId: string,
+    jobId: number,
+    newStageId: string | null | undefined,
+  ): Promise<void> {
+    if (!newStageId) return;
+    const stages = await ensureProductionStagesV2(supabase, userId);
+    const stage = stages.find((s) => s.id === newStageId);
+    if (!stage?.is_final) return;
+
+    const { data: existing, error } = await supabase
+      .from('galleries').select('id').eq('job_id', jobId).eq('user_id', userId).limit(1);
+    if (error || (existing && existing.length > 0)) return; // tabela ausente ou galeria já existe
+
+    const { data: job } = await supabase
+      .from('jobs')
+      .select('id, job_name, job_type, client_id, clients(name, email, phone)')
+      .eq('id', jobId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!job) return;
+
+    const client: any = (job as any).clients || {};
+    await supabase.from('galleries').insert({
+      user_id: userId,
+      job_id: jobId,
+      client_id: job.client_id || null,
+      client_name: client.name || null,
+      client_email: client.email || null,
+      client_phone: client.phone || null,
+      title: `Seleção — ${(job as any).job_name || (job as any).job_type || `Trabalho ${jobId}`}`,
+      category: (job as any).job_type || null,
+      status: 'draft',
+      share_token: newGalleryToken(),
+      included_count: 20,
+      extra_price: await getDefaultExtraPrice(userId),
+    });
+    console.log(`[galeria] galeria draft criada automaticamente pro job ${jobId}`);
+  }
+
+  // ── Configurações da galeria ──────────────────────────────────────────────
+
+  app.get('/api/gallery-settings', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const s = await getGallerySettings(userId);
+    const prot = s.protection || {};
+    res.json({
+      settings: {
+        watermark_type: s.watermark_type === 'logo' ? 'logo' : 'text',
+        watermark_text: s.watermark_text,
+        watermark_logo_path: s.watermark_logo_path,
+        watermark_logo_url: previewPublicUrl(s.watermark_logo_path),
+        watermark_opacity: Number(s.watermark_opacity ?? 0.3),
+        watermark_include_client_name: !!s.watermark_include_client,
+        sender_email: s.sender_email,
+        notify_studio_whatsapp: s.notify_studio_whatsapp !== false,
+        categories: Array.isArray(s.categories) ? s.categories : [],
+        protect_right_click: prot.right_click !== false,
+        protect_download: prot.drag !== false,
+        custom_domain: s.custom_domain,
+        mp_access_token: null, // nunca ecoa o token
+        mp_access_token_set: !!s.mp_access_token,
+        default_included_count: 20,
+        default_extra_price: await getDefaultExtraPrice(userId),
+      },
+    });
+  });
+
+  // Sobe a logo da marca d'água (data URL) pro bucket público de previews.
+  // Path fixo por usuário (logos/{userId}.png) com upsert — trocar substitui.
+  async function uploadWatermarkLogo(userId: string, dataUrl: string): Promise<{ path?: string; error?: string }> {
+    const match = String(dataUrl || '').match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
+    if (!match) return { error: 'watermark_logo_base64 inválido (esperado data URL de imagem)' };
+    const buffer = Buffer.from(match[2], 'base64');
+    if (buffer.length > 2_097_152) return { error: 'Logo muito grande (máx. 2MB)' };
+    if (!supabaseAdmin) return { error: 'Storage indisponível' };
+
+    await ensureGalleryBuckets();
+    const path = `logos/${userId}.png`;
+    const { error } = await supabaseAdmin.storage
+      .from(GALLERY_PREVIEWS_BUCKET)
+      .upload(path, buffer, { contentType: match[1], upsert: true });
+    if (error) return { error: `Upload da logo falhou: ${error.message}` };
+    return { path };
+  }
+
+  app.put('/api/gallery-settings', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const body = req.body || {};
+    const payload: any = { user_id: userId, updated_at: new Date().toISOString() };
+
+    if (body.watermark_type !== undefined) payload.watermark_type = body.watermark_type === 'logo' ? 'logo' : 'text';
+    if (body.watermark_text !== undefined) payload.watermark_text = body.watermark_text || null;
+    if (body.watermark_logo_path !== undefined) payload.watermark_logo_path = body.watermark_logo_path || null;
+    // Logo enviada como data URL: sobe no Storage e grava o path resultante.
+    if (typeof body.watermark_logo_base64 === 'string' && body.watermark_logo_base64) {
+      const up = await uploadWatermarkLogo(userId, body.watermark_logo_base64);
+      if (up.error) return res.status(400).json({ error: up.error });
+      payload.watermark_logo_path = up.path;
+    }
+    if (body.watermark_opacity !== undefined) {
+      payload.watermark_opacity = Math.min(1, Math.max(0.05, Number(body.watermark_opacity) || 0.3));
+    }
+    if (body.watermark_include_client_name !== undefined) payload.watermark_include_client = !!body.watermark_include_client_name;
+    if (body.sender_email !== undefined) payload.sender_email = body.sender_email || null;
+    if (body.notify_studio_whatsapp !== undefined) payload.notify_studio_whatsapp = !!body.notify_studio_whatsapp;
+    if (Array.isArray(body.categories)) payload.categories = body.categories.map(String);
+    if (body.protect_right_click !== undefined || body.protect_download !== undefined) {
+      payload.protection = {
+        right_click: body.protect_right_click !== false,
+        drag: body.protect_download !== false,
+        notice: true,
+      };
+    }
+    if (body.custom_domain !== undefined) payload.custom_domain = body.custom_domain || null;
+    // Token do Mercado Pago: só grava se vier preenchido (cifrado em repouso).
+    if (typeof body.mp_access_token === 'string' && body.mp_access_token.trim()) {
+      payload.mp_access_token = encryptIfNeeded(body.mp_access_token.trim());
+    }
+
+    const { error } = await supabase.from('gallery_settings').upsert(payload, { onConflict: 'user_id' });
+    if (error) {
+      return galleryTableMissing(error) ? galleryMigrationError(res) : res.status(500).json({ error: error.message });
+    }
+    res.json({ ok: true });
+  });
+
+  // ── CRUD de galerias (lado do estúdio) ────────────────────────────────────
+
+  app.get('/api/galleries', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    let q = supabase.from('galleries').select('*').eq('user_id', userId).order('created_at', { ascending: false });
+    if (req.query.job_id) q = q.eq('job_id', Number(req.query.job_id));
+    const { data, error } = await q;
+    if (error) {
+      if (galleryTableMissing(error)) return res.json({ galleries: [], table_missing: true });
+      return res.status(500).json({ error: error.message });
+    }
+    res.json({ galleries: await decorateGalleries(supabase, data || []) });
+  });
+
+  // Soma o pendente (extras × preço) de galerias 'selected' que ainda não têm
+  // linha em gallery_payments (ex.: finalize sem valor de extra ou row antiga).
+  async function pendingAmountWithoutPayment(supabase: SupabaseClient, galleries: any[]): Promise<number> {
+    if (galleries.length === 0) return 0;
+    const ids = galleries.map((g) => g.id);
+    const { data } = await supabase
+      .from('gallery_selections').select('gallery_id').in('gallery_id', ids).eq('selected', true);
+    const selCount = new Map<string, number>();
+    for (const s of data || []) selCount.set(s.gallery_id, (selCount.get(s.gallery_id) || 0) + 1);
+
+    let total = 0;
+    for (const g of galleries) {
+      const extras = Math.max(0, (selCount.get(g.id) || 0) - (g.included_count || 0));
+      total += extras * Number(g.extra_price || 0);
+    }
+    return total;
+  }
+
+  const sumPaymentAmounts = (rows: any[]) => rows.reduce((acc, p) => acc + Number(p.amount || 0), 0);
+
+  // Aba Receita: cards (a receber, recebido no mês, ticket médio) + extrato.
+  // IMPORTANTE: registrada ANTES de GET /api/galleries/:id — senão o Express
+  // casaria 'revenue' como :id.
+  app.get('/api/galleries/revenue', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    const { data: payments, error } = await supabase
+      .from('gallery_payments')
+      .select('gallery_id, order_code, extra_count, amount, status, created_at, paid_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(1000);
+    if (error) {
+      if (galleryTableMissing(error)) {
+        return res.json({ to_receive: 0, received_month: 0, avg_ticket: 0, pending_count: 0, orders: [] });
+      }
+      return res.status(500).json({ error: error.message });
+    }
+
+    const { data: galleries } = await supabase
+      .from('galleries')
+      .select('id, title, client_name, status, included_count, extra_price')
+      .eq('user_id', userId);
+    const galleryById = new Map((galleries || []).map((g: any) => [g.id, g]));
+
+    const rows = payments || [];
+    const pending = rows.filter((p: any) => p.status === 'pending');
+    const paid = rows.filter((p: any) => p.status === 'paid');
+
+    // A receber: pendentes + galerias 'selected' sem payment row (sem dupla contagem).
+    const withPayment = new Set(rows.map((p: any) => p.gallery_id));
+    const awaiting = (galleries || []).filter((g: any) => g.status === 'selected' && !withPayment.has(g.id));
+    const to_receive = sumPaymentAmounts(pending) + (await pendingAmountWithoutPayment(supabase, awaiting));
+
+    const monthPrefix = new Date().toISOString().slice(0, 7);
+    const paidThisMonth = paid.filter((p: any) => String(p.paid_at || '').startsWith(monthPrefix));
+
+    const orders = rows.slice(0, 200).map((p: any) => ({
+      order_code: p.order_code,
+      client_name: galleryById.get(p.gallery_id)?.client_name || null,
+      gallery_title: galleryById.get(p.gallery_id)?.title || null,
+      extra_count: p.extra_count || 0,
+      amount: Number(p.amount || 0),
+      status: p.status,
+      created_at: p.created_at,
+      paid_at: p.paid_at || null,
+    }));
+
+    res.json({
+      to_receive,
+      received_month: sumPaymentAmounts(paidThisMonth),
+      avg_ticket: paid.length > 0 ? sumPaymentAmounts(paid) / paid.length : 0,
+      pending_count: pending.length,
+      orders,
+    });
+  });
+
+  // Quando criada a partir de um job (sem title), herda título/cliente do job.
+  async function galleryDefaultsFromJob(supabase: SupabaseClient, userId: string, jobId: number): Promise<any> {
+    const { data: job } = await supabase
+      .from('jobs')
+      .select('id, job_name, job_type, client_id, clients(name, email, phone)')
+      .eq('id', jobId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!job) return {};
+    const client: any = (job as any).clients || {};
+    return {
+      title: `Seleção — ${(job as any).job_name || (job as any).job_type || `Trabalho ${jobId}`}`,
+      category: (job as any).job_type || null,
+      client_id: job.client_id || null,
+      client_name: client.name || null,
+      client_email: client.email || null,
+      client_phone: client.phone || null,
+    };
+  }
+
+  app.post('/api/galleries', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const body = req.body || {};
+
+    const jobId = body.job_id ? Number(body.job_id) : null;
+    const fromJob = jobId && !body.title ? await galleryDefaultsFromJob(supabase, userId, jobId) : {};
+    const title = String(body.title || fromJob.title || '').trim();
+    if (!title) return res.status(400).json({ error: 'Informe o título da galeria.' });
+
+    const payload = {
+      user_id: userId,
+      job_id: jobId,
+      client_id: body.client_id ?? fromJob.client_id ?? null,
+      client_name: body.client_name ?? fromJob.client_name ?? null,
+      client_email: body.client_email ?? fromJob.client_email ?? null,
+      client_phone: body.client_phone ?? fromJob.client_phone ?? null,
+      title,
+      category: body.category ?? fromJob.category ?? null,
+      status: 'draft',
+      share_token: newGalleryToken(),
+      included_count: Math.max(0, Number(body.included_count) || 0),
+      extra_price: Math.max(0, Number(body.extra_price) || 0),
+    };
+    const { data, error } = await supabase.from('galleries').insert(payload).select().single();
+    if (error) {
+      return galleryTableMissing(error) ? galleryMigrationError(res) : res.status(500).json({ error: error.message });
+    }
+    const [gallery] = await decorateGalleries(supabase, [data]);
+    res.json({ gallery });
+  });
+
+  app.get('/api/galleries/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data: gallery, error } = await supabase
+      .from('galleries').select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (error) {
+      return galleryTableMissing(error) ? galleryMigrationError(res) : res.status(500).json({ error: error.message });
+    }
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+
+    const [photosQ, selectionsQ, decorated] = await Promise.all([
+      supabase.from('gallery_photos').select('*').eq('gallery_id', gallery.id).order('sort_order').order('created_at'),
+      supabase.from('gallery_selections').select('photo_id, selected, client_comment').eq('gallery_id', gallery.id),
+      decorateGalleries(supabase, [gallery]),
+    ]);
+
+    res.json({
+      gallery: decorated[0],
+      photos: (photosQ.data || []).map((p: any) => ({
+        id: p.id,
+        file_name: p.file_name,
+        sort_order: p.sort_order,
+        process_status: p.process_status,
+        thumb_url: previewPublicUrl(p.thumb_path),
+        preview_url: previewPublicUrl(p.preview_path),
+        width: p.width,
+        height: p.height,
+      })),
+      selections: selectionsQ.data || [],
+    });
+  });
+
+  function buildGalleryPatch(body: any): any {
+    const patch: any = { updated_at: new Date().toISOString() };
+    for (const k of ['title', 'category', 'client_id', 'client_name', 'client_email', 'client_phone']) {
+      if (body[k] !== undefined) patch[k] = body[k] || null;
+    }
+    if (body.included_count !== undefined) patch.included_count = Math.max(0, Number(body.included_count) || 0);
+    if (body.extra_price !== undefined) patch.extra_price = Math.max(0, Number(body.extra_price) || 0);
+    if (body.selection_deadline !== undefined) patch.selection_deadline = body.selection_deadline || null;
+    if (body.status !== undefined && GALLERY_STATUSES.includes(body.status)) {
+      patch.status = body.status;
+      if (body.status === 'sent') patch.sent_at = new Date().toISOString();
+      if (body.status === 'selected') patch.selected_at = new Date().toISOString();
+    }
+    return patch;
+  }
+
+  app.put('/api/galleries/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const patch = buildGalleryPatch(req.body || {});
+    const { error } = await supabase
+      .from('galleries').update(patch).eq('id', req.params.id).eq('user_id', userId);
+    if (error) {
+      return galleryTableMissing(error) ? galleryMigrationError(res) : res.status(500).json({ error: error.message });
+    }
+    res.json({ success: true });
+  });
+
+  // Remove os arquivos das fotos no Storage (lotes de 100).
+  async function removeGalleryStorage(photos: any[]) {
+    if (!supabaseAdmin) return;
+    const originals = photos.map((p) => p.original_path).filter(Boolean);
+    const previews = photos.flatMap((p) => [p.preview_path, p.thumb_path]).filter(Boolean);
+    for (let i = 0; i < originals.length; i += 100) {
+      await supabaseAdmin.storage.from(GALLERY_ORIGINALS_BUCKET).remove(originals.slice(i, i + 100));
+    }
+    for (let i = 0; i < previews.length; i += 100) {
+      await supabaseAdmin.storage.from(GALLERY_PREVIEWS_BUCKET).remove(previews.slice(i, i + 100));
+    }
+  }
+
+  app.delete('/api/galleries/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data: gallery } = await supabase
+      .from('galleries').select('id').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+
+    const { data: photos } = await supabase
+      .from('gallery_photos').select('original_path, preview_path, thumb_path').eq('gallery_id', gallery.id);
+    await removeGalleryStorage(photos || []).catch((e: any) =>
+      console.warn('[galeria] limpeza do storage falhou:', e?.message));
+
+    const { error } = await supabase.from('galleries').delete().eq('id', gallery.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  // ── Upload + processamento de fotos ───────────────────────────────────────
+
+  // Lote de signed upload URLs: browser sobe o ORIGINAL direto pro bucket
+  // privado (não passa pelo backend) e depois chama /process foto a foto.
+  app.post('/api/galleries/:id/photos/sign-upload', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Storage indisponível.' });
+    const files = Array.isArray(req.body?.files) ? req.body.files : [];
+    if (files.length === 0 || files.length > 50) {
+      return res.status(400).json({ error: 'Envie de 1 a 50 arquivos por lote.' });
+    }
+
+    const { data: gallery, error: gErr } = await supabase
+      .from('galleries').select('id').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (gErr) {
+      return galleryTableMissing(gErr) ? galleryMigrationError(res) : res.status(500).json({ error: gErr.message });
+    }
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+    await ensureGalleryBuckets();
+
+    const { count } = await supabase
+      .from('gallery_photos').select('id', { count: 'exact', head: true }).eq('gallery_id', gallery.id);
+    const baseOrder = count || 0;
+
+    const rows = files.map((f: any, i: number) => {
+      const id = crypto.randomUUID();
+      return {
+        id,
+        gallery_id: gallery.id,
+        file_name: String(f?.name || `foto-${baseOrder + i + 1}.jpg`),
+        sort_order: baseOrder + i,
+        bytes: Number(f?.size) || null,
+        process_status: 'pending',
+        original_path: `${userId}/${gallery.id}/${id}/original`,
+      };
+    });
+    const { error: insErr } = await supabase.from('gallery_photos').insert(rows);
+    if (insErr) return res.status(500).json({ error: insErr.message });
+
+    const uploads: Array<{ photo_id: string; signed_url: string }> = [];
+    for (const r of rows) {
+      const { data: signed, error: sErr } = await supabaseAdmin.storage
+        .from(GALLERY_ORIGINALS_BUCKET)
+        .createSignedUploadUrl(r.original_path);
+      if (sErr || !signed) {
+        return res.status(500).json({ error: `Falha ao assinar upload: ${sErr?.message || 'desconhecida'}` });
+      }
+      uploads.push({ photo_id: r.id, signed_url: signed.signedUrl });
+    }
+    res.json({ uploads });
+  });
+
+  async function downloadGalleryObject(bucket: string, objectPath: string): Promise<Buffer> {
+    const { data, error } = await supabaseAdmin!.storage.from(bucket).download(objectPath);
+    if (error || !data) throw new Error(`download falhou: ${error?.message || 'arquivo vazio'}`);
+    return Buffer.from(await data.arrayBuffer());
+  }
+
+  async function uploadGalleryPreview(objectPath: string, buf: Buffer) {
+    const { error } = await supabaseAdmin!.storage
+      .from(GALLERY_PREVIEWS_BUCKET)
+      .upload(objectPath, buf, { contentType: 'image/jpeg', upsert: true });
+    if (error) throw new Error(`upload do preview falhou: ${error.message}`);
+  }
+
+  async function buildWatermarkOpts(userId: string, gallery: any) {
+    const s = await getGallerySettings(userId);
+    let logo: Buffer | null = null;
+    if (s.watermark_type === 'logo' && s.watermark_logo_path) {
+      logo = await downloadGalleryObject(GALLERY_PREVIEWS_BUCKET, s.watermark_logo_path).catch(() => null);
+    }
+    const text = (s.watermark_text || '').trim() || (await getStudioNameForGallery(userId));
+    return {
+      watermarkType: (logo ? 'logo' : 'text') as 'logo' | 'text',
+      watermarkText: text,
+      logo,
+      opacity: Number(s.watermark_opacity ?? 0.3),
+      clientLabel: s.watermark_include_client ? gallery.client_name : null,
+    };
+  }
+
+  // Gera preview 1600px + thumb 400px com marca d'água a partir do original.
+  app.post('/api/galleries/:id/photos/:photoId/process', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Storage indisponível.' });
+
+    const { data: gallery } = await supabase
+      .from('galleries').select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+    const { data: photo } = await supabase
+      .from('gallery_photos').select('*').eq('id', req.params.photoId).eq('gallery_id', gallery.id).maybeSingle();
+    if (!photo?.original_path) return res.status(404).json({ error: 'Foto não encontrada' });
+
+    await supabase.from('gallery_photos').update({ process_status: 'processing' }).eq('id', photo.id);
+    try {
+      const original = await downloadGalleryObject(GALLERY_ORIGINALS_BUCKET, photo.original_path);
+      const opts = await buildWatermarkOpts(userId, gallery);
+      const out = await processGalleryPhoto(original, opts);
+
+      const basePath = `${userId}/${gallery.id}/${photo.id}`;
+      await uploadGalleryPreview(`${basePath}/preview.jpg`, out.preview);
+      await uploadGalleryPreview(`${basePath}/thumb.jpg`, out.thumb);
+
+      await supabase.from('gallery_photos').update({
+        preview_path: `${basePath}/preview.jpg`,
+        thumb_path: `${basePath}/thumb.jpg`,
+        width: out.width,
+        height: out.height,
+        process_status: 'done',
+      }).eq('id', photo.id);
+      res.json({ ok: true });
+    } catch (e: any) {
+      console.error('[galeria] processamento falhou:', e?.message);
+      await supabase.from('gallery_photos').update({ process_status: 'error' }).eq('id', photo.id);
+      res.status(500).json({ error: e?.message || 'Falha ao processar a foto' });
+    }
+  });
+
+  app.delete('/api/galleries/:id/photos/:photoId', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data: gallery } = await supabase
+      .from('galleries').select('id').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+
+    const { data: photo } = await supabase
+      .from('gallery_photos')
+      .select('id, original_path, preview_path, thumb_path')
+      .eq('id', req.params.photoId)
+      .eq('gallery_id', gallery.id)
+      .maybeSingle();
+    if (!photo) return res.status(404).json({ error: 'Foto não encontrada' });
+
+    await removeGalleryStorage([photo]).catch(() => {});
+    const { error } = await supabase.from('gallery_photos').delete().eq('id', photo.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  // ── Enviar galeria pro cliente (e-mail + WhatsApp) ────────────────────────
+
+  async function sendGalleryWhatsApp(userId: string, gallery: any, link: string): Promise<boolean> {
+    const digits = String(gallery.client_phone || '').replace(/\D/g, '');
+    if (!digits || BaileysManager.getStatus(userId) !== 'open') return false;
+    const phone = normalizeBrazilianPhone(digits);
+    const ola = gallery.client_name ? `Olá, ${gallery.client_name}!` : 'Olá!';
+    const msg = `${ola} 📸 Suas fotos de "${gallery.title}" estão prontas para você escolher as favoritas.\n\nAcesse: ${link}`;
+    try {
+      await BaileysManager.sendText(userId, phone, msg);
+      return true;
+    } catch (e: any) {
+      console.warn('[galeria] envio WhatsApp falhou:', e?.message);
+      return false;
+    }
+  }
+
+  app.post('/api/galleries/:id/send', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data: gallery, error } = await supabase
+      .from('galleries').select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (error) {
+      return galleryTableMissing(error) ? galleryMigrationError(res) : res.status(500).json({ error: error.message });
+    }
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+
+    const settings = await getGallerySettings(userId);
+    const studioName = await getStudioNameForGallery(userId);
+    const link = galleryLink(gallery.share_token);
+
+    let email_sent = false;
+    if (gallery.client_email) {
+      email_sent = await sendGalleryReadyEmail({
+        to: gallery.client_email,
+        from: settings.sender_email,
+        studioName,
+        clientName: gallery.client_name,
+        galleryTitle: gallery.title,
+        link,
+        includedCount: gallery.included_count || 0,
+        extraPrice: Number(gallery.extra_price || 0),
+      });
+    }
+    const whatsapp_sent = await sendGalleryWhatsApp(userId, gallery, link);
+
+    const patch: any = { sent_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+    if (gallery.status === 'draft') patch.status = 'sent';
+    await supabase.from('galleries').update(patch).eq('id', gallery.id);
+
+    res.json({ ok: true, link, email_sent, whatsapp_sent });
+  });
+
+  // ── Rotas PÚBLICAS (cliente final, validação por share_token) ─────────────
+
+  async function findGalleryByToken(token: string): Promise<any | null> {
+    if (!supabaseAdmin || !token) return null;
+    const { data } = await supabaseAdmin.from('galleries').select('*').eq('share_token', token).maybeSingle();
+    return data || null;
+  }
+
+  async function galleryTotals(galleryId: string, includedCount: number, extraPrice: number) {
+    const { count } = await supabaseAdmin!
+      .from('gallery_selections')
+      .select('id', { count: 'exact', head: true })
+      .eq('gallery_id', galleryId)
+      .eq('selected', true);
+    const selected_count = count || 0;
+    const extra_count = Math.max(0, selected_count - (includedCount || 0));
+    return { selected_count, extra_count, amount: extra_count * Number(extraPrice || 0) };
+  }
+
+  app.get('/api/public/gallery/:token', async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
+    const gallery = await findGalleryByToken(req.params.token);
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+
+    const [settings, studioName, photosQ, selQ] = await Promise.all([
+      getGallerySettings(gallery.user_id),
+      getStudioNameForGallery(gallery.user_id),
+      supabaseAdmin
+        .from('gallery_photos')
+        .select('id, file_name, preview_path, thumb_path')
+        .eq('gallery_id', gallery.id)
+        .eq('process_status', 'done')
+        .order('sort_order')
+        .order('created_at'),
+      supabaseAdmin
+        .from('gallery_selections')
+        .select('photo_id, selected, client_comment')
+        .eq('gallery_id', gallery.id),
+    ]);
+
+    if (gallery.status !== 'draft') {
+      await supabaseAdmin
+        .from('galleries')
+        .update({ view_count: (gallery.view_count || 0) + 1, last_viewed_at: new Date().toISOString() })
+        .eq('id', gallery.id);
+    }
+
+    const selections: Record<string, { selected: boolean; comment: string | null }> = {};
+    for (const s of selQ.data || []) selections[s.photo_id] = { selected: !!s.selected, comment: s.client_comment };
+
+    const prot = settings.protection || {};
+    res.json({
+      gallery: {
+        title: gallery.title,
+        status: gallery.status,
+        included_count: gallery.included_count || 0,
+        extra_price: Number(gallery.extra_price || 0),
+        category: gallery.category,
+        studio_name: studioName,
+        protection: {
+          enabled: prot.right_click !== false || prot.drag !== false,
+          notice: prot.notice !== false,
+        },
+      },
+      photos: (photosQ.data || []).map((p: any) => ({
+        id: p.id,
+        file_name: p.file_name,
+        thumb_url: previewPublicUrl(p.thumb_path) || '',
+        preview_url: previewPublicUrl(p.preview_path) || '',
+      })),
+      selections,
+    });
+  });
+
+  app.post('/api/public/gallery/:token/select', async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
+    const gallery = await findGalleryByToken(req.params.token);
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+    if (gallery.status === 'delivered') return res.status(409).json({ error: 'Galeria já entregue' });
+
+    const { photo_id, selected, comment } = req.body || {};
+    if (!photo_id) return res.status(400).json({ error: 'photo_id obrigatório' });
+    const { data: photo } = await supabaseAdmin
+      .from('gallery_photos').select('id').eq('id', photo_id).eq('gallery_id', gallery.id).maybeSingle();
+    if (!photo) return res.status(404).json({ error: 'Foto não encontrada' });
+
+    const { error } = await supabaseAdmin.from('gallery_selections').upsert(
+      {
+        gallery_id: gallery.id,
+        photo_id,
+        selected: !!selected,
+        client_comment: typeof comment === 'string' && comment.trim() ? comment.trim() : null,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'gallery_id,photo_id' },
+    );
+    if (error) return res.status(500).json({ error: error.message });
+
+    const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price);
+    res.json({ ok: true, ...totals });
+  });
+
+  // Cria a preference do Checkout Pro na conta MP do PRÓPRIO estúdio.
+  async function createMercadoPagoCheckout(gallery: any, payment: any, settings: any): Promise<string | null> {
+    const token = decryptIfNeeded(settings.mp_access_token || '');
+    if (!token) return null;
+    try {
+      const resp = await fetch('https://api.mercadopago.com/checkout/preferences', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: [{
+            title: `Fotos extras — ${gallery.title}`,
+            quantity: 1,
+            currency_id: 'BRL',
+            unit_price: Number(payment.amount),
+          }],
+          external_reference: payment.id,
+          notification_url: `${galleryPublicBase()}/api/public/gallery/mp-webhook?payment=${payment.id}`,
+          back_urls: { success: galleryLink(gallery.share_token) },
+        }),
+      });
+      const data: any = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.id) {
+        console.warn('[galeria] MP preference falhou:', resp.status, data?.message || '');
+        return null;
+      }
+      await supabaseAdmin!.from('gallery_payments').update({ provider_ref: String(data.id) }).eq('id', payment.id);
+      return data.init_point || data.sandbox_init_point || null;
+    } catch (e: any) {
+      console.warn('[galeria] MP erro:', e?.message);
+      return null;
+    }
+  }
+
+  async function createGalleryPayment(
+    gallery: any,
+    totals: { selected_count: number; extra_count: number; amount: number },
+  ): Promise<{ payment_url: string | null; order_code: string | null }> {
+    const order_code = `G${Date.now().toString(36).toUpperCase()}${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+    const { data: row, error } = await supabaseAdmin!
+      .from('gallery_payments')
+      .insert({
+        gallery_id: gallery.id,
+        user_id: gallery.user_id,
+        order_code,
+        extra_count: totals.extra_count,
+        amount: totals.amount,
+        provider: 'mercadopago',
+        status: 'pending',
+      })
+      .select()
+      .single();
+    if (error || !row) {
+      console.warn('[galeria] criar pagamento falhou:', error?.message);
+      return { payment_url: null, order_code: null };
+    }
+    const settings = await getGallerySettings(gallery.user_id);
+    const payment_url = await createMercadoPagoCheckout(gallery, row, settings);
+    if (payment_url) {
+      await supabaseAdmin!.from('gallery_payments').update({ payment_url }).eq('id', row.id);
+    }
+    return { payment_url, order_code };
+  }
+
+  // Avisa o estúdio (e-mail de login + WhatsApp pro próprio número conectado).
+  async function notifyStudioSelectionDone(
+    gallery: any,
+    totals: { selected_count: number; extra_count: number; amount: number },
+  ) {
+    const settings = await getGallerySettings(gallery.user_id);
+    const studioName = await getStudioNameForGallery(gallery.user_id);
+
+    if (isMailerConfigured() && supabaseAdmin) {
+      const { data } = await supabaseAdmin.auth.admin.getUserById(gallery.user_id);
+      const to = data?.user?.email;
+      if (to) {
+        await sendSelectionDoneEmail({
+          to,
+          from: settings.sender_email,
+          studioName,
+          clientName: gallery.client_name,
+          galleryTitle: gallery.title,
+          selectedCount: totals.selected_count,
+          extraCount: totals.extra_count,
+          amount: totals.amount,
+        });
+      }
+    }
+
+    if (settings.notify_studio_whatsapp !== false && BaileysManager.getStatus(gallery.user_id) === 'open') {
+      const own = BaileysManager.getConnectedPhone(gallery.user_id);
+      if (own) {
+        const valor = totals.amount > 0 ? `, R$ ${totals.amount.toFixed(2).replace('.', ',')}` : '';
+        const msg = `📸 ${gallery.client_name || 'Cliente'} finalizou a seleção de "${gallery.title}": ${totals.selected_count} foto(s), ${totals.extra_count} extra(s)${valor}.`;
+        await BaileysManager.sendText(gallery.user_id, own.replace(/\D/g, ''), msg).catch(() => {});
+      }
+    }
+  }
+
+  app.post('/api/public/gallery/:token/finalize', async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
+    const gallery = await findGalleryByToken(req.params.token);
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+    if (gallery.status === 'delivered') return res.status(409).json({ error: 'Galeria já entregue' });
+
+    const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price);
+    await supabaseAdmin
+      .from('galleries')
+      .update({ status: 'selected', selected_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq('id', gallery.id);
+
+    let payment: { payment_url: string | null; order_code: string | null } = { payment_url: null, order_code: null };
+    if (totals.amount > 0) payment = await createGalleryPayment(gallery, totals);
+
+    notifyStudioSelectionDone(gallery, totals).catch((e: any) =>
+      console.warn('[galeria] notificação ao estúdio falhou:', e?.message));
+
+    res.json({ ok: true, ...totals, ...payment });
+  });
+
+  // Confirma o pagamento direto na API do MP (usado no polling e no webhook).
+  async function refreshMercadoPagoStatus(payment: any): Promise<any | null> {
+    const settings = await getGallerySettings(payment.user_id);
+    const token = decryptIfNeeded(settings.mp_access_token || '');
+    if (!token) return null;
+    const resp = await fetch(
+      `https://api.mercadopago.com/v1/payments/search?external_reference=${encodeURIComponent(payment.id)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!resp.ok) return null;
+    const data: any = await resp.json().catch(() => null);
+    const approved = (data?.results || []).find((p: any) => p.status === 'approved');
+    if (!approved) return null;
+    const patch = { status: 'paid', paid_at: new Date().toISOString() };
+    await supabaseAdmin!.from('gallery_payments').update(patch).eq('id', payment.id);
+    return { ...payment, ...patch };
+  }
+
+  app.get('/api/public/gallery/:token/payment-status', async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
+    const gallery = await findGalleryByToken(req.params.token);
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+
+    const { data: payment } = await supabaseAdmin
+      .from('gallery_payments')
+      .select('*')
+      .eq('gallery_id', gallery.id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!payment) return res.json({ status: null });
+
+    if (payment.status === 'pending') {
+      const updated = await refreshMercadoPagoStatus(payment).catch(() => null);
+      if (updated) return res.json({ status: updated.status, payment_url: updated.payment_url });
+    }
+    res.json({ status: payment.status, payment_url: payment.payment_url });
+  });
+
+  // Webhook do Mercado Pago (notification_url da preference).
+  app.post('/api/public/gallery/mp-webhook', async (req, res) => {
+    res.sendStatus(200); // responde já — o MP reenvia se demorar
+    try {
+      const paymentRowId = String(req.query.payment || '');
+      if (!paymentRowId || !supabaseAdmin) return;
+      const { data: payment } = await supabaseAdmin
+        .from('gallery_payments').select('*').eq('id', paymentRowId).maybeSingle();
+      if (payment && payment.status === 'pending') await refreshMercadoPagoStatus(payment);
+    } catch (e: any) {
+      console.warn('[galeria] mp-webhook erro:', e?.message);
+    }
   });
 
   // Cria customer no Asaas + subscription. Retorna invoiceUrl pra pagamento.

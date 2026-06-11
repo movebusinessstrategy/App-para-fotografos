@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   X, User, Phone, Mail, Instagram, MapPin, Calendar,
-  CheckSquare, Square, Trash2, Plus, Image, Clock,
+  CheckSquare, Square, Trash2, Plus, Image, Images, Clock,
   ChevronRight, Tag, FileText, LogOut, Workflow, Check,
   DollarSign, Package, Layers, Briefcase, Search, CreditCard,
   Pencil, RefreshCw
@@ -1057,6 +1057,9 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                   </div>
                 )}
               </section>
+
+              {/* Galeria de seleção de fotos (proofing) */}
+              <GallerySection jobId={job.id} />
             </div>
           )}
 
@@ -1506,6 +1509,96 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
         </div>
       )}
     </>
+  );
+}
+
+// ─── Galeria de seleção de fotos vinculada ao trabalho ──────────────────
+const GALLERY_STATUS_LABELS: Record<string, string> = {
+  draft: "Preparando",
+  sent: "Enviada",
+  selected: "Seleção feita",
+  delivered: "Entregue",
+};
+
+interface GallerySummary {
+  id: string;
+  title: string;
+  status: string;
+  share_token: string;
+  photo_count: number;
+  selected_count: number;
+}
+
+function GallerySection({ jobId }: { jobId: number }) {
+  const { data, mutate } = useApi<{ galleries: GallerySummary[] }>(`/api/galleries?job_id=${jobId}`);
+  const gallery = data?.galleries?.[0];
+  const [creating, setCreating] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const handleCreate = async () => {
+    setCreating(true);
+    try {
+      const res = await authFetch("/api/galleries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: jobId, included_count: 20, extra_price: 35 }),
+      });
+      if (res.ok) mutate();
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleCopyLink = async () => {
+    if (!gallery) return;
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}/g/${gallery.share_token}`);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard indisponível */
+    }
+  };
+
+  return (
+    <section>
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 flex items-center gap-1.5">
+        <Images size={12} />
+        Galeria de seleção
+      </h3>
+      {gallery ? (
+        <div className="rounded-lg border border-gray-200 dark:border-gray-700 px-3 py-2 space-y-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{gallery.title}</span>
+            <span className="flex-shrink-0 rounded-full bg-gold-50 dark:bg-gold-500/15 px-2 py-0.5 text-[10px] font-bold text-gold-700 dark:text-gold-300">
+              {GALLERY_STATUS_LABELS[gallery.status] || gallery.status}
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400">
+            <span>
+              {gallery.photo_count || 0} foto{gallery.photo_count === 1 ? "" : "s"} · {gallery.selected_count || 0} escolhida{gallery.selected_count === 1 ? "" : "s"}
+            </span>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button onClick={handleCopyLink} className="font-semibold text-gold-600 dark:text-gold-400 hover:underline">
+                {copied ? "Copiado!" : "Copiar link"}
+              </button>
+              <a href="/galeria" className="font-semibold text-gold-600 dark:text-gold-400 hover:underline">
+                Abrir painel
+              </a>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={handleCreate}
+          disabled={creating}
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-gold-500/15 hover:bg-gold-500/25 text-gold-700 dark:text-gold-300 text-sm font-semibold rounded-lg transition-colors disabled:opacity-60"
+        >
+          <Images size={14} />
+          {creating ? "Criando..." : "Criar galeria de seleção"}
+        </button>
+      )}
+    </section>
   );
 }
 
