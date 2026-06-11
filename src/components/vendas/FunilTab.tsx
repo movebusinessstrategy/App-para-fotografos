@@ -95,8 +95,14 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
   const dealsByStage = useMemo(() => {
     const map: Record<string, Deal[]> = {};
     activeStages.forEach((s) => (map[s.id] = []));
+    // Lead com etapa órfã (pipeline recriada → ids mudaram) cai na PRIMEIRA
+    // coluna aberta em vez de sumir. Etapas finais (ganho/perda) existem em
+    // `stages`, então não são tratadas como órfãs.
+    const knownStageIds = new Set(stages.map((s) => s.id));
+    const fallbackId = activeStages[0]?.id;
     filteredDeals.forEach((d) => {
       if (map[d.stage]) map[d.stage].push(d);
+      else if (fallbackId && !knownStageIds.has(d.stage)) map[fallbackId].push(d);
     });
     // Ordena cada etapa pelo tempo parado nela: quem entrou há mais
     // tempo fica no topo (lead "travado" aparece primeiro).
@@ -111,7 +117,7 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
       arr.sort((a, b) => enteredAt(a) - enteredAt(b)),
     );
     return map;
-  }, [filteredDeals, activeStages]);
+  }, [filteredDeals, activeStages, stages]);
 
   const handleDragStart = (event: DragStartEvent) => {
     isDraggingRef.current = true;
