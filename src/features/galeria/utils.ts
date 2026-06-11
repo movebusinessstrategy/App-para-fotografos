@@ -5,7 +5,7 @@ export const GALLERY_COLUMNS: { id: GalleryStatus; label: string }[] = [
   { id: "draft", label: "Preparando" },
   { id: "sent", label: "Enviada" },
   { id: "selected", label: "Seleção feita" },
-  { id: "delivered", label: "Entregue" },
+  { id: "delivered", label: "Finalizada" },
 ];
 
 export function formatBRL(v: number | null | undefined): string {
