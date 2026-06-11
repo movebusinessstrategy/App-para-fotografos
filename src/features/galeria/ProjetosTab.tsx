@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   DndContext,
   DragEndEvent,
@@ -18,7 +19,6 @@ import { Gallery, GalleryStatus } from "./types";
 import { GALLERY_COLUMNS } from "./utils";
 import { GaleriaCard, GaleriaCardGhost } from "./GaleriaCard";
 import { NovaGaleriaModal } from "./NovaGaleriaModal";
-import { GaleriaDetailDrawer } from "./GaleriaDetailDrawer";
 import { ToastKind } from "./Toast";
 
 interface ProjetosTabProps {
@@ -30,10 +30,11 @@ export default function ProjetosTab({ onNotify }: ProjetosTabProps) {
   const { data, isLoading, mutate } = useApi<{ galleries: Gallery[] }>("/api/galleries", liveRefresh);
   const galleries = useMemo(() => data?.galleries ?? [], [data]);
 
+  const navigate = useNavigate();
   const [localGalleries, setLocalGalleries] = useState<Gallery[]>(galleries);
   const [activeGallery, setActiveGallery] = useState<Gallery | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [novaOpen, setNovaOpen] = useState(false);
+  const openGallery = (id: string) => navigate(`/galeria/${id}`);
   // Mesmo guard do FunilTab: poll de 5s não pode "voltar" o card no meio
   // de um arraste nem nos ~2s seguintes a um movimento local.
   const isDraggingRef = useRef(false);
@@ -125,7 +126,7 @@ export default function ProjetosTab({ onNotify }: ProjetosTabProps) {
                 key={column.id}
                 column={column}
                 galleries={byStatus[column.id]}
-                onCardClick={(id) => setSelectedId(id)}
+                onCardClick={openGallery}
               />
             ))}
           </div>
@@ -142,18 +143,9 @@ export default function ProjetosTab({ onNotify }: ProjetosTabProps) {
           onCreated={(gallery) => {
             setNovaOpen(false);
             mutate();
-            setSelectedId(gallery.id);
+            openGallery(gallery.id);
             onNotify("success", "Galeria criada! Agora envie as fotos.");
           }}
-          onNotify={onNotify}
-        />
-      )}
-
-      {selectedId && (
-        <GaleriaDetailDrawer
-          galleryId={selectedId}
-          onClose={() => setSelectedId(null)}
-          onChanged={() => mutate()}
           onNotify={onNotify}
         />
       )}

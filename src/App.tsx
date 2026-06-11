@@ -37,6 +37,7 @@ const AssinaturaPage = lazy(() => import("./pages/AssinaturaPage"));
 const AgentePage = lazy(() => import("./pages/AgentePage"));
 const WhatsappPage = lazy(() => import("./pages/WhatsappPage"));
 const GaleriasPage = lazy(() => import("./features/galeria/GaleriasPage"));
+const GaleriaDetailPage = lazy(() => import("./features/galeria/GaleriaDetailPage"));
 const GaleriaPublicaPage = lazy(() => import("./features/galeria-publica/GaleriaPublicaPage"));
 
 // ── Central de Configurações ────────────────────────────────────────────────
@@ -122,6 +123,7 @@ export default function App() {
                 <Route path="jobs" element={<PermissionRoute module="jobs"><JobsPage /></PermissionRoute>} />
                 <Route path="tarefas" element={<PermissionRoute module="jobs"><TasksPage /></PermissionRoute>} />
                 <Route path="galeria" element={<PermissionRoute module="jobs"><GaleriasPage /></PermissionRoute>} />
+                <Route path="galeria/:id" element={<PermissionRoute module="jobs"><GaleriaDetailPage /></PermissionRoute>} />
                 <Route path="agente" element={<AgentePage />} />
                 <Route path="vendas" element={<PermissionRoute module="vendas"><VendasPage /></PermissionRoute>} />
                 <Route path="whatsapp" element={<PermissionRoute module="whatsapp"><WhatsappPage /></PermissionRoute>} />

@@ -7365,6 +7365,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
     if (body.cart_discount !== undefined) patch.cart_discount = Math.max(0, Number(body.cart_discount) || 0);
     if (body.lock_after_deadline !== undefined) patch.lock_after_deadline = !!body.lock_after_deadline;
+    if (body.cover_layout !== undefined) patch.cover_layout = String(body.cover_layout || 'classic').slice(0, 32);
+    if (body.font_family !== undefined) patch.font_family = String(body.font_family || 'sans').slice(0, 32);
+    if (body.primary_color !== undefined) {
+      const v = String(body.primary_color || '').slice(0, 16);
+      patch.primary_color = /^#[0-9A-Fa-f]{3,8}$/.test(v) ? v : '#D4537E';
+    }
     return patch;
   }
 
@@ -7581,6 +7587,70 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ success: true });
   });
 
+  // ── Pacotes de upgrade (Fase 2) ────────────────────────────────────────────
+
+  app.get('/api/galleries/:id/packs', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const { data: gallery } = await supabase
+      .from('galleries').select('id, cart_discount').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+    const { data, error } = await supabase
+      .from('gallery_packs').select('*').eq('gallery_id', gallery.id).order('sort_order');
+    if (error) {
+      return galleryTableMissing(error) ? res.json({ packs: [], cart_discount: 0, table_missing: true })
+        : res.status(500).json({ error: error.message });
+    }
+    res.json({ packs: data || [], cart_discount: Number(gallery.cart_discount || 0) });
+  });
+
+  app.post('/api/galleries/:id/packs', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const { data: gallery } = await supabase
+      .from('galleries').select('id').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+    const payload = {
+      gallery_id: gallery.id,
+      name: String(req.body?.name || '').trim().slice(0, 80) || 'Pacote',
+      photo_count: Math.max(1, Number(req.body?.photo_count) || 1),
+      price: Math.max(0, Number(req.body?.price) || 0),
+      sort_order: Number(req.body?.sort_order) || 0,
+    };
+    const { data, error } = await supabase.from('gallery_packs').insert(payload).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ pack: data });
+  });
+
+  app.put('/api/galleries/:id/packs/:packId', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const { data: gallery } = await supabase
+      .from('galleries').select('id').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+    const patch: any = {};
+    if (req.body?.name !== undefined) patch.name = String(req.body.name).trim().slice(0, 80) || 'Pacote';
+    if (req.body?.photo_count !== undefined) patch.photo_count = Math.max(1, Number(req.body.photo_count) || 1);
+    if (req.body?.price !== undefined) patch.price = Math.max(0, Number(req.body.price) || 0);
+    if (req.body?.sort_order !== undefined) patch.sort_order = Number(req.body.sort_order) || 0;
+    const { error } = await supabase
+      .from('gallery_packs').update(patch).eq('id', req.params.packId).eq('gallery_id', gallery.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+  });
+
+  app.delete('/api/galleries/:id/packs/:packId', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const { data: gallery } = await supabase
+      .from('galleries').select('id').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+    const { error } = await supabase
+      .from('gallery_packs').delete().eq('id', req.params.packId).eq('gallery_id', gallery.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+  });
+
   // ── Enviar galeria pro cliente (e-mail + WhatsApp) ────────────────────────
 
   async function sendGalleryWhatsApp(userId: string, gallery: any, link: string): Promise<boolean> {
@@ -7642,15 +7712,55 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return data || null;
   }
 
-  async function galleryTotals(galleryId: string, includedCount: number, extraPrice: number) {
-    const { count } = await supabaseAdmin!
+  // Totais da seleção respeitando o pricing_mode da galeria:
+  //   no_charge      → cliente só seleciona; valor 0.
+  //   extra_avulso   → N incluídas grátis + cada extra a extra_price.
+  //   upgrade_packs  → cliente compra um pacote (pack_id) ao finalizar.
+  //   sell_all       → cada foto tem preço (gallery_photo_prices); senão extra_price.
+  // Aplica cart_discount como abatimento em reais sobre o subtotal.
+  async function galleryTotals(
+    galleryId: string,
+    includedCount: number,
+    extraPrice: number,
+    opts: { pricingMode?: string; cartDiscount?: number; packId?: string | null } = {},
+  ) {
+    const sb = supabaseAdmin!;
+    const mode = opts.pricingMode || 'extra_avulso';
+
+    const { data: selRows } = await sb
       .from('gallery_selections')
-      .select('id', { count: 'exact', head: true })
+      .select('photo_id')
       .eq('gallery_id', galleryId)
       .eq('selected', true);
-    const selected_count = count || 0;
+    const selectedIds = (selRows || []).map((r: any) => r.photo_id);
+    const selected_count = selectedIds.length;
     const extra_count = Math.max(0, selected_count - (includedCount || 0));
-    return { selected_count, extra_count, amount: extra_count * Number(extraPrice || 0) };
+
+    let subtotal = 0;
+    let pack_name: string | null = null;
+    if (mode === 'no_charge') {
+      subtotal = 0;
+    } else if (mode === 'upgrade_packs' && opts.packId) {
+      const { data: pack } = await sb
+        .from('gallery_packs').select('name, price').eq('id', opts.packId).eq('gallery_id', galleryId).maybeSingle();
+      subtotal = Number(pack?.price || 0);
+      pack_name = pack?.name || null;
+    } else if (mode === 'sell_all' && selectedIds.length > 0) {
+      const { data: prices } = await sb
+        .from('gallery_photo_prices').select('photo_id, price')
+        .eq('gallery_id', galleryId).in('photo_id', selectedIds);
+      const byId = new Map<string, number>();
+      for (const p of prices || []) byId.set(p.photo_id, Number(p.price || 0));
+      // Foto sem preço cadastrado usa extra_price como fallback.
+      subtotal = selectedIds.reduce((sum, id) => sum + (byId.has(id) ? byId.get(id)! : Number(extraPrice || 0)), 0);
+    } else {
+      // extra_avulso (default) — N inclusas + cobra os extras.
+      subtotal = extra_count * Number(extraPrice || 0);
+    }
+
+    const discount = Math.max(0, Number(opts.cartDiscount || 0));
+    const amount = Math.max(0, subtotal - discount);
+    return { selected_count, extra_count, amount, subtotal, discount, pack_name };
   }
 
   // ── Acesso & auditoria (Fase 1) ────────────────────────────────────────────
@@ -8017,7 +8127,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       });
     }
 
-    const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price);
+    const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price, {
+      pricingMode: gallery.pricing_mode, cartDiscount: gallery.cart_discount,
+    });
     res.json({ ok: true, ...totals });
   });
 
