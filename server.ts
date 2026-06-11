@@ -2778,15 +2778,22 @@ async function startServer() {
   // Marcar conversa como lida (zera unread no Supabase)
   app.post('/api/inbox/mark-read/:phone', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const phone = normalizeBrazilianPhone(req.params.phone.replace(/\D/g, ''));
-    readUpToTimestampByPhone.set(liveKey(userId, phone), Date.now());
+    const raw = req.params.phone.replace(/\D/g, '');
+    const with55 = raw.startsWith('55') ? raw : '55' + raw;
+    const phone13 = normalizeBrazilianPhone(with55);
+    // Variante SEM o nono dígito: conversas podem estar salvas em qualquer um
+    // dos formatos (12 ou 13 dígitos). Antes o update só tentava o normalizado
+    // → não achava a linha → o badge de "não lida" NUNCA sumia.
+    const phone12 = phone13.length === 13 ? phone13.slice(0, 4) + phone13.slice(5) : phone13;
+    const variants = [...new Set([with55, phone13, phone12])];
+    variants.forEach(v => readUpToTimestampByPhone.set(liveKey(userId, v), Date.now()));
     try {
       const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
       await db
         .from('wa_conversations')
         .update({ unread_count: 0, updated_at: new Date().toISOString() })
         .eq('user_id', userId)
-        .eq('phone', phone);
+        .in('phone', variants);
     } catch {}
     return res.json({ ok: true });
   });
@@ -4262,26 +4269,46 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const { data: job } = await supabase.from('jobs').select('id, amount').eq('id', jobId).eq('user_id', userId).single();
     if (!job) return res.status(404).json({ error: 'Job not found' });
 
-    const { amount, description, payment_date, payment_method } = req.body;
-    if (!amount || amount <= 0) return res.status(400).json({ error: 'amount obrigatório e > 0' });
+    const { amount, description, payment_date, payment_method, discount } = req.body;
+    const discountVal = Math.max(0, Number(discount) || 0);
+    const amountVal = Math.max(0, Number(amount) || 0);
+    // Pagamento e desconto podem vir juntos ou separados (ex: quitar só com desconto)
+    if (amountVal <= 0 && discountVal <= 0) {
+      return res.status(400).json({ error: 'Informe um valor de pagamento e/ou desconto' });
+    }
 
-    const { data: payment, error } = await adminClient.from('job_payments').insert({
-      job_id: jobId,
-      amount: Number(amount),
-      description: description || null,
-      payment_date: payment_date || new Date().toISOString().slice(0, 10),
-      payment_method: payment_method || 'Pix',
-    }).select().single();
+    // Desconto abate do VALOR TOTAL do job (não é "dinheiro recebido" — não
+    // infla receita). Fica registrado na descrição do pagamento.
+    const newAmount = discountVal > 0 ? Math.max(0, (Number(job.amount) || 0) - discountVal) : (Number(job.amount) || 0);
+    const descParts = [
+      description || null,
+      discountVal > 0 ? `Desconto de R$ ${discountVal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} aplicado` : null,
+    ].filter(Boolean);
 
-    if (error) return res.status(500).json({ error: error.message });
+    let payment: any = null;
+    if (amountVal > 0) {
+      const ins = await adminClient.from('job_payments').insert({
+        job_id: jobId,
+        amount: amountVal,
+        description: descParts.join(' · ') || null,
+        payment_date: payment_date || new Date().toISOString().slice(0, 10),
+        payment_method: payment_method || 'Pix',
+      }).select().single();
+      if (ins.error) return res.status(500).json({ error: ins.error.message });
+      payment = ins.data;
+    }
 
-    // Recalcula total pago e atualiza payment_status no job
+    // Recalcula total pago e atualiza payment_status (contra o total já com desconto)
     const { data: allPayments } = await adminClient.from('job_payments').select('amount').eq('job_id', jobId);
     const totalPago = (allPayments || []).reduce((s: number, p: any) => s + (p.amount || 0), 0);
-    const newStatus = totalPago <= 0 ? 'pending' : (job.amount > 0 && totalPago >= job.amount) ? 'paid' : 'partial';
-    await supabase.from('jobs').update({ payment_status: newStatus }).eq('id', jobId).eq('user_id', userId);
+    const newStatus = (newAmount === 0 && (totalPago > 0 || discountVal > 0))
+      ? 'paid'
+      : totalPago <= 0 ? 'pending' : totalPago >= newAmount ? 'paid' : 'partial';
+    const jobUpdate: any = { payment_status: newStatus };
+    if (discountVal > 0) jobUpdate.amount = newAmount;
+    await supabase.from('jobs').update(jobUpdate).eq('id', jobId).eq('user_id', userId);
 
-    res.json({ payment, totalPago, newStatus });
+    res.json({ payment, totalPago, newStatus, newAmount, discountApplied: discountVal });
   });
 
   // DELETE /api/job-payments/:id
@@ -5530,7 +5557,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!stage) return res.status(404).json({ error: 'Etapa não encontrada' });
     if (stage.is_final) return res.status(400).json({ error: 'Etapas finais não podem ser removidas' });
 
-    const fallbackStage = stageIdOrDefault(stages, stages.find((s) => !s.is_final && s.id !== id)?.id);
+    // Fallback SEGURO: precisa ser uma etapa aberta que SOBREVIVE à exclusão.
+    // O stageIdOrDefault antigo podia devolver a própria etapa excluída (ou um
+    // id default que nem existe) → deals ficavam órfãos e SUMIAM do funil.
+    const fallbackStage = stages.find((s) => !s.is_final && s.id !== id)?.id || null;
+    if (!fallbackStage) {
+      return res.status(400).json({
+        error: 'Crie a nova etapa antes de excluir a última etapa aberta — os leads precisam de um destino.',
+      });
+    }
     await supabase.from('deals').update({ stage: fallbackStage }).eq('stage', id).eq('user_id', userId);
     await supabase.from('deal_stages').delete().eq('id', id).eq('user_id', userId);
     res.json({ success: true });
@@ -7670,6 +7705,29 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const { deals } = await loadDeals(supabase, userId);
+
+    // RESGATE de leads órfãos: deal ativo apontando pra etapa que não existe
+    // mais (ex: usuário recriou a pipeline — os ids mudam) ficava INVISÍVEL no
+    // funil. Aqui movemos de volta pra primeira etapa aberta e persistimos.
+    // Best-effort: falha no resgate não bloqueia a listagem.
+    try {
+      const stages = await ensurePipelineStages(supabase, userId);
+      const knownIds = new Set(stages.map((s: any) => s.id));
+      const orphans = (deals || []).filter((d: any) => d.stage && !knownIds.has(d.stage) && !d.converted);
+      if (orphans.length > 0) {
+        const firstOpen = stages.find((s: any) => !s.is_final)?.id;
+        if (firstOpen) {
+          const nowIso = new Date().toISOString();
+          await supabase.from('deals')
+            .update({ stage: firstOpen, current_stage_entered_at: nowIso })
+            .in('id', orphans.map((o: any) => o.id))
+            .eq('user_id', userId);
+          orphans.forEach((o: any) => { o.stage = firstOpen; o.current_stage_entered_at = nowIso; });
+          console.log(`[deals] ${orphans.length} lead(s) órfão(s) resgatado(s) → etapa "${firstOpen}" (user ${userId})`);
+        }
+      }
+    } catch { /* não bloqueia a resposta */ }
+
     res.json(deals);
   });
 
@@ -7677,7 +7735,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const stages = await ensurePipelineStages(supabase, userId);
-    const { client_id, title, value, stage, priority, expected_close_date, next_follow_up, notes, assigned_to } = req.body;
+    const { client_id, title, value, stage, priority, expected_close_date, next_follow_up, notes, assigned_to, contact_name, contact_phone, contact_email, lead_source } = req.body;
     const nowIso = new Date().toISOString();
     const stageId = stageIdOrDefault(stages, stage);
     const stageName = stages.find((s) => s.id === stageId)?.name || stageId;
@@ -7685,6 +7743,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const payload: any = {
       client_id: client_id || null,
       title,
+      contact_name: contact_name || title || null,
+      contact_phone: contact_phone || null,
+      contact_email: contact_email || null,
+      lead_source: lead_source || null,
       value: value || 0,
       stage: stageId,
       stage_entered_at: nowIso,
@@ -7735,7 +7797,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const supabase = (req as any).supabase as SupabaseClient;
     const stages = await ensurePipelineStages(supabase, userId);
     const firstStage = stages.find((s) => !s.is_final) || DEFAULT_STAGES[0];
-    const { name, phone, email, value, source, stage: requestedStage, assigned_to } = req.body;
+    const { name, phone, email, value, source, stage: requestedStage, assigned_to, notes } = req.body;
     if (!name || !phone) return res.status(400).json({ error: 'Nome e telefone são obrigatórios' });
 
     // Stage solicitado (drag direto pra coluna específica) > primeira stage
@@ -7748,6 +7810,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       contact_phone: phone,
       contact_email: email || null,
       lead_source: source || null,
+      notes: notes || null,
       value: Number(value) || 0,
       stage: targetStage.id,
       stage_entered_at: nowIso,
@@ -7965,8 +8028,17 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const supabase = (req as any).supabase as SupabaseClient;
     const stages = await ensurePipelineStages(supabase, userId);
     const wonStage = stages.find((s) => s.is_won) || DEFAULT_STAGES.find((s) => s.is_won);
-    const { createClient, createJob, client, job, sinalAmount, existingClientId } = req.body;
+    const { createClient, createJob, client, job, sinalAmount, existingClientId, converted_at } = req.body;
     const nowIso = new Date().toISOString();
+    // Data da venda retroativa: aceita 'YYYY-MM-DD' (ou ISO) e usa como
+    // converted_at do deal. Inválida ou no futuro → agora. O meio-dia evita
+    // a data "voltar" um dia por fuso horário.
+    let soldAtIso = nowIso;
+    if (typeof converted_at === 'string' && converted_at.trim()) {
+      const raw = converted_at.trim();
+      const d = new Date(raw.length <= 10 ? `${raw}T12:00:00` : raw);
+      if (!isNaN(d.getTime()) && d.getTime() <= Date.now()) soldAtIso = d.toISOString();
+    }
 
     const { data: deal } = await supabase
       .from('deals')
@@ -8051,14 +8123,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       if (error) return res.status(500).json({ error: error.message });
       jobId = newJob?.id || null;
 
-      // Registra o sinal como pagamento na tabela job_payments
+      // Registra o sinal como pagamento na tabela job_payments.
+      // Venda retroativa: o sinal entra com a data real da venda.
       if (jobId && sinalAmount && Number(sinalAmount) > 0) {
         const adminClient = supabaseAdmin || supabase;
         await adminClient.from('job_payments').insert({
           job_id: jobId,
           amount: Number(sinalAmount),
           description: 'Sinal',
-          payment_date: new Date().toISOString().slice(0, 10),
+          payment_date: soldAtIso.slice(0, 10),
           payment_method: job.payment_method || 'Pix',
         }).select();
       }
@@ -8072,7 +8145,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       current_stage_entered_at: nowIso,
       stage_history: appendStageHistory(deal.stage_history, stageId, stageName, nowIso),
       converted: true,
-      converted_at: nowIso,
+      converted_at: soldAtIso,
       converted_client_id: clientId,
       converted_job_id: jobId,
       client_id: clientId || deal.client_id,
@@ -12490,6 +12563,39 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   // ============ CONTRACTS / STUDIO SETTINGS ============
 
+  // ─── Saneamento LGPD de modelos legados ────────────────────────────────────
+  // O seed antigo (2026-05-05 → 05-23) embutia DADOS REAIS no corpo de 24
+  // modelos: estúdio Pitori (CNPJ/responsável/endereço) em todos, e uma
+  // cliente real (nome/CPF/endereço/telefone/email) no "ACOMPANHAMENTO
+  // AVULSO". A fonte foi removida, mas contas criadas no período ainda têm os
+  // modelos sujos no banco — e, por serem texto FIXO, eles também não puxavam
+  // os dados do cliente. Aqui trocamos as assinaturas conhecidas por
+  // placeholders. Roda nos GETs de modelos: idempotente, preserva edições do
+  // usuário (só altera os trechos conhecidos) e persiste o resultado.
+  const LEGACY_SANITIZE_RULES: Array<[RegExp, string]> = [
+    // Cliente real vazada no seed (ordem importa: endereço antes da cidade)
+    [/Micheli\s+Fioravanti(?:\s+Alves)?/gi, '{{cliente_nome}}'],
+    [/075\.?722\.?709-?05/g, '{{cliente_cpf}}'],
+    [/(?:Rua\s+)?Alameda\s+Cris[âa]ntemo[^\n]*/gi, '{{cliente_endereco}}'],
+    [/\(?43\)?\s*9?9634-?5322/g, '{{cliente_telefone}}'],
+    [/michelifioalves@hotmail\.com/gi, '{{cliente_email}}'],
+    // Dados do estúdio do seed (terceiros para as demais contas) → placeholders
+    // {{studio_*}}, preenchidos pelo gerador com os settings da PRÓPRIA conta.
+    [/ST[ÚU]DIO\s+PITORI\s+LTDA/gi, '{{studio_nome}}'],
+    [/39\.?732\.?374\/?0001-?37/g, '{{studio_cnpj}}'],
+    [/Giovana\s+Vit[óo]ria\s+Pitori(?:\s+Macena)?/gi, '{{studio_responsavel}}'],
+    [/103\.?177\.?439-?45/g, '{{studio_responsavel_cpf}}'],
+    [/Rua\s+Dinamarca[^\n]*/gi, '{{studio_endereco}}'],
+    [/Camb[ée]\s*\/\s*PR/g, '{{studio_cidade}}'],
+  ];
+
+  function sanitizeLegacyContractBody(body: string): string | null {
+    if (!body) return null;
+    let out = body;
+    for (const [re, repl] of LEGACY_SANITIZE_RULES) out = out.replace(re, repl);
+    return out === body ? null : out;
+  }
+
   // GET studio settings (returns null if user has none yet)
   app.get('/api/studio-settings', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
@@ -12790,7 +12896,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .order('category', { ascending: true })
       .order('name', { ascending: true });
     if (error) return res.status(500).json({ error: error.message });
-    res.json(data || []);
+
+    // Saneamento LGPD: troca dados reais do seed antigo por placeholders e persiste
+    const templates = data || [];
+    for (const t of templates) {
+      const cleaned = sanitizeLegacyContractBody(t.body || '');
+      if (cleaned) {
+        t.body = cleaned;
+        await supabase.from('contract_templates').update({ body: cleaned }).eq('id', t.id).eq('user_id', userId);
+        console.log(`[contracts] modelo "${t.name}" saneado (dados de terceiros → placeholders) user=${userId}`);
+      }
+    }
+    res.json(templates);
   });
 
   app.get('/api/contract-templates/:id', requireAuth, async (req, res) => {
@@ -12804,7 +12921,74 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .maybeSingle();
     if (error) return res.status(500).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'not found' });
+    // Mesmo saneamento do GET de lista (cobre quem abre o modelo direto)
+    const cleaned = sanitizeLegacyContractBody(data.body || '');
+    if (cleaned) {
+      data.body = cleaned;
+      await supabase.from('contract_templates').update({ body: cleaned }).eq('id', data.id).eq('user_id', userId);
+      console.log(`[contracts] modelo "${data.name}" saneado (dados de terceiros → placeholders) user=${userId}`);
+    }
     res.json(data);
+  });
+
+  // Importa um contrato em Word (.docx) ou PDF e cria um MODELO editável.
+  // O arquivo chega em base64 (express.json já aceita 50mb); o texto extraído
+  // vira o body do modelo — o usuário então troca os dados pelos placeholders.
+  app.post('/api/contract-templates/import', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { filename, file_base64 } = req.body || {};
+    if (!filename || !file_base64) return res.status(400).json({ error: 'Envie filename e file_base64' });
+
+    let buf: Buffer;
+    try { buf = Buffer.from(String(file_base64), 'base64'); } catch { return res.status(400).json({ error: 'Arquivo inválido' }); }
+    if (buf.length < 100) return res.status(400).json({ error: 'Arquivo vazio ou inválido' });
+    if (buf.length > 15 * 1024 * 1024) return res.status(400).json({ error: 'Arquivo muito grande (máx 15MB)' });
+
+    let text = '';
+    try {
+      if (/\.docx$/i.test(filename)) {
+        const mammoth = await import('mammoth');
+        const r = await mammoth.extractRawText({ buffer: buf });
+        text = r?.value || '';
+      } else if (/\.pdf$/i.test(filename)) {
+        // BUG do pdf-parse@1: o index.js tenta abrir um PDF de teste ao ser
+        // importado. Workaround: importa direto o módulo interno (igual ao
+        // autentique-import).
+        // @ts-ignore — pdf-parse v1 não tem types publicados
+        const pdfParse = (await import('pdf-parse/lib/pdf-parse.js')).default;
+        const parsed = await pdfParse(buf);
+        text = parsed?.text || '';
+      } else if (/\.doc$/i.test(filename)) {
+        return res.status(400).json({ error: 'Formato .doc antigo não é suportado — abra no Word e salve como .docx' });
+      } else {
+        return res.status(400).json({ error: 'Formato não suportado — envie .docx ou .pdf' });
+      }
+    } catch (err: any) {
+      console.error('[contracts/import] falha ao ler arquivo:', err?.message || err);
+      return res.status(422).json({ error: 'Não consegui ler o arquivo. Confira se ele não está corrompido ou protegido por senha.' });
+    }
+
+    // Limpeza: normaliza quebras de linha e colapsa linhas vazias em excesso
+    const cleanedText = text
+      .replace(/\r\n?/g, '\n')
+      .split('\n').map((l: string) => l.replace(/[ \t]+$/g, '')).join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    if (!cleanedText || cleanedText.length < 40) {
+      return res.status(422).json({ error: 'O arquivo não tem texto extraível (PDF escaneado/imagem não é suportado).' });
+    }
+
+    const name = String(filename).replace(/\.(docx|pdf)$/i, '').trim().slice(0, 80) || 'Contrato importado';
+    const { data: created, error } = await supabase.from('contract_templates').insert({
+      user_id: userId,
+      name,
+      category: 'IMPORTADO',
+      body: cleanedText,
+      is_default: false,
+    }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(created);
   });
 
   app.post('/api/contract-templates', requireAuth, async (req, res) => {
@@ -14013,6 +14197,28 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     if (!isHistory) {
       console.log(`[Baileys] ✅ msg ${msg.key.fromMe ? 'enviada' : 'recebida'} | ${msgType} | ${phone} | ${contactName || 'sem nome'}`);
+    }
+  });
+
+  // Acks do WhatsApp → status das mensagens enviadas (✓ enviado, ✓✓ entregue,
+  // ✓✓ azul lido). O MessageBubble do app já renderiza pelos valores
+  // 'sent'/'delivered'/'read' — faltava alimentar. Nunca rebaixa um 'read'.
+  BaileysManager.setAckHandler(async (userId, updates) => {
+    if (!supabaseAdmin) return;
+    for (const u of updates) {
+      try {
+        let q = supabaseAdmin
+          .from('wa_messages')
+          .update({ status: u.status })
+          .eq('user_id', userId)
+          .eq('message_id', u.messageId);
+        // delivered só sobe a partir de estados anteriores; read sobrescreve
+        // tudo menos o próprio read (acks podem chegar fora de ordem).
+        q = u.status === 'delivered'
+          ? q.in('status', ['sending', 'sent', 'server_ack'])
+          : q.neq('status', 'read');
+        await q;
+      } catch { /* ack perdido não é crítico — o próximo corrige */ }
     }
   });
 

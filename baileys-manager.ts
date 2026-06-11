@@ -59,6 +59,15 @@ export function setConnectHandler(handler: ConnectHandler) {
   globalConnectHandler = handler;
 }
 
+// Acks de entrega/leitura das mensagens ENVIADAS (✓✓ cinza / ✓✓ azul no app)
+export type AckUpdate = { messageId: string; status: 'delivered' | 'read' };
+export type AckHandler = (userId: string, updates: AckUpdate[]) => void;
+let globalOnAck: AckHandler | null = null;
+
+export function setAckHandler(handler: AckHandler) {
+  globalOnAck = handler;
+}
+
 // ─── Iniciar / Reconectar sessão ─────────────────────────────────────────────
 
 export async function startSession(userId: string): Promise<void> {
@@ -249,6 +258,23 @@ async function _initSocket(session: Session, sessionDir: string) {
       } catch (e) {
         console.error('[Baileys] Erro ao processar msg:', e);
       }
+    }
+  });
+
+  // Acks das mensagens que NÓS enviamos — alimenta o ✓✓/azul do app.
+  // proto.WebMessageInfo.Status: 3=DELIVERY_ACK, 4=READ, 5=PLAYED (áudio ouvido).
+  sock.ev.on('messages.update', (updates) => {
+    if (!globalOnAck) return;
+    const mapped: AckUpdate[] = [];
+    for (const u of updates || []) {
+      const st = Number((u.update as any)?.status);
+      const id = u.key?.id;
+      if (!id || !u.key?.fromMe) continue;
+      if (st === 3) mapped.push({ messageId: id, status: 'delivered' });
+      else if (st === 4 || st === 5) mapped.push({ messageId: id, status: 'read' });
+    }
+    if (mapped.length) {
+      try { globalOnAck(userId, mapped); } catch { /* não derruba o socket */ }
     }
   });
 
