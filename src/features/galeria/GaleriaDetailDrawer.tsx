@@ -38,11 +38,69 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
+// HEIC do iPhone não roda no sharp do servidor (precisaria de libheif com
+// codec HEVC, que o pacote padrão não tem). Converte pra JPEG aqui.
+const isHeic = (f: File) =>
+  /heic|heif/i.test(f.type) || /\.heic$|\.heif$/i.test(f.name);
+
+async function convertHeic(file: File): Promise<File> {
+  const heic2any = (await import("heic2any")).default as (
+    opts: { blob: Blob; toType?: string; quality?: number },
+  ) => Promise<Blob | Blob[]>;
+  const out = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.92 });
+  const blob = Array.isArray(out) ? out[0] : out;
+  const newName = file.name.replace(/\.heic$|\.heif$/i, ".jpg");
+  return new File([blob], newName, { type: "image/jpeg" });
+}
+
+// Reduz pra <=3000px (lado maior). Evita estourar memória do Render
+// (sharp carrega o original cru pra gerar preview+thumb).
+const MAX_DIMENSION = 3000;
+const MAX_BYTES_TO_RESIZE = 3 * 1024 * 1024;
+
+async function downscaleIfHuge(file: File): Promise<File> {
+  if (file.size < MAX_BYTES_TO_RESIZE) return file;
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error("imagem inválida"));
+      el.src = url;
+    });
+    if (img.width <= MAX_DIMENSION && img.height <= MAX_DIMENSION) return file;
+    const scale = MAX_DIMENSION / Math.max(img.width, img.height);
+    const w = Math.round(img.width * scale);
+    const h = Math.round(img.height * scale);
+    const canvas = document.createElement("canvas");
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return file;
+    ctx.drawImage(img, 0, 0, w, h);
+    const blob: Blob | null = await new Promise((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", 0.9),
+    );
+    if (!blob) return file;
+    const newName = file.name.replace(/\.[^.]+$/, ".jpg");
+    return new File([blob], newName, { type: "image/jpeg" });
+  } catch {
+    return file;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function prepareFile(file: File): Promise<File> {
+  const step1 = isHeic(file) ? await convertHeic(file) : file;
+  return downscaleIfHuge(step1);
+}
+
 export function GaleriaDetailDrawer({ galleryId, onClose, onChanged, onNotify }: GaleriaDetailDrawerProps) {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [sending, setSending] = useState(false);
   const [sendResult, setSendResult] = useState<SendResult | null>(null);
+  const [clearingErrors, setClearingErrors] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -95,15 +153,46 @@ export function GaleriaDetailDrawer({ galleryId, onClose, onChanged, onNotify }:
     }
   };
 
+  const handleClearErrors = async () => {
+    setClearingErrors(true);
+    try {
+      const res = await authFetch(`/api/galleries/${galleryId}/photos-erro`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("falha");
+      const { removed } = await res.json();
+      onNotify("success", `${removed} foto(s) com erro removida(s).`);
+      mutate();
+      onChanged();
+    } catch {
+      onNotify("error", "Não foi possível limpar.");
+    } finally {
+      setClearingErrors(false);
+    }
+  };
+
   const handleFiles = async (fileList: FileList | null) => {
-    const files = Array.from(fileList || []).filter((f) => f.type.startsWith("image/"));
-    if (files.length === 0) return;
+    const raw = Array.from(fileList || []).filter(
+      (f) => f.type.startsWith("image/") || isHeic(f),
+    );
+    if (raw.length === 0) return;
     setUploading(true);
     const errors: string[] = [];
-    setProgress({ done: 0, total: files.length, errors });
+    setProgress({ done: 0, total: raw.length, errors });
 
     try {
-      for (const batch of chunk(files, 20)) {
+      for (const batchRaw of chunk(raw, 20)) {
+        const batch: File[] = [];
+        for (const file of batchRaw) {
+          try {
+            batch.push(await prepareFile(file));
+          } catch {
+            errors.push(file.name);
+            setProgress((p) => (p ? { ...p, done: p.done + 1 } : p));
+          }
+        }
+        if (batch.length === 0) continue;
+
         const res = await authFetch(`/api/galleries/${galleryId}/photos/sign-upload`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -115,7 +204,7 @@ export function GaleriaDetailDrawer({ galleryId, onClose, onChanged, onNotify }:
           continue;
         }
         const { uploads } = await res.json();
-        await runPool(3, batch.map((file, i) => () => uploadOne(uploads[i], file, errors)));
+        await runPool(2, batch.map((file, i) => () => uploadOne(uploads[i], file, errors)));
       }
     } finally {
       setUploading(false);
@@ -295,18 +384,30 @@ export function GaleriaDetailDrawer({ galleryId, onClose, onChanged, onNotify }:
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
                   Fotos
                 </h3>
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading}
-                  className="inline-flex items-center gap-2 px-3 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 text-xs font-semibold rounded-xl transition-colors disabled:opacity-60"
-                >
-                  {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-                  Enviar fotos
-                </button>
+                <div className="flex items-center gap-2">
+                  {photos.some((p) => p.process_status === "error") && (
+                    <button
+                      onClick={handleClearErrors}
+                      disabled={uploading || clearingErrors}
+                      className="inline-flex items-center gap-2 px-3 py-2 bg-red-50 hover:bg-red-100 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-700 dark:text-red-200 text-xs font-semibold rounded-xl transition-colors disabled:opacity-60"
+                    >
+                      {clearingErrors ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                      Limpar com erro
+                    </button>
+                  )}
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading}
+                    className="inline-flex items-center gap-2 px-3 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 text-xs font-semibold rounded-xl transition-colors disabled:opacity-60"
+                  >
+                    {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                    Enviar fotos
+                  </button>
+                </div>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/*"
+                  accept="image/*,.heic,.heif"
                   multiple
                   className="hidden"
                   onChange={(e) => handleFiles(e.target.files)}

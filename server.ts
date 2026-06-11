@@ -7495,6 +7495,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     await supabase.from('gallery_photos').update({ process_status: 'processing' }).eq('id', photo.id);
     try {
+      // HEIC do iPhone crasha o sharp (precisa de libheif com codec HEVC).
+      // O frontend converte pra JPEG antes; aqui é rede de proteção.
+      if (/\.heic$|\.heif$/i.test(photo.file_name || '')) {
+        throw new Error('Formato HEIC não suportado — converta pra JPEG antes de enviar.');
+      }
       const original = await downloadGalleryObject(GALLERY_ORIGINALS_BUCKET, photo.original_path);
       const opts = await buildWatermarkOpts(userId, gallery);
       const out = await processGalleryPhoto(original, opts);
@@ -7516,6 +7521,31 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       await supabase.from('gallery_photos').update({ process_status: 'error' }).eq('id', photo.id);
       res.status(500).json({ error: e?.message || 'Falha ao processar a foto' });
     }
+  });
+
+  // Remove em massa as fotos que ficaram com status 'error' (crash do
+  // processamento) — útil pra limpar HEIC/originais corrompidos sem
+  // apagar uma a uma.
+  app.delete('/api/galleries/:id/photos-erro', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const { data: gallery } = await supabase
+      .from('galleries').select('id').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+
+    const { data: photos } = await supabase
+      .from('gallery_photos')
+      .select('id, original_path, preview_path, thumb_path')
+      .eq('gallery_id', gallery.id)
+      .eq('process_status', 'error');
+    const list = photos || [];
+    if (list.length === 0) return res.json({ removed: 0 });
+
+    await removeGalleryStorage(list).catch(() => {});
+    const { error } = await supabase
+      .from('gallery_photos').delete().in('id', list.map((p) => p.id));
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ removed: list.length });
   });
 
   app.delete('/api/galleries/:id/photos/:photoId', requireAuth, async (req, res) => {
