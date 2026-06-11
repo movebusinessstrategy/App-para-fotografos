@@ -16,7 +16,8 @@ export function useStatusPagamento(token: string | undefined, ativo: boolean) {
     const consultar = async () => {
       try {
         const dados = await publicGet<RespostaPaymentStatus>(
-          `/api/public/gallery/${token}/payment-status`
+          `/api/public/gallery/${token}/payment-status`,
+          token,
         );
         if (parado) return;
         setStatus(dados.status ?? null);

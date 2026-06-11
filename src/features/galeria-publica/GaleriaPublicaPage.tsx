@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
-import { publicGet, publicPost } from "./api";
+import { ErroApiPublica, lerSessao, limparSessao, publicGet, publicPost } from "./api";
 import { BarraInferior } from "./components/BarraInferior";
 import { CabecalhoGaleria } from "./components/CabecalhoGaleria";
 import { GradeFotos } from "./components/GradeFotos";
 import { Lightbox } from "./components/Lightbox";
 import { ModalFinalizar } from "./components/ModalFinalizar";
 import { ResumoFinalizado } from "./components/ResumoFinalizado";
+import { TelaLogin } from "./components/TelaLogin";
 import {
   TelaCarregando,
   TelaPagamento,
@@ -44,6 +45,8 @@ export default function GaleriaPublicaPage() {
   const [galeria, setGaleria] = useState<GaleriaPublica | null>(null);
   const [fotos, setFotos] = useState<FotoPublica[]>([]);
   const [selecoes, setSelecoes] = useState<MapaSelecoes>({});
+  const [loginInfo, setLoginInfo] = useState<{ title: string; studio_name: string } | null>(null);
+  const [tentativaLogin, setTentativaLogin] = useState(0);
 
   const [fase, setFase] = useState<Fase>("galeria");
   const [pagamento, setPagamento] = useState<DadosPagamento | null>(null);
@@ -58,19 +61,37 @@ export default function GaleriaPublicaPage() {
       return;
     }
     let ativo = true;
-    publicGet<RespostaGaleriaPublica>(`/api/public/gallery/${token}`)
+    setCarregando(true);
+    setLoginInfo(null);
+    publicGet<RespostaGaleriaPublica>(`/api/public/gallery/${token}`, token)
       .then((dados) => {
         if (!ativo) return;
         setGaleria(dados.gallery);
         setFotos(dados.photos || []);
         setSelecoes(dados.selections || {});
       })
-      .catch(() => ativo && setErro(true))
+      .catch(async (e) => {
+        if (!ativo) return;
+        // 401 = require_login + sem session válida → busca info e mostra tela de login.
+        if (e instanceof ErroApiPublica && e.status === 401) {
+          limparSessao(token);
+          try {
+            const info = await publicGet<{ title: string; studio_name: string }>(
+              `/api/public/gallery/${token}/login-info`,
+            );
+            if (ativo) setLoginInfo(info);
+          } catch {
+            if (ativo) setErro(true);
+          }
+        } else {
+          setErro(true);
+        }
+      })
       .finally(() => ativo && setCarregando(false));
     return () => {
       ativo = false;
     };
-  }, [token]);
+  }, [token, tentativaLogin]);
 
   useEffect(() => {
     if (!galeria) return;
@@ -97,7 +118,7 @@ export default function GaleriaPublicaPage() {
       photo_id: fotoId,
       selected: novo,
       comment: comentario ?? undefined,
-    }).catch(() => aplicarSelecao(fotoId, !novo, comentario));
+    }, token).catch(() => aplicarSelecao(fotoId, !novo, comentario));
   };
 
   // Comentário do lightbox (já chega debounced de lá).
@@ -110,14 +131,18 @@ export default function GaleriaPublicaPage() {
       photo_id: fotoId,
       selected,
       comment: texto,
-    }).catch(() => aplicarSelecao(fotoId, selected, atual?.comment ?? null));
+    }, token).catch(() => aplicarSelecao(fotoId, selected, atual?.comment ?? null));
   };
 
   const confirmarFinalizacao = async () => {
     setFinalizando(true);
     setErroFinalizar(null);
     try {
-      const resp = await publicPost<RespostaFinalize>(`/api/public/gallery/${token}/finalize`);
+      const resp = await publicPost<RespostaFinalize>(
+        `/api/public/gallery/${token}/finalize`,
+        undefined,
+        token,
+      );
       setModalAberto(false);
       setGaleria((g) => (g ? { ...g, status: "selected" } : g));
       if (resp.payment_url && resp.amount > 0) {
@@ -138,6 +163,15 @@ export default function GaleriaPublicaPage() {
   };
 
   if (carregando) return <TelaCarregando />;
+  if (loginInfo && token) {
+    return (
+      <TelaLogin
+        shareToken={token}
+        info={loginInfo}
+        onSucesso={() => { setLoginInfo(null); setTentativaLogin((n) => n + 1); }}
+      />
+    );
+  }
   if (erro || !galeria || !token) return <TelaTokenInvalido />;
   if (galeria.status === "draft") return <TelaPreparacao estudio={galeria.studio_name} />;
   if (fase === "sucesso") return <TelaSucesso estudio={galeria.studio_name} />;

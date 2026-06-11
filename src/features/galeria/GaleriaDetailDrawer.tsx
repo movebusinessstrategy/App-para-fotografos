@@ -10,6 +10,8 @@ import { cn } from "../../utils/cn";
 import { GalleryDetailResponse, GalleryPhoto, SendResult } from "./types";
 import { GALLERY_COLUMNS, formatBRL, formatDateBR, publicGalleryLink } from "./utils";
 import { ToastKind } from "./Toast";
+import { AcessoSection } from "./AcessoSection";
+import { AtividadesSection } from "./AtividadesSection";
 
 interface GaleriaDetailDrawerProps {
   galleryId: string;
@@ -462,6 +464,15 @@ export function GaleriaDetailDrawer({ galleryId, onClose, onChanged, onNotify }:
                 onCopyNames={() => copy(selectedPhotos.map((p) => p.file_name).join("\n"), "Nomes dos arquivos")}
               />
             )}
+
+            <AtividadesSection galleryId={galleryId} />
+
+            <AcessoSection
+              galleryId={galleryId}
+              initialRequireLogin={!!gallery.require_login}
+              initialDownloadMode={gallery.download_mode || "off"}
+              onNotify={onNotify}
+            />
           </div>
         )}
       </div>

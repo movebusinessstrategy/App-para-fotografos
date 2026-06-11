@@ -27,6 +27,9 @@ export interface Gallery {
   pending_amount: number;
   paid_amount: number;
   cover_thumb_url: string | null;
+  require_login?: boolean;
+  download_mode?: "off" | "with_watermark" | "clean";
+  pricing_mode?: "no_charge" | "extra_avulso" | "upgrade_packs" | "sell_all";
 }
 
 export interface GalleryPhoto {
