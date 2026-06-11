@@ -7038,6 +7038,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     jobId: number,
     newStageId: string | null | undefined,
   ): Promise<void> {
+    // RLS ligado nas tabelas da galeria: usa service role (toda query filtra por user_id)
+    supabase = (supabaseAdmin || supabase) as SupabaseClient;
     if (!newStageId) return;
     const stages = await ensureProductionStagesV2(supabase, userId);
     const stage = stages.find((s) => s.id === newStageId);
@@ -7121,7 +7123,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   app.put('/api/gallery-settings', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
     const body = req.body || {};
     const payload: any = { user_id: userId, updated_at: new Date().toISOString() };
 
@@ -7165,7 +7167,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   app.get('/api/galleries', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
     let q = supabase.from('galleries').select('*').eq('user_id', userId).order('created_at', { ascending: false });
     if (req.query.job_id) q = q.eq('job_id', Number(req.query.job_id));
     const { data, error } = await q;
@@ -7201,7 +7203,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // casaria 'revenue' como :id.
   app.get('/api/galleries/revenue', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
 
     const { data: payments, error } = await supabase
       .from('gallery_payments')
@@ -7276,7 +7278,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   app.post('/api/galleries', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
     const body = req.body || {};
 
     const jobId = body.job_id ? Number(body.job_id) : null;
@@ -7308,7 +7310,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   app.get('/api/galleries/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
     const { data: gallery, error } = await supabase
       .from('galleries').select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
     if (error) {
@@ -7356,7 +7358,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   app.put('/api/galleries/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
     const patch = buildGalleryPatch(req.body || {});
     const { error } = await supabase
       .from('galleries').update(patch).eq('id', req.params.id).eq('user_id', userId);
@@ -7381,7 +7383,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   app.delete('/api/galleries/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
     const { data: gallery } = await supabase
       .from('galleries').select('id').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
     if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
@@ -7402,7 +7404,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // privado (não passa pelo backend) e depois chama /process foto a foto.
   app.post('/api/galleries/:id/photos/sign-upload', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
     if (!supabaseAdmin) return res.status(500).json({ error: 'Storage indisponível.' });
     const files = Array.isArray(req.body?.files) ? req.body.files : [];
     if (files.length === 0 || files.length > 50) {
@@ -7481,7 +7483,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Gera preview 1600px + thumb 400px com marca d'água a partir do original.
   app.post('/api/galleries/:id/photos/:photoId/process', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
     if (!supabaseAdmin) return res.status(500).json({ error: 'Storage indisponível.' });
 
     const { data: gallery } = await supabase
@@ -7518,7 +7520,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   app.delete('/api/galleries/:id/photos/:photoId', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
     const { data: gallery } = await supabase
       .from('galleries').select('id').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
     if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
@@ -7556,7 +7558,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   app.post('/api/galleries/:id/send', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
     const { data: gallery, error } = await supabase
       .from('galleries').select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
     if (error) {
