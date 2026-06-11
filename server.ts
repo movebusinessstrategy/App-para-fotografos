@@ -951,8 +951,10 @@ async function startServer() {
     const origin = req.headers.origin || '';
     const allowed = [
       'https://app-para-fotografos.vercel.app', // sempre permitido
+      'https://crmtrilha.com.br', // domínio custom (apex)
+      'https://www.crmtrilha.com.br', // domínio custom (a Vercel redireciona o apex pra cá)
       process.env.APP_URL,
-      process.env.APP_PUBLIC_URL, // custom domain (ex: https://crmtrilha.com.br)
+      process.env.APP_PUBLIC_URL,
       'http://localhost:5173',
       'http://localhost:3000',
     ]
