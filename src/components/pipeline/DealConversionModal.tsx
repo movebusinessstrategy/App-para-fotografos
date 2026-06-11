@@ -1,10 +1,35 @@
 // src/components/vendas/DealConversionModal.tsx
 import React, { useEffect, useState, useMemo } from "react";
 import { motion } from "motion/react";
-import { Plus, User, Briefcase, ChevronDown, ChevronUp, Link2, DollarSign } from "lucide-react";
+import { Plus, User, Briefcase, ChevronDown, ChevronUp, Link2, DollarSign, Search, Trash2, Package, Tag, Layers, CalendarDays } from "lucide-react";
 
 import { Deal, Client } from "../../types";
 import { authFetch } from "../../utils/authFetch";
+import { useApi } from "../../utils/useApi";
+import { normalizeText } from "../../utils/normalizeText";
+import { useTiposEnsaio, tiposComValorAtual } from "../../hooks/useTiposEnsaio";
+
+type CatalogType = "combo" | "produto" | "servico";
+
+interface PendingItem {
+  catalog_type: CatalogType;
+  catalog_id: string;
+  catalog_name: string;
+  catalog_value: number;
+  quantidade: number;
+}
+
+const CATALOG_LABELS: Record<CatalogType, string> = {
+  combo: "Combos",
+  produto: "Produtos",
+  servico: "Serviços",
+};
+
+const CATALOG_ICONS: Record<CatalogType, React.ReactNode> = {
+  combo: <Layers size={11} />,
+  produto: <Package size={11} />,
+  servico: <Tag size={11} />,
+};
 
 interface DealConversionModalProps {
   deal: Deal | null;
@@ -25,10 +50,45 @@ export function DealConversionModal({
   const [createJob, setCreateJob] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [sinalAmount, setSinalAmount] = useState(0);
+  // Data da venda: default hoje; permite registrar vendas antigas (retroativas)
+  const [soldDate, setSoldDate] = useState(new Date().toISOString().slice(0, 10));
   const [expandedSections, setExpandedSections] = useState({
     client: true,
     job: true,
   });
+
+  // ── Itens do catálogo (produtos/serviços/combos da venda) ──
+  // Os já vinculados ao deal aparecem como existentes; aqui dá pra ADICIONAR
+  // novos na hora da conversão (mesmo fluxo que a extensão já tinha).
+  const [newItems, setNewItems] = useState<PendingItem[]>([]);
+  const [showAdder, setShowAdder] = useState(false);
+  const [adderType, setAdderType] = useState<CatalogType>("combo");
+  const [adderSearch, setAdderSearch] = useState("");
+
+  const tiposEnsaio = useTiposEnsaio();
+  const { data: produtosData } = useApi<any[]>(deal ? "/api/produtos" : null);
+  const { data: servicosData } = useApi<any[]>(deal ? "/api/servicos" : null);
+  const { data: combosData } = useApi<any[]>(deal ? "/api/combos" : null);
+
+  const catalogList = useMemo(() => {
+    const produtos = Array.isArray(produtosData) ? produtosData : [];
+    const servicos = Array.isArray(servicosData) ? servicosData : [];
+    const combos = Array.isArray(combosData) ? combosData : [];
+    if (adderType === "produto") return produtos.filter(p => p.ativo).map(p => ({ id: String(p.id), nome: p.nome, value: Number(p.preco_venda) || 0 }));
+    if (adderType === "servico") return servicos.filter(s => s.ativo).map(s => ({ id: String(s.id), nome: s.nome, value: Number(s.preco_base) || 0 }));
+    return combos.filter(c => c.ativo).map(c => ({ id: String(c.id), nome: c.nome, value: Number(c.preco_final) || 0 }));
+  }, [adderType, produtosData, servicosData, combosData]);
+
+  const filteredCatalog = useMemo(() => {
+    const q = normalizeText(adderSearch);
+    if (!q) return catalogList;
+    return catalogList.filter(i => normalizeText(i.nome).includes(q));
+  }, [catalogList, adderSearch]);
+
+  const existingItems = deal?.items || [];
+  const existingTotal = existingItems.reduce((s, i) => s + (Number(i.catalog_value) || 0) * (Number(i.quantidade) || 1), 0);
+  const newItemsTotal = newItems.reduce((s, i) => s + i.catalog_value * i.quantidade, 0);
+  const allItemsCount = existingItems.length + newItems.length;
 
   // Dados completos do cliente
   const [clientData, setClientData] = useState({
@@ -83,8 +143,18 @@ export function DealConversionModal({
         notes: deal.notes || "",
       }));
       setSinalAmount(0);
+      setNewItems([]);
+      setSoldDate(new Date().toISOString().slice(0, 10));
     }
   }, [deal]);
+
+  // Itens adicionados aqui atualizam o valor total da venda automaticamente
+  useEffect(() => {
+    if (allItemsCount > 0) {
+      setJobData(prev => ({ ...prev, amount: existingTotal + newItemsTotal }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existingTotal, newItemsTotal, allItemsCount]);
 
   // Deriva o payment_status automaticamente do sinal
   const autoPaymentStatus = useMemo(() => {
@@ -111,15 +181,29 @@ export function DealConversionModal({
   const submit = async () => {
     setIsSubmitting(true);
     try {
+      // 1. Vincula os itens novos do catálogo ao deal (mesmo fluxo da extensão)
+      for (const it of newItems) {
+        await authFetch(`/api/deals/${deal.id}/items`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(it),
+        });
+      }
+
+      const itemsNote = newItems.length
+        ? `Itens do catálogo:\n${newItems.map(i => `- ${CATALOG_LABELS[i.catalog_type]}: ${i.catalog_name} (${i.quantidade}x R$ ${i.catalog_value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })})`).join('\n')}`
+        : '';
       const jobPayload = createJob ? {
         ...jobData,
         payment_status: autoPaymentStatus,
         notes: [
           jobData.notes,
+          itemsNote,
           sinalAmount > 0 ? `Sinal pago: R$ ${sinalAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '',
         ].filter(Boolean).join('\n').trim(),
       } : undefined;
 
+      // 2. Converte (converted_at permite registrar venda retroativa)
       await authFetch(`/api/deals/${deal.id}/convert`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -130,6 +214,7 @@ export function DealConversionModal({
           client: conversionMode === "new" && createClient ? clientData : undefined,
           job: jobPayload,
           sinalAmount: sinalAmount > 0 ? sinalAmount : undefined,
+          converted_at: soldDate || undefined,
         }),
       });
       onConverted();
@@ -162,17 +247,8 @@ export function DealConversionModal({
     "RS", "RO", "RR", "SC", "SP", "SE", "TO"
   ];
 
-  const jobTypes = [
-    "Gestante",
-    "Newborn",
-    "Família",
-    "Casamento",
-    "Ensaio Externo",
-    "Aniversário",
-    "Batizado",
-    "Corporativo",
-    "Outro",
-  ];
+  // Tipos de ensaio: lista mestre configurável (Configurações → Oportunidades)
+  const jobTypes = tiposComValorAtual(tiposEnsaio, jobData.job_type);
 
   const canSubmit = conversionMode === "existing" 
     ? selectedClientId !== null 
@@ -252,6 +328,154 @@ export function DealConversionModal({
                 </div>
               </button>
             </div>
+          </div>
+
+          {/* ====== DATA DA VENDA (permite venda retroativa) ====== */}
+          <div className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2">
+              <CalendarDays size={16} className="text-emerald-600 dark:text-emerald-400" />
+              <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">Data da venda</label>
+            </div>
+            <input
+              type="date"
+              value={soldDate}
+              max={new Date().toISOString().slice(0, 10)}
+              onChange={(e) => setSoldDate(e.target.value)}
+              className={`${inputClasses} !w-auto [color-scheme:light] dark:[color-scheme:dark]`}
+            />
+            <p className="text-[11px] text-gray-400 dark:text-gray-500">
+              Venda fechada antes e não lançada? Escolha o dia real — os relatórios usam esta data.
+            </p>
+          </div>
+
+          {/* ====== ITENS DA VENDA (produtos/serviços/combos) ====== */}
+          <div className="border border-gray-100 dark:border-gray-800 rounded-xl p-4 space-y-2">
+            <label className={labelClasses}>
+              <Package size={12} className="inline mr-1" />
+              Itens da venda (produtos, serviços e combos)
+            </label>
+
+            {existingItems.length > 0 && (
+              <div className="space-y-1.5">
+                {existingItems.map((it: any) => (
+                  <div key={it.id} className="flex items-center gap-2 px-2.5 py-2 bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700 rounded-lg">
+                    <span className="text-gray-400 flex-shrink-0">{CATALOG_ICONS[(it.catalog_type as CatalogType)] || <Package size={11} />}</span>
+                    <span className="text-sm text-gray-800 dark:text-gray-100 flex-1 truncate">{it.catalog_name}</span>
+                    <span className="text-xs text-gray-400">{Number(it.quantidade) || 1}x</span>
+                    <span className="text-sm font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap">
+                      R$ {((Number(it.catalog_value) || 0) * (Number(it.quantidade) || 1)).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {newItems.length > 0 && (
+              <div className="space-y-1.5">
+                {newItems.map((it, idx) => (
+                  <div key={idx} className="flex items-center gap-2 px-2.5 py-2 bg-emerald-50/50 dark:bg-emerald-900/10 border border-emerald-200 dark:border-emerald-800 rounded-lg">
+                    <span className="text-gray-400 flex-shrink-0">{CATALOG_ICONS[it.catalog_type]}</span>
+                    <span className="text-sm text-gray-800 dark:text-gray-100 flex-1 truncate">{it.catalog_name}</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={it.quantidade}
+                      onChange={(e) => {
+                        const q = Math.max(1, Number(e.target.value) || 1);
+                        setNewItems(prev => prev.map((p, i) => i === idx ? { ...p, quantidade: q } : p));
+                      }}
+                      className="w-12 text-xs text-center border border-gray-200 dark:border-gray-700 rounded bg-white dark:bg-gray-900 outline-none px-1 py-0.5"
+                    />
+                    <span className="text-sm font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap">
+                      R$ {(it.catalog_value * it.quantidade).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setNewItems(prev => prev.filter((_, i) => i !== idx))}
+                      className="p-1 text-gray-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded transition-colors"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {!showAdder ? (
+              <button
+                type="button"
+                onClick={() => setShowAdder(true)}
+                className="w-full flex items-center justify-center gap-1.5 px-3 py-2 border border-dashed border-gray-300 dark:border-gray-600 hover:border-emerald-400 hover:bg-emerald-50/50 dark:hover:bg-emerald-900/10 rounded-lg text-sm text-gray-600 dark:text-gray-300 transition-colors"
+              >
+                <Plus size={13} />
+                Adicionar produto, serviço ou combo
+              </button>
+            ) : (
+              <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-2.5 space-y-2 bg-gray-50/50 dark:bg-gray-800/30">
+                <div className="flex gap-1">
+                  {(["combo", "produto", "servico"] as CatalogType[]).map(type => (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => setAdderType(type)}
+                      className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-md transition-colors ${
+                        adderType === type
+                          ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
+                          : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                      }`}
+                    >
+                      {CATALOG_ICONS[type]}
+                      {CATALOG_LABELS[type]}
+                    </button>
+                  ))}
+                </div>
+                <div className="relative">
+                  <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="text"
+                    value={adderSearch}
+                    onChange={(e) => setAdderSearch(e.target.value)}
+                    placeholder={`Buscar em ${CATALOG_LABELS[adderType].toLowerCase()}...`}
+                    className="w-full pl-8 pr-2 py-1.5 text-xs border border-gray-200 dark:border-gray-700 rounded-md bg-white dark:bg-gray-900 outline-none focus:border-emerald-400"
+                    autoFocus
+                  />
+                </div>
+                <div className="max-h-40 overflow-y-auto space-y-0.5">
+                  {filteredCatalog.length === 0 ? (
+                    <p className="text-xs text-gray-400 text-center py-3">Nenhum item ativo encontrado.</p>
+                  ) : filteredCatalog.map(it => (
+                    <button
+                      key={it.id}
+                      type="button"
+                      onClick={() => {
+                        setNewItems(prev => [...prev, {
+                          catalog_type: adderType,
+                          catalog_id: it.id,
+                          catalog_name: it.nome,
+                          catalog_value: it.value,
+                          quantidade: 1,
+                        }]);
+                        setShowAdder(false);
+                        setAdderSearch("");
+                      }}
+                      className="w-full flex items-center justify-between gap-2 px-2 py-1.5 text-xs hover:bg-white dark:hover:bg-gray-700 rounded transition-colors text-left"
+                    >
+                      <span className="text-gray-700 dark:text-gray-200 truncate">{it.nome}</span>
+                      <span className="text-gray-500 dark:text-gray-400 font-semibold whitespace-nowrap">
+                        R$ {it.value.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setShowAdder(false); setAdderSearch(""); }}
+                  className="w-full text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 py-1"
+                >
+                  Cancelar
+                </button>
+              </div>
+            )}
           </div>
 
           {/* ====== RESUMO FINANCEIRO ====== */}

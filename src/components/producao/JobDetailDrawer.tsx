@@ -262,7 +262,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
   const [jobAmount, setJobAmount] = useState(0);
   const [loadingFin, setLoadingFin] = useState(false);
   // Adicionar pagamento
-  const [newPayment, setNewPayment] = useState({ amount: '', description: '', payment_date: new Date().toISOString().slice(0, 10), payment_method: 'Pix' });
+  const [newPayment, setNewPayment] = useState({ amount: '', discount: '', description: '', payment_date: new Date().toISOString().slice(0, 10), payment_method: 'Pix' });
   const [savingPayment, setSavingPayment] = useState(false);
   // Adicionar item ao job
   const [showAddJobItem, setShowAddJobItem] = useState(false);
@@ -379,16 +379,22 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
   }, [job?.id]);
 
   const handleAddPayment = async () => {
-    if (!job || !newPayment.amount || Number(newPayment.amount) <= 0) return;
+    const amountVal = Number(newPayment.amount) || 0;
+    const discountVal = Number(newPayment.discount) || 0;
+    // Aceita pagamento, desconto, ou os dois juntos (ex: quitar com desconto)
+    if (!job || (amountVal <= 0 && discountVal <= 0)) return;
     setSavingPayment(true);
     try {
       const res = await authFetch(`/api/jobs/${job.id}/payments`, {
         method: 'POST',
-        body: JSON.stringify({ ...newPayment, amount: Number(newPayment.amount) }),
+        body: JSON.stringify({ ...newPayment, amount: amountVal, discount: discountVal > 0 ? discountVal : undefined }),
       });
       if (res.ok) {
-        setNewPayment({ amount: '', description: '', payment_date: new Date().toISOString().slice(0, 10), payment_method: 'Pix' });
+        const data = await res.json().catch(() => null);
+        setNewPayment({ amount: '', discount: '', description: '', payment_date: new Date().toISOString().slice(0, 10), payment_method: 'Pix' });
         loadFinanceiro(job.id);
+        // Desconto muda o valor total do job — reflete no board sem F5
+        if (data && onJobUpdate) onJobUpdate(job.id, { amount: data.newAmount, payment_status: data.newStatus });
       }
     } finally { setSavingPayment(false); }
   };
@@ -1320,15 +1326,25 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                       {/* Formulário novo pagamento */}
                       <div className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800 space-y-2">
                         <p className="text-[11px] font-semibold text-gray-400 uppercase">Registrar pagamento</p>
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-3 gap-2">
                           <div>
-                            <label className="text-[10px] text-gray-400 mb-0.5 block">Valor *</label>
+                            <label className="text-[10px] text-gray-400 mb-0.5 block">Valor</label>
                             <input
                               type="number"
                               placeholder="0,00"
                               value={newPayment.amount}
                               onChange={e => setNewPayment(p => ({ ...p, amount: e.target.value }))}
                               className="w-full border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 rounded-lg px-2 py-1.5 text-sm text-gray-900 dark:text-white outline-none focus:border-emerald-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-gray-400 mb-0.5 block" title="Abate do valor total do trabalho">Desconto</label>
+                            <input
+                              type="number"
+                              placeholder="0,00"
+                              value={newPayment.discount}
+                              onChange={e => setNewPayment(p => ({ ...p, discount: e.target.value }))}
+                              className="w-full border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-900/10 rounded-lg px-2 py-1.5 text-sm text-gray-900 dark:text-white outline-none focus:border-amber-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                             />
                           </div>
                           <div>
@@ -1341,6 +1357,11 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                             />
                           </div>
                         </div>
+                        {Number(newPayment.discount) > 0 && (
+                          <p className="text-[10px] text-amber-600 dark:text-amber-400">
+                            O desconto reduz o valor total do trabalho (não conta como dinheiro recebido).
+                          </p>
+                        )}
                         <div className="grid grid-cols-2 gap-2">
                           <div>
                             <label className="text-[10px] text-gray-400 mb-0.5 block">Forma</label>
@@ -1367,10 +1388,10 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                         </div>
                         <button
                           onClick={handleAddPayment}
-                          disabled={savingPayment || !newPayment.amount || Number(newPayment.amount) <= 0}
+                          disabled={savingPayment || (Number(newPayment.amount) <= 0 && Number(newPayment.discount) <= 0)}
                           className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                         >
-                          <Plus size={14} /> Registrar Pagamento
+                          <Plus size={14} /> {Number(newPayment.discount) > 0 && Number(newPayment.amount) <= 0 ? 'Aplicar Desconto' : 'Registrar Pagamento'}
                         </button>
                       </div>
                     </section>
