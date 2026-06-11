@@ -154,6 +154,10 @@ async function handleMessage(message) {
     case 'GET_CLIENTS': {
       return apiFetch('/api/clients');
     }
+    case 'GET_TIPOS_ENSAIO': {
+      // Lista mestre de tipos de ensaio (Configurações → Oportunidades no app)
+      return apiFetch('/api/tipo-ensaio-precos');
+    }
     case 'GET_CATALOG': {
       const [produtos, servicos, combos] = await Promise.all([
         apiFetch('/api/produtos'),

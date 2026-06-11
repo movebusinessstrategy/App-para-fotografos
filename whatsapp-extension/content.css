@@ -827,6 +827,25 @@ body.fp-kanban-open #pane-side { display: none !important; }
   animation: fp-pulse-red 2s ease-in-out infinite;
 }
 .fpc-av-wrap { position: relative; flex-shrink: 0; line-height: 0; }
+/* Nº de conversas não lidas (lido do WhatsApp) — canto superior do avatar */
+.fpc-unread-count {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #25d366;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: 0 0 0 2px #fff;
+  z-index: 1;
+  box-sizing: border-box;
+}
 .fpc-stale-dot {
   position: absolute;
   bottom: -1px;

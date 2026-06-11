@@ -40,6 +40,7 @@
   let modalStageSel = null;
   let modalAssignSel = null;
   let modalSourceSel = null;
+  let modalTypeSel = null;
   let draggingId = null;
   let draggingInboxIdx = null;
   let dragMoved = false;
@@ -151,6 +152,19 @@
   //   const sel = fpSelect({ items: [{value, label}], value, placeholder, searchable, onChange });
   //   container.appendChild(sel.element);
   //   sel.getValue(); sel.setValue(v); sel.setItems(arr);
+  // Fecha o modal só quando o clique COMEÇA e TERMINA no fundo (overlay).
+  // Antes: arrastar a barra de rolagem (ou selecionar texto) e soltar o mouse
+  // fora da caixa disparava 'click' no overlay → o modal fechava sozinho no
+  // meio do preenchimento (ex: na hora de fechar uma venda).
+  function bindOverlayClose(overlayEl, closeFn) {
+    let downOnOverlay = false;
+    overlayEl.addEventListener('mousedown', (e) => { downOnOverlay = (e.target === overlayEl); });
+    overlayEl.addEventListener('click', (e) => {
+      if (e.target === overlayEl && downOnOverlay) closeFn();
+      downOnOverlay = false;
+    });
+  }
+
   function fpSelect({ items = [], value = '', placeholder = 'Selecione…', searchable = false, onChange } = {}) {
     const wrap = document.createElement('div');
     wrap.className = 'fp-fselect';
@@ -236,14 +250,24 @@
         menu.remove();
         document.removeEventListener('mousedown', onDoc, true);
         document.removeEventListener('keydown', onKey, true);
-        window.removeEventListener('scroll', close, true);
+        window.removeEventListener('scroll', onScroll, true);
       }
       function onDoc(e) { if (!menu.contains(e.target) && !wrap.contains(e.target)) close(); }
       function onKey(e) { if (e.key === 'Escape') close(); }
+      // Rolar DENTRO do menu não fecha (bug antigo: fechava ao rolar a lista
+      // pra ver as últimas opções). Rolagem fora (página/modal) reposiciona o
+      // menu pra seguir o campo; só fecha se o campo sair da tela.
+      function onScroll(e) {
+        if (menu.contains(e.target)) return;
+        const r = trigger.getBoundingClientRect();
+        if (!r.height || r.bottom < 0 || r.top > window.innerHeight) { close(); return; }
+        menu.style.left = `${r.left}px`;
+        menu.style.top = `${r.bottom + 6}px`;
+      }
       setTimeout(() => {
         document.addEventListener('mousedown', onDoc, true);
         document.addEventListener('keydown', onKey, true);
-        window.addEventListener('scroll', close, true);
+        window.addEventListener('scroll', onScroll, true);
       }, 0);
     }
 
@@ -472,6 +496,7 @@
         <div class="fp-mf"><label class="fp-ml">Telefone</label><input class="fp-mi" id="fp-mp" placeholder="5511999999999" /></div>
         <div class="fp-mf"><label class="fp-ml">Valor (R$)</label><input class="fp-mi" id="fp-mv" type="number" placeholder="0" /></div>
         <div class="fp-mf"><label class="fp-ml">Origem</label><div id="fp-msource-slot"></div></div>
+        <div class="fp-mf"><label class="fp-ml">Tipo de ensaio</label><div id="fp-mtype-slot"></div></div>
         <div class="fp-mf"><label class="fp-ml">Etapa do funil</label><div id="fp-msid-slot"></div></div>
         <div class="fp-mf"><label class="fp-ml">Vendedor responsável</label><div id="fp-massign-slot"></div></div>
         <div class="fp-mrow">
@@ -500,7 +525,7 @@
     });
     document.getElementById('fp-mc').addEventListener('click', closeModal);
     document.getElementById('fp-ms').addEventListener('click', saveNewDeal);
-    m.addEventListener('click', (e) => { if (e.target === m) closeModal(); });
+    bindOverlayClose(m, closeModal);
 
     // Drop global
     window.__fpDrop = drop;
@@ -632,6 +657,42 @@
     }
   }
 
+  // ===== NÃO-LIDAS POR CONTATO (badge nos cards) =====
+  // Lê os badges de "não lida" direto do DOM da lista do WhatsApp Web — assim
+  // ler a conversa (ou marcar como não lida) no WA reflete aqui sozinho no
+  // próximo tick do refresh (≤5s), nos dois sentidos. Limitação: a lista do
+  // WA é virtualizada, mas não-lidas sobem pro topo e ficam no DOM.
+  let unreadByContact = new Map();
+
+  function normNameKey(s) {
+    return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+  }
+
+  function computeUnreadByContact() {
+    const map = new Map();
+    let items = [];
+    try { items = scanWhatsappInbox(); } catch { return map; }
+    for (const it of items) {
+      const n = Number(it?.unread) || 0;
+      if (n <= 0) continue;
+      const ph = digits(it.phone || '');
+      if (ph.length >= 8) map.set('p:' + ph.slice(-8), n);
+      const nk = normNameKey(it.name);
+      if (nk) map.set('n:' + nk, n);
+    }
+    return map;
+  }
+
+  function getUnreadForDeal(d) {
+    const ph = digits(d?.contact_phone || '');
+    if (ph.length >= 8) {
+      const v = unreadByContact.get('p:' + ph.slice(-8));
+      if (v) return v;
+    }
+    const nk = normNameKey(d?.contact_name || d?.title);
+    return nk ? (unreadByContact.get('n:' + nk) || 0) : 0;
+  }
+
   // ===== KANBAN =====
   let lastBoardSig = '';
   async function loadKanban(opts) {
@@ -650,9 +711,13 @@
       const nextMemberId = me?.currentMember?.id || null;
       // No refresh silencioso (polling de 5s), só rebuilda o board se algo
       // mudou de fato — evita flash/reset de rolagem quando nada mudou.
-      const sig = JSON.stringify([nextDeals, nextStages, nextMembers, nextMemberId]);
+      // As não-lidas entram na assinatura: ler/marcar não lida no WA re-renderiza.
+      const nextUnread = computeUnreadByContact();
+      const unreadSig = [...nextUnread.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([k, v]) => `${k}:${v}`).join('|');
+      const sig = JSON.stringify([nextDeals, nextStages, nextMembers, nextMemberId, unreadSig]);
       if (silent && sig === lastBoardSig) return;
       lastBoardSig = sig;
+      unreadByContact = nextUnread;
       deals = nextDeals;
       stages = nextStages;
       teamMembers = nextMembers;
@@ -737,9 +802,16 @@
     `;
 
     // ── Colunas das etapas ──
+    // Lead com etapa órfã (pipeline recriada no app → ids mudaram) cai na
+    // primeira coluna aberta em vez de sumir do board.
+    const knownStageIds = new Set(all.map(s => s.id));
+    const firstOpenId = (all.find(s => !s.is_final) || all[0])?.id;
     const stagesHtml = all.map((s, i) => {
       const c = C(s.position ?? i);
-      const sd = deals.filter(d => d.stage === s.id && matches(d));
+      const sd = deals.filter(d => (
+        d.stage === s.id ||
+        (s.id === firstOpenId && d.stage && !knownStageIds.has(d.stage) && !d.converted)
+      ) && matches(d));
       const total = sd.reduce((t, d) => t + (d.value || 0), 0);
       const hasLeadsWithPhone = sd.some(d => d.contact_phone);
       return `
@@ -1133,12 +1205,18 @@
     try {
       window.history.pushState({ fpOpenChat: true }, '', `/send?phone=${phoneFull}`);
       window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }));
-      await sleep(1400);
 
-      const openedPhone = digits(getWAChatPhone() || '');
-      if (openedPhone && openedPhone.endsWith(phoneFull.slice(-8))) {
-        toast('Conversa aberta');
-        return true;
+      // Poll em vez de espera fixa: detecta o chat aberto o quanto antes
+      // (caso comum ~300-600ms; antes era sempre 1400ms). Total máx ~2.6s,
+      // mais tolerante que o sleep antigo em conexões lentas.
+      const tail = phoneFull.slice(-8);
+      for (let i = 0; i < 12; i++) {
+        await sleep(i < 4 ? 150 : 250);
+        const openedPhone = digits(getWAChatPhone() || '');
+        if (openedPhone && openedPhone.endsWith(tail)) {
+          toast('Conversa aberta');
+          return true;
+        }
       }
     } catch {
       // Se o WhatsApp mudar a estratégia de roteamento, seguimos sem recarregar.
@@ -1388,6 +1466,31 @@
     return [cleanType ? `Tipo de ensaio: ${cleanType}` : '', cleanNotes].filter(Boolean).join('\n');
   }
 
+  // ===== TIPOS DE ENSAIO (lista mestre) =====
+  // Vem do app (Configurações → Oportunidades → "Tipos de ensaio e valor
+  // mínimo"). Carregada 1x no init; se a API falhar ou estiver vazia, cai na
+  // lista padrão abaixo (a mesma do app).
+  const DEFAULT_TIPOS_ENSAIO = ['Gestante', 'Newborn', 'Acompanhamento', 'Smash the Cake', 'Aniversário', 'Família', 'Casamento', 'Batizado', 'Corporativo', 'Ensaio Externo', 'Marca Pessoal', 'Outros'];
+  let tiposEnsaioCache = null;
+
+  function getTiposEnsaio() {
+    return (Array.isArray(tiposEnsaioCache) && tiposEnsaioCache.length > 0)
+      ? tiposEnsaioCache
+      : DEFAULT_TIPOS_ENSAIO;
+  }
+
+  async function loadTiposEnsaio() {
+    try {
+      const rows = await bg({ type: 'GET_TIPOS_ENSAIO' });
+      const nomes = (Array.isArray(rows) ? rows : [])
+        .map((r) => String(r?.tipo_nome || '').trim())
+        .filter(Boolean);
+      if (nomes.length > 0) tiposEnsaioCache = nomes;
+    } catch {
+      /* mantém o fallback padrão */
+    }
+  }
+
   function card(d, c) {
     const name = d.contact_name || d.title || 'Sem nome';
     const phone = d.contact_phone || '';
@@ -1395,11 +1498,18 @@
     const type = getDealShootType(d);
     const phoneLabel = phone ? `+${digits(phone).replace(/(\d{2})(\d{2})(\d{5})(\d{4})/, '$1 ($2) $3-$4')}` : '';
     const sub = [type, phoneLabel || stripDealMetaFromNotes(d.notes)?.substring(0, 40)].filter(Boolean).join(' · ');
-    const st = staleness(d.current_stage_entered_at);
+    // Alerta de tempo parado só em etapas ABERTAS: card em ganho/perda já
+    // fechou — não há ação a tomar, então não fica amarelo/vermelho.
+    const dealStage = stages.find(s => s.id === d.stage);
+    const st = dealStage?.is_final ? null : staleness(d.current_stage_entered_at);
     const avatarInner = photo
       ? `<div class="fpc-av fpc-av-img"><img src="${esc(photo)}" alt="" /></div>`
       : `<div class="fpc-av" style="background:${c.dot}">${esc(initials(name))}</div>`;
-    const avatar = `<div class="fpc-av-wrap">${avatarInner}${st ? `<span class="fpc-stale-dot fpc-stale-dot-${st}"></span>` : ''}</div>`;
+    const unreadCount = getUnreadForDeal(d);
+    const unreadBadge = unreadCount > 0
+      ? `<span class="fpc-unread-count" title="${unreadCount} não lida${unreadCount > 1 ? 's' : ''}">${unreadCount > 99 ? '99+' : unreadCount}</span>`
+      : '';
+    const avatar = `<div class="fpc-av-wrap">${avatarInner}${unreadBadge}${st ? `<span class="fpc-stale-dot fpc-stale-dot-${st}"></span>` : ''}</div>`;
     const staleTag = st
       ? `<span class="fpc-stale-tag fpc-stale-tag-${st}" title="Parado nesta etapa há ${st === 'urgent' ? '24h ou mais' : '12h ou mais'}">${st === 'urgent' ? '+24h' : '+12h'}</span>`
       : '';
@@ -1850,6 +1960,11 @@
             <span>Enviar automaticamente</span>
             <span class="fp-mass-auto-hint">(${singleMode ? 'envia direto sem pedir confirmação' : 'manda pra todos com intervalo de 4s entre cada'})</span>
           </label>
+          <label class="fp-mass-auto-label">
+            <input type="checkbox" id="fp-mass-move-next" checked />
+            <span>Mover para a próxima etapa após enviar</span>
+            <span class="fp-mass-auto-hint">(nunca move pra ganho/perda)</span>
+          </label>
         </div>
 
         <div class="fp-mass-foot">
@@ -1910,7 +2025,7 @@
     });
 
     const close = () => modal.remove();
-    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    bindOverlayClose(modal, close);
     modal.querySelector('#fp-mass-close')?.addEventListener('click', close);
     modal.querySelector('#fp-mass-cancel')?.addEventListener('click', close);
 
@@ -1952,12 +2067,13 @@
             .filter(Boolean);
       if (!selected.length) return toast('Selecione pelo menos 1 lead', true);
       const autoSend = modal.querySelector('#fp-mass-auto')?.checked || false;
+      const moveNext = modal.querySelector('#fp-mass-move-next')?.checked || false;
       close();
-      startMassFollowUpQueue(selected, message, autoSend);
+      startMassFollowUpQueue(selected, message, autoSend, moveNext);
     });
   }
 
-  async function startMassFollowUpQueue(targetDeals, template, autoSend = false) {
+  async function startMassFollowUpQueue(targetDeals, template, autoSend = false, moveNext = false) {
     let apiSend = false;
     if (autoSend) {
       try {
@@ -1965,9 +2081,28 @@
         apiSend = status?.connected === true || status?.whatsapp?.connected === true;
       } catch {}
     }
-    massQueue = { deals: targetDeals, message: collapseRepeatedMessage(template), idx: 0, autoSend, apiSend };
+    massQueue = { deals: targetDeals, message: collapseRepeatedMessage(template), idx: 0, autoSend, apiSend, moveNext };
     showMassQueueWidget(autoSend);
     await openCurrentMassQueueLead();
+  }
+
+  // Após follow-up confirmado: avança o lead pra PRÓXIMA etapa aberta.
+  // Nunca move pra etapa final (ganho/perda) — fechamento é decisão manual.
+  // Fire-and-forget: erro aqui não interrompe a fila de envios.
+  function moveMassLeadToNextStage(deal) {
+    try {
+      const ordered = orderedStages(stages);
+      const curIdx = ordered.findIndex(s => s.id === deal.stage);
+      const cur = curIdx >= 0 ? ordered[curIdx] : null;
+      if (!cur || cur.is_final) return;
+      const next = ordered.find((s, i) => i > curIdx && !s.is_final);
+      if (!next) return; // já está na última etapa aberta
+      deal.stage = next.id;
+      deal.current_stage_entered_at = new Date().toISOString();
+      bg({ type: 'MOVE_STAGE', dealId: deal.id, stageId: next.id })
+        .then(() => toast(`→ ${firstNameOf(deal) || 'Lead'} movido pra "${next.name}"`))
+        .catch(() => {});
+    } catch { /* não interrompe a fila */ }
   }
 
   function showMassQueueWidget(autoSend) {
@@ -2146,6 +2281,12 @@
 
   async function advanceMassQueue(skipped) {
     if (!massQueue) return;
+    // Envio confirmado (não pulado): move o lead pra próxima etapa, se ligado.
+    // Cobre os 3 caminhos — API, auto-clique e manual (botão "Próximo →").
+    if (!skipped && massQueue.moveNext) {
+      const sentDeal = massQueue.deals[massQueue.idx];
+      if (sentDeal) moveMassLeadToNextStage(sentDeal);
+    }
     massQueue.idx += 1;
     if (massQueue.idx >= massQueue.deals.length) {
       stopMassQueue();
@@ -2852,7 +2993,7 @@
     // sobrescrever pra recarregar outra tela (Produção, etc).
     const reload = onSaved || loadAgenda;
 
-    const types = ['Newborn', 'Gestante', 'Família', 'Smash the Cake', 'Aniversário', 'Acompanhamento', 'Casamento', 'Outro'];
+    const types = getTiposEnsaio();
 
     // Valores iniciais — vêm do evento existente OU do slot clicado
     const initType = existing?.type && types.includes(existing.type) ? existing.type : (existing?.type || 'Outro');
@@ -4466,7 +4607,7 @@
     `;
     document.body.appendChild(m);
 
-    m.addEventListener('click', (e) => { if (e.target === m) m.remove(); });
+    bindOverlayClose(m, () => m.remove());
     m.querySelector('#fp-info-close')?.addEventListener('click', () => m.remove());
   }
 
@@ -4730,7 +4871,7 @@
     loadTeamAndMe().then(() => populateAssigneeSelect('fp-ed-assign', deal.assigned_to));
 
     const close = () => modal.remove();
-    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    bindOverlayClose(modal, close);
     modal.querySelector('#fp-deal-edit-close')?.addEventListener('click', close);
     modal.querySelector('#fp-deal-edit-cancel')?.addEventListener('click', close);
     modal.querySelector('#fp-deal-edit-save')?.addEventListener('click', () => saveDealEdit(deal, modal));
@@ -4839,7 +4980,7 @@
     reasonSlot._fpSel = reasonSel;
 
     const close = () => modal.remove();
-    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    bindOverlayClose(modal, close);
     modal.querySelector('#fp-lost-close')?.addEventListener('click', close);
     modal.querySelector('#fp-lost-cancel')?.addEventListener('click', close);
     modal.querySelector('#fp-lost-save')?.addEventListener('click', () => saveLostDeal(deal, modal, targetStage?.id || stageId));
@@ -5409,6 +5550,11 @@
             <label><input type="radio" name="fp-win-mode" value="existing" /> Cliente existente</label>
           </div>
 
+          <div class="fp-won-grid">
+            <div class="fp-mf"><label class="fp-ml">Data da venda</label><input class="fp-mi" id="fp-win-sold-date" type="date" value="${todayISO()}" max="${todayISO()}" /></div>
+            <div class="fp-mf"><label class="fp-ml" style="opacity:.65;text-transform:none;font-weight:500">Venda antiga? Escolha o dia real do fechamento — os relatórios usam esta data.</label></div>
+          </div>
+
           <div class="fp-won-existing fp-hidden">
             <div class="fp-mf"><label class="fp-ml">Cliente existente</label><div id="fp-win-client-select-slot"></div></div>
           </div>
@@ -5498,7 +5644,11 @@
     foundSlot.appendChild(foundSel.element);
     foundSlot._fpSel = foundSel;
 
-    const jobTypes = ['Gestante', 'Newborn', 'Família', 'Casamento', 'Ensaio Externo', 'Aniversário', 'Batizado', 'Corporativo', 'Outro'];
+    // Lista mestre (mesma do app); inclui o tipo atual do lead se foi removido
+    const jobTypes = (() => {
+      const base = getTiposEnsaio();
+      return shootType && !base.includes(shootType) ? [shootType, ...base] : base;
+    })();
     const typeSel = fpSelect({
       items: jobTypes.map((t) => ({ value: t, label: t })),
       value: jobTypes.includes(shootType) ? shootType : jobTypes[0],
@@ -5557,7 +5707,7 @@
       modal.querySelector('.fp-won-job-section')?.classList.toggle('fp-hidden', !enabled);
     };
 
-    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    bindOverlayClose(modal, close);
     modal.querySelector('#fp-won-close')?.addEventListener('click', close);
     modal.querySelector('#fp-won-cancel')?.addEventListener('click', close);
     modal.querySelectorAll('input[name="fp-win-mode"]').forEach(input => input.addEventListener('change', updateMode));
@@ -5665,14 +5815,15 @@
       }
 
       if (btn) btn.textContent = 'Convertendo...';
+      const soldDate = val(modal, '#fp-win-sold-date');
       await bg({
         type: 'CONVERT_DEAL',
         dealId: deal.id,
-        data: { existingClientId, createClient, createJob, client, job, sinalAmount: sinalAmount > 0 ? sinalAmount : undefined },
+        data: { existingClientId, createClient, createJob, client, job, sinalAmount: sinalAmount > 0 ? sinalAmount : undefined, converted_at: soldDate || undefined },
       });
       deal.stage = (stages.find(isWonStage) || stages.find(s => s.id === 'won'))?.id || deal.stage;
       deal.converted = true;
-      deal.converted_at = new Date().toISOString();
+      deal.converted_at = soldDate ? `${soldDate}T12:00:00.000Z` : new Date().toISOString();
       if (createJob) {
         deal.value = amount;
         deal.items = catalogItems;
@@ -6394,6 +6545,19 @@
     if (nameInput) nameInput.value = name || '';
     refreshModalStages(stageId);
     populateSourceSelect(fromChat ? 'WhatsApp' : '');
+    // Tipo de ensaio: lista mestre (mesma dos outros formulários)
+    const typeSlot = document.getElementById('fp-mtype-slot');
+    if (typeSlot) {
+      const typeSel = fpSelect({
+        items: [{ value: '', label: 'Selecione (opcional)' }, ...getTiposEnsaio().map((t) => ({ value: t, label: t }))],
+        value: '',
+        placeholder: 'Selecione (opcional)',
+        searchable: false,
+      });
+      typeSlot.innerHTML = '';
+      typeSlot.appendChild(typeSel.element);
+      modalTypeSel = typeSel;
+    }
     // Vendedor: default no usuário logado se já conhecido, e re-carrega lista em background
     populateAssigneeSelect('fp-massign', currentMemberId);
     loadTeamAndMe().then(() => populateAssigneeSelect('fp-massign', currentMemberId));
@@ -6407,6 +6571,7 @@
     m.classList.add('fp-hidden');
     ['fp-mn', 'fp-mp', 'fp-mv'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     modalSourceSel?.setValue('');
+    modalTypeSel?.setValue('');
     modalContext = { fromChat: false };
   }
 
@@ -6415,6 +6580,7 @@
     const phone = digits(document.getElementById('fp-mp')?.value || '');
     const value = Number(document.getElementById('fp-mv')?.value) || 0;
     const source = modalSourceSel?.getValue() || (modalContext.fromChat ? 'WhatsApp' : null);
+    const shootType = modalTypeSel?.getValue() || '';
     const stage = modalStageSel?.getValue() || undefined;
     const assigned_to = modalAssignSel?.getValue() || null;
     if (!name && phone) name = phone;
@@ -6429,7 +6595,8 @@
         (digits(getWAChatPhone() || '').includes(phone.slice(-8)));
 
       if (shouldRefreshChat) rememberContactPhoto(phone, getWAChatPhoto());
-      await bg({ type: 'CREATE_DEAL', data: { name, phone, value, source, stage, assigned_to } });
+      // Tipo de ensaio vai como meta nas notas (formato lido por getDealShootType)
+      await bg({ type: 'CREATE_DEAL', data: { name, phone, value, source, stage, assigned_to, notes: shootType ? buildDealNotes(shootType, '') : undefined } });
       toast('Lead criado!');
       closeModal();
       await loadKanban();
@@ -6471,6 +6638,8 @@
     setTimeout(adjustPosition, 4000);
     // Carrega vendedores em background — modal e "Adicionar ao Pipeline" já abrem com o valor certo
     loadTeamAndMe();
+    // Lista mestre de tipos de ensaio (selects dos modais usam — fallback se falhar)
+    loadTiposEnsaio();
     startLiveRefresh();
   }
 
