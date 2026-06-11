@@ -6,6 +6,7 @@ import { Plus } from "lucide-react";
 import { authFetch } from "../../utils/authFetch";
 import { Job, Client } from "../../types";
 import { SearchableSelect } from "../ui/SearchableSelect";
+import { useTiposEnsaio, tiposComValorAtual } from "../../hooks/useTiposEnsaio";
 
 interface JobFormModalProps {
   clientId?: number;
@@ -24,6 +25,7 @@ export default function JobFormModal({
   onClose,
   onSave,
 }: JobFormModalProps) {
+  const tiposEnsaio = useTiposEnsaio();
   const [clientId, setClientId] = useState(initialClientId || job?.client_id || undefined);
   const [formData, setFormData] = useState({
     job_type: job?.job_type || "Gestante",
@@ -129,16 +131,9 @@ export default function JobFormModal({
                   onChange={(e) => setFormData({ ...formData, job_type: e.target.value })}
                   className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400"
                 >
-                  <option className="dark:bg-gray-800">Gestante</option>
-                  <option className="dark:bg-gray-800">Newborn</option>
-                  <option className="dark:bg-gray-800">Acompanhamento</option>
-                  <option className="dark:bg-gray-800">Smash the Cake</option>
-                  <option className="dark:bg-gray-800">Aniversário</option>
-                  <option className="dark:bg-gray-800">Batizado</option>
-                  <option className="dark:bg-gray-800">Família</option>
-                  <option className="dark:bg-gray-800">Marca Pessoal</option>
-                  <option className="dark:bg-gray-800">Evento Externo</option>
-                  <option className="dark:bg-gray-800">Outros</option>
+                  {tiposComValorAtual(tiposEnsaio, formData.job_type).map((t) => (
+                    <option key={t} value={t} className="dark:bg-gray-800">{t}</option>
+                  ))}
                 </select>
               </div>
               <div>

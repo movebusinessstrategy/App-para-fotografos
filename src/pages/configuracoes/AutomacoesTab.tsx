@@ -5,15 +5,23 @@ import { authFetch } from "../../utils/authFetch";
 import { cn } from "../../utils/cn";
 import { ConfirmModal } from "../../components/ui/ConfirmModal";
 import { OpportunityRule } from "../../types";
+import { DEFAULT_TIPOS_ENSAIO, useTiposEnsaio } from "../../hooks/useTiposEnsaio";
+import { refreshApi } from "../../utils/useApi";
 
-const JOB_TYPES = ["Gestante", "Newborn", "Acompanhamento", "Smash the Cake", "Aniversário", "Família", "Outros"];
+// ─── Tipos de ensaio e valor mínimo ──────────────────────────────────────
+// LUGAR RAIZ dos tipos de ensaio do sistema: o que estiver aqui aparece nos
+// selects do app inteiro (registrar trabalho, converter venda, etc.) e na
+// extensão. O valor é o preço do pacote base, usado como fallback no cálculo
+// de "potencial de venda" das oportunidades sem valor preenchido.
+interface TipoEntry {
+  id?: string; // id no banco (tipos já salvos); novos ainda não têm
+  nome: string;
+  preco: number;
+}
 
-// ─── Valor mínimo por tipo de ensaio ─────────────────────────────────────
-// O usuário cadastra o preço do pacote base de cada tipo. Esses valores são
-// usados como fallback no cálculo de "potencial de venda" das oportunidades
-// que não têm valor preenchido individualmente.
 function ValoresPorTipoSection() {
-  const [precos, setPrecos] = useState<Record<string, number>>({});
+  const [entries, setEntries] = useState<TipoEntry[]>([]);
+  const [novoTipo, setNovoTipo] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -22,33 +30,55 @@ function ValoresPorTipoSection() {
     authFetch('/api/tipo-ensaio-precos')
       .then(r => r.ok ? r.json() : [])
       .then((rows: any[]) => {
-        const m: Record<string, number> = {};
-        // Pre-popula com os tipos hardcoded zerados
-        JOB_TYPES.forEach(t => { m[t] = 0; });
-        // Sobrescreve com o que já foi salvo (preserva nomes que não estão no hardcoded)
-        rows.forEach(r => { m[r.tipo_nome] = Number(r.preco_minimo) || 0; });
-        setPrecos(m);
+        if (Array.isArray(rows) && rows.length > 0) {
+          setEntries(rows.map(r => ({ id: r.id, nome: r.tipo_nome, preco: Number(r.preco_minimo) || 0 })));
+        } else {
+          // Conta nova: começa com a lista padrão (salvar grava no banco)
+          setEntries(DEFAULT_TIPOS_ENSAIO.map(t => ({ nome: t, preco: 0 })));
+        }
       })
-      .catch(() => setPrecos(Object.fromEntries(JOB_TYPES.map(t => [t, 0]))))
+      .catch(() => setEntries(DEFAULT_TIPOS_ENSAIO.map(t => ({ nome: t, preco: 0 }))))
       .finally(() => setLoading(false));
   }, []);
 
-  const setPreco = (tipo: string, valor: number) => {
-    setPrecos(prev => ({ ...prev, [tipo]: valor }));
+  const setPreco = (idx: number, valor: number) => {
+    setEntries(prev => prev.map((e, i) => i === idx ? { ...e, preco: valor } : e));
+  };
+
+  const addTipo = () => {
+    const nome = novoTipo.trim();
+    if (!nome) return;
+    if (entries.some(e => e.nome.toLowerCase() === nome.toLowerCase())) {
+      setNovoTipo("");
+      return;
+    }
+    setEntries(prev => [...prev, { nome, preco: 0 }]);
+    setNovoTipo("");
+  };
+
+  const removeTipo = async (idx: number) => {
+    const entry = entries[idx];
+    setEntries(prev => prev.filter((_, i) => i !== idx));
+    if (entry.id) {
+      await authFetch(`/api/tipo-ensaio-precos/${entry.id}`, { method: 'DELETE' }).catch(() => {});
+      refreshApi('/api/tipo-ensaio-precos');
+    }
   };
 
   const save = async () => {
     setSaving(true);
     try {
-      const items = (Object.entries(precos) as [string, number][])
-        .filter(([, v]) => Number.isFinite(v) && v >= 0)
-        .map(([tipo_nome, preco_minimo]) => ({ tipo_nome, preco_minimo }));
+      const items = entries
+        .filter(e => e.nome.trim() && Number.isFinite(e.preco) && e.preco >= 0)
+        .map(e => ({ tipo_nome: e.nome.trim(), preco_minimo: e.preco }));
       await authFetch('/api/tipo-ensaio-precos', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ items }),
       });
       setSavedAt(Date.now());
+      // Os selects do app (useTiposEnsaio) leem desta API — invalida o cache
+      refreshApi('/api/tipo-ensaio-precos');
     } finally {
       setSaving(false);
     }
@@ -59,10 +89,11 @@ function ValoresPorTipoSection() {
       <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
         <div>
           <h3 className="text-base font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-            <DollarSign size={16} /> Valor mínimo por tipo de ensaio
+            <DollarSign size={16} /> Tipos de ensaio e valor mínimo
           </h3>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-            Cadastre o valor do pacote base de cada tipo. É usado pra calcular o potencial de venda das oportunidades.
+            Esta é a lista mestre: os tipos daqui aparecem em todos os formulários do sistema.
+            O valor é o pacote base, usado no potencial de venda das oportunidades.
           </p>
         </div>
         <button
@@ -80,32 +111,58 @@ function ValoresPorTipoSection() {
           <Loader2 size={14} className="animate-spin" /> Carregando...
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {Object.entries(precos).map(([tipo, valor]) => (
-            <div key={tipo} className="flex items-center gap-2">
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300 flex-1 min-w-0 truncate">
-                {tipo}
-              </span>
-              <div className="relative flex-shrink-0">
-                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">R$</span>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={valor || ''}
-                  onChange={e => setPreco(tipo, Number(e.target.value) || 0)}
-                  placeholder="0,00"
-                  className="w-32 pl-9 pr-2 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 outline-none focus:border-gold-400"
-                />
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {entries.map((entry, idx) => (
+              <div key={`${entry.nome}-${idx}`} className="flex items-center gap-2">
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300 flex-1 min-w-0 truncate">
+                  {entry.nome}
+                </span>
+                <div className="relative flex-shrink-0">
+                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">R$</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={entry.preco || ''}
+                    onChange={e => setPreco(idx, Number(e.target.value) || 0)}
+                    placeholder="0,00"
+                    className="w-32 pl-9 pr-2 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 outline-none focus:border-gold-400"
+                  />
+                </div>
+                <button
+                  onClick={() => removeTipo(idx)}
+                  title={`Remover "${entry.nome}"`}
+                  className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/10 rounded flex-shrink-0"
+                >
+                  <Trash2 size={14} />
+                </button>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2 mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
+            <input
+              value={novoTipo}
+              onChange={e => setNovoTipo(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTipo(); } }}
+              placeholder="Novo tipo de ensaio (ex: Pet, Formatura...)"
+              className="flex-1 px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 outline-none focus:border-gold-400"
+            />
+            <button
+              onClick={addTipo}
+              disabled={!novoTipo.trim()}
+              className="inline-flex items-center gap-1.5 px-4 py-2 border border-gold-300 dark:border-gold-700 text-gold-700 dark:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-900/10 text-sm font-semibold rounded-lg disabled:opacity-40"
+            >
+              <Plus size={14} /> Adicionar tipo
+            </button>
+          </div>
+        </>
       )}
 
       {savedAt && (
         <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-3">
-          ✓ Salvo. O painel de oportunidades usa esses valores no próximo carregamento.
+          ✓ Salvo. Os formulários do app e da extensão usam esta lista no próximo carregamento.
         </p>
       )}
     </div>
@@ -113,12 +170,17 @@ function ValoresPorTipoSection() {
 }
 
 export function RuleModal({ rule, onClose, onSave }: { rule: OpportunityRule | null; onClose: () => void; onSave: () => void }) {
+  const tiposEnsaio = useTiposEnsaio();
   const [formData, setFormData] = useState({
     trigger_job_type: rule?.trigger_job_type || "Gestante",
     target_job_type:  rule?.target_job_type  || "Newborn",
     days_offset:      rule?.days_offset      ?? 30,
     is_active:        rule ? Boolean(rule.is_active) : true,
   });
+  // Garante que o tipo atual da regra apareça mesmo se removido da lista mestre
+  const triggerOptions = tiposEnsaio.includes(formData.trigger_job_type)
+    ? tiposEnsaio
+    : [formData.trigger_job_type, ...tiposEnsaio];
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -145,7 +207,7 @@ export function RuleModal({ rule, onClose, onSave }: { rule: OpportunityRule | n
             <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Tipo de ensaio (gatilho)</label>
             <select value={formData.trigger_job_type} onChange={e => setFormData({ ...formData, trigger_job_type: e.target.value })}
               className="w-full px-3 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-sm">
-              {JOB_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              {triggerOptions.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
           <div>

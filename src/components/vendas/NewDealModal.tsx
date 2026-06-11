@@ -8,6 +8,9 @@ import { cn } from "../../utils/cn";
 import { normalizeText } from "../../utils/normalizeText";
 import { useSellers } from "../../hooks/useSellers";
 import { SellerPicker } from "./SellerPicker";
+import { useTiposEnsaio } from "../../hooks/useTiposEnsaio";
+
+const LEAD_SOURCES = ["WhatsApp", "Instagram", "Facebook", "Google", "Indicação", "Site", "Outro"];
 
 interface NewDealModalProps {
   open: boolean;
@@ -47,8 +50,12 @@ const CATALOG_ICONS: Record<CatalogType, React.ReactNode> = {
 
 export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewDealModalProps) {
   const { sellers, currentMemberId } = useSellers();
+  const tiposEnsaio = useTiposEnsaio();
   const [form, setForm] = useState({
     title: "",
+    phone: "",
+    lead_source: "",
+    shoot_type: "",
     client_id: "",
     value: "",
     expected_close_date: "",
@@ -124,12 +131,23 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
 
     setLoading(true);
     try {
+      // Tipo de ensaio vai como meta nas notas — mesmo formato que a extensão
+      // já usa/lê ("Tipo de ensaio: X" na primeira linha, via getDealShootType)
+      const notesWithMeta = [
+        form.shoot_type ? `Tipo de ensaio: ${form.shoot_type}` : "",
+        form.notes,
+      ].filter(Boolean).join("\n");
+
       // 1. Cria o deal
       const dealRes = await authFetch("/api/deals", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...form,
+          notes: notesWithMeta,
+          contact_name: form.title,
+          contact_phone: form.phone.replace(/\D/g, "") || null,
+          lead_source: form.lead_source || null,
           client_id: form.client_id ? Number(form.client_id) : null,
           value: valueToUse,
         }),
@@ -147,6 +165,9 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
 
       setForm({
         title: "",
+        phone: "",
+        lead_source: "",
+        shoot_type: "",
         client_id: "",
         value: "",
         expected_close_date: "",
@@ -190,6 +211,52 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
               placeholder="Ex: Proposta Website"
               className="w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:border-gray-400 dark:focus:border-gray-600 focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-600"
             />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Telefone / WhatsApp
+              </label>
+              <input
+                type="tel"
+                value={form.phone}
+                onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                placeholder="(00) 00000-0000"
+                className="w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:border-gray-400 dark:focus:border-gray-600 focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-600"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Origem
+              </label>
+              <select
+                value={form.lead_source}
+                onChange={(e) => setForm({ ...form, lead_source: e.target.value })}
+                className="w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white outline-none focus:border-gray-400 dark:focus:border-gray-600 focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-600"
+              >
+                <option value="">Selecione...</option>
+                {LEAD_SOURCES.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Tipo de ensaio
+            </label>
+            <select
+              value={form.shoot_type}
+              onChange={(e) => setForm({ ...form, shoot_type: e.target.value })}
+              className="w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white outline-none focus:border-gray-400 dark:focus:border-gray-600 focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-600"
+            >
+              <option value="">Selecione (opcional)...</option>
+              {tiposEnsaio.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
           </div>
 
           <div>
