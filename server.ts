@@ -2539,11 +2539,16 @@ async function startServer() {
         const media = extractWebhookMedia(event);
         if (!phone || (!text && !media)) continue;
 
-        const name = String(
+        // Evolution API v2: fromMe fica em event.key.fromMe
+        const fromMe = Boolean(event?.key?.fromMe ?? event?.fromMe);
+
+        // pushName de mensagem NOSSA (fromMe) é o nome do próprio estúdio —
+        // não usar como nome do contato (mesmo guard do handler do Baileys).
+        const name = fromMe ? undefined : (String(
           // Evolution API v2: pushName vem no campo raiz do data
           event?.pushName ?? event?.senderName ?? event?.chatName ??
           event?.contact?.name ?? event?.name ?? ''
-        ).trim() || undefined;
+        ).trim() || undefined);
 
         const timestamp = parseWebhookTimestamp(event);
         // Evolution API v2: id fica em event.key.id
@@ -2552,9 +2557,6 @@ async function startServer() {
           (typeof messageIdRaw === 'string' && messageIdRaw.trim())
             ? messageIdRaw.trim()
             : `${phone}-${timestamp}-${processed}`;
-
-        // Evolution API v2: fromMe fica em event.key.fromMe
-        const fromMe = Boolean(event?.key?.fromMe ?? event?.fromMe);
 
         cacheLiveWhatsAppMessage({
           id: messageId,
@@ -14019,6 +14021,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // ── Baileys: handler de mensagens ────────────────────────────────────────
+  // Conversas já limpas do "nome do estúdio" neste boot (chave userId:nome)
+  const ownerNameHealed = new Set<string>();
+
   BaileysManager.setMessageHandler(async (userId, msg, sock, isHistory = false) => {
     if (!supabaseAdmin) { console.warn('[Baileys] MessageHandler: supabaseAdmin não disponível'); return; }
     const rawRemoteJid = msg.key.remoteJid || '';
@@ -14101,7 +14106,28 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
 
     // Salva/atualiza conversa — UPDATE primeiro, INSERT se nenhuma linha foi atualizada
-    const contactName = msg.pushName || null;
+    // pushName é o nome de QUEM ENVIOU: em mensagem nossa (fromMe) é o nome do
+    // PRÓPRIO estúdio — gravar isso como contact_name fazia a lista inteira de
+    // conversas virar "Estúdio X" em vez do nome do cliente.
+    const contactName = msg.key.fromMe ? null : (msg.pushName || null);
+
+    // HEAL retroativo: limpa conversas já contaminadas com o nome do estúdio
+    // (gravado por mensagens enviadas antes do fix). Roda 1x por boot por
+    // usuário+nome, na primeira mensagem enviada — quando o contato falar de
+    // novo, o pushName dele repovoa o nome correto.
+    if (msg.key.fromMe && msg.pushName) {
+      const healKey = `${userId}:${msg.pushName}`;
+      if (!ownerNameHealed.has(healKey)) {
+        ownerNameHealed.add(healKey);
+        try {
+          await supabaseAdmin.from('wa_conversations')
+            .update({ contact_name: null })
+            .eq('user_id', userId)
+            .eq('contact_name', msg.pushName);
+          console.log(`[Baileys] Conversas com nome do estúdio ("${msg.pushName}") limpas (user ${userId})`);
+        } catch { /* heal é best-effort */ }
+      }
+    }
     const now = new Date().toISOString();
     const lastMsgPreview = msgType === 'audio'
       ? '🎤 Mensagem de voz'
