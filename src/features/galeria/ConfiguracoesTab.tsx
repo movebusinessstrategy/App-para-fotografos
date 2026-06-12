@@ -547,14 +547,21 @@ function MercadoPagoConnect({ settings, onNotify, onReload }: MercadoPagoConnect
     setWorking(true);
     try {
       const res = await authFetch("/api/oauth/mp/start");
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j?.error || "falha");
+      // Servidor antigo (mid-deploy) devolve a página HTML em vez de JSON —
+      // o parse falha. Tratamos como "atualizando" em vez de vazar erro cru.
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.url) {
+        throw new Error(
+          data?.error ||
+          "O servidor está atualizando. Aguarde 1–2 minutos e tente de novo.",
+        );
       }
-      const { url } = await res.json();
-      window.location.href = url;
+      window.location.href = data.url;
     } catch (e: any) {
-      onNotify("error", e?.message || "Não foi possível iniciar a conexão.");
+      const msg = e?.message?.includes("JSON")
+        ? "O servidor está atualizando. Aguarde 1–2 minutos e tente de novo."
+        : e?.message || "Não foi possível iniciar a conexão.";
+      onNotify("error", msg);
       setWorking(false);
     }
   };
