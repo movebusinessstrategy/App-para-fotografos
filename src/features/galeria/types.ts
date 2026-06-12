@@ -96,6 +96,7 @@ export interface GallerySettings {
   custom_domain?: string | null;
   default_included_count?: number;
   default_extra_price?: number;
+  deadline_presets?: number[];
 }
 
 export interface SendResult {

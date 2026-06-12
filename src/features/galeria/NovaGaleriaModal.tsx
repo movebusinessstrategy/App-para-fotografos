@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { RefreshCw, ShieldCheck, X } from "lucide-react";
 
 import { SearchableSelect } from "../../components/ui/SearchableSelect";
 import { authFetch } from "../../utils/authFetch";
@@ -28,6 +28,25 @@ interface FormState {
   clientPhone: string;
   includedCount: string;
   extraPrice: string;
+  createAccess: boolean;
+  accessEmail: string;
+  accessPassword: string;
+  requireLogin: boolean;
+}
+
+// Senha legível e curta — 8 chars, sem caracteres confusos (0/O, 1/l).
+function gerarSenha(): string {
+  const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+  let s = "";
+  const crypto = (window as any).crypto || (window as any).msCrypto;
+  if (crypto?.getRandomValues) {
+    const buf = new Uint32Array(8);
+    crypto.getRandomValues(buf);
+    for (let i = 0; i < 8; i++) s += chars[buf[i] % chars.length];
+  } else {
+    for (let i = 0; i < 8; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return s;
 }
 
 function buildClientFields(form: FormState, clients: Client[]) {
@@ -65,6 +84,10 @@ export function NovaGaleriaModal({ onClose, onCreated, onNotify }: NovaGaleriaMo
     clientPhone: "",
     includedCount: String(settings?.default_included_count ?? 20),
     extraPrice: String(settings?.default_extra_price ?? 35),
+    createAccess: true,
+    accessEmail: "",
+    accessPassword: gerarSenha(),
+    requireLogin: true,
   });
   const [loading, setLoading] = useState(false);
 
@@ -87,6 +110,18 @@ export function NovaGaleriaModal({ onClose, onCreated, onNotify }: NovaGaleriaMo
     [clients],
   );
 
+  // Sincroniza accessEmail com o e-mail do cliente — muda quando troca cliente.
+  // Só sobrescreve se o usuário não tiver editado manualmente.
+  const accessEditedRef = useRef(false);
+  const selectedClient = clients.find((c) => String(c.id) === form.clientId);
+  const clientEmailNow = form.clientMode === "existing"
+    ? selectedClient?.email || ""
+    : form.clientEmail;
+  useEffect(() => {
+    if (accessEditedRef.current) return;
+    setForm((f) => ({ ...f, accessEmail: clientEmailNow }));
+  }, [clientEmailNow]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -104,6 +139,42 @@ export function NovaGaleriaModal({ onClose, onCreated, onNotify }: NovaGaleriaMo
       });
       if (!res.ok) throw new Error();
       const data = await res.json();
+
+      // Auto-cria acesso da cliente (e-mail + senha) se foi pedido.
+      const wantsAccess = form.createAccess && form.accessEmail.trim() && form.accessPassword.trim().length >= 4;
+      if (wantsAccess) {
+        try {
+          const accRes = await authFetch(`/api/galleries/${data.gallery.id}/access`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: form.accessEmail.trim(),
+              password: form.accessPassword,
+              name: data.gallery.client_name || undefined,
+              role: "owner",
+            }),
+          });
+          if (accRes.ok && form.requireLogin) {
+            // Liga "exigir login" na galeria.
+            await authFetch(`/api/galleries/${data.gallery.id}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ require_login: true }),
+            });
+          }
+          if (accRes.ok) {
+            onNotify(
+              "success",
+              `Acesso criado: ${form.accessEmail.trim()} · senha ${form.accessPassword}. Anote!`,
+            );
+          } else {
+            onNotify("error", "Galeria criada, mas não consegui criar o acesso da cliente.");
+          }
+        } catch {
+          onNotify("error", "Galeria criada, mas não consegui criar o acesso da cliente.");
+        }
+      }
+
       onCreated(data.gallery);
     } catch {
       onNotify("error", "Não foi possível criar a galeria.");
@@ -218,6 +289,64 @@ export function NovaGaleriaModal({ onClose, onCreated, onNotify }: NovaGaleriaMo
                 className={INPUT_CLS}
               />
             </div>
+          </div>
+
+          {/* Acesso da cliente — login + senha já saem prontos */}
+          <div className="rounded-lg border border-violet-200 dark:border-violet-800/40 bg-violet-50/40 dark:bg-violet-900/10 p-3 space-y-2">
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.createAccess}
+                onChange={(e) => set({ createAccess: e.target.checked })}
+                className="mt-0.5 w-4 h-4 accent-violet-600"
+              />
+              <span className="text-sm font-medium flex items-center gap-1.5">
+                <ShieldCheck size={14} className="text-violet-600 dark:text-violet-400" />
+                Criar acesso pra cliente já
+              </span>
+            </label>
+            {form.createAccess && (
+              <div className="space-y-2 pl-6">
+                <div>
+                  <label className="text-[11px] font-medium text-gray-600 dark:text-gray-300">E-mail de acesso</label>
+                  <input
+                    type="email"
+                    value={form.accessEmail}
+                    onChange={(e) => { accessEditedRef.current = true; set({ accessEmail: e.target.value }); }}
+                    placeholder="cliente@email.com"
+                    className={INPUT_CLS}
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-medium text-gray-600 dark:text-gray-300">Senha (anote pra mandar pra ela)</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={form.accessPassword}
+                      onChange={(e) => set({ accessPassword: e.target.value })}
+                      className={INPUT_CLS + " font-mono tracking-wider"}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => set({ accessPassword: gerarSenha() })}
+                      title="Gerar nova senha"
+                      className="px-3 py-2 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
+                    >
+                      <RefreshCw size={14} />
+                    </button>
+                  </div>
+                </div>
+                <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.requireLogin}
+                    onChange={(e) => set({ requireLogin: e.target.checked })}
+                    className="w-3.5 h-3.5 accent-violet-600"
+                  />
+                  Exigir login pra acessar (recomendado)
+                </label>
+              </div>
+            )}
           </div>
 
           <div className="flex gap-2 pt-1">

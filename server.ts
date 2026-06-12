@@ -6951,6 +6951,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     categories: ['Gestante', 'Newborn', 'Casamento', 'Família'],
     protection: { right_click: true, drag: true, notice: true },
     custom_domain: null as string | null,
+    deadline_presets: [7, 15, 30] as number[],
   };
 
   async function getGallerySettings(userId: string): Promise<any> {
@@ -7277,6 +7278,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         mp_oauth_available: mpConfigured(),
         default_included_count: 20,
         default_extra_price: await getDefaultExtraPrice(userId),
+        deadline_presets: Array.isArray(s.deadline_presets) && s.deadline_presets.length > 0
+          ? s.deadline_presets.map((n: any) => Math.max(1, Math.min(365, Number(n) || 0))).filter(Boolean).slice(0, 6)
+          : [7, 15, 30],
       },
     });
   });
@@ -7321,6 +7325,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (body.sender_email !== undefined) payload.sender_email = body.sender_email || null;
     if (body.notify_studio_whatsapp !== undefined) payload.notify_studio_whatsapp = !!body.notify_studio_whatsapp;
     if (Array.isArray(body.categories)) payload.categories = body.categories.map(String);
+    if (Array.isArray(body.deadline_presets)) {
+      payload.deadline_presets = body.deadline_presets
+        .map((n: any) => Math.max(1, Math.min(365, Math.round(Number(n) || 0))))
+        .filter((n: number) => n > 0)
+        .slice(0, 6);
+    }
     if (body.protect_right_click !== undefined || body.protect_download !== undefined) {
       payload.protection = {
         right_click: body.protect_right_click !== false,

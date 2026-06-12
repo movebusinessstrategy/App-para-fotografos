@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-  Activity, ArrowLeft, CalendarClock, Copy, DollarSign, Droplet,
+  Activity, ArrowLeft, CalendarClock, ChevronRight, Copy, DollarSign, Droplet,
   History, Image as ImageIcon, Info, Loader2, Mail, MessageCircle, Palette,
   Send, ShieldCheck, Trash2,
 } from "lucide-react";
@@ -23,28 +23,31 @@ import { MarcaDaguaSection } from "./secoes/MarcaDaguaSection";
 import { DesignSection } from "./secoes/DesignSection";
 import { AtividadesSection, HistoricoSection } from "./secoes/AtividadesESHistoricoSections";
 
-// ── Abas no topo (estilo CatalogoPage) ───────────────────────────────────────
+// ── Estrutura da sidebar (estilo Alboom — Visão geral / Preferências) ────────
 
 type SecaoId =
-  | "fotos" | "atividades" | "historico" | "dados" | "venda"
-  | "prazo" | "acesso" | "marca" | "design";
+  | "atividades" | "historico"
+  | "dados" | "fotos" | "venda" | "prazo" | "acesso" | "marca" | "design";
 
-interface AbaItem {
+interface ItemMenu {
   id: SecaoId;
   label: string;
   icon: React.ComponentType<{ size?: number; className?: string }>;
 }
 
-const ABAS: AbaItem[] = [
-  { id: "fotos",      label: "Fotos",          icon: ImageIcon },
-  { id: "atividades", label: "Atividades",     icon: Activity },
-  { id: "historico",  label: "Histórico",      icon: History },
-  { id: "dados",      label: "Dados",          icon: Info },
-  { id: "venda",      label: "Seleção e venda", icon: DollarSign },
-  { id: "prazo",      label: "Prazo",          icon: CalendarClock },
-  { id: "acesso",     label: "Acesso",         icon: ShieldCheck },
-  { id: "marca",      label: "Marca d'água",   icon: Droplet },
-  { id: "design",     label: "Design",         icon: Palette },
+const VISAO_GERAL: ItemMenu[] = [
+  { id: "atividades", label: "Atividades do cliente",  icon: Activity },
+  { id: "historico",  label: "Histórico de atividades", icon: History },
+];
+
+const PREFERENCIAS: ItemMenu[] = [
+  { id: "dados",  label: "Dados da galeria",     icon: Info },
+  { id: "fotos",  label: "Fotos",                icon: ImageIcon },
+  { id: "venda",  label: "Seleção e venda",      icon: DollarSign },
+  { id: "prazo",  label: "Prazo e lembrete",     icon: CalendarClock },
+  { id: "acesso", label: "Acesso e privacidade", icon: ShieldCheck },
+  { id: "marca",  label: "Marca d'água",         icon: Droplet },
+  { id: "design", label: "Design",               icon: Palette },
 ];
 
 // ── Página principal ────────────────────────────────────────────────────────
@@ -192,56 +195,37 @@ export default function GaleriaDetailPage() {
         )}
       </div>
 
-      {/* Abas no topo (estilo CatalogoPage) — pill bar com scroll horizontal em telas pequenas */}
-      <div className="px-3 sm:px-5 pt-4 max-w-[1400px] mx-auto">
-        <div className="flex bg-gray-100 dark:bg-gray-800 p-1 rounded-xl gap-1 overflow-x-auto">
-          {ABAS.map((a) => {
-            const Icon = a.icon;
-            const ativo = secao === a.id;
-            return (
-              <button
-                key={a.id} onClick={() => setSecao(a.id)}
-                className={cn(
-                  "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap flex-shrink-0",
-                  ativo
-                    ? "bg-white dark:bg-gray-700 text-violet-700 dark:text-violet-300 shadow-sm"
-                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200",
-                )}
-              >
-                <Icon size={15} /> {a.label}
-              </button>
-            );
-          })}
-        </div>
+      {/* Layout 2 colunas: sidebar à esquerda + painel à direita */}
+      <div className="flex gap-4 sm:gap-6 px-3 sm:px-5 py-5 max-w-[1400px] mx-auto">
+        <Sidebar atual={secao} onSelect={setSecao} />
+        <main className="flex-1 min-w-0">
+          {secao === "atividades" && <AtividadesSection galleryId={galleryId} />}
+          {secao === "historico"  && <HistoricoSection  galleryId={galleryId} />}
+          {secao === "dados"      && <DadosSection      gallery={gallery} onChanged={refresh} onNotify={onNotify} />}
+          {secao === "fotos"      && (
+            <FotosSection
+              galleryId={galleryId}
+              data={data}
+              mutate={refresh}
+              onChanged={refresh}
+              onNotify={onNotify}
+              setUploading={setUploading}
+            />
+          )}
+          {secao === "venda"      && <VendaSection      gallery={gallery} onChanged={refresh} onNotify={onNotify} />}
+          {secao === "prazo"      && <PrazoSection      gallery={gallery} onChanged={refresh} onNotify={onNotify} />}
+          {secao === "acesso"     && (
+            <AcessoSection
+              galleryId={galleryId}
+              initialRequireLogin={!!gallery.require_login}
+              initialDownloadMode={gallery.download_mode || "off"}
+              onNotify={onNotify}
+            />
+          )}
+          {secao === "marca"      && <MarcaDaguaSection onNotify={onNotify} />}
+          {secao === "design"     && <DesignSection     gallery={gallery as any} onChanged={refresh} onNotify={onNotify} />}
+        </main>
       </div>
-
-      <main className="px-3 sm:px-5 py-5 max-w-[1400px] mx-auto">
-        {secao === "atividades" && <AtividadesSection galleryId={galleryId} />}
-        {secao === "historico"  && <HistoricoSection  galleryId={galleryId} />}
-        {secao === "dados"      && <DadosSection      gallery={gallery} onChanged={refresh} onNotify={onNotify} />}
-        {secao === "fotos"      && (
-          <FotosSection
-            galleryId={galleryId}
-            data={data}
-            mutate={refresh}
-            onChanged={refresh}
-            onNotify={onNotify}
-            setUploading={setUploading}
-          />
-        )}
-        {secao === "venda"      && <VendaSection      gallery={gallery} onChanged={refresh} onNotify={onNotify} />}
-        {secao === "prazo"      && <PrazoSection      gallery={gallery} onChanged={refresh} onNotify={onNotify} />}
-        {secao === "acesso"     && (
-          <AcessoSection
-            galleryId={galleryId}
-            initialRequireLogin={!!gallery.require_login}
-            initialDownloadMode={gallery.download_mode || "off"}
-            onNotify={onNotify}
-          />
-        )}
-        {secao === "marca"      && <MarcaDaguaSection onNotify={onNotify} />}
-        {secao === "design"     && <DesignSection     gallery={gallery as any} onChanged={refresh} onNotify={onNotify} />}
-      </main>
 
       <ConfirmModal
         open={confirmDelete}
@@ -254,6 +238,54 @@ export default function GaleriaDetailPage() {
       />
 
       <Toast toast={toast} onClose={() => setToast(null)} />
+    </div>
+  );
+}
+
+// ── Sidebar com 2 grupos (Visão geral / Preferências) ────────────────────────
+
+function Sidebar({ atual, onSelect }: { atual: SecaoId; onSelect: (s: SecaoId) => void }) {
+  return (
+    <aside className="w-56 flex-shrink-0 hidden sm:block">
+      <nav className="space-y-5 sticky top-3">
+        <Grupo titulo="Visão geral" items={VISAO_GERAL} atual={atual} onSelect={onSelect} />
+        <Grupo titulo="Preferências" items={PREFERENCIAS} atual={atual} onSelect={onSelect} />
+      </nav>
+    </aside>
+  );
+}
+
+function Grupo({ titulo, items, atual, onSelect }: {
+  titulo: string; items: ItemMenu[]; atual: SecaoId; onSelect: (s: SecaoId) => void;
+}) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider font-semibold text-gray-400 mb-2 px-2">{titulo}</div>
+      <ul className="space-y-0.5">
+        {items.map((it) => {
+          const ativo = it.id === atual;
+          const Icon = it.icon;
+          return (
+            <li key={it.id}>
+              <button
+                onClick={() => onSelect(it.id)}
+                className={cn(
+                  "w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-sm transition-colors",
+                  ativo
+                    ? "bg-violet-50 dark:bg-violet-900/20 text-violet-700 dark:text-violet-300 font-medium"
+                    : "text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800",
+                )}
+              >
+                <span className="flex items-center gap-2 min-w-0">
+                  <Icon size={14} className="flex-shrink-0" />
+                  <span className="truncate">{it.label}</span>
+                </span>
+                {ativo && <ChevronRight size={13} className="flex-shrink-0" />}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

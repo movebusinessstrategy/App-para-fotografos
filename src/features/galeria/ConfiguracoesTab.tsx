@@ -26,6 +26,7 @@ interface FormState {
   protect_right_click: boolean;
   protect_download: boolean;
   custom_domain: string;
+  deadline_presets: number[];
 }
 
 const DEFAULT_FORM: FormState = {
@@ -39,6 +40,7 @@ const DEFAULT_FORM: FormState = {
   protect_right_click: true,
   protect_download: true,
   custom_domain: "",
+  deadline_presets: [7, 15, 30],
 };
 
 function clampPct(v: number): number {
@@ -57,6 +59,8 @@ function formFromSettings(s: GallerySettings): FormState {
     protect_right_click: s.protect_right_click !== false,
     protect_download: s.protect_download !== false,
     custom_domain: s.custom_domain || "",
+    deadline_presets: Array.isArray(s.deadline_presets) && s.deadline_presets.length > 0
+      ? s.deadline_presets : [7, 15, 30],
   };
 }
 
@@ -119,6 +123,7 @@ export default function ConfiguracoesTab({ onNotify }: ConfiguracoesTabProps) {
       protect_right_click: form.protect_right_click,
       protect_download: form.protect_download,
       custom_domain: form.custom_domain.trim() || null,
+      deadline_presets: form.deadline_presets,
     };
     if (logoBase64) body.watermark_logo_base64 = logoBase64;
     if (mpToken.trim()) body.mp_access_token = mpToken.trim();
@@ -237,6 +242,13 @@ export default function ConfiguracoesTab({ onNotify }: ConfiguracoesTabProps) {
 
       <Section title="Categorias de ensaio">
         <CategoriasEditor categories={form.categories} onChange={(c) => set("categories", c)} />
+      </Section>
+
+      <Section title="Atalhos de prazo">
+        <p className="text-xs text-gray-500 dark:text-gray-400 -mt-1 mb-2">
+          Botões rápidos que aparecem no calendário do prazo de seleção (além de "Hoje", que é fixo). Até 6 valores, em dias.
+        </p>
+        <PresetsEditor presets={form.deadline_presets} onChange={(p) => set("deadline_presets", p)} />
       </Section>
 
       <Section title="Pagamentos">
@@ -429,6 +441,65 @@ function CategoriasEditor({ categories, onChange }: { categories: string[]; onCh
         </button>
       </div>
     </>
+  );
+}
+
+// ── Editor de presets de prazo (dias) ─────────────────────────────────────
+
+function PresetsEditor({ presets, onChange }: { presets: number[]; onChange: (p: number[]) => void }) {
+  const [novo, setNovo] = useState("");
+
+  const add = () => {
+    const n = parseInt(novo, 10);
+    if (!n || n <= 0 || n > 365) return;
+    if (presets.includes(n)) { setNovo(""); return; }
+    if (presets.length >= 6) return;
+    onChange([...presets, n].sort((a, b) => a - b));
+    setNovo("");
+  };
+
+  const remove = (n: number) => onChange(presets.filter((p) => p !== n));
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2 mb-2">
+        {presets.length === 0 && (
+          <span className="text-xs text-gray-400">Nenhum atalho — só "Hoje" vai aparecer.</span>
+        )}
+        {presets.map((n) => (
+          <span
+            key={n}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-50 dark:bg-violet-900/20 text-violet-700 dark:text-violet-300 text-xs font-semibold"
+          >
+            +{n} dias
+            <button onClick={() => remove(n)} className="hover:text-red-600">
+              <X size={11} />
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input
+          type="number"
+          min={1}
+          max={365}
+          value={novo}
+          onChange={(e) => setNovo(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), add())}
+          placeholder="Dias (ex.: 7)"
+          disabled={presets.length >= 6}
+          className="w-32 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg px-2.5 py-1.5 text-sm outline-none focus:border-violet-500"
+        />
+        <button
+          type="button"
+          onClick={add}
+          disabled={presets.length >= 6}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 text-xs font-semibold rounded-lg disabled:opacity-40"
+        >
+          <Plus size={12} /> Adicionar
+        </button>
+      </div>
+    </div>
   );
 }
 
