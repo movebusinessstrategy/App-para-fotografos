@@ -244,6 +244,10 @@ export default function ConfiguracoesTab({ onNotify }: ConfiguracoesTabProps) {
         <CategoriasEditor categories={form.categories} onChange={(c) => set("categories", c)} />
       </Section>
 
+      <Section title="Armazenamento">
+        <ArmazenamentoCard />
+      </Section>
+
       <Section title="Atalhos de prazo">
         <p className="text-xs text-gray-500 dark:text-gray-400 -mt-1 mb-2">
           Botões rápidos que aparecem no calendário do prazo de seleção (além de "Hoje", que é fixo). Até 6 valores, em dias.
@@ -441,6 +445,71 @@ function CategoriasEditor({ categories, onChange }: { categories: string[]; onCh
         </button>
       </div>
     </>
+  );
+}
+
+// ── Armazenamento usado pelas fotos ────────────────────────────────────────
+
+interface StorageInfo {
+  total_bytes: number;
+  photo_count: number;
+  galleries: { id: string; title: string; client_name: string | null; bytes: number; photo_count: number }[];
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes <= 0) return "0 MB";
+  const gb = bytes / (1024 * 1024 * 1024);
+  if (gb >= 1) return `${gb.toFixed(2)} GB`;
+  const mb = bytes / (1024 * 1024);
+  return `${mb.toFixed(1)} MB`;
+}
+
+function ArmazenamentoCard() {
+  const { data, isLoading } = useApi<StorageInfo>("/api/galleries/storage");
+
+  if (isLoading && !data) {
+    return <div className="text-sm text-gray-500 py-2">Calculando…</div>;
+  }
+  if (!data) {
+    return <div className="text-sm text-gray-500 py-2">Não foi possível carregar.</div>;
+  }
+
+  const top = data.galleries.slice(0, 5);
+  return (
+    <div className="space-y-3">
+      <div className="flex items-end gap-3">
+        <div className="text-3xl font-semibold text-gray-900 dark:text-white">{formatBytes(data.total_bytes)}</div>
+        <div className="text-sm text-gray-500 dark:text-gray-400 pb-1">
+          em {data.photo_count} foto{data.photo_count === 1 ? "" : "s"} · {data.galleries.length} galeria{data.galleries.length === 1 ? "" : "s"}
+        </div>
+      </div>
+
+      {top.length > 0 && (
+        <div>
+          <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">Maiores galerias</div>
+          <ul className="space-y-1">
+            {top.map((g) => {
+              const pct = data.total_bytes > 0 ? Math.round((g.bytes / data.total_bytes) * 100) : 0;
+              return (
+                <li key={g.id} className="text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate">{g.title}{g.client_name ? ` · ${g.client_name}` : ""}</span>
+                    <span className="text-xs text-gray-500 flex-shrink-0">{formatBytes(g.bytes)} ({g.photo_count})</span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden mt-0.5">
+                    <div className="h-full bg-violet-500" style={{ width: `${Math.max(2, pct)}%` }} />
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      <p className="text-[11px] text-gray-400 dark:text-gray-500">
+        Soma dos originais enviados. Previews com marca d'água adicionam ~10%. Excluir uma galeria libera o espaço dela. Dica: envie em resolução Média ou Baixa pra economizar.
+      </p>
+    </div>
   );
 }
 

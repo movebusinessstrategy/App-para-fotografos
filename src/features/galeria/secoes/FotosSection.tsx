@@ -1,12 +1,15 @@
 import React, { useMemo, useRef, useState } from "react";
-import { AlertCircle, Check, Copy, Loader2, Trash2, Upload } from "lucide-react";
+import { AlertCircle, Check, Copy, Heart, Loader2, Trash2, Upload } from "lucide-react";
 
 import { authFetch } from "../../../utils/authFetch";
 import { GalleryDetailResponse, GalleryPhoto } from "../types";
 import { formatBRL } from "../utils";
 import { ToastKind } from "../Toast";
 import { SecaoHeader } from "./DadosSection";
-import { chunk, isHeic, prepareFile, runPool } from "./uploadHelpers";
+import {
+  RESOLUTIONS, UploadResolution, chunk, getSavedResolution, isHeic,
+  prepareFile, runPool, saveResolution,
+} from "./uploadHelpers";
 
 interface FotosSectionProps {
   galleryId: string;
@@ -19,7 +22,10 @@ interface FotosSectionProps {
 
 interface UploadProgress { done: number; total: number }
 
-// Upload em massa + grid de thumbs + lista das fotos escolhidas pela cliente.
+type SubAba = "enviar" | "selecionadas";
+
+// Sub-abas: "Enviar fotos" (upload + grid) | "Selecionadas" (escolhas da
+// cliente com comentários). Resolução do upload configurável (espaço).
 export function FotosSection({
   galleryId, data, mutate, onChanged, onNotify, setUploading,
 }: FotosSectionProps) {
@@ -31,6 +37,13 @@ export function FotosSection({
   const [uploadingLocal, setUploadingLocal] = useState(false);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [clearingErrors, setClearingErrors] = useState(false);
+  const [subAba, setSubAba] = useState<SubAba>("enviar");
+  const [resolution, setResolution] = useState<UploadResolution>(getSavedResolution());
+
+  const changeResolution = (r: UploadResolution) => {
+    setResolution(r);
+    saveResolution(r);
+  };
 
   const selectedByPhoto = useMemo(() => {
     const map = new Map<string, { selected: boolean; comment: string | null }>();
@@ -81,7 +94,7 @@ export function FotosSection({
         const batch: File[] = [];
         for (const file of batchRaw) {
           try {
-            batch.push(await prepareFile(file));
+            batch.push(await prepareFile(file, resolution));
           } catch {
             errors.push(file.name);
             setProgress((p) => (p ? { ...p, done: p.done + 1 } : p));
@@ -149,110 +162,183 @@ export function FotosSection({
         descricao={`${photos.length} foto${photos.length === 1 ? "" : "s"} enviada${photos.length === 1 ? "" : "s"} pra essa galeria.`}
       />
 
-      <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-4 space-y-3">
-        <div className="flex items-center justify-between gap-2 flex-wrap">
-          <div className="text-sm text-gray-600 dark:text-gray-300">
-            {photos.length} foto(s) {photos.some((p) => p.process_status !== "done") ? "· processando algumas…" : ""}
-          </div>
-          <div className="flex items-center gap-2">
-            {photos.some((p) => p.process_status === "error") && (
-              <button
-                onClick={handleClearErrors} disabled={clearingErrors || uploadingLocal}
-                className="inline-flex items-center gap-2 px-3 py-2 bg-red-50 hover:bg-red-100 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-700 dark:text-red-200 text-xs font-semibold rounded-lg disabled:opacity-60"
-              >
-                {clearingErrors ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
-                Limpar com erro
-              </button>
-            )}
-            <button
-              onClick={() => fileInputRef.current?.click()} disabled={uploadingLocal}
-              className="inline-flex items-center gap-2 px-3 py-2 bg-violet-600 hover:bg-violet-700 text-white text-xs font-semibold rounded-lg disabled:opacity-60"
-            >
-              {uploadingLocal ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-              Enviar fotos
-            </button>
-            <input
-              ref={fileInputRef} type="file" accept="image/*,.heic,.heif" multiple className="hidden"
-              onChange={(e) => handleFiles(e.target.files)}
-            />
-          </div>
-        </div>
-
-        {progress && (uploadingLocal || progress.done < progress.total) && (
-          <div>
-            <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
-              <span>Enviando e aplicando marca d'água…</span>
-              <span>{progress.done}/{progress.total}</span>
-            </div>
-            <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
-              <div
-                className="h-full bg-violet-500 transition-all"
-                style={{ width: `${(progress.done / Math.max(1, progress.total)) * 100}%` }}
-              />
-            </div>
-          </div>
-        )}
-
-        {photos.length === 0 ? (
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="w-full h-32 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700 flex flex-col items-center justify-center gap-2 text-gray-400 hover:border-violet-400 hover:text-violet-500 transition-colors"
-          >
-            <Upload size={20} />
-            <span className="text-sm">Clique pra enviar as fotos do ensaio</span>
-          </button>
-        ) : (
-          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
-            {photos.map((p) => (
-              <ThumbFoto
-                key={p.id} photo={p}
-                selected={!!selectedByPhoto.get(p.id)?.selected}
-                onDelete={() => handleDeletePhoto(p)}
-              />
-            ))}
-          </div>
-        )}
+      {/* Sub-abas: Enviar fotos | Selecionadas */}
+      <div className="flex bg-gray-100 dark:bg-gray-800 p-1 rounded-xl gap-1 w-fit">
+        <button
+          onClick={() => setSubAba("enviar")}
+          className={
+            "flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors " +
+            (subAba === "enviar"
+              ? "bg-white dark:bg-gray-700 text-violet-700 dark:text-violet-300 shadow-sm"
+              : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200")
+          }
+        >
+          <Upload size={14} /> Enviar fotos
+        </button>
+        <button
+          onClick={() => setSubAba("selecionadas")}
+          className={
+            "flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors " +
+            (subAba === "selecionadas"
+              ? "bg-white dark:bg-gray-700 text-violet-700 dark:text-violet-300 shadow-sm"
+              : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200")
+          }
+        >
+          <Heart size={14} /> Selecionadas ({selectedPhotos.length})
+        </button>
       </div>
 
-      {selectedPhotos.length > 0 && (
+      {subAba === "enviar" && (
         <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold">Escolhidas pela cliente ({selectedPhotos.length})</h3>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="text-sm text-gray-600 dark:text-gray-300">
+              {photos.length} foto(s) {photos.some((p) => p.process_status !== "done") ? "· processando algumas…" : ""}
+            </div>
+            <div className="flex items-center gap-2">
+              {photos.some((p) => p.process_status === "error") && (
+                <button
+                  onClick={handleClearErrors} disabled={clearingErrors || uploadingLocal}
+                  className="inline-flex items-center gap-2 px-3 py-2 bg-red-50 hover:bg-red-100 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-700 dark:text-red-200 text-xs font-semibold rounded-lg disabled:opacity-60"
+                >
+                  {clearingErrors ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                  Limpar com erro
+                </button>
+              )}
+              <button
+                onClick={() => fileInputRef.current?.click()} disabled={uploadingLocal}
+                className="inline-flex items-center gap-2 px-3 py-2 bg-violet-600 hover:bg-violet-700 text-white text-xs font-semibold rounded-lg disabled:opacity-60"
+              >
+                {uploadingLocal ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                Enviar fotos
+              </button>
+              <input
+                ref={fileInputRef} type="file" accept="image/*,.heic,.heif" multiple className="hidden"
+                onChange={(e) => handleFiles(e.target.files)}
+              />
+            </div>
+          </div>
+
+          {/* Resolução do upload — menor = menos espaço de armazenamento */}
+          <div className="rounded-lg bg-gray-50 dark:bg-gray-800/50 p-3">
+            <div className="text-xs font-medium text-gray-600 dark:text-gray-300 mb-2">
+              Resolução do envio
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {(Object.keys(RESOLUTIONS) as UploadResolution[]).map((r) => {
+                const opt = RESOLUTIONS[r];
+                const active = resolution === r;
+                return (
+                  <button
+                    key={r}
+                    onClick={() => changeResolution(r)}
+                    disabled={uploadingLocal}
+                    className={
+                      "text-left p-2.5 rounded-lg border transition-colors " +
+                      (active
+                        ? "border-violet-600 bg-violet-50 dark:bg-violet-900/20 ring-1 ring-violet-600/40"
+                        : "border-gray-200 dark:border-gray-700 hover:border-gray-400")
+                    }
+                  >
+                    <div className="text-sm font-medium">{opt.label} <span className="text-xs text-gray-400">· {opt.maxDim}px</span></div>
+                    <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">{opt.hint}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {progress && (uploadingLocal || progress.done < progress.total) && (
+            <div>
+              <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
+                <span>Enviando e aplicando marca d'água…</span>
+                <span>{progress.done}/{progress.total}</span>
+              </div>
+              <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
+                <div
+                  className="h-full bg-violet-500 transition-all"
+                  style={{ width: `${(progress.done / Math.max(1, progress.total)) * 100}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {photos.length === 0 ? (
             <button
-              onClick={copyNames}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-xs font-semibold rounded-lg"
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full h-32 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700 flex flex-col items-center justify-center gap-2 text-gray-400 hover:border-violet-400 hover:text-violet-500 transition-colors"
             >
-              <Copy size={12} /> Copiar nomes
+              <Upload size={20} />
+              <span className="text-sm">Clique pra enviar as fotos do ensaio</span>
             </button>
-          </div>
-          <div className={
-            "text-xs font-medium " +
-            ((gallery.pending_amount || 0) > 0
-              ? "text-amber-600 dark:text-amber-400"
-              : "text-emerald-600 dark:text-emerald-400")
-          }>
-            {(gallery.extra_count || 0) > 0
-              ? `${gallery.extra_count} extra(s) · ${
-                  (gallery.pending_amount || 0) > 0
-                    ? `${formatBRL(gallery.pending_amount)} pendente`
-                    : `${formatBRL(gallery.paid_amount)} pago`
-                }`
-              : "Dentro do pacote — sem extras."}
-          </div>
-          <ul className="space-y-1.5 max-h-64 overflow-y-auto">
-            {selectedPhotos.map((p) => {
-              const comment = selectedByPhoto.get(p.id)?.comment;
-              return (
-                <li key={p.id} className="flex items-start gap-2 text-sm">
-                  {p.thumb_url && <img src={p.thumb_url} alt="" className="w-9 h-9 rounded object-cover flex-shrink-0" />}
-                  <div className="min-w-0 flex-1">
-                    <span className="font-medium break-all">{p.file_name}</span>
-                    {comment && <p className="text-xs text-gray-500 dark:text-gray-400 italic">"{comment}"</p>}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+          ) : (
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
+              {photos.map((p) => (
+                <ThumbFoto
+                  key={p.id} photo={p}
+                  selected={!!selectedByPhoto.get(p.id)?.selected}
+                  onDelete={() => handleDeletePhoto(p)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {subAba === "selecionadas" && (
+        <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-4 space-y-3">
+          {selectedPhotos.length === 0 ? (
+            <div className="py-8 text-center text-sm text-gray-500">
+              <Heart size={22} className="mx-auto mb-2 text-gray-300" />
+              A cliente ainda não marcou nenhuma foto.
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold">Escolhidas pela cliente ({selectedPhotos.length})</h3>
+                <button
+                  onClick={copyNames}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-xs font-semibold rounded-lg"
+                >
+                  <Copy size={12} /> Copiar nomes
+                </button>
+              </div>
+              <div className={
+                "text-xs font-medium " +
+                ((gallery.pending_amount || 0) > 0
+                  ? "text-amber-600 dark:text-amber-400"
+                  : "text-emerald-600 dark:text-emerald-400")
+              }>
+                {(gallery.extra_count || 0) > 0
+                  ? `${gallery.extra_count} extra(s) · ${
+                      (gallery.pending_amount || 0) > 0
+                        ? `${formatBRL(gallery.pending_amount)} pendente`
+                        : `${formatBRL(gallery.paid_amount)} pago`
+                    }`
+                  : "Dentro do pacote — sem extras."}
+              </div>
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
+                {selectedPhotos.map((p) => (
+                  <ThumbFoto
+                    key={p.id} photo={p} selected
+                    onDelete={() => handleDeletePhoto(p)}
+                  />
+                ))}
+              </div>
+              <ul className="space-y-1.5 max-h-64 overflow-y-auto">
+                {selectedPhotos.filter((p) => selectedByPhoto.get(p.id)?.comment).map((p) => (
+                  <li key={p.id} className="flex items-start gap-2 text-sm">
+                    {p.thumb_url && <img src={p.thumb_url} alt="" className="w-9 h-9 rounded object-cover flex-shrink-0" />}
+                    <div className="min-w-0 flex-1">
+                      <span className="font-medium break-all">{p.file_name}</span>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 italic">
+                        "{selectedByPhoto.get(p.id)?.comment}"
+                      </p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </div>
       )}
     </div>

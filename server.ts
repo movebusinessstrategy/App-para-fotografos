@@ -7391,6 +7391,53 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   const sumPaymentAmounts = (rows: any[]) => rows.reduce((acc, p) => acc + Number(p.amount || 0), 0);
 
+  // Armazenamento usado pelas fotos da conta (originais; previews/thumbs são
+  // ~10% disso e ficam de fora do somatório — o aviso na UI explica).
+  // Também registrada ANTES de GET /api/galleries/:id.
+  app.get('/api/galleries/storage', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+
+    const { data: galleries, error } = await supabase
+      .from('galleries').select('id, title, client_name').eq('user_id', userId);
+    if (error) {
+      return galleryTableMissing(error)
+        ? res.json({ total_bytes: 0, photo_count: 0, galleries: [] })
+        : res.status(500).json({ error: error.message });
+    }
+    const list = galleries || [];
+    if (list.length === 0) return res.json({ total_bytes: 0, photo_count: 0, galleries: [] });
+
+    const ids = list.map((g: any) => g.id);
+    const { data: photos } = await supabase
+      .from('gallery_photos').select('gallery_id, bytes').in('gallery_id', ids);
+
+    const byGallery = new Map<string, { bytes: number; count: number }>();
+    let total_bytes = 0;
+    let photo_count = 0;
+    for (const p of photos || []) {
+      const acc = byGallery.get(p.gallery_id) || { bytes: 0, count: 0 };
+      acc.bytes += Number(p.bytes || 0);
+      acc.count += 1;
+      byGallery.set(p.gallery_id, acc);
+      total_bytes += Number(p.bytes || 0);
+      photo_count += 1;
+    }
+
+    const detail = list
+      .map((g: any) => ({
+        id: g.id,
+        title: g.title,
+        client_name: g.client_name,
+        bytes: byGallery.get(g.id)?.bytes || 0,
+        photo_count: byGallery.get(g.id)?.count || 0,
+      }))
+      .filter((g: any) => g.photo_count > 0)
+      .sort((a: any, b: any) => b.bytes - a.bytes);
+
+    res.json({ total_bytes, photo_count, galleries: detail });
+  });
+
   // Aba Receita: cards (a receber, recebido no mês, ticket médio) + extrato.
   // IMPORTANTE: registrada ANTES de GET /api/galleries/:id — senão o Express
   // casaria 'revenue' como :id.
@@ -7575,6 +7622,43 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       return galleryTableMissing(error) ? galleryMigrationError(res) : res.status(500).json({ error: error.message });
     }
     res.json({ success: true });
+  });
+
+  // Reabre uma galeria finalizada: a cliente volta a poder marcar/trocar
+  // fotos. Expira cobrança pendente (o valor pode mudar) e registra no log.
+  app.post('/api/galleries/:id/reopen', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const { data: gallery } = await supabase
+      .from('galleries').select('id, status').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+    if (gallery.status !== 'selected' && gallery.status !== 'delivered') {
+      return res.status(409).json({ error: 'A galeria não está finalizada.' });
+    }
+
+    const { error } = await supabase
+      .from('galleries')
+      .update({ status: 'sent', selected_at: null, updated_at: new Date().toISOString() })
+      .eq('id', gallery.id);
+    if (error) return res.status(500).json({ error: error.message });
+
+    await supabaseAdmin?.from('gallery_payments')
+      .update({ status: 'expired' })
+      .eq('gallery_id', gallery.id)
+      .eq('status', 'pending');
+
+    try {
+      await supabaseAdmin?.from('gallery_access_log').insert({
+        gallery_id: gallery.id,
+        access_user_id: null,
+        event: 'reopen',
+        detail: 'seleção reaberta pelo estúdio',
+        ip: 'estudio',
+        user_agent: null,
+      });
+    } catch { /* log é best-effort */ }
+
+    res.json({ ok: true });
   });
 
   // Remove os arquivos das fotos no Storage (lotes de 100).

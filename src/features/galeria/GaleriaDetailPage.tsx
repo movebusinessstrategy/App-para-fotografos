@@ -2,7 +2,7 @@ import React, { useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   Activity, ArrowLeft, CalendarClock, ChevronRight, Copy, DollarSign, Droplet,
-  History, Image as ImageIcon, Info, Loader2, Palette,
+  History, Image as ImageIcon, Info, Loader2, Palette, RotateCcw,
   Send, ShieldCheck, Trash2,
 } from "lucide-react";
 
@@ -68,6 +68,7 @@ export default function GaleriaDetailPage() {
   const [secao, setSecao] = useState<SecaoId>("fotos");
   const [uploading, setUploading] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmReopen, setConfirmReopen] = useState(false);
   const [enviarOpen, setEnviarOpen] = useState(false);
 
   const { data, mutate } = useApi<GalleryDetailResponse>(
@@ -97,6 +98,18 @@ export default function GaleriaDetailPage() {
     if (!res.ok) { onNotify("error", "Erro ao excluir."); return; }
     onNotify("success", "Galeria excluída.");
     goBack();
+  };
+
+  const handleReopen = async () => {
+    if (!galleryId) return;
+    try {
+      const res = await authFetch(`/api/galleries/${galleryId}/reopen`, { method: "POST" });
+      if (!res.ok) throw new Error();
+      onNotify("success", "Seleção reaberta — a cliente já pode trocar as fotos.");
+      refresh();
+    } catch {
+      onNotify("error", "Não foi possível reabrir.");
+    }
   };
 
   const statusLabel = useMemo(
@@ -141,6 +154,14 @@ export default function GaleriaDetailPage() {
               <span className="inline-flex items-center rounded-full bg-amber-50 dark:bg-amber-900/30 px-3 py-1 text-xs font-semibold text-amber-700 dark:text-amber-300">
                 {statusLabel}
               </span>
+            )}
+            {(gallery.status === "selected" || gallery.status === "delivered") && (
+              <button
+                onClick={() => setConfirmReopen(true)}
+                className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg"
+              >
+                <RotateCcw size={13} /> Reabrir seleção
+              </button>
             )}
             <button
               onClick={() => setEnviarOpen(true)} disabled={data.photos.length === 0}
@@ -207,6 +228,15 @@ export default function GaleriaDetailPage() {
         variant="danger"
         onConfirm={() => { setConfirmDelete(false); handleDelete(); }}
         onCancel={() => setConfirmDelete(false)}
+      />
+
+      <ConfirmModal
+        open={confirmReopen}
+        title="Reabrir seleção"
+        message="A cliente vai poder marcar e trocar fotos de novo. Cobrança pendente (se houver) é cancelada — ao finalizar de novo, gera outra com o valor atualizado. Reabrir?"
+        confirmText="Reabrir"
+        onConfirm={() => { setConfirmReopen(false); handleReopen(); }}
+        onCancel={() => setConfirmReopen(false)}
       />
 
       {enviarOpen && (

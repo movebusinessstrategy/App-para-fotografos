@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Activity, AlertTriangle, Check, CircleCheck, Download, Eye, Heart,
-  History, LogIn, MessageSquare, Receipt, ShieldOff, X,
+  History, LogIn, MessageSquare, Receipt, RotateCcw, ShieldOff, X,
 } from "lucide-react";
 
 import { authFetch } from "../../../utils/authFetch";
@@ -44,7 +44,9 @@ const EVENT_META: Record<string, { label: string; icon: React.ComponentType<{ si
   unselect_photo: { label: "Desmarcou foto",    icon: X,             color: "text-gray-500" },
   comment_photo:  { label: "Comentou",          icon: MessageSquare, color: "text-amber-600 dark:text-amber-400" },
   finalize:       { label: "Finalizou seleção", icon: CircleCheck,   color: "text-emerald-600 dark:text-emerald-400" },
+  pay_attempt:    { label: "Foi pro pagamento", icon: Receipt,       color: "text-amber-600 dark:text-amber-400" },
   pay_success:    { label: "Pagou",             icon: Receipt,       color: "text-emerald-600 dark:text-emerald-400" },
+  reopen:         { label: "Seleção reaberta",  icon: RotateCcw,     color: "text-blue-600 dark:text-blue-400" },
 };
 
 function formatBR(d: string | null): string {

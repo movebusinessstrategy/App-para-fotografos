@@ -31,11 +31,31 @@ export async function convertHeic(file: File): Promise<File> {
   return new File([blob], newName, { type: "image/jpeg" });
 }
 
-const MAX_DIMENSION = 3000;
-const MAX_BYTES_TO_RESIZE = 3 * 1024 * 1024;
+// Resoluções de upload: lado maior em px. Menor resolução = menos espaço
+// no armazenamento da conta (a marca d'água/preview de 1600px independe).
+export type UploadResolution = "alta" | "media" | "baixa";
 
-export async function downscaleIfHuge(file: File): Promise<File> {
-  if (file.size < MAX_BYTES_TO_RESIZE) return file;
+export const RESOLUTIONS: Record<UploadResolution, { label: string; maxDim: number; hint: string }> = {
+  alta:  { label: "Alta",  maxDim: 3000, hint: "~1–3 MB por foto · melhor pra ampliações" },
+  media: { label: "Média", maxDim: 2200, hint: "~0,5–1,5 MB · ótima pra seleção (recomendada)" },
+  baixa: { label: "Baixa", maxDim: 1600, hint: "~0,3–0,8 MB · ocupa o mínimo de espaço" },
+};
+
+const RES_STORAGE_KEY = "gp_upload_resolution";
+
+export function getSavedResolution(): UploadResolution {
+  try {
+    const v = localStorage.getItem(RES_STORAGE_KEY);
+    if (v === "alta" || v === "media" || v === "baixa") return v;
+  } catch { /* sem localStorage */ }
+  return "media";
+}
+
+export function saveResolution(r: UploadResolution): void {
+  try { localStorage.setItem(RES_STORAGE_KEY, r); } catch { /* idem */ }
+}
+
+export async function downscaleIfHuge(file: File, maxDim: number): Promise<File> {
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -44,8 +64,8 @@ export async function downscaleIfHuge(file: File): Promise<File> {
       el.onerror = () => reject(new Error("imagem inválida"));
       el.src = url;
     });
-    if (img.width <= MAX_DIMENSION && img.height <= MAX_DIMENSION) return file;
-    const scale = MAX_DIMENSION / Math.max(img.width, img.height);
+    if (img.width <= maxDim && img.height <= maxDim) return file;
+    const scale = maxDim / Math.max(img.width, img.height);
     const w = Math.round(img.width * scale);
     const h = Math.round(img.height * scale);
     const canvas = document.createElement("canvas");
@@ -66,7 +86,7 @@ export async function downscaleIfHuge(file: File): Promise<File> {
   }
 }
 
-export async function prepareFile(file: File): Promise<File> {
+export async function prepareFile(file: File, resolution: UploadResolution = "media"): Promise<File> {
   const step1 = isHeic(file) ? await convertHeic(file) : file;
-  return downscaleIfHuge(step1);
+  return downscaleIfHuge(step1, RESOLUTIONS[resolution].maxDim);
 }
