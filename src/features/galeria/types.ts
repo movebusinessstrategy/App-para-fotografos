@@ -86,6 +86,10 @@ export interface GallerySettings {
   categories?: string[];
   mp_access_token?: string | null;
   mp_access_token_set?: boolean;
+  mp_connected?: boolean;
+  mp_email?: string | null;
+  mp_user_id?: string | null;
+  mp_oauth_available?: boolean;
   notify_studio_whatsapp?: boolean;
   protect_right_click?: boolean;
   protect_download?: boolean;

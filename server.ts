@@ -7077,6 +7077,178 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     console.log(`[galeria] galeria draft criada automaticamente pro job ${jobId}`);
   }
 
+  // ── OAuth do Mercado Pago ─────────────────────────────────────────────────
+  //
+  // Cada estúdio conecta a própria conta MP pra receber direto. UMA app no
+  // MP Developers (CRM Trilha), N usuários autorizam acesso. Token cifrado
+  // em repouso; refresh automático quando perto de expirar (5 min antes).
+
+  const MP_STATE_CACHE = new Map<string, { userId: string; ts: number }>();
+  const MP_STATE_TTL_MS = 10 * 60 * 1000;
+
+  const mpClientId       = () => process.env.MP_CLIENT_ID || '';
+  const mpClientSecret   = () => process.env.MP_CLIENT_SECRET || '';
+  const mpRedirectUri    = () => process.env.MP_REDIRECT_URI || '';
+  const mpConfigured     = () => !!(mpClientId() && mpClientSecret() && mpRedirectUri());
+
+  function pruneMpStates() {
+    const now = Date.now();
+    for (const [k, v] of MP_STATE_CACHE.entries()) {
+      if (now - v.ts > MP_STATE_TTL_MS) MP_STATE_CACHE.delete(k);
+    }
+  }
+
+  function buildMpAuthUrl(state: string): string {
+    const params = new URLSearchParams({
+      client_id: mpClientId(),
+      response_type: 'code',
+      platform_id: 'mp',
+      state,
+      redirect_uri: mpRedirectUri(),
+    });
+    return `https://auth.mercadopago.com.br/authorization?${params.toString()}`;
+  }
+
+  // Renova o access usando o refresh_token. Devolve o novo access ou null.
+  async function refreshMpAccessToken(userId: string, currentSettings: any): Promise<string | null> {
+    const refreshToken = decryptIfNeeded(currentSettings.mp_refresh_token || '');
+    if (!refreshToken || !mpConfigured() || !supabaseAdmin) return null;
+    try {
+      const resp = await fetch('https://api.mercadopago.com/oauth/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          client_id: mpClientId(),
+          client_secret: mpClientSecret(),
+          refresh_token: refreshToken,
+        }).toString(),
+      });
+      const data: any = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.access_token) {
+        console.warn('[MP OAuth] refresh falhou:', resp.status, data?.message || '');
+        return null;
+      }
+      const expiresIn = Number(data.expires_in) || 0;
+      await supabaseAdmin.from('gallery_settings').update({
+        mp_access_token: encryptIfNeeded(data.access_token),
+        mp_refresh_token: encryptIfNeeded(data.refresh_token || refreshToken),
+        mp_token_expires_at: expiresIn ? new Date(Date.now() + expiresIn * 1000).toISOString() : null,
+        updated_at: new Date().toISOString(),
+      }).eq('user_id', userId);
+      return data.access_token as string;
+    } catch (e: any) {
+      console.warn('[MP OAuth] refresh erro:', e?.message);
+      return null;
+    }
+  }
+
+  // Pega access válido (renova se expirar em <5min).
+  async function getValidMpAccessToken(userId: string): Promise<string | null> {
+    const settings = await getGallerySettings(userId);
+    if (!settings.mp_access_token) return null;
+    const expiresAt = settings.mp_token_expires_at ? new Date(settings.mp_token_expires_at).getTime() : 0;
+    if (expiresAt && expiresAt - Date.now() < 5 * 60 * 1000 && settings.mp_refresh_token) {
+      const fresh = await refreshMpAccessToken(userId, settings);
+      if (fresh) return fresh;
+    }
+    return decryptIfNeeded(settings.mp_access_token);
+  }
+
+  // Inicia OAuth: gera state CSRF, devolve URL pra redirect no front.
+  app.get('/api/oauth/mp/start', requireAuth, async (req, res) => {
+    if (!mpConfigured()) {
+      return res.status(503).json({ error: 'Pagamento ainda não está configurado neste servidor.' });
+    }
+    const userId = (req as any).userId;
+    const state = crypto.randomBytes(24).toString('base64url');
+    pruneMpStates();
+    MP_STATE_CACHE.set(state, { userId, ts: Date.now() });
+    res.json({ url: buildMpAuthUrl(state) });
+  });
+
+  // Callback do MP: troca code por token, salva, redireciona pro front.
+  app.get('/api/oauth/mp/callback', async (req, res) => {
+    const back = (process.env.APP_PUBLIC_URL || 'https://crmtrilha.com.br').replace(/\/$/, '');
+    const failRedirect = (reason: string) => res.redirect(`${back}/galeria?mp_error=${encodeURIComponent(reason)}`);
+
+    const code = String(req.query.code || '');
+    const state = String(req.query.state || '');
+    if (!code || !state) return failRedirect('parametros');
+
+    const stateData = MP_STATE_CACHE.get(state);
+    if (!stateData || Date.now() - stateData.ts > MP_STATE_TTL_MS) return failRedirect('expirou');
+    MP_STATE_CACHE.delete(state);
+    const userId = stateData.userId;
+
+    try {
+      const tokenResp = await fetch('https://api.mercadopago.com/oauth/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          client_id: mpClientId(),
+          client_secret: mpClientSecret(),
+          code,
+          redirect_uri: mpRedirectUri(),
+        }).toString(),
+      });
+      const tokenData: any = await tokenResp.json().catch(() => null);
+      if (!tokenResp.ok || !tokenData?.access_token) {
+        console.error('[MP OAuth] troca falhou:', tokenResp.status, tokenData?.message || '');
+        return failRedirect('troca');
+      }
+
+      const accessToken: string = tokenData.access_token;
+      const refreshToken: string = tokenData.refresh_token || '';
+      const expiresIn = Number(tokenData.expires_in) || 0;
+      const mpUserId = String(tokenData.user_id || '');
+
+      // E-mail do dono — útil pra exibir "Conectado como ...". Best-effort.
+      let email = '';
+      try {
+        const userResp = await fetch('https://api.mercadopago.com/users/me', {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (userResp.ok) {
+          const userData: any = await userResp.json().catch(() => null);
+          email = String(userData?.email || '');
+        }
+      } catch { /* ignora */ }
+
+      if (!supabaseAdmin) return failRedirect('storage');
+      await supabaseAdmin.from('gallery_settings').upsert({
+        user_id: userId,
+        mp_access_token: encryptIfNeeded(accessToken),
+        mp_refresh_token: encryptIfNeeded(refreshToken),
+        mp_user_id: mpUserId,
+        mp_email: email,
+        mp_token_expires_at: expiresIn ? new Date(Date.now() + expiresIn * 1000).toISOString() : null,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'user_id' });
+
+      res.redirect(`${back}/galeria?mp_connected=1`);
+    } catch (e: any) {
+      console.error('[MP OAuth] callback erro:', e?.message);
+      failRedirect('erro');
+    }
+  });
+
+  // Limpa a conexão. Não tenta revogar do lado do MP — só apaga o token.
+  app.post('/api/oauth/mp/disconnect', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    if (!supabaseAdmin) return res.status(500).json({ error: 'indisponível' });
+    await supabaseAdmin.from('gallery_settings').update({
+      mp_access_token: null,
+      mp_refresh_token: null,
+      mp_user_id: null,
+      mp_email: null,
+      mp_token_expires_at: null,
+      updated_at: new Date().toISOString(),
+    }).eq('user_id', userId);
+    res.json({ ok: true });
+  });
+
   // ── Configurações da galeria ──────────────────────────────────────────────
 
   app.get('/api/gallery-settings', requireAuth, async (req, res) => {
@@ -7099,6 +7271,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         custom_domain: s.custom_domain,
         mp_access_token: null, // nunca ecoa o token
         mp_access_token_set: !!s.mp_access_token,
+        mp_connected: !!s.mp_user_id,
+        mp_email: s.mp_email || null,
+        mp_user_id: s.mp_user_id || null,
+        mp_oauth_available: mpConfigured(),
         default_included_count: 20,
         default_extra_price: await getDefaultExtraPrice(userId),
       },
@@ -8134,8 +8310,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // Cria a preference do Checkout Pro na conta MP do PRÓPRIO estúdio.
-  async function createMercadoPagoCheckout(gallery: any, payment: any, settings: any): Promise<string | null> {
-    const token = decryptIfNeeded(settings.mp_access_token || '');
+  async function createMercadoPagoCheckout(gallery: any, payment: any, _settings: any): Promise<string | null> {
+    const token = await getValidMpAccessToken(payment.user_id);
     if (!token) return null;
     try {
       const resp = await fetch('https://api.mercadopago.com/checkout/preferences', {
@@ -8261,8 +8437,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   // Confirma o pagamento direto na API do MP (usado no polling e no webhook).
   async function refreshMercadoPagoStatus(payment: any): Promise<any | null> {
-    const settings = await getGallerySettings(payment.user_id);
-    const token = decryptIfNeeded(settings.mp_access_token || '');
+    const token = await getValidMpAccessToken(payment.user_id);
     if (!token) return null;
     const resp = await fetch(
       `https://api.mercadopago.com/v1/payments/search?external_reference=${encodeURIComponent(payment.id)}`,

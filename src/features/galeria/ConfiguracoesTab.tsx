@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Check, CheckCircle2, ExternalLink, Image as ImageIcon, Loader2, Plus, Upload, X } from "lucide-react";
+import { Check, CheckCircle2, ExternalLink, Image as ImageIcon, Link2, Link2Off, Loader2, Plus, Upload, X } from "lucide-react";
 
 import { authFetch } from "../../utils/authFetch";
 import { useApi, refreshApi } from "../../utils/useApi";
@@ -240,45 +240,11 @@ export default function ConfiguracoesTab({ onNotify }: ConfiguracoesTabProps) {
       </Section>
 
       <Section title="Pagamentos">
-        {settings?.mp_access_token_set && (
-          <div className="flex items-center gap-3">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 dark:bg-emerald-500/15 px-3 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
-              <CheckCircle2 size={12} />
-              Mercado Pago conectado
-            </span>
-            {!trocandoToken && (
-              <button
-                onClick={() => setTrocandoToken(true)}
-                className="text-xs font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 underline"
-              >
-                Trocar token
-              </button>
-            )}
-          </div>
-        )}
-        {(!settings?.mp_access_token_set || trocandoToken) && (
-          <input
-            type="password"
-            value={mpToken}
-            onChange={(e) => setMpToken(e.target.value)}
-            placeholder="Access Token de produção"
-            autoComplete="new-password"
-            className={INPUT_CLS}
-          />
-        )}
-        <p className="text-xs text-gray-400 dark:text-gray-500">
-          Pegue o Access Token de produção em{" "}
-          <a
-            href="https://www.mercadopago.com.br/developers"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-0.5 text-gold-600 dark:text-gold-400 hover:underline"
-          >
-            mercadopago.com.br/developers
-            <ExternalLink size={10} />
-          </a>{" "}
-          → Suas integrações → Credenciais.
-        </p>
+        <MercadoPagoConnect
+          settings={settings || null}
+          onNotify={onNotify}
+          onReload={() => refreshApi("/api/gallery-settings")}
+        />
       </Section>
 
       <Section title="Proteção das fotos">
@@ -463,5 +429,133 @@ function CategoriasEditor({ categories, onChange }: { categories: string[]; onCh
         </button>
       </div>
     </>
+  );
+}
+
+// ── Botão "Conectar Mercado Pago" via OAuth ────────────────────────────────
+//
+// Cada estúdio autoriza o CRM Trilha a criar cobranças na conta MP dele.
+// Não pede Access Token — só clica e faz login no MP. Token renova
+// sozinho via refresh_token.
+
+interface MercadoPagoConnectProps {
+  settings: GallerySettings | null;
+  onNotify: (kind: ToastKind, message: string) => void;
+  onReload: () => void;
+}
+
+function MercadoPagoConnect({ settings, onNotify, onReload }: MercadoPagoConnectProps) {
+  const [working, setWorking] = useState(false);
+
+  // Detecta retorno do callback do MP (?mp_connected=1 ou ?mp_error=...).
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const ok = url.searchParams.get("mp_connected");
+    const err = url.searchParams.get("mp_error");
+    if (ok) {
+      onNotify("success", "Mercado Pago conectado!");
+      onReload();
+      url.searchParams.delete("mp_connected");
+      window.history.replaceState({}, "", url.toString());
+    } else if (err) {
+      const motivos: Record<string, string> = {
+        parametros: "Faltaram parâmetros do Mercado Pago.",
+        expirou: "A sessão de conexão expirou. Tente de novo.",
+        troca: "O Mercado Pago não aceitou a autorização. Tente de novo.",
+        storage: "Erro interno ao salvar a conexão.",
+        erro: "Erro ao conectar. Tente novamente.",
+      };
+      onNotify("error", motivos[err] || "Falha ao conectar Mercado Pago.");
+      url.searchParams.delete("mp_error");
+      window.history.replaceState({}, "", url.toString());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const conectar = async () => {
+    setWorking(true);
+    try {
+      const res = await authFetch("/api/oauth/mp/start");
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j?.error || "falha");
+      }
+      const { url } = await res.json();
+      window.location.href = url;
+    } catch (e: any) {
+      onNotify("error", e?.message || "Não foi possível iniciar a conexão.");
+      setWorking(false);
+    }
+  };
+
+  const desconectar = async () => {
+    if (!window.confirm("Desconectar o Mercado Pago? Você precisará conectar de novo pra receber pagamentos.")) return;
+    setWorking(true);
+    try {
+      const res = await authFetch("/api/oauth/mp/disconnect", { method: "POST" });
+      if (!res.ok) throw new Error();
+      onNotify("success", "Mercado Pago desconectado.");
+      onReload();
+    } catch {
+      onNotify("error", "Não foi possível desconectar.");
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  // Servidor avisa quando o OAuth não tá configurado (env vars faltando).
+  if (settings && settings.mp_oauth_available === false) {
+    return (
+      <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 p-3 text-sm text-amber-800 dark:text-amber-200">
+        Pagamentos pela galeria ainda não estão habilitados neste servidor. Avise o suporte.
+      </div>
+    );
+  }
+
+  const connected = !!settings?.mp_connected;
+
+  if (connected) {
+    return (
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 dark:bg-emerald-500/15 px-3 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+            <CheckCircle2 size={12} />
+            Mercado Pago conectado
+          </span>
+          {settings?.mp_email && (
+            <span className="text-xs text-gray-500 dark:text-gray-400">
+              Conta: <strong>{settings.mp_email}</strong>
+            </span>
+          )}
+        </div>
+        <button
+          onClick={desconectar}
+          disabled={working}
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-red-600 dark:text-red-400 hover:underline disabled:opacity-60"
+        >
+          {working ? <Loader2 size={12} className="animate-spin" /> : <Link2Off size={12} />}
+          Desconectar
+        </button>
+        <p className="text-xs text-gray-400 dark:text-gray-500">
+          Os pagamentos das fotos extras caem direto na sua conta. O token renova sozinho.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <button
+        onClick={conectar}
+        disabled={working}
+        className="inline-flex items-center gap-2 px-4 py-2 bg-[#009EE3] hover:bg-[#008ACA] text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60"
+      >
+        {working ? <Loader2 size={14} className="animate-spin" /> : <Link2 size={14} />}
+        Conectar Mercado Pago
+      </button>
+      <p className="text-xs text-gray-500 dark:text-gray-400">
+        Vamos abrir o site do Mercado Pago. Você faz login com sua conta e autoriza o CRM Trilha a criar cobranças. Os pagamentos caem direto na sua conta.
+      </p>
+    </div>
   );
 }
