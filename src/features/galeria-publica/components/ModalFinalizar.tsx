@@ -48,7 +48,9 @@ export function ModalFinalizar({ totais, precoExtra, finalizando, erro, onConfir
         </div>
 
         <p className="mt-3 text-[11px] text-neutral-400">
-          Após finalizar, a seleção não poderá mais ser alterada.
+          {totais.valor > 0
+            ? "Você vai para o pagamento agora — a seleção só é confirmada depois que o pagamento for aprovado."
+            : "Após finalizar, a seleção não poderá mais ser alterada."}
         </p>
 
         {erro && <p className="mt-2 text-xs font-medium text-red-600">{erro}</p>}

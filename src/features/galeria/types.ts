@@ -97,11 +97,22 @@ export interface GallerySettings {
   default_included_count?: number;
   default_extra_price?: number;
   deadline_presets?: number[];
+  send_message_template?: string;
+}
+
+export interface SendChannelResult {
+  sent: boolean;
+  error?: string;
 }
 
 export interface SendResult {
   ok: boolean;
   link: string;
+  message?: string;
+  email: SendChannelResult;
+  whatsapp: SendChannelResult;
+  access?: { email: string; password: string } | null;
+  // Legado
   email_sent: boolean;
   whatsapp_sent: boolean;
 }

@@ -55,6 +55,31 @@ export async function sendSelectionDoneEmail(input: SelectionDoneEmailInput): Pr
   });
 }
 
+// Mensagem livre (texto do estúdio) com botão pro link da galeria.
+// Diferente das outras: retorna o MOTIVO da falha pro front mostrar a
+// verdade ("enviado" só quando o Resend aceitou de fato).
+export interface GalleryMessageEmailInput {
+  to: string;
+  from?: string | null;
+  studioName: string;
+  subject: string;
+  messageText: string; // texto puro; quebras de linha viram <br>
+  link: string;
+}
+
+export async function sendGalleryMessageEmail(
+  input: GalleryMessageEmailInput,
+): Promise<{ ok: boolean; error?: string }> {
+  const html = emailShell(`
+      <p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#3d3833;white-space:pre-line;">${escapeHtml(input.messageText)}</p>
+      <p style="margin:24px 0;text-align:center;">
+        <a href="${input.link}" style="display:inline-block;background:#D4537E;color:#ffffff;text-decoration:none;font-size:15px;font-weight:600;padding:12px 28px;border-radius:999px;">Abrir minha galeria</a>
+      </p>
+      <p style="margin:0;font-size:12px;color:#8a8377;">Se o botão não funcionar, copie e cole este link: ${input.link}</p>
+  `, input.studioName);
+  return sendEmailDetailed({ to: input.to, from: input.from, subject: input.subject, html });
+}
+
 // ── Envio ─────────────────────────────────────────────────────────────────────
 
 interface SendArgs {
@@ -64,8 +89,9 @@ interface SendArgs {
   html: string;
 }
 
-async function sendEmail({ to, from, subject, html }: SendArgs): Promise<boolean> {
-  if (!isMailerConfigured() || !to) return false;
+async function sendEmailDetailed({ to, from, subject, html }: SendArgs): Promise<{ ok: boolean; error?: string }> {
+  if (!isMailerConfigured()) return { ok: false, error: 'E-mail não configurado no servidor (RESEND_API_KEY ausente).' };
+  if (!to) return { ok: false, error: 'Cliente sem e-mail cadastrado.' };
   try {
     const res = await fetch(RESEND_URL, {
       method: 'POST',
@@ -83,13 +109,23 @@ async function sendEmail({ to, from, subject, html }: SendArgs): Promise<boolean
     if (!res.ok) {
       const body = await res.text().catch(() => '');
       console.error(`[gallery-mailer] Resend respondeu ${res.status}: ${body.slice(0, 300)}`);
-      return false;
+      // 403 do remetente de teste = caso mais comum: domínio não verificado.
+      if (res.status === 403 && body.includes('testing')) {
+        return { ok: false, error: 'O remetente de teste do Resend só entrega pro dono da conta. Verifique seu domínio no Resend e configure RESEND_FROM.' };
+      }
+      let apiMsg = '';
+      try { apiMsg = JSON.parse(body)?.message || ''; } catch { /* corpo não-JSON */ }
+      return { ok: false, error: `Resend recusou (${res.status})${apiMsg ? `: ${apiMsg}` : ''}` };
     }
-    return true;
-  } catch (err) {
+    return { ok: true };
+  } catch (err: any) {
     console.error('[gallery-mailer] erro ao enviar e-mail:', err);
-    return false;
+    return { ok: false, error: `Falha de rede ao enviar: ${err?.message || 'desconhecida'}` };
   }
+}
+
+async function sendEmail(args: SendArgs): Promise<boolean> {
+  return (await sendEmailDetailed(args)).ok;
 }
 
 // ── Templates ─────────────────────────────────────────────────────────────────

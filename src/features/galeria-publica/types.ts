@@ -47,6 +47,9 @@ export interface RespostaSelect {
 export interface RespostaFinalize extends RespostaSelect {
   payment_url?: string | null;
   order_code?: string | null;
+  // false = pagamento pendente; a seleção só fecha quando o MP confirmar.
+  finalized?: boolean;
+  payment_required?: boolean;
 }
 
 export interface RespostaPaymentStatus {

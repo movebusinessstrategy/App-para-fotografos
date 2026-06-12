@@ -144,8 +144,8 @@ export default function GaleriaPublicaPage() {
         token,
       );
       setModalAberto(false);
-      setGaleria((g) => (g ? { ...g, status: "selected" } : g));
-      if (resp.payment_url && resp.amount > 0) {
+      if (resp.payment_url && resp.finalized === false) {
+        // Pagamento pendente: a seleção SÓ fecha quando o MP confirmar.
         setPagamento({
           url: resp.payment_url,
           orderCode: resp.order_code ?? null,
@@ -153,6 +153,7 @@ export default function GaleriaPublicaPage() {
         });
         setFase("pagamento");
       } else {
+        setGaleria((g) => (g ? { ...g, status: "selected" } : g));
         setFase("sucesso");
       }
     } catch {
@@ -177,7 +178,14 @@ export default function GaleriaPublicaPage() {
   if (fase === "sucesso") return <TelaSucesso estudio={galeria.studio_name} />;
   if (fase === "pagamento") {
     return (
-      <PaginaPagamento token={token} pagamento={pagamento} onPago={() => setFase("sucesso")} />
+      <PaginaPagamento
+        token={token}
+        pagamento={pagamento}
+        onPago={() => {
+          setGaleria((g) => (g ? { ...g, status: "selected" } : g));
+          setFase("sucesso");
+        }}
+      />
     );
   }
 

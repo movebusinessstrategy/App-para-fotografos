@@ -2,7 +2,7 @@ import React, { useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   Activity, ArrowLeft, CalendarClock, ChevronRight, Copy, DollarSign, Droplet,
-  History, Image as ImageIcon, Info, Loader2, Mail, MessageCircle, Palette,
+  History, Image as ImageIcon, Info, Loader2, Palette,
   Send, ShieldCheck, Trash2,
 } from "lucide-react";
 
@@ -10,10 +10,11 @@ import { ConfirmModal } from "../../components/ui/ConfirmModal";
 import { authFetch } from "../../utils/authFetch";
 import { useApi } from "../../utils/useApi";
 import { cn } from "../../utils/cn";
-import { GalleryDetailResponse, SendResult } from "./types";
+import { GalleryDetailResponse } from "./types";
 import { GALLERY_COLUMNS, publicGalleryLink } from "./utils";
 import { Toast, ToastKind, ToastState } from "./Toast";
 import { AcessoSection } from "./AcessoSection";
+import { EnviarGaleriaModal } from "./EnviarGaleriaModal";
 
 import { DadosSection } from "./secoes/DadosSection";
 import { FotosSection } from "./secoes/FotosSection";
@@ -67,8 +68,7 @@ export default function GaleriaDetailPage() {
   const [secao, setSecao] = useState<SecaoId>("fotos");
   const [uploading, setUploading] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [sendResult, setSendResult] = useState<SendResult | null>(null);
+  const [enviarOpen, setEnviarOpen] = useState(false);
 
   const { data, mutate } = useApi<GalleryDetailResponse>(
     galleryId ? `/api/galleries/${galleryId}` : null,
@@ -80,23 +80,6 @@ export default function GaleriaDetailPage() {
 
   // Volta pro Kanban quando a galeria some / é excluída.
   const goBack = () => navigate("/galeria");
-
-  const handleSend = async () => {
-    if (!galleryId) return;
-    setSending(true);
-    try {
-      const res = await authFetch(`/api/galleries/${galleryId}/send`, { method: "POST" });
-      if (!res.ok) throw new Error();
-      const result: SendResult = await res.json();
-      setSendResult(result);
-      onNotify("success", "Galeria enviada pra cliente.");
-      mutate();
-    } catch {
-      onNotify("error", "Não foi possível enviar.");
-    } finally {
-      setSending(false);
-    }
-  };
 
   const handleCopyLink = async () => {
     if (!gallery) return;
@@ -160,10 +143,10 @@ export default function GaleriaDetailPage() {
               </span>
             )}
             <button
-              onClick={handleSend} disabled={sending || data.photos.length === 0}
+              onClick={() => setEnviarOpen(true)} disabled={data.photos.length === 0}
               className="inline-flex items-center gap-2 px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-semibold rounded-lg disabled:opacity-50"
             >
-              {sending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+              <Send size={13} />
               {gallery.status === "draft" ? "Enviar pra cliente" : "Reenviar"}
             </button>
             <button
@@ -182,17 +165,6 @@ export default function GaleriaDetailPage() {
           </div>
         </div>
 
-        {sendResult && (
-          <div className="mt-3 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 p-3 flex items-center gap-4 text-xs text-emerald-800 dark:text-emerald-200">
-            <input
-              readOnly value={sendResult.link}
-              className="flex-1 bg-white dark:bg-gray-900 border border-emerald-200 dark:border-emerald-800 rounded-lg px-2 py-1.5"
-              onFocus={(e) => e.target.select()}
-            />
-            <span className="inline-flex items-center gap-1"><Mail size={12} /> {sendResult.email_sent ? "E-mail ✓" : "E-mail —"}</span>
-            <span className="inline-flex items-center gap-1"><MessageCircle size={12} /> {sendResult.whatsapp_sent ? "WhatsApp ✓" : "WhatsApp —"}</span>
-          </div>
-        )}
       </div>
 
       {/* Layout 2 colunas: sidebar à esquerda + painel à direita */}
@@ -236,6 +208,15 @@ export default function GaleriaDetailPage() {
         onConfirm={() => { setConfirmDelete(false); handleDelete(); }}
         onCancel={() => setConfirmDelete(false)}
       />
+
+      {enviarOpen && (
+        <EnviarGaleriaModal
+          gallery={gallery}
+          onClose={() => setEnviarOpen(false)}
+          onSent={() => refresh()}
+          onNotify={onNotify}
+        />
+      )}
 
       <Toast toast={toast} onClose={() => setToast(null)} />
     </div>

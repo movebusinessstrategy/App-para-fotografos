@@ -39,7 +39,7 @@ import {
   stageIdOrDefault,
 } from './pipeline-helpers.js';
 import { processGalleryPhoto } from './gallery-image.js';
-import { isMailerConfigured, sendGalleryReadyEmail, sendSelectionDoneEmail } from './gallery-mailer.js';
+import { isMailerConfigured, sendGalleryReadyEmail, sendSelectionDoneEmail, sendGalleryMessageEmail } from './gallery-mailer.js';
 
 dotenv.config();
 
@@ -7281,6 +7281,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         deadline_presets: Array.isArray(s.deadline_presets) && s.deadline_presets.length > 0
           ? s.deadline_presets.map((n: any) => Math.max(1, Math.min(365, Number(n) || 0))).filter(Boolean).slice(0, 6)
           : [7, 15, 30],
+        send_message_template: s.send_message_template || GALLERY_SEND_TEMPLATE_DEFAULT,
       },
     });
   });
@@ -7330,6 +7331,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         .map((n: any) => Math.max(1, Math.min(365, Math.round(Number(n) || 0))))
         .filter((n: number) => n > 0)
         .slice(0, 6);
+    }
+    if (body.send_message_template !== undefined) {
+      const t = String(body.send_message_template || '').trim();
+      payload.send_message_template = t || null; // vazio volta pro padrão do sistema
     }
     if (body.protect_right_click !== undefined || body.protect_download !== undefined) {
       payload.protection = {
@@ -7838,20 +7843,62 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // ── Enviar galeria pro cliente (e-mail + WhatsApp) ────────────────────────
+  //
+  // O texto sai de um template editável (por envio e/ou padrão do estúdio em
+  // gallery_settings.send_message_template). Placeholders: {cliente} {titulo}
+  // {link} {estudio} {prazo} {acesso_email} {senha}. Resultado por canal é
+  // REAL: "enviado" só quando o provedor aceitou; senão devolve o motivo.
 
-  async function sendGalleryWhatsApp(userId: string, gallery: any, link: string): Promise<boolean> {
-    const digits = String(gallery.client_phone || '').replace(/\D/g, '');
-    if (!digits || BaileysManager.getStatus(userId) !== 'open') return false;
-    const phone = normalizeBrazilianPhone(digits);
-    const ola = gallery.client_name ? `Olá, ${gallery.client_name}!` : 'Olá!';
-    const msg = `${ola} 📸 Suas fotos de "${gallery.title}" estão prontas para você escolher as favoritas.\n\nAcesse: ${link}`;
-    try {
-      await BaileysManager.sendText(userId, phone, msg);
-      return true;
-    } catch (e: any) {
-      console.warn('[galeria] envio WhatsApp falhou:', e?.message);
-      return false;
+  const GALLERY_SEND_TEMPLATE_DEFAULT = [
+    'Olá, {cliente}! 📸',
+    '',
+    'Suas fotos de "{titulo}" estão prontas! Escolha suas favoritas aqui:',
+    '{link}',
+    '',
+    'Seus dados de acesso:',
+    'E-mail: {acesso_email}',
+    'Senha: {senha}',
+    '',
+    'Qualquer dúvida é só chamar! — {estudio}',
+  ].join('\n');
+
+  function renderGalleryMessage(template: string, vars: Record<string, string>): string {
+    let out = template;
+    for (const [k, v] of Object.entries(vars)) {
+      out = out.split(`{${k}}`).join(v);
     }
+    // Remove o bloco de acesso quando não há credenciais (linhas que ficaram
+    // com placeholder vazio ou rótulo órfão).
+    if (!vars.acesso_email) {
+      out = out
+        .split('\n')
+        .filter((l) => !/^(Seus dados de acesso:|E-mail:\s*$|Senha:\s*$)/.test(l.trim()))
+        .join('\n');
+    }
+    return out.replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  // Reseta a senha do acesso principal e devolve { email, senha } em texto
+  // plano pra incluir na mensagem. Sem acesso cadastrado → null.
+  async function regenerateGalleryAccessPassword(gallery: any): Promise<{ email: string; password: string } | null> {
+    if (!supabaseAdmin) return null;
+    const { data: users } = await supabaseAdmin
+      .from('gallery_access_users')
+      .select('id, email, role')
+      .eq('gallery_id', gallery.id)
+      .order('created_at');
+    const owner = (users || []).find((u: any) => u.role === 'owner') || (users || [])[0];
+    if (!owner) return null;
+    const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+    let password = '';
+    for (let i = 0; i < 8; i++) password += chars[crypto.randomInt(chars.length)];
+    const password_hash = await bcrypt.hash(password, 10);
+    const { error } = await supabaseAdmin
+      .from('gallery_access_users')
+      .update({ password_hash, updated_at: new Date().toISOString() })
+      .eq('id', owner.id);
+    if (error) return null;
+    return { email: owner.email, password };
   }
 
   app.post('/api/galleries/:id/send', requireAuth, async (req, res) => {
@@ -7864,30 +7911,94 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
     if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
 
+    const body = req.body || {};
+    const wantEmail = body.channel_email !== false;       // default: tenta os dois
+    const wantWhatsApp = body.channel_whatsapp !== false;
+    const includeAccess = body.include_access !== false && !!gallery.require_login;
+
     const settings = await getGallerySettings(userId);
     const studioName = await getStudioNameForGallery(userId);
     const link = galleryLink(gallery.share_token);
 
-    let email_sent = false;
-    if (gallery.client_email) {
-      email_sent = await sendGalleryReadyEmail({
-        to: gallery.client_email,
-        from: settings.sender_email,
-        studioName,
-        clientName: gallery.client_name,
-        galleryTitle: gallery.title,
-        link,
-        includedCount: gallery.included_count || 0,
-        extraPrice: Number(gallery.extra_price || 0),
-      });
+    // Template: o que veio do front > padrão do estúdio > padrão do sistema.
+    const template = String(body.message || settings.send_message_template || GALLERY_SEND_TEMPLATE_DEFAULT);
+    if (body.save_as_default === true && typeof body.message === 'string' && body.message.trim()) {
+      await supabaseAdmin?.from('gallery_settings')
+        .upsert({ user_id: userId, send_message_template: body.message.trim(), updated_at: new Date().toISOString() }, { onConflict: 'user_id' });
     }
-    const whatsapp_sent = await sendGalleryWhatsApp(userId, gallery, link);
 
-    const patch: any = { sent_at: new Date().toISOString(), updated_at: new Date().toISOString() };
-    if (gallery.status === 'draft') patch.status = 'sent';
-    await supabase.from('galleries').update(patch).eq('id', gallery.id);
+    // Credenciais: regenera a senha do acesso principal e injeta na mensagem.
+    let access: { email: string; password: string } | null = null;
+    if (includeAccess) access = await regenerateGalleryAccessPassword(gallery);
 
-    res.json({ ok: true, link, email_sent, whatsapp_sent });
+    const prazo = gallery.selection_deadline
+      ? new Date(gallery.selection_deadline + 'T12:00:00').toLocaleDateString('pt-BR')
+      : '';
+    const message = renderGalleryMessage(template, {
+      cliente: gallery.client_name || 'tudo bem',
+      titulo: gallery.title,
+      link,
+      estudio: studioName,
+      prazo,
+      acesso_email: access?.email || '',
+      senha: access?.password || '',
+    });
+
+    // E-mail — resultado real com motivo.
+    let email: { sent: boolean; error?: string } = { sent: false, error: 'Canal desativado.' };
+    if (wantEmail) {
+      if (!gallery.client_email) {
+        email = { sent: false, error: 'Cliente sem e-mail cadastrado (preencha em Dados da galeria).' };
+      } else {
+        const r = await sendGalleryMessageEmail({
+          to: gallery.client_email,
+          from: settings.sender_email,
+          studioName,
+          subject: `Suas fotos estão prontas — ${gallery.title}`,
+          messageText: message,
+          link,
+        });
+        email = { sent: r.ok, error: r.error };
+      }
+    }
+
+    // WhatsApp — resultado real com motivo.
+    let whatsapp: { sent: boolean; error?: string } = { sent: false, error: 'Canal desativado.' };
+    if (wantWhatsApp) {
+      const digits = String(gallery.client_phone || '').replace(/\D/g, '');
+      if (!digits) {
+        whatsapp = { sent: false, error: 'Cliente sem telefone cadastrado (preencha em Dados da galeria).' };
+      } else if (BaileysManager.getStatus(userId) !== 'open') {
+        whatsapp = { sent: false, error: 'WhatsApp desconectado — conecte na página WhatsApp do app.' };
+      } else {
+        try {
+          await BaileysManager.sendText(userId, normalizeBrazilianPhone(digits), message);
+          whatsapp = { sent: true };
+        } catch (e: any) {
+          console.warn('[galeria] envio WhatsApp falhou:', e?.message);
+          whatsapp = { sent: false, error: `Falha no envio: ${e?.message || 'desconhecida'}` };
+        }
+      }
+    }
+
+    // Marca como enviada somente se ALGUM canal entregou de verdade.
+    if (email.sent || whatsapp.sent) {
+      const patch: any = { sent_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      if (gallery.status === 'draft') patch.status = 'sent';
+      await supabase.from('galleries').update(patch).eq('id', gallery.id);
+    }
+
+    res.json({
+      ok: email.sent || whatsapp.sent,
+      link,
+      message,
+      email,
+      whatsapp,
+      access,
+      // Legado (banner antigo)
+      email_sent: email.sent,
+      whatsapp_sent: whatsapp.sent,
+    });
   });
 
   // ── Rotas PÚBLICAS (cliente final, validação por share_token) ─────────────
@@ -8275,10 +8386,20 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
     const gallery = await findGalleryByToken(req.params.token);
     if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
-    if (gallery.status === 'delivered') return res.status(409).json({ error: 'Galeria já entregue' });
+    if (gallery.status === 'delivered' || gallery.status === 'selected') {
+      return res.status(409).json({ error: 'Seleção já finalizada — fale com o estúdio pra reabrir.' });
+    }
 
     const access = await ensureGalleryAccess(req, res, gallery);
     if (access === undefined) return;
+
+    // Mexeu na seleção com pagamento pendente? O valor pode mudar — expira a
+    // cobrança antiga; o finalize gera outra com o valor certo.
+    await supabaseAdmin
+      .from('gallery_payments')
+      .update({ status: 'expired' })
+      .eq('gallery_id', gallery.id)
+      .eq('status', 'pending');
 
     const { photo_id, selected, comment } = req.body || {};
     if (!photo_id) return res.status(400).json({ error: 'photo_id obrigatório' });
@@ -8417,35 +8538,77 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
   }
 
+  // Fecha a galeria de verdade. Chamado quando: (a) finalize sem valor a
+  // pagar; (b) pagamento confirmado pelo Mercado Pago (webhook/polling).
+  async function finalizeGallery(gallery: any, totals: any, origem: string): Promise<void> {
+    await supabaseAdmin!
+      .from('galleries')
+      .update({ status: 'selected', selected_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq('id', gallery.id)
+      .in('status', ['draft', 'sent']); // idempotente — não rebaixa nada
+    try {
+      await supabaseAdmin!.from('gallery_access_log').insert({
+        gallery_id: gallery.id,
+        access_user_id: null,
+        event: 'finalize',
+        detail: `selecionadas=${totals.selected_count} extras=${totals.extra_count} valor=${totals.amount} via=${origem}`,
+        ip: origem,
+        user_agent: null,
+      });
+    } catch { /* log é best-effort */ }
+    notifyStudioSelectionDone(gallery, totals).catch((e: any) =>
+      console.warn('[galeria] notificação ao estúdio falhou:', e?.message));
+  }
+
   app.post('/api/public/gallery/:token/finalize', async (req, res) => {
     if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
     const gallery = await findGalleryByToken(req.params.token);
     if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
-    if (gallery.status === 'delivered') return res.status(409).json({ error: 'Galeria já entregue' });
+    if (gallery.status === 'delivered' || gallery.status === 'selected') {
+      return res.status(409).json({ error: 'Seleção já finalizada' });
+    }
 
     const access = await ensureGalleryAccess(req, res, gallery);
     if (access === undefined) return;
 
-    const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price);
-    await supabaseAdmin
-      .from('galleries')
-      .update({ status: 'selected', selected_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-      .eq('id', gallery.id);
-
-    let payment: { payment_url: string | null; order_code: string | null } = { payment_url: null, order_code: null };
-    if (totals.amount > 0) payment = await createGalleryPayment(gallery, totals);
-
-    await logGalleryEvent(gallery.id, access.accessUserId, 'finalize', req, {
-      detail: `selecionadas=${totals.selected_count} extras=${totals.extra_count} valor=${totals.amount}`,
+    const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price, {
+      pricingMode: gallery.pricing_mode, cartDiscount: gallery.cart_discount,
     });
 
-    notifyStudioSelectionDone(gallery, totals).catch((e: any) =>
-      console.warn('[galeria] notificação ao estúdio falhou:', e?.message));
+    // SEM valor a pagar → finaliza na hora.
+    if (totals.amount <= 0) {
+      await logGalleryEvent(gallery.id, access.accessUserId, 'finalize', req, {
+        detail: `selecionadas=${totals.selected_count} extras=${totals.extra_count} valor=0`,
+      });
+      await finalizeGallery(gallery, totals, 'cliente');
+      return res.json({ ok: true, finalized: true, ...totals, payment_url: null, order_code: null });
+    }
 
-    res.json({ ok: true, ...totals, ...payment });
+    // COM valor a pagar → a seleção SÓ finaliza após o pagamento confirmar.
+    // Expira pendências antigas pra preference nova bater com a seleção atual.
+    await supabaseAdmin
+      .from('gallery_payments')
+      .update({ status: 'expired' })
+      .eq('gallery_id', gallery.id)
+      .eq('status', 'pending');
+
+    const payment = await createGalleryPayment(gallery, totals);
+    await logGalleryEvent(gallery.id, access.accessUserId, 'pay_attempt', req, {
+      detail: `valor=${totals.amount} pedido=${payment.order_code || '-'}`,
+    });
+
+    if (!payment.payment_url) {
+      // Estúdio sem Mercado Pago conectado: não dá pra travar o cliente sem
+      // saída. Finaliza e o estúdio cobra por fora (comportamento antigo).
+      await finalizeGallery(gallery, totals, 'cliente-sem-gateway');
+      return res.json({ ok: true, finalized: true, ...totals, payment_url: null, order_code: payment.order_code });
+    }
+
+    res.json({ ok: true, finalized: false, payment_required: true, ...totals, ...payment });
   });
 
   // Confirma o pagamento direto na API do MP (usado no polling e no webhook).
+  // Pagamento aprovado → marca paid E finaliza a galeria (a seleção só fecha aqui).
   async function refreshMercadoPagoStatus(payment: any): Promise<any | null> {
     const token = await getValidMpAccessToken(payment.user_id);
     if (!token) return null;
@@ -8459,6 +8622,27 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!approved) return null;
     const patch = { status: 'paid', paid_at: new Date().toISOString() };
     await supabaseAdmin!.from('gallery_payments').update(patch).eq('id', payment.id);
+
+    try {
+      const { data: gallery } = await supabaseAdmin!
+        .from('galleries').select('*').eq('id', payment.gallery_id).maybeSingle();
+      if (gallery) {
+        await supabaseAdmin!.from('gallery_access_log').insert({
+          gallery_id: gallery.id,
+          access_user_id: null,
+          event: 'pay_success',
+          detail: `valor=${payment.amount} pedido=${payment.order_code || '-'}`,
+          ip: 'mercadopago',
+          user_agent: null,
+        });
+        const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price, {
+          pricingMode: gallery.pricing_mode, cartDiscount: gallery.cart_discount,
+        });
+        await finalizeGallery(gallery, totals, 'pagamento-confirmado');
+      }
+    } catch (e: any) {
+      console.warn('[galeria] finalização pós-pagamento falhou:', e?.message);
+    }
     return { ...payment, ...patch };
   }
 
