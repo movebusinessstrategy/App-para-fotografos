@@ -23,12 +23,20 @@ export interface SlotFill {
   offset_y?: number;
 }
 
-// Uma lâmina (spread = 2 páginas) com seu template e o preenchimento dos slots.
+// Tipo de página: capa (1 pág.), lâmina interna (2 págs.) ou contracapa (1 pág.).
+export type SpreadKind = "cover" | "spread" | "backcover";
+
+// Uma página/lâmina. No editor LIVRE o conteúdo real fica em canvas_json
+// (objeto serializado do fabric). slots/template_id ficam por compatibilidade
+// com o backend e o editor antigo de slots.
 export interface AlbumSpread {
   id: string;
   position: number;
+  kind?: SpreadKind;
   template_id: string;
   slots: SlotFill[];
+  // Cena do fabric.js daquela página (canvas.toJSON). null = página em branco.
+  canvas_json?: Record<string, unknown> | null;
 }
 
 // Projeto de álbum completo (linha de album_projects).

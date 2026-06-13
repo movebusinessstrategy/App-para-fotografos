@@ -8920,7 +8920,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   // Resolve a URL pública de um asset. Asset 'gallery' aponta pro bucket de
   // previews da galeria (já público); asset 'upload' pro bucket do álbum.
-  const albumAssetUrl = (asset: { source?: string; preview_path?: string | null; thumb_path?: string | null }, which: 'preview' | 'thumb'): string | null => {
+  const albumAssetUrl = (asset: { source?: string; preview_path?: string | null; thumb_path?: string | null; full_path?: string | null }, which: 'preview' | 'thumb'): string | null => {
+    // full_path = foto LIMPA (sem marca d'água) copiada pro bucket do álbum —
+    // é o que o editor usa. Vale tanto pra upload quanto pra import da galeria.
+    if (asset.full_path) return albumPublicUrl(asset.full_path);
     const p = which === 'thumb' ? asset.thumb_path : asset.preview_path;
     if (!p) return which === 'thumb' ? albumAssetUrl(asset, 'preview') : null;
     return asset.source === 'gallery' ? previewPublicUrl(p) : albumPublicUrl(p);
@@ -8947,8 +8950,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return {
       id: s.id,
       position: s.position,
+      kind: s.kind || 'spread',
       template_id: s.template_id,
       slots: Array.isArray(s.slots) ? s.slots : [],
+      canvas_json: s.canvas_json || null,
     };
   }
 
@@ -8969,34 +8974,52 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const { data: photos } = await supabaseAdmin
       .from('gallery_photos')
-      .select('id, file_name, preview_path, thumb_path, sort_order')
+      .select('id, file_name, original_path, preview_path, thumb_path, sort_order')
       .in('id', selectedIds)
       .eq('process_status', 'done')
       .order('sort_order');
-    const ready = (photos || []).filter((p: any) => p.preview_path);
+    const ready = (photos || []).filter((p: any) => p.original_path || p.preview_path);
     if (ready.length === 0) return 0;
 
+    // Idempotência: não reimporta a mesma foto da galeria (por original_path).
     const { data: existing } = await supabaseAdmin
-      .from('album_assets').select('preview_path').eq('album_id', albumId).eq('source', 'gallery');
-    const have = new Set((existing || []).map((r: any) => r.preview_path));
+      .from('album_assets').select('source_ref').eq('album_id', albumId).eq('source', 'gallery');
+    const have = new Set((existing || []).map((r: any) => r.source_ref).filter(Boolean));
     const { count } = await supabaseAdmin
       .from('album_assets').select('id', { count: 'exact', head: true }).eq('album_id', albumId);
     let order = count || 0;
 
-    const rows = ready
-      .filter((p: any) => !have.has(p.preview_path))
-      .map((p: any) => ({
-        album_id: albumId,
-        source: 'gallery',
-        preview_path: p.preview_path,
-        thumb_path: p.thumb_path || p.preview_path,
-        original_name: p.file_name,
-        sort_order: order++,
-      }));
-    if (rows.length === 0) return 0;
-    const { error } = await supabaseAdmin.from('album_assets').insert(rows);
-    if (error) throw new Error(error.message);
-    return rows.length;
+    await ensureAlbumBucket();
+    const novos = ready.filter((p: any) => !have.has(p.original_path || p.preview_path));
+    let importadas = 0;
+    for (const p of novos) {
+      try {
+        // Copia o ORIGINAL (limpo, sem marca d'água) do bucket privado da
+        // galeria pro bucket do álbum, com path uuid não-adivinhável.
+        const srcBucket = p.original_path ? GALLERY_ORIGINALS_BUCKET : GALLERY_PREVIEWS_BUCKET;
+        const srcPath = p.original_path || p.preview_path;
+        const buf = await downloadGalleryObject(srcBucket, srcPath);
+        const destPath = `${userId}/${albumId}/gallery/${crypto.randomUUID()}.jpg`;
+        const up = await supabaseAdmin.storage.from(ALBUM_ASSETS_BUCKET)
+          .upload(destPath, buf, { contentType: 'image/jpeg', upsert: true });
+        if (up.error) throw new Error(up.error.message);
+        const ins = await supabaseAdmin.from('album_assets').insert({
+          album_id: albumId,
+          source: 'gallery',
+          source_ref: p.original_path || p.preview_path,
+          full_path: destPath,
+          preview_path: destPath,
+          thumb_path: destPath,
+          original_name: p.file_name,
+          sort_order: order++,
+        });
+        if (ins.error) throw new Error(ins.error.message);
+        importadas++;
+      } catch (e: any) {
+        console.warn('[album] import de foto da galeria falhou:', e?.message);
+      }
+    }
+    return importadas;
   }
 
   async function carregarAlbum(supabase: SupabaseClient, userId: string, id: string): Promise<any | null> {
@@ -9090,6 +9113,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       : Array.from({ length: ALBUM_SPREAD_COUNT }, (_, i) => ({
           album_id: album.id,
           position: i,
+          // 1ª página = capa, última = contracapa, resto = lâminas.
+          kind: i === 0 ? 'cover' : (i === ALBUM_SPREAD_COUNT - 1 ? 'backcover' : 'spread'),
           template_id: ALBUM_DEFAULT_TEMPLATE,
           slots: [],
         }));
@@ -9327,12 +9352,17 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Sanitiza uma lâmina vinda do body. template_id e slots são livres
   // (validação fina fica no front com o contrato de templates); aqui só
   // garante tipos e tamanho seguro.
-  function sanitizeSpread(s: any, fallbackPos: number): { id: string | null; position: number; template_id: string; slots: any[] } {
+  function sanitizeSpread(s: any, fallbackPos: number): { id: string | null; position: number; kind: string; template_id: string; slots: any[]; canvas_json: any } {
+    const kind = ['cover', 'spread', 'backcover'].includes(s?.kind) ? s.kind : 'spread';
     return {
       id: typeof s?.id === 'string' && s.id ? s.id : null,
       position: Number.isFinite(s?.position) ? Number(s.position) : fallbackPos,
+      kind,
       template_id: (typeof s?.template_id === 'string' && s.template_id ? s.template_id : ALBUM_DEFAULT_TEMPLATE).slice(0, 64),
       slots: Array.isArray(s?.slots) ? s.slots.slice(0, 64) : [],
+      // canvas_json = desenho livre do fabric.js (objeto). Limite defensivo
+      // de tamanho serializado (~2MB) pra não estourar a linha.
+      canvas_json: s?.canvas_json && JSON.stringify(s.canvas_json).length < 2_000_000 ? s.canvas_json : null,
     };
   }
 
@@ -9352,13 +9382,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     for (const s of clean) {
       if (!s.id) continue;
       await supabaseAdmin!.from('album_spreads').update({
-        position: s.position, template_id: s.template_id, slots: s.slots, updated_at: new Date().toISOString(),
+        position: s.position, kind: s.kind, template_id: s.template_id, slots: s.slots,
+        canvas_json: s.canvas_json, updated_at: new Date().toISOString(),
       }).eq('id', s.id).eq('album_id', albumId);
     }
 
     // 3) Cria os novos (sem id).
     const novos = clean.filter((s) => !s.id).map((s) => ({
-      album_id: albumId, position: s.position, template_id: s.template_id, slots: s.slots,
+      album_id: albumId, position: s.position, kind: s.kind, template_id: s.template_id, slots: s.slots, canvas_json: s.canvas_json,
     }));
     if (novos.length > 0) await supabaseAdmin!.from('album_spreads').insert(novos);
 

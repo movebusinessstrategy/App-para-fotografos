@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { publicPut } from "../api";
 import type { AlbumSpread } from "../../album/types";
-import { payloadSpreads } from "../spreads";
 
 export type EstadoSalvamento = "ocioso" | "salvando" | "salvo" | "erro";
 
-// Autosave debounced das lâminas no PUT /api/public/album/:token/spreads.
-// Agenda o salvamento ~800ms após a última alteração; só roda se podeEditar.
-export function useAutosaveSpreads(token: string | undefined, podeEditar: boolean) {
+// Autosave debounced das lâminas do editor LIVRE no PUT público.
+// Envia canvas_json de cada página. Só roda se podeEditar.
+export function usePublicAutosave(token: string | undefined, podeEditar: boolean) {
   const [estado, setEstado] = useState<EstadoSalvamento>("ocioso");
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendenteRef = useRef<AlbumSpread[] | null>(null);
@@ -20,7 +19,14 @@ export function useAutosaveSpreads(token: string | undefined, podeEditar: boolea
     setEstado("salvando");
     try {
       await publicPut(`/api/public/album/${token}/spreads`, {
-        spreads: payloadSpreads(spreads),
+        spreads: spreads.map((s, i) => ({
+          id: s.id?.startsWith("tmp-") ? undefined : s.id,
+          position: i,
+          kind: s.kind || "spread",
+          template_id: s.template_id || "livre",
+          slots: s.slots || [],
+          canvas_json: s.canvas_json ?? null,
+        })),
       });
       setEstado("salvo");
     } catch {
@@ -33,17 +39,12 @@ export function useAutosaveSpreads(token: string | undefined, podeEditar: boolea
       if (!token || !podeEditar) return;
       pendenteRef.current = spreads;
       if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(enviar, 800);
+      timerRef.current = setTimeout(enviar, 1200);
     },
     [token, podeEditar, enviar],
   );
 
-  useEffect(
-    () => () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    },
-    [],
-  );
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
 
   return { estado, agendar };
 }
