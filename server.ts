@@ -8875,6 +8875,700 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
   });
 
+  // ════════════════════════════════════════════════════════════════════════
+  // DIAGRAMAÇÃO DE ÁLBUM — editor visual de lâminas (spreads = 2 páginas)
+  // Tabelas: album_projects, album_assets, album_spreads (migration
+  // migrations/033_album.sql). Bucket: album-assets (PÚBLICO — saída é só
+  // prévia visual pra aprovar, sem PDF de gráfica; original não precisa de
+  // bucket privado). Fotos vêm da galeria de proofing (selecionadas) e de
+  // upload próprio. Fotógrafo E cliente montam.
+  // Preview de asset: reusa processGalleryPhoto com a MARCA DO ESTÚDIO leve
+  // (é só prévia de aprovação — não é arquivo de gráfica). Fotos importadas
+  // da galeria já vêm com preview/thumb prontos (referenciados direto do
+  // bucket público da galeria, sem reprocessar).
+  // Rotas públicas (/api/public/album/*) validam pelo share_token, sem auth.
+  // ════════════════════════════════════════════════════════════════════════
+
+  const ALBUM_ASSETS_BUCKET = 'album-assets';
+  const ALBUM_SIZES_VALID = new Set(['sq30', 'sq20', 'land40x30', 'port20x30']);
+  const ALBUM_STATUSES = ['draft', 'sent', 'approved'];
+  const ALBUM_SPREAD_COUNT = 10; // lâminas em branco ao criar
+  const ALBUM_DEFAULT_TEMPLATE = 'classico';
+
+  let albumBucketReady = false;
+  async function ensureAlbumBucket() {
+    if (albumBucketReady || !supabaseAdmin) return;
+    try {
+      const { data: buckets } = await supabaseAdmin.storage.listBuckets();
+      const names = new Set((buckets || []).map((b: any) => b.name));
+      if (!names.has(ALBUM_ASSETS_BUCKET)) {
+        await supabaseAdmin.storage.createBucket(ALBUM_ASSETS_BUCKET, {
+          public: true,
+          fileSizeLimit: 52_428_800, // 50MB por foto
+        });
+      }
+      albumBucketReady = true;
+    } catch (e: any) {
+      console.error('[album] erro criando bucket:', e?.message);
+    }
+  }
+
+  const albumPublicUrl = (p: string | null | undefined): string | null => {
+    if (!p || !supabaseAdmin) return null;
+    return supabaseAdmin.storage.from(ALBUM_ASSETS_BUCKET).getPublicUrl(p).data.publicUrl || null;
+  };
+
+  // Resolve a URL pública de um asset. Asset 'gallery' aponta pro bucket de
+  // previews da galeria (já público); asset 'upload' pro bucket do álbum.
+  const albumAssetUrl = (asset: { source?: string; preview_path?: string | null; thumb_path?: string | null }, which: 'preview' | 'thumb'): string | null => {
+    const p = which === 'thumb' ? asset.thumb_path : asset.preview_path;
+    if (!p) return which === 'thumb' ? albumAssetUrl(asset, 'preview') : null;
+    return asset.source === 'gallery' ? previewPublicUrl(p) : albumPublicUrl(p);
+  };
+
+  const albumTableMissing = (error: any) => error?.code === '42P01';
+  const albumMigrationError = (res: express.Response) =>
+    res.status(400).json({ error: 'Tabelas do álbum não existem. Rode a migration 033_album.sql no Supabase.' });
+  const newAlbumToken = () => crypto.randomBytes(18).toString('base64url');
+  const albumLink = (token: string) => `${galleryPublicBase()}/a/${token}`;
+
+  function mapAlbumAsset(a: any) {
+    return {
+      id: a.id,
+      source: a.source,
+      preview_url: albumAssetUrl(a, 'preview'),
+      thumb_url: albumAssetUrl(a, 'thumb'),
+      original_name: a.original_name,
+      sort_order: a.sort_order,
+    };
+  }
+
+  function mapAlbumSpread(s: any) {
+    return {
+      id: s.id,
+      position: s.position,
+      template_id: s.template_id,
+      slots: Array.isArray(s.slots) ? s.slots : [],
+    };
+  }
+
+  // Importa as fotos SELECIONADAS de uma galeria como album_assets (source
+  // 'gallery', preview_path/thumb_path copiados de gallery_photos). Idempotente
+  // por (album_id, gallery preview_path): não reimporta a mesma foto. Retorna
+  // quantas foram importadas de fato.
+  async function importGalleryPhotosToAlbum(albumId: string, userId: string, galleryId: string): Promise<number> {
+    if (!supabaseAdmin) return 0;
+    const { data: gallery } = await supabaseAdmin
+      .from('galleries').select('id').eq('id', galleryId).eq('user_id', userId).maybeSingle();
+    if (!gallery) return 0;
+
+    const { data: sel } = await supabaseAdmin
+      .from('gallery_selections').select('photo_id').eq('gallery_id', galleryId).eq('selected', true);
+    const selectedIds = (sel || []).map((s: any) => s.photo_id).filter(Boolean);
+    if (selectedIds.length === 0) return 0;
+
+    const { data: photos } = await supabaseAdmin
+      .from('gallery_photos')
+      .select('id, file_name, preview_path, thumb_path, sort_order')
+      .in('id', selectedIds)
+      .eq('process_status', 'done')
+      .order('sort_order');
+    const ready = (photos || []).filter((p: any) => p.preview_path);
+    if (ready.length === 0) return 0;
+
+    const { data: existing } = await supabaseAdmin
+      .from('album_assets').select('preview_path').eq('album_id', albumId).eq('source', 'gallery');
+    const have = new Set((existing || []).map((r: any) => r.preview_path));
+    const { count } = await supabaseAdmin
+      .from('album_assets').select('id', { count: 'exact', head: true }).eq('album_id', albumId);
+    let order = count || 0;
+
+    const rows = ready
+      .filter((p: any) => !have.has(p.preview_path))
+      .map((p: any) => ({
+        album_id: albumId,
+        source: 'gallery',
+        preview_path: p.preview_path,
+        thumb_path: p.thumb_path || p.preview_path,
+        original_name: p.file_name,
+        sort_order: order++,
+      }));
+    if (rows.length === 0) return 0;
+    const { error } = await supabaseAdmin.from('album_assets').insert(rows);
+    if (error) throw new Error(error.message);
+    return rows.length;
+  }
+
+  async function carregarAlbum(supabase: SupabaseClient, userId: string, id: string): Promise<any | null> {
+    const { data, error } = await supabase
+      .from('album_projects').select('*').eq('id', id).eq('user_id', userId).maybeSingle();
+    if (error) throw error;
+    return data || null;
+  }
+
+  // ── CRUD de álbuns (lado do estúdio) ──────────────────────────────────────
+
+  app.get('/api/albums', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const { data, error } = await supabase
+      .from('album_projects').select('*').eq('user_id', userId).order('created_at', { ascending: false });
+    if (error) {
+      if (albumTableMissing(error)) return res.json({ albums: [], table_missing: true });
+      return res.status(500).json({ error: error.message });
+    }
+    const albums = data || [];
+    if (albums.length === 0) return res.json({ albums: [] });
+
+    const ids = albums.map((a: any) => a.id);
+    const [spreadsQ, assetsQ] = await Promise.all([
+      supabase.from('album_spreads').select('album_id').in('album_id', ids),
+      supabase.from('album_assets').select('album_id, thumb_path, preview_path, source, sort_order').in('album_id', ids),
+    ]);
+
+    const spreadCount = new Map<string, number>();
+    for (const s of spreadsQ.data || []) spreadCount.set(s.album_id, (spreadCount.get(s.album_id) || 0) + 1);
+
+    const assetCount = new Map<string, number>();
+    const cover = new Map<string, any>();
+    const sortedAssets = (assetsQ.data || []).slice().sort((a: any, b: any) => (a.sort_order || 0) - (b.sort_order || 0));
+    for (const a of sortedAssets) {
+      assetCount.set(a.album_id, (assetCount.get(a.album_id) || 0) + 1);
+      if (!cover.has(a.album_id)) cover.set(a.album_id, a);
+    }
+
+    res.json({
+      albums: albums.map((a: any) => ({
+        id: a.id,
+        title: a.title,
+        client_name: a.client_name,
+        status: a.status,
+        size: a.size,
+        spread_count: spreadCount.get(a.id) || 0,
+        asset_count: assetCount.get(a.id) || 0,
+        cover_thumb_url: cover.has(a.id) ? albumAssetUrl(cover.get(a.id), 'thumb') : null,
+        created_at: a.created_at,
+      })),
+    });
+  });
+
+  app.post('/api/albums', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const body = req.body || {};
+    const title = String(body.title || '').trim();
+    if (!title) return res.status(400).json({ error: 'Informe um título pro álbum.' });
+
+    const size = ALBUM_SIZES_VALID.has(body.size) ? body.size : 'sq30';
+    const insert: any = {
+      user_id: userId,
+      title: title.slice(0, 200),
+      size,
+      status: 'draft',
+      share_token: newAlbumToken(),
+      allow_client_edit: body.allow_client_edit !== false,
+    };
+    for (const k of ['gallery_id', 'job_id', 'client_id', 'client_name', 'client_email', 'client_phone']) {
+      if (body[k] !== undefined && body[k] !== null && body[k] !== '') insert[k] = body[k];
+    }
+
+    const { data: album, error } = await supabase
+      .from('album_projects').insert(insert).select('*').maybeSingle();
+    if (error || !album) {
+      return albumTableMissing(error) ? albumMigrationError(res) : res.status(500).json({ error: error?.message || 'Falha ao criar álbum.' });
+    }
+
+    // Lâminas em branco. Se vieram spreads no body, usa-os; senão 10 brancas.
+    const spreadsBody = Array.isArray(body.spreads) ? body.spreads : [];
+    const spreadRows = spreadsBody.length > 0
+      ? spreadsBody.map((s: any, i: number) => ({
+          album_id: album.id,
+          position: Number.isFinite(s?.position) ? Number(s.position) : i,
+          template_id: typeof s?.template_id === 'string' ? s.template_id : ALBUM_DEFAULT_TEMPLATE,
+          slots: Array.isArray(s?.slots) ? s.slots : [],
+        }))
+      : Array.from({ length: ALBUM_SPREAD_COUNT }, (_, i) => ({
+          album_id: album.id,
+          position: i,
+          template_id: ALBUM_DEFAULT_TEMPLATE,
+          slots: [],
+        }));
+    await supabase.from('album_spreads').insert(spreadRows);
+
+    // Importa fotos selecionadas da galeria, se informada (best-effort).
+    if (insert.gallery_id) {
+      await importGalleryPhotosToAlbum(album.id, userId, insert.gallery_id)
+        .catch((e: any) => console.warn('[album] import galeria falhou:', e?.message));
+    }
+
+    res.json({ album });
+  });
+
+  app.get('/api/albums/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    let album: any;
+    try {
+      album = await carregarAlbum(supabase, userId, req.params.id);
+    } catch (e: any) {
+      return albumTableMissing(e) ? albumMigrationError(res) : res.status(500).json({ error: e.message });
+    }
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+
+    const [assetsQ, spreadsQ] = await Promise.all([
+      supabase.from('album_assets').select('*').eq('album_id', album.id).order('sort_order').order('created_at'),
+      supabase.from('album_spreads').select('*').eq('album_id', album.id).order('position'),
+    ]);
+
+    res.json({
+      album,
+      assets: (assetsQ.data || []).map(mapAlbumAsset),
+      spreads: (spreadsQ.data || []).map(mapAlbumSpread),
+    });
+  });
+
+  function buildAlbumPatch(body: any): any {
+    const patch: any = { updated_at: new Date().toISOString() };
+    if (body.title !== undefined) patch.title = String(body.title || '').trim().slice(0, 200) || 'Álbum';
+    if (body.size !== undefined && ALBUM_SIZES_VALID.has(body.size)) patch.size = body.size;
+    if (body.status !== undefined && ALBUM_STATUSES.includes(body.status)) patch.status = body.status;
+    if (body.allow_client_edit !== undefined) patch.allow_client_edit = !!body.allow_client_edit;
+    for (const k of ['client_id', 'client_name', 'client_email', 'client_phone']) {
+      if (body[k] !== undefined) patch[k] = body[k] || null;
+    }
+    return patch;
+  }
+
+  app.put('/api/albums/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const patch = buildAlbumPatch(req.body || {});
+    const { error } = await supabase
+      .from('album_projects').update(patch).eq('id', req.params.id).eq('user_id', userId);
+    if (error) {
+      return albumTableMissing(error) ? albumMigrationError(res) : res.status(500).json({ error: error.message });
+    }
+    res.json({ ok: true });
+  });
+
+  app.delete('/api/albums/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const album = await carregarAlbum(supabase, userId, req.params.id).catch(() => null);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+
+    // Remove os arquivos de upload do storage (gallery assets ficam — são da
+    // galeria). Best-effort: a falha do storage não impede apagar as linhas.
+    if (supabaseAdmin) {
+      const { data: assets } = await supabaseAdmin
+        .from('album_assets').select('source, preview_path, thumb_path').eq('album_id', album.id);
+      const paths: string[] = [];
+      for (const a of assets || []) {
+        if (a.source === 'upload') {
+          if (a.preview_path) paths.push(a.preview_path);
+          if (a.thumb_path && a.thumb_path !== a.preview_path) paths.push(a.thumb_path);
+        }
+      }
+      if (paths.length > 0) {
+        await supabaseAdmin.storage.from(ALBUM_ASSETS_BUCKET).remove(paths).catch(() => {});
+      }
+    }
+
+    // Cascade (FK ON DELETE CASCADE) limpa assets + spreads.
+    const { error } = await supabase
+      .from('album_projects').delete().eq('id', album.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+  });
+
+  // ── Upload de fotos próprias (browser sobe direto pro bucket público) ──────
+
+  app.post('/api/albums/:id/assets/sign-upload', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Storage indisponível.' });
+    const files = Array.isArray(req.body?.files) ? req.body.files : [];
+    if (files.length === 0 || files.length > 50) {
+      return res.status(400).json({ error: 'Envie de 1 a 50 arquivos por lote.' });
+    }
+    const album = await carregarAlbum(supabase, userId, req.params.id).catch(() => null);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+    await ensureAlbumBucket();
+
+    const { count } = await supabase
+      .from('album_assets').select('id', { count: 'exact', head: true }).eq('album_id', album.id);
+    const baseOrder = count || 0;
+
+    const rows = files.map((f: any, i: number) => {
+      const id = crypto.randomUUID();
+      return {
+        id,
+        album_id: album.id,
+        source: 'upload',
+        original_name: String(f?.name || `foto-${baseOrder + i + 1}.jpg`).slice(0, 300),
+        sort_order: baseOrder + i,
+        // path do ORIGINAL temporário (processado depois em /process):
+        preview_path: `${userId}/${album.id}/${id}/original`,
+      };
+    });
+    const { error: insErr } = await supabase.from('album_assets').insert(rows);
+    if (insErr) {
+      return albumTableMissing(insErr) ? albumMigrationError(res) : res.status(500).json({ error: insErr.message });
+    }
+
+    const uploads: Array<{ asset_id: string; signed_url: string }> = [];
+    for (const r of rows) {
+      const { data: signed, error: sErr } = await supabaseAdmin.storage
+        .from(ALBUM_ASSETS_BUCKET)
+        .createSignedUploadUrl(r.preview_path);
+      if (sErr || !signed) {
+        return res.status(500).json({ error: `Falha ao assinar upload: ${sErr?.message || 'desconhecida'}` });
+      }
+      uploads.push({ asset_id: r.id, signed_url: signed.signedUrl });
+    }
+    res.json({ uploads });
+  });
+
+  async function downloadAlbumObject(objectPath: string): Promise<Buffer> {
+    const { data, error } = await supabaseAdmin!.storage.from(ALBUM_ASSETS_BUCKET).download(objectPath);
+    if (error || !data) throw new Error(`download falhou: ${error?.message || 'arquivo vazio'}`);
+    return Buffer.from(await data.arrayBuffer());
+  }
+
+  async function uploadAlbumObject(objectPath: string, buf: Buffer) {
+    const { error } = await supabaseAdmin!.storage
+      .from(ALBUM_ASSETS_BUCKET)
+      .upload(objectPath, buf, { contentType: 'image/jpeg', upsert: true });
+    if (error) throw new Error(`upload falhou: ${error.message}`);
+  }
+
+  // Gera preview + thumb a partir do original recém-enviado. É só PRÉVIA de
+  // aprovação (sem PDF de gráfica), então a marca d'água do estúdio é leve e
+  // serve só pra identificar — reusa o mesmo processGalleryPhoto da galeria.
+  app.post('/api/albums/:id/assets/:assetId/process', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Storage indisponível.' });
+
+    const album = await carregarAlbum(supabase, userId, req.params.id).catch(() => null);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+    const { data: asset } = await supabase
+      .from('album_assets').select('*').eq('id', req.params.assetId).eq('album_id', album.id).maybeSingle();
+    if (!asset?.preview_path) return res.status(404).json({ error: 'Foto não encontrada' });
+
+    try {
+      if (/\.heic$|\.heif$/i.test(asset.original_name || '')) {
+        throw new Error('Formato HEIC não suportado — converta pra JPEG antes de enviar.');
+      }
+      const originalPath = `${userId}/${album.id}/${asset.id}/original`;
+      const original = await downloadAlbumObject(originalPath);
+
+      const studioName = await getStudioNameForGallery(userId);
+      const out = await processGalleryPhoto(original, {
+        watermarkType: 'text',
+        watermarkText: studioName,
+        logo: null,
+        opacity: 0.18, // marca leve — é só prévia de aprovação
+        clientLabel: null,
+      });
+
+      const base = `${userId}/${album.id}/${asset.id}`;
+      await uploadAlbumObject(`${base}/preview.jpg`, out.preview);
+      await uploadAlbumObject(`${base}/thumb.jpg`, out.thumb);
+      // O original temporário não é mais necessário (saída é só prévia).
+      await supabaseAdmin.storage.from(ALBUM_ASSETS_BUCKET).remove([originalPath]).catch(() => {});
+
+      const patch = { preview_path: `${base}/preview.jpg`, thumb_path: `${base}/thumb.jpg` };
+      await supabase.from('album_assets').update(patch).eq('id', asset.id);
+      res.json({ asset: { id: asset.id, ...mapAlbumAsset({ ...asset, ...patch }) } });
+    } catch (e: any) {
+      console.error('[album] processamento falhou:', e?.message);
+      res.status(500).json({ error: `Falha ao processar foto: ${e?.message || 'desconhecida'}` });
+    }
+  });
+
+  app.post('/api/albums/:id/assets/import-gallery', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const galleryId = String(req.body?.gallery_id || '').trim();
+    if (!galleryId) return res.status(400).json({ error: 'gallery_id obrigatório' });
+    const album = await carregarAlbum(supabase, userId, req.params.id).catch(() => null);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+    try {
+      const imported = await importGalleryPhotosToAlbum(album.id, userId, galleryId);
+      res.json({ imported });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || 'Falha ao importar fotos.' });
+    }
+  });
+
+  app.delete('/api/albums/:id/assets/:assetId', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const album = await carregarAlbum(supabase, userId, req.params.id).catch(() => null);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+
+    const { data: asset } = await supabase
+      .from('album_assets').select('*').eq('id', req.params.assetId).eq('album_id', album.id).maybeSingle();
+    if (!asset) return res.status(404).json({ error: 'Foto não encontrada' });
+
+    if (supabaseAdmin && asset.source === 'upload') {
+      const base = `${userId}/${album.id}/${asset.id}`;
+      await supabaseAdmin.storage.from(ALBUM_ASSETS_BUCKET)
+        .remove([`${base}/original`, `${base}/preview.jpg`, `${base}/thumb.jpg`]).catch(() => {});
+    }
+    const { error } = await supabase.from('album_assets').delete().eq('id', asset.id).eq('album_id', album.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+  });
+
+  // ── Lâminas (spreads): salva em lote (replace) ────────────────────────────
+
+  // Sanitiza uma lâmina vinda do body. template_id e slots são livres
+  // (validação fina fica no front com o contrato de templates); aqui só
+  // garante tipos e tamanho seguro.
+  function sanitizeSpread(s: any, fallbackPos: number): { id: string | null; position: number; template_id: string; slots: any[] } {
+    return {
+      id: typeof s?.id === 'string' && s.id ? s.id : null,
+      position: Number.isFinite(s?.position) ? Number(s.position) : fallbackPos,
+      template_id: (typeof s?.template_id === 'string' && s.template_id ? s.template_id : ALBUM_DEFAULT_TEMPLATE).slice(0, 64),
+      slots: Array.isArray(s?.slots) ? s.slots.slice(0, 64) : [],
+    };
+  }
+
+  // Replace em lote: atualiza por id, cria novos sem id, e remove os que
+  // sumiram da lista. Transação lógica (sequência de queries scoped pelo
+  // album_id já validado pelo user_id).
+  async function replaceAlbumSpreads(albumId: string, incoming: any[]): Promise<any[]> {
+    const clean = incoming.map((s, i) => sanitizeSpread(s, i));
+    const keepIds = clean.filter((s) => s.id).map((s) => s.id as string);
+
+    // 1) Apaga os que sumiram da lista.
+    let delQ = supabaseAdmin!.from('album_spreads').delete().eq('album_id', albumId);
+    if (keepIds.length > 0) delQ = delQ.not('id', 'in', `(${keepIds.join(',')})`);
+    await delQ;
+
+    // 2) Atualiza os existentes (por id, scoped pelo album_id).
+    for (const s of clean) {
+      if (!s.id) continue;
+      await supabaseAdmin!.from('album_spreads').update({
+        position: s.position, template_id: s.template_id, slots: s.slots, updated_at: new Date().toISOString(),
+      }).eq('id', s.id).eq('album_id', albumId);
+    }
+
+    // 3) Cria os novos (sem id).
+    const novos = clean.filter((s) => !s.id).map((s) => ({
+      album_id: albumId, position: s.position, template_id: s.template_id, slots: s.slots,
+    }));
+    if (novos.length > 0) await supabaseAdmin!.from('album_spreads').insert(novos);
+
+    const { data } = await supabaseAdmin!
+      .from('album_spreads').select('*').eq('album_id', albumId).order('position');
+    return (data || []).map(mapAlbumSpread);
+  }
+
+  app.put('/api/albums/:id/spreads', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
+    const album = await carregarAlbum(supabase, userId, req.params.id).catch(() => null);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+    const spreads = Array.isArray(req.body?.spreads) ? req.body.spreads : [];
+    if (spreads.length > 200) return res.status(400).json({ error: 'Máximo de 200 lâminas.' });
+
+    try {
+      const saved = await replaceAlbumSpreads(album.id, spreads);
+      await supabase.from('album_projects').update({ updated_at: new Date().toISOString() }).eq('id', album.id);
+      res.json({ ok: true, spreads: saved });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || 'Falha ao salvar lâminas.' });
+    }
+  });
+
+  // ── Export (a "lista": qual foto em cada lâmina) ──────────────────────────
+
+  app.get('/api/albums/:id/export', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const album = await carregarAlbum(supabase, userId, req.params.id).catch(() => null);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+
+    const [assetsQ, spreadsQ] = await Promise.all([
+      supabase.from('album_assets').select('id, original_name').eq('album_id', album.id),
+      supabase.from('album_spreads').select('position, template_id, slots').eq('album_id', album.id).order('position'),
+    ]);
+    const nameById = new Map<string, string>();
+    for (const a of assetsQ.data || []) nameById.set(a.id, a.original_name || 'foto');
+
+    const pages = (spreadsQ.data || []).map((s: any, i: number) => {
+      const slots = Array.isArray(s.slots) ? s.slots : [];
+      const photos: string[] = [];
+      for (const slot of slots) {
+        const assetId = typeof slot === 'string' ? slot : slot?.asset_id;
+        if (assetId && nameById.has(assetId)) photos.push(nameById.get(assetId)!);
+      }
+      return { spread: i + 1, template: s.template_id, photos };
+    });
+    res.json({ album_title: album.title, pages });
+  });
+
+  // ── Envio do link pra cliente (e-mail + WhatsApp) ─────────────────────────
+
+  app.post('/api/albums/:id/send', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const album = await carregarAlbum(supabase, userId, req.params.id).catch(() => null);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+
+    const settings = await getGallerySettings(userId);
+    const studioName = await getStudioNameForGallery(userId);
+    const link = albumLink(album.share_token);
+    const message =
+      `Olá ${album.client_name || ''}! O layout do seu álbum "${album.title}" está pronto pra você revisar e aprovar. ` +
+      `Acesse: ${link}`.replace('  ', ' ');
+
+    let email: { sent: boolean; error?: string } = { sent: false, error: 'Cliente sem e-mail cadastrado.' };
+    if (album.client_email) {
+      const r = await sendGalleryMessageEmail({
+        to: album.client_email,
+        from: settings.sender_email,
+        studioName,
+        subject: `Seu álbum está pronto pra aprovação — ${album.title}`,
+        messageText: message,
+        link,
+      });
+      email = { sent: r.ok, error: r.error };
+    }
+
+    let whatsapp: { sent: boolean; error?: string } = { sent: false, error: 'Cliente sem telefone cadastrado.' };
+    const digits = String(album.client_phone || '').replace(/\D/g, '');
+    if (digits) {
+      if (BaileysManager.getStatus(userId) !== 'open') {
+        whatsapp = { sent: false, error: 'WhatsApp desconectado — conecte na página WhatsApp do app.' };
+      } else {
+        try {
+          await BaileysManager.sendText(userId, normalizeBrazilianPhone(digits), message);
+          whatsapp = { sent: true };
+        } catch (e: any) {
+          whatsapp = { sent: false, error: `Falha no envio: ${e?.message || 'desconhecida'}` };
+        }
+      }
+    }
+
+    if (email.sent || whatsapp.sent || album.status === 'draft') {
+      await supabase.from('album_projects')
+        .update({ status: album.status === 'approved' ? 'approved' : 'sent', updated_at: new Date().toISOString() })
+        .eq('id', album.id).eq('user_id', userId);
+    }
+    res.json({ ok: email.sent || whatsapp.sent, link, email, whatsapp });
+  });
+
+  // ── Rotas PÚBLICAS (cliente final, validação por share_token) ─────────────
+
+  async function findAlbumByToken(token: string): Promise<any | null> {
+    if (!supabaseAdmin || !token) return null;
+    const { data } = await supabaseAdmin.from('album_projects').select('*').eq('share_token', token).maybeSingle();
+    return data || null;
+  }
+
+  app.get('/api/public/album/:token', async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
+    if (!publicRateLimit(req, 'album_view', 120, 60 * 1000)) {
+      return res.status(429).json({ error: 'Muitas requisições. Aguarde um instante.' });
+    }
+    const album = await findAlbumByToken(req.params.token);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+
+    const [studioName, assetsQ, spreadsQ] = await Promise.all([
+      getStudioNameForGallery(album.user_id),
+      supabaseAdmin.from('album_assets').select('*').eq('album_id', album.id).order('sort_order').order('created_at'),
+      supabaseAdmin.from('album_spreads').select('*').eq('album_id', album.id).order('position'),
+    ]);
+
+    res.json({
+      album: {
+        title: album.title,
+        size: album.size,
+        status: album.status,
+        studio_name: studioName,
+        allow_client_edit: !!album.allow_client_edit,
+      },
+      assets: (assetsQ.data || []).map(mapAlbumAsset),
+      spreads: (spreadsQ.data || []).map(mapAlbumSpread),
+    });
+  });
+
+  app.put('/api/public/album/:token/spreads', async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
+    if (!publicRateLimit(req, 'album_edit', 240, 60 * 1000)) {
+      return res.status(429).json({ error: 'Muitas ações seguidas. Aguarde um instante.' });
+    }
+    const album = await findAlbumByToken(req.params.token);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+    // Fail-closed: cliente só edita se permitido E enquanto não aprovado.
+    if (!album.allow_client_edit) return res.status(403).json({ error: 'Edição pela cliente desativada.' });
+    if (album.status === 'approved') return res.status(409).json({ error: 'Álbum já aprovado — fale com o estúdio pra reabrir.' });
+
+    const spreads = Array.isArray(req.body?.spreads) ? req.body.spreads : [];
+    if (spreads.length > 200) return res.status(400).json({ error: 'Máximo de 200 lâminas.' });
+    try {
+      await replaceAlbumSpreads(album.id, spreads);
+      await supabaseAdmin.from('album_projects').update({ updated_at: new Date().toISOString() }).eq('id', album.id);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || 'Falha ao salvar lâminas.' });
+    }
+  });
+
+  // Notifica o estúdio que a cliente aprovou o álbum (WhatsApp + e-mail).
+  async function notifyStudioAlbumApproved(album: any): Promise<void> {
+    const settings = await getGallerySettings(album.user_id);
+    const studioName = await getStudioNameForGallery(album.user_id);
+
+    if (isMailerConfigured() && supabaseAdmin) {
+      const { data } = await supabaseAdmin.auth.admin.getUserById(album.user_id);
+      const to = data?.user?.email;
+      if (to) {
+        await sendGalleryMessageEmail({
+          to,
+          from: settings.sender_email,
+          studioName,
+          subject: `Álbum aprovado — ${album.title}`,
+          messageText: `${album.client_name || 'A cliente'} aprovou o layout do álbum "${album.title}". Pode seguir pra produção.`,
+          link: albumLink(album.share_token),
+        }).catch(() => {});
+      }
+    }
+
+    if (settings.notify_studio_whatsapp !== false && BaileysManager.getStatus(album.user_id) === 'open') {
+      const own = BaileysManager.getConnectedPhone(album.user_id);
+      if (own) {
+        const msg = `📔 ${album.client_name || 'Cliente'} aprovou o álbum "${album.title}".`;
+        await BaileysManager.sendText(album.user_id, own.replace(/\D/g, ''), msg).catch(() => {});
+      }
+    }
+  }
+
+  app.post('/api/public/album/:token/approve', async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
+    if (!publicRateLimit(req, 'album_approve', 20, 60 * 1000)) {
+      return res.status(429).json({ error: 'Muitas tentativas. Aguarde um instante.' });
+    }
+    const album = await findAlbumByToken(req.params.token);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+    if (album.status === 'approved') return res.json({ ok: true, already: true });
+
+    const { error } = await supabaseAdmin
+      .from('album_projects')
+      .update({ status: 'approved', updated_at: new Date().toISOString() })
+      .eq('id', album.id);
+    if (error) return res.status(500).json({ error: error.message });
+
+    notifyStudioAlbumApproved(album).catch((e: any) =>
+      console.warn('[album] notificação de aprovação falhou:', e?.message));
+    res.json({ ok: true });
+  });
+
   // Cria customer no Asaas + subscription. Retorna invoiceUrl pra pagamento.
   // Body: { planSlug: 'pro'|'business', billingType: 'PIX'|'CREDIT_CARD',
   //         cpfCnpj, mobilePhone, creditCard?, creditCardHolderInfo? }

@@ -39,6 +39,9 @@ const WhatsappPage = lazy(() => import("./pages/WhatsappPage"));
 const GaleriasPage = lazy(() => import("./features/galeria/GaleriasPage"));
 const GaleriaDetailPage = lazy(() => import("./features/galeria/GaleriaDetailPage"));
 const GaleriaPublicaPage = lazy(() => import("./features/galeria-publica/GaleriaPublicaPage"));
+const AlbumListPage = lazy(() => import("./features/album/AlbumListPage"));
+const AlbumEditorPage = lazy(() => import("./features/album/AlbumEditorPage"));
+const AlbumPublicoPage = lazy(() => import("./features/album-publica/AlbumPublicoPage"));
 
 // ── Central de Configurações ────────────────────────────────────────────────
 const SettingsLayout = lazy(() => import("./pages/configuracoes/SettingsLayout"));
@@ -109,6 +112,7 @@ export default function App() {
               <Route path="/excluir-dados" element={<DataDeletionPage />} />
               {/* Galeria pública de seleção de fotos — cliente final, sem login */}
               <Route path="/g/:token" element={<GaleriaPublicaPage />} />
+              <Route path="/a/:token" element={<AlbumPublicoPage />} />
 
               {/* Rotas protegidas */}
               <Route
@@ -124,6 +128,8 @@ export default function App() {
                 <Route path="tarefas" element={<PermissionRoute module="jobs"><TasksPage /></PermissionRoute>} />
                 <Route path="galeria" element={<PermissionRoute module="jobs"><GaleriasPage /></PermissionRoute>} />
                 <Route path="galeria/:id" element={<PermissionRoute module="jobs"><GaleriaDetailPage /></PermissionRoute>} />
+                <Route path="album" element={<PermissionRoute module="jobs"><AlbumListPage /></PermissionRoute>} />
+                <Route path="album/:id" element={<PermissionRoute module="jobs"><AlbumEditorPage /></PermissionRoute>} />
                 <Route path="agente" element={<AgentePage />} />
                 <Route path="vendas" element={<PermissionRoute module="vendas"><VendasPage /></PermissionRoute>} />
                 <Route path="whatsapp" element={<PermissionRoute module="whatsapp"><WhatsappPage /></PermissionRoute>} />
