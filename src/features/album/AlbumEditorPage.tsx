@@ -46,20 +46,6 @@ export default function AlbumEditorPage() {
   const album = detail?.album;
   const curIndex = Math.min(current, Math.max(0, spreads.length - 1));
 
-  const handleSizeChange = async (size: string) => {
-    if (!album) return;
-    try {
-      await authFetch(`/api/albums/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ size }),
-      });
-      editor.load();
-    } catch {
-      notify("error", "Não foi possível mudar o tamanho.");
-    }
-  };
-
   if (loadError) {
     return (
       <div className="p-8 text-center">
@@ -91,14 +77,12 @@ export default function AlbumEditorPage() {
         <div className="ml-2"><SaveBadge state={saveState} /></div>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <select
-            value={album.size}
-            onChange={(e) => handleSizeChange(e.target.value)}
-            className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1.5 text-xs text-gray-700 dark:text-gray-200 outline-none"
-            title="Tamanho do álbum"
+          <span
+            className="rounded-lg bg-gray-100 dark:bg-gray-800 px-2.5 py-1.5 text-xs font-medium text-gray-600 dark:text-gray-300"
+            title="O tamanho é definido ao criar o álbum e não muda depois (evita bagunçar a diagramação)."
           >
-            {ALBUM_SIZES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
-          </select>
+            {ALBUM_SIZES.find((s) => s.id === album.size)?.label || album.size}
+          </span>
           <ExportarMenu albumId={id} title={album.title} size={album.size} spreads={spreads} onNotify={notify} />
           <button
             onClick={() => setShowSend(true)}

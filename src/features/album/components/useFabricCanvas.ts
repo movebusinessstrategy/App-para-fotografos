@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Canvas, FabricObject } from "fabric";
 import type { AlbumSpread } from "../types";
 import { canvasDims } from "../templates";
-import { serializeCanvas } from "./canvasHelpers";
+import { serializeCanvas, clampToFrame, clampToCanvas, type FabricObjAny } from "./canvasHelpers";
 
 export interface FabricSelection {
   type: "image" | "textbox" | "rect" | "circle" | "none";
@@ -73,9 +73,19 @@ export function useFabricCanvas(params: Params) {
 
     const onSel = () => setSelection(selectionFromObject(c.getActiveObject()));
     const onClear = () => setSelection(EMPTY_SELECTION);
+    // Foto presa ao quadro (clamp) e objetos livres dentro da lâmina.
+    const onConstrain = (e: { target?: FabricObject }) => {
+      const o = e.target as FabricObjAny | undefined;
+      if (!o) return;
+      if (o.frame) clampToFrame(o);
+      else clampToCanvas(o, c.getWidth(), c.getHeight());
+    };
     c.on("selection:created", onSel);
     c.on("selection:updated", onSel);
     c.on("selection:cleared", onClear);
+    c.on("object:moving", onConstrain);
+    c.on("object:scaling", onConstrain);
+    c.on("object:modified", onConstrain);
     c.on("object:modified", scheduleSave);
     c.on("object:added", scheduleSave);
     c.on("object:removed", scheduleSave);
@@ -157,6 +167,20 @@ export function useFabricCanvas(params: Params) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size, readOnly]);
 
+  // Ajusta o TAMANHO EXIBIDO (CSS) mantendo o backstore na resolução do
+  // editor. Mantém a proporção EXATA (fabric cssOnly) — sem transform frágil,
+  // que era a causa do "desconfigurado / saiu da lâmina / tamanho errado".
+  const fitToWidth = useCallback((availW: number): { w: number; h: number } => {
+    const c = fabricRef.current;
+    if (!c || availW <= 0) return { w: 0, h: 0 };
+    const bw = c.getWidth();
+    const bh = c.getHeight();
+    const cssW = Math.min(availW, bw);
+    const cssH = (cssW * bh) / bw;
+    c.setDimensions({ width: `${cssW}px`, height: `${cssH}px` }, { cssOnly: true });
+    return { w: cssW, h: cssH };
+  }, []);
+
   // Serializa a cena atual imediatamente (sem debounce) — usado ao trocar página.
   const snapshot = useCallback((): Record<string, unknown> | null => {
     const c = fabricRef.current;
@@ -184,6 +208,7 @@ export function useFabricCanvas(params: Params) {
     bgColor,
     loadSpread,
     snapshot,
+    fitToWidth,
     scheduleSave,
     changeBackground,
     refreshSelection: () => setSelection(selectionFromObject(fabricRef.current?.getActiveObject() ?? null)),
