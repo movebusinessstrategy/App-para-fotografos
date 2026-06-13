@@ -88,6 +88,33 @@ export function useFabricCanvas(params: Params) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Troca de TAMANHO do álbum: redimensiona o canvas e reescala os objetos
+  // proporcionalmente (mantém a composição relativa).
+  const sizeRef = useRef(size);
+  useEffect(() => {
+    const c = fabricRef.current;
+    if (!c || !ready) return;
+    if (sizeRef.current === size) return;
+    const oldDims = canvasDims(sizeRef.current, currentSpread?.kind);
+    const newDims = canvasDims(size, currentSpread?.kind);
+    sizeRef.current = size;
+    const sx = newDims.w / (oldDims.w || 1);
+    const sy = newDims.h / (oldDims.h || 1);
+    c.setDimensions({ width: newDims.w, height: newDims.h });
+    c.getObjects().forEach((o) => {
+      o.set({
+        left: (o.left || 0) * sx,
+        top: (o.top || 0) * sy,
+        scaleX: (o.scaleX || 1) * sx,
+        scaleY: (o.scaleY || 1) * sy,
+      });
+      o.setCoords();
+    });
+    c.requestRenderAll();
+    scheduleSave();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size, ready]);
+
   // Aplica readOnly em runtime (canvas e objetos).
   useEffect(() => {
     const c = fabricRef.current;

@@ -141,25 +141,41 @@ export function addShape(canvas: Canvas, kind: "rect" | "circle"): void {
   canvas.requestRenderAll();
 }
 
-// Aplica um template livre: cria placeholders cinza nos retângulos do layout.
+// Aplica um template livre: posiciona as caixas do layout sobre a lâmina
+// inteira. Usa as dimensões VIVAS do canvas (nunca valores defasados).
+// Limpa placeholders/fotos antigos e RE-ENCAIXA as fotos que já estavam na
+// página nas novas caixas (na ordem); sobra vira placeholder pra preencher.
 export function applyTemplate(canvas: Canvas, tpl: FreeTemplate): void {
-  tpl.slots.forEach((s) => {
-    const rect = new Rect({
-      left: s.x * canvas.width,
-      top: s.y * canvas.height,
-      width: s.w * canvas.width,
-      height: s.h * canvas.height,
-      fill: "#e9e4ea",
-      stroke: "#D4537E",
-      strokeDashArray: [6, 6],
-      strokeWidth: 1.5,
-      rx: 6,
-      ry: 6,
-      cornerColor: "#D4537E",
-    }) as FabricObjAny;
-    rect.isPlaceholder = true;
-    canvas.add(rect as FabricObject);
+  const W = canvas.getWidth();
+  const H = canvas.getHeight();
+
+  // Fotos já presentes (preserva pra reencaixar); remove tudo da página.
+  const fotos = canvas.getObjects().filter((o) => o.type === "image") as FabricObjAny[];
+  canvas.getObjects().slice().forEach((o) => canvas.remove(o));
+
+  tpl.slots.forEach((s, i) => {
+    const box = { x: s.x * W, y: s.y * H, w: s.w * W, h: s.h * H };
+    const foto = fotos[i];
+    if (foto) {
+      fitInto(foto as unknown as FabricImage, box);
+      foto.isPlaceholder = false;
+      foto.set({ cornerColor: "#D4537E", cornerStyle: "circle", transparentCorners: false });
+      canvas.add(foto as FabricObject);
+    } else {
+      const rect = new Rect({
+        left: box.x, top: box.y, width: box.w, height: box.h,
+        fill: "#ece9ef",
+        stroke: "#D4537E",
+        strokeDashArray: [6, 6],
+        strokeWidth: 1.5,
+        rx: 6, ry: 6,
+        cornerColor: "#D4537E", cornerStyle: "circle", transparentCorners: false,
+      }) as FabricObjAny;
+      rect.isPlaceholder = true;
+      canvas.add(rect as FabricObject);
+    }
   });
+  canvas.discardActiveObject();
   canvas.requestRenderAll();
 }
 

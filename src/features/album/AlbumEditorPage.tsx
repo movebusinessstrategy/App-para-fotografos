@@ -4,6 +4,7 @@ import { ArrowLeft, Check, Loader2, Send } from "lucide-react";
 
 import { authFetch } from "../../utils/authFetch";
 import { ALBUM_SIZES } from "./templates";
+import { medidasResumo } from "./components/exportFreeCanvas";
 import type { AlbumSpread } from "./types";
 import AlbumCanvasEditor, { AlbumCanvasEditorHandle } from "./components/AlbumCanvasEditor";
 import { FerramentasPanel, Ferramenta } from "./components/FerramentasPanel";
@@ -83,7 +84,9 @@ export default function AlbumEditorPage() {
         </button>
         <div className="min-w-0">
           <h1 className="truncate text-base font-bold text-gray-900 dark:text-white">{album.title}</h1>
-          {album.client_name && <p className="truncate text-xs text-gray-500 dark:text-gray-400">{album.client_name}</p>}
+          <p className="truncate text-xs text-gray-500 dark:text-gray-400">
+            {album.client_name ? `${album.client_name} · ` : ""}{medidasResumo(album.size)}
+          </p>
         </div>
         <div className="ml-2"><SaveBadge state={saveState} /></div>
 
