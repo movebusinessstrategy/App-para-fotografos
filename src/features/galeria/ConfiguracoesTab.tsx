@@ -603,6 +603,7 @@ function MercadoPagoConnect({ settings, onNotify, onReload }: MercadoPagoConnect
         expirou: "A sessão de conexão expirou. Tente de novo.",
         troca: "O Mercado Pago não aceitou a autorização. Tente de novo.",
         storage: "Erro interno ao salvar a conexão.",
+        cifra_ausente: "Servidor sem chave de segurança configurada — não dá pra guardar a conexão com segurança. Avise o suporte.",
         erro: "Erro ao conectar. Tente novamente.",
       };
       onNotify("error", motivos[err] || "Falha ao conectar Mercado Pago.");

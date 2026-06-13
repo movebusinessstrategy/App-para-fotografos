@@ -13,8 +13,8 @@ ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 import * as BaileysManager from './baileys-manager.js';
 import * as Asaas from './asaas-client.js';
 import { initSentry } from './sentry-server.js';
-import { encryptIfNeeded, decryptIfNeeded } from './lib/wa-token-crypto.js';
-import { signGallerySession, verifyGallerySession, type GallerySessionPayload } from './lib/gallery-session.js';
+import { encryptIfNeeded, decryptIfNeeded, isEncryptionConfigured } from './lib/wa-token-crypto.js';
+import { signGallerySession, verifyGallerySession, isGallerySessionConfigured, type GallerySessionPayload } from './lib/gallery-session.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 
@@ -7218,6 +7218,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       } catch { /* ignora */ }
 
       if (!supabaseAdmin) return failRedirect('storage');
+      // Em produção, NÃO grava token de pagamento sem cifra em repouso.
+      if (process.env.NODE_ENV === 'production' && !isEncryptionConfigured()) {
+        console.error('[MP OAuth] CRÍTICO: WA_TOKEN_ENCRYPTION_KEY ausente — recusando salvar token MP em plaintext.');
+        return failRedirect('cifra_ausente');
+      }
       await supabaseAdmin.from('gallery_settings').upsert({
         user_id: userId,
         mp_access_token: encryptIfNeeded(accessToken),
@@ -8146,6 +8151,55 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   // ── Acesso & auditoria (Fase 1) ────────────────────────────────────────────
 
+  // Rate-limit simples em memória pras rotas PÚBLICAS da galeria (anti
+  // brute-force de senha + anti-flood de seleção/comentário). Janela
+  // deslizante por chave (ip+token+ação). Em memória: não compartilha entre
+  // instâncias do Render, mas já corta o abuso de uma origem. Fail-open se
+  // algo der errado — nunca derruba uma requisição legítima por engano.
+  const RL_BUCKETS = new Map<string, number[]>();
+  function publicRateLimit(req: express.Request, action: string, max: number, windowMs: number): boolean {
+    try {
+      const ip = String(
+        req.headers['x-forwarded-for']?.toString().split(',')[0].trim() ||
+        req.headers['x-real-ip'] || req.socket.remoteAddress || 'unknown',
+      ).slice(0, 64);
+      const key = `${action}:${req.params.token || ''}:${ip}`;
+      const now = Date.now();
+      const hits = (RL_BUCKETS.get(key) || []).filter((t) => now - t < windowMs);
+      if (hits.length >= max) { RL_BUCKETS.set(key, hits); return false; }
+      hits.push(now);
+      RL_BUCKETS.set(key, hits);
+      // Limpeza preguiçosa pra não vazar memória (mapa não cresce sem fim).
+      if (RL_BUCKETS.size > 5000) {
+        for (const [k, v] of RL_BUCKETS) {
+          if (v.every((t) => now - t > windowMs)) RL_BUCKETS.delete(k);
+        }
+      }
+      return true;
+    } catch {
+      return true; // fail-open
+    }
+  }
+
+  // Conta login_fail recentes (últimos 15 min) pra lockout por conta/galeria,
+  // aproveitando o log de auditoria já gravado. Defesa adicional ao rate-limit
+  // por IP (cobre brute-force distribuído num mesmo e-mail).
+  async function recentLoginFails(galleryId: string, email: string): Promise<number> {
+    if (!supabaseAdmin) return 0;
+    try {
+      const since = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+      const { count } = await supabaseAdmin
+        .from('gallery_access_log')
+        .select('id', { count: 'exact', head: true })
+        .eq('gallery_id', galleryId)
+        .eq('event', 'login_fail')
+        .gte('created_at', since);
+      return count || 0;
+    } catch {
+      return 0;
+    }
+  }
+
   // Extrai IP + UA pro log de auditoria.
   function reqIpUa(req: express.Request): { ip: string; ua: string } {
     const ip = String(
@@ -8243,7 +8297,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const name = req.body?.name ? String(req.body.name).trim() : null;
     const role: 'owner' | 'guest' = req.body?.role === 'guest' ? 'guest' : 'owner';
     if (!email.includes('@')) return res.status(400).json({ error: 'E-mail inválido' });
-    if (password.length < 4) return res.status(400).json({ error: 'Senha curta demais (mínimo 4)' });
+    if (password.length < 6) return res.status(400).json({ error: 'Senha curta demais (mínimo 6 caracteres).' });
 
     const password_hash = await bcrypt.hash(password, 10);
     const { data, error } = await supabase
@@ -8268,7 +8322,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const patch: any = { updated_at: new Date().toISOString() };
     if (req.body?.name !== undefined) patch.name = req.body.name ? String(req.body.name).trim() : null;
     if (req.body?.role === 'owner' || req.body?.role === 'guest') patch.role = req.body.role;
-    if (typeof req.body?.password === 'string' && req.body.password.length >= 4) {
+    if (typeof req.body?.password === 'string' && req.body.password.length >= 6) {
       patch.password_hash = await bcrypt.hash(req.body.password, 10);
     }
     const { error } = await supabase
@@ -8353,12 +8407,23 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   app.post('/api/public/gallery/:token/login', async (req, res) => {
     if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
+
+    // Anti brute-force por IP: no máx 8 tentativas a cada 15 min por token+IP.
+    if (!publicRateLimit(req, 'login', 8, 15 * 60 * 1000)) {
+      return res.status(429).json({ error: 'Muitas tentativas. Aguarde alguns minutos e tente de novo.' });
+    }
+
     const gallery = await findGalleryByToken(req.params.token);
     if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
 
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
     if (!email || !password) return res.status(400).json({ error: 'E-mail e senha são obrigatórios.' });
+
+    // Lockout por galeria: muitas falhas recentes (qualquer IP) → trava temporária.
+    if (await recentLoginFails(gallery.id, email) >= 20) {
+      return res.status(429).json({ error: 'Acesso bloqueado por excesso de tentativas. Tente novamente em 15 minutos.' });
+    }
 
     const { data: user } = await supabaseAdmin
       .from('gallery_access_users')
@@ -8384,6 +8449,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     await logGalleryEvent(gallery.id, user.id, 'login', req);
 
     const session = signGallerySession({ gid: gallery.id, aid: user.id, role: user.role });
+    if (!session) {
+      // Chave de sessão ausente em produção (fail-closed) — não dá pra logar.
+      return res.status(503).json({ error: 'Login temporariamente indisponível. Avise o estúdio.' });
+    }
     res.json({
       session_token: session,
       user: { id: user.id, email: user.email, name: user.name, role: user.role },
@@ -8468,6 +8537,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   app.post('/api/public/gallery/:token/select', async (req, res) => {
     if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
+    // Anti-flood: ~240 cliques/min por token+IP (folgado pra seleção normal).
+    if (!publicRateLimit(req, 'select', 240, 60 * 1000)) {
+      return res.status(429).json({ error: 'Muitas ações seguidas. Aguarde um instante.' });
+    }
     const gallery = await findGalleryByToken(req.params.token);
     if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
     if (gallery.status === 'delivered' || gallery.status === 'selected') {
@@ -8491,7 +8564,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .from('gallery_photos').select('id').eq('id', photo_id).eq('gallery_id', gallery.id).maybeSingle();
     if (!photo) return res.status(404).json({ error: 'Foto não encontrada' });
 
-    const cleanComment = typeof comment === 'string' && comment.trim() ? comment.trim() : null;
+    // Limita a 1000 chars — comentário de foto não precisa de mais e evita
+    // que um blob gigante seja gravado (DoS de armazenamento).
+    const cleanComment = typeof comment === 'string' && comment.trim() ? comment.trim().slice(0, 1000) : null;
     const { error } = await supabaseAdmin.from('gallery_selections').upsert(
       {
         gallery_id: gallery.id,
@@ -8560,7 +8635,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   async function createGalleryPayment(
     gallery: any,
     totals: { selected_count: number; extra_count: number; amount: number },
-  ): Promise<{ payment_url: string | null; order_code: string | null }> {
+  ): Promise<{ payment_url: string | null; order_code: string | null; connected: boolean }> {
+    // connected = o estúdio tem MP vinculado. Distingue "não conectou"
+    // (cobra por fora, ok finalizar) de "conectou mas a cobrança falhou"
+    // (erro transitório — NÃO pode liberar a galeria de graça).
+    const settings = await getGallerySettings(gallery.user_id);
+    const connected = !!(settings.mp_user_id && settings.mp_access_token);
+
     const order_code = `G${Date.now().toString(36).toUpperCase()}${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
     const { data: row, error } = await supabaseAdmin!
       .from('gallery_payments')
@@ -8577,14 +8658,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .single();
     if (error || !row) {
       console.warn('[galeria] criar pagamento falhou:', error?.message);
-      return { payment_url: null, order_code: null };
+      return { payment_url: null, order_code: null, connected };
     }
-    const settings = await getGallerySettings(gallery.user_id);
     const payment_url = await createMercadoPagoCheckout(gallery, row, settings);
     if (payment_url) {
       await supabaseAdmin!.from('gallery_payments').update({ payment_url }).eq('id', row.id);
     }
-    return { payment_url, order_code };
+    return { payment_url, order_code, connected };
   }
 
   // Avisa o estúdio (e-mail de login + WhatsApp pro próprio número conectado).
@@ -8678,12 +8758,20 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const payment = await createGalleryPayment(gallery, totals);
     await logGalleryEvent(gallery.id, access.accessUserId, 'pay_attempt', req, {
-      detail: `valor=${totals.amount} pedido=${payment.order_code || '-'}`,
+      detail: `valor=${totals.amount} pedido=${payment.order_code || '-'} conectado=${payment.connected}`,
     });
 
     if (!payment.payment_url) {
-      // Estúdio sem Mercado Pago conectado: não dá pra travar o cliente sem
-      // saída. Finaliza e o estúdio cobra por fora (comportamento antigo).
+      if (payment.connected) {
+        // Estúdio TEM MP, mas a cobrança falhou agora (rede/MP fora/token).
+        // NÃO finaliza de graça — devolve erro pra cliente tentar de novo.
+        console.warn(`[galeria] cobrança MP falhou com estúdio conectado — galeria ${gallery.id} NÃO finalizada`);
+        return res.status(502).json({
+          ok: false,
+          error: 'Não conseguimos gerar o pagamento agora. Tente novamente em instantes.',
+        });
+      }
+      // Estúdio nunca conectou MP: finaliza e o estúdio cobra por fora.
       await finalizeGallery(gallery, totals, 'cliente-sem-gateway');
       return res.json({ ok: true, finalized: true, ...totals, payment_url: null, order_code: payment.order_code });
     }
@@ -8702,9 +8790,31 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     );
     if (!resp.ok) return null;
     const data: any = await resp.json().catch(() => null);
-    const approved = (data?.results || []).find((p: any) => p.status === 'approved');
-    if (!approved) return null;
-    const patch = { status: 'paid', paid_at: new Date().toISOString() };
+    // SÓ aceita se: aprovado + moeda BRL + valor pago >= valor cobrado.
+    // Sem isso, um pagamento parcial/de centavos marcaria a galeria como
+    // paga (fraude de valor). Tolerância de 1 centavo p/ arredondamento.
+    const esperado = Number(payment.amount || 0);
+    const approved = (data?.results || []).find((p: any) =>
+      p.status === 'approved' &&
+      (p.currency_id === 'BRL' || !p.currency_id) &&
+      Number(p.transaction_amount || 0) >= esperado - 0.01,
+    );
+    if (!approved) {
+      // Há aprovado mas com valor divergente? Loga pro estúdio investigar.
+      const divergente = (data?.results || []).find((p: any) => p.status === 'approved');
+      if (divergente) {
+        console.warn(`[galeria] pagamento aprovado com valor divergente (esperado ${esperado}, pago ${divergente.transaction_amount}) — galeria NÃO finalizada. payment ${payment.id}`);
+        try {
+          await supabaseAdmin!.from('gallery_access_log').insert({
+            gallery_id: payment.gallery_id, access_user_id: null, event: 'pay_mismatch',
+            detail: `esperado=${esperado} pago=${divergente.transaction_amount} ${divergente.currency_id || ''}`,
+            ip: 'mercadopago', user_agent: null,
+          });
+        } catch { /* best-effort */ }
+      }
+      return null;
+    }
+    const patch = { status: 'paid', paid_at: new Date().toISOString(), provider_ref: String(approved.id || payment.provider_ref || '') };
     await supabaseAdmin!.from('gallery_payments').update(patch).eq('id', payment.id);
 
     try {
@@ -15786,6 +15896,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    // Avisos de segurança no boot (galeria/pagamento).
+    if (process.env.NODE_ENV === 'production') {
+      if (!isEncryptionConfigured()) {
+        console.error('[SEGURANÇA] WA_TOKEN_ENCRYPTION_KEY ausente: tokens de WhatsApp/Mercado Pago NÃO serão cifrados e conexões de pagamento serão recusadas. Configure uma chave de 64 hex.');
+      }
+      if (!isGallerySessionConfigured()) {
+        console.error('[SEGURANÇA] Sem chave de sessão da galeria (GALLERY_SESSION_KEY/WA_TOKEN_ENCRYPTION_KEY): login de clientes na galeria está DESABILITADO. Configure uma chave de 64 hex.');
+      }
+    }
   });
 
   // Crashes que escapam — também vão pro Sentry

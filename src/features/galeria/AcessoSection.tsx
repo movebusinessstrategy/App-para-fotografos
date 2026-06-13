@@ -365,8 +365,8 @@ function AddAccessModal({
           <div className="relative">
             <input
               type={showPwd ? "text" : "password"}
-              value={password} onChange={(e) => setPassword(e.target.value)} required minLength={4}
-              placeholder="Mínimo 4 caracteres"
+              value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6}
+              placeholder="Mínimo 6 caracteres"
               className="w-full pl-3 pr-10 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm"
             />
             <button
