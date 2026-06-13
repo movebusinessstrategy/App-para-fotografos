@@ -1,10 +1,11 @@
 import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { BookImage, Loader2, Plus, X } from "lucide-react";
+import { BookImage, Loader2, Plus, Trash2, X } from "lucide-react";
 
 import { authFetch } from "../../utils/authFetch";
 import { useApi, refreshApi } from "../../utils/useApi";
 import { cn } from "../../utils/cn";
+import { ConfirmModal } from "../../components/ui/ConfirmModal";
 import { ALBUM_SIZES } from "./templates";
 import type { Album, AlbumListItem } from "./types";
 
@@ -29,6 +30,22 @@ export default function AlbumListPage() {
   const { data, error, isLoading } = useApi<{ albums: AlbumListItem[] }>("/api/albums");
   const albums = useMemo(() => (Array.isArray(data?.albums) ? data!.albums : []), [data]);
   const [showNew, setShowNew] = useState(false);
+  const [confirmDel, setConfirmDel] = useState<AlbumListItem | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async (album: AlbumListItem) => {
+    setDeleting(true);
+    try {
+      const res = await authFetch(`/api/albums/${album.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error();
+      refreshApi("/api/albums");
+    } catch {
+      /* silencioso — a lista atualiza sozinha no próximo refresh */
+    } finally {
+      setDeleting(false);
+      setConfirmDel(null);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -66,7 +83,7 @@ export default function AlbumListPage() {
       {albums.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {albums.map((a) => (
-            <AlbumCard key={a.id} album={a} />
+            <AlbumCard key={a.id} album={a} onDelete={() => setConfirmDel(a)} />
           ))}
         </div>
       )}
@@ -77,6 +94,16 @@ export default function AlbumListPage() {
           onCreated={() => { refreshApi("/api/albums"); setShowNew(false); }}
         />
       )}
+
+      <ConfirmModal
+        open={!!confirmDel}
+        title="Excluir álbum"
+        message={`Excluir o álbum "${confirmDel?.title || ""}"? As fotos e lâminas dele serão removidas. Esta ação não pode ser desfeita.`}
+        confirmText={deleting ? "Excluindo..." : "Excluir"}
+        variant="danger"
+        onConfirm={() => { if (confirmDel) handleDelete(confirmDel); }}
+        onCancel={() => setConfirmDel(null)}
+      />
     </div>
   );
 }
@@ -103,13 +130,20 @@ function EmptyState({ onNew }: { onNew: () => void }) {
   );
 }
 
-function AlbumCard({ album }: { album: AlbumListItem; key?: React.Key | null }) {
+function AlbumCard({ album, onDelete }: { album: AlbumListItem; onDelete: () => void; key?: React.Key | null }) {
   const navigate = useNavigate();
   return (
-    <button
+    <div
       onClick={() => navigate(`/album/${album.id}`)}
-      className="group text-left bg-white dark:bg-gray-800/90 ring-1 ring-gray-200 dark:ring-gray-700/80 rounded-xl overflow-hidden shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all"
+      className="group relative cursor-pointer text-left bg-white dark:bg-gray-800/90 ring-1 ring-gray-200 dark:ring-gray-700/80 rounded-xl overflow-hidden shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all"
     >
+      <button
+        onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        title="Excluir álbum"
+        className="absolute top-2 right-2 z-10 rounded-lg bg-white/90 dark:bg-gray-900/90 p-1.5 text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+      >
+        <Trash2 size={14} />
+      </button>
       <div className="aspect-[3/2] bg-gray-100 dark:bg-gray-900 flex items-center justify-center overflow-hidden">
         {album.cover_thumb_url ? (
           <img
@@ -138,7 +172,7 @@ function AlbumCard({ album }: { album: AlbumListItem; key?: React.Key | null }) 
           {album.spread_count} lâmina{album.spread_count === 1 ? "" : "s"} · {album.asset_count} foto{album.asset_count === 1 ? "" : "s"}
         </div>
       </div>
-    </button>
+    </div>
   );
 }
 
