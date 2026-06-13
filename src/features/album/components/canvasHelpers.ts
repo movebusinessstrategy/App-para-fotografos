@@ -51,6 +51,7 @@ function coverIntoFrame(img: FabricObjAny, frame: Frame): void {
   const ih = img.height || 1;
   const scale = Math.max(frame.w / iw, frame.h / ih);
   const clip = new Rect({
+    originX: "left", originY: "top",
     left: frame.x, top: frame.y, width: frame.w, height: frame.h, absolutePositioned: true,
   });
   img.set({
@@ -100,6 +101,9 @@ export function clampToCanvas(o: FabricObjAny, W: number, H: number): void {
 // Placeholder de um quadro vazio: fixo (não move/escala), clicável pra preencher.
 function makePlaceholder(frame: Frame): FabricObjAny {
   const rect = new Rect({
+    // fabric v7 usa origin 'center' por padrão — fixamos top-left pra que
+    // left/top sejam o CANTO do quadro (senão a caixa sobe pra esquerda).
+    originX: "left", originY: "top",
     left: frame.x, top: frame.y, width: frame.w, height: frame.h,
     fill: "#ece9ef",
     stroke: "#D4537E", strokeDashArray: [7, 7], strokeWidth: 1.5,
@@ -200,6 +204,7 @@ export function addText(canvas: Canvas): void {
 export function addShape(canvas: Canvas, kind: "rect" | "circle"): void {
   const size = Math.min(canvas.width, canvas.height) * 0.3;
   const common = {
+    originX: "left" as const, originY: "top" as const,
     left: canvas.width * 0.5 - size / 2,
     top: canvas.height * 0.5 - size / 2,
     fill: "#D4537E",
