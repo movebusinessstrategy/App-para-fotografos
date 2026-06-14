@@ -190,14 +190,17 @@ function NovoAlbumModal({ onClose, onCreated }: { onClose: () => void; onCreated
     return Array.isArray(galData?.galleries) ? galData!.galleries! : [];
   }, [galData]);
 
-  const firstSizeOf = (g: Grafica): string => {
-    const t = g.linhas?.[0]?.tamanhos?.[0];
+  const firstLinhaId = (gr: Grafica): string => gr.linhas?.[0]?.id || "";
+  const sizeOfLinha = (gr: Grafica, lid: string): string => {
+    const l = gr.linhas?.find((x) => x.id === lid);
+    const t = l?.tamanhos?.[0];
     return t ? tamanhoToSize(t) : (ALBUM_SIZES[0]?.id || "sq30");
   };
 
   const [title, setTitle] = useState("");
   const [graficaId, setGraficaId] = useState("generico");
-  const [size, setSize] = useState<string>(() => firstSizeOf(graficaById("generico")));
+  const [linhaId, setLinhaId] = useState(() => firstLinhaId(graficaById("generico")));
+  const [size, setSize] = useState<string>(() => sizeOfLinha(graficaById("generico"), firstLinhaId(graficaById("generico"))));
   const [customW, setCustomW] = useState("30");
   const [customH, setCustomH] = useState("30");
   const [galleryId, setGalleryId] = useState("");
@@ -206,11 +209,19 @@ function NovoAlbumModal({ onClose, onCreated }: { onClose: () => void; onCreated
 
   const g = graficaById(graficaId);
   const temLinhas = !!(g.linhas && g.linhas.length);
+  const linhaAtual = g.linhas?.find((l) => l.id === linhaId) || g.linhas?.[0];
   const isCustom = size === "__custom";
 
   const trocarGrafica = (id: string) => {
+    const ng = graficaById(id);
+    const lid = firstLinhaId(ng);
     setGraficaId(id);
-    setSize(firstSizeOf(graficaById(id)));
+    setLinhaId(lid);
+    setSize(sizeOfLinha(ng, lid));
+  };
+  const trocarLinha = (lid: string) => {
+    setLinhaId(lid);
+    setSize(sizeOfLinha(g, lid));
   };
 
   // Medida resolvida (pra mostrar a prévia da lâmina).
@@ -284,24 +295,30 @@ function NovoAlbumModal({ onClose, onCreated }: { onClose: () => void; onCreated
             </p>
           </div>
 
+          {temLinhas && (
+            <div>
+              <label className={LABEL_CLS}>Linha / coleção</label>
+              <select value={linhaId} onChange={(e) => trocarLinha(e.target.value)} className={INPUT_CLS}>
+                {g.linhas!.map((l) => (
+                  <option key={l.id} value={l.id}>{l.nome}</option>
+                ))}
+              </select>
+              {linhaAtual?.obs && (
+                <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">{linhaAtual.obs}</p>
+              )}
+            </div>
+          )}
+
           <div>
-            <label className={LABEL_CLS}>Linha e tamanho</label>
+            <label className={LABEL_CLS}>Tamanho</label>
             <select value={size} onChange={(e) => setSize(e.target.value)} className={INPUT_CLS}>
-              {temLinhas ? (
-                g.linhas!.map((l) => (
-                  <optgroup key={l.id} label={l.nome}>
-                    {l.tamanhos.map((t) => (
-                      <option key={l.id + tamanhoToSize(t)} value={tamanhoToSize(t)}>{l.nome} — {t.label} cm</option>
-                    ))}
-                  </optgroup>
-                ))
-              ) : (
-                <optgroup label="Tamanhos padrão">
-                  {ALBUM_SIZES.map((s) => (
+              {temLinhas
+                ? (linhaAtual?.tamanhos || []).map((t) => (
+                    <option key={tamanhoToSize(t)} value={tamanhoToSize(t)}>{t.label} cm</option>
+                  ))
+                : ALBUM_SIZES.map((s) => (
                     <option key={s.id} value={s.id}>{s.label}</option>
                   ))}
-                </optgroup>
-              )}
               <option value="__custom">Outro tamanho (personalizado)…</option>
             </select>
 
@@ -315,8 +332,7 @@ function NovoAlbumModal({ onClose, onCreated }: { onClose: () => void; onCreated
             )}
 
             <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
-              Página {pg.w}×{pg.h} cm · lâmina aberta {sc.w}×{sc.h} cm{g.linhas ? "" : ""}
-              {!temLinhas && graficaId !== "generico" ? " · (linhas dessa gráfica em breve — use personalizado se faltar)" : ""}
+              Página {pg.w}×{pg.h} cm · lâmina aberta {sc.w}×{sc.h} cm
             </p>
           </div>
 
