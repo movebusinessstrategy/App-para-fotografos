@@ -1,4 +1,5 @@
 import React, { useEffect, useImperativeHandle, useRef } from "react";
+import { Redo2, Undo2 } from "lucide-react";
 
 import type { AlbumAsset, AlbumSpread } from "../types";
 import { FREE_TEMPLATES, freeTemplateById } from "../templates";
@@ -99,7 +100,8 @@ const AlbumCanvasEditor = React.forwardRef<AlbumCanvasEditorHandle, Props>(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [currentIndex, fc.ready]);
 
-    // Tecla Delete remove o objeto ativo.
+    // Atalhos: Delete remove o ativo; Ctrl/Cmd+Z desfaz; Ctrl/Cmd+Shift+Z ou
+    // Ctrl/Cmd+Y refaz.
     useEffect(() => {
       if (readOnly) return;
       const onKey = (e: KeyboardEvent) => {
@@ -108,16 +110,29 @@ const AlbumCanvasEditor = React.forwardRef<AlbumCanvasEditorHandle, Props>(
         const c = fc.fabricRef.current;
         if (!c) return;
         const active = c.getActiveObject() as FabricObjAny | undefined;
-        // Não apaga enquanto edita texto.
+        // Não interfere enquanto edita texto.
         const editing = active && active.type === "textbox" && (active as { isEditing?: boolean }).isEditing;
-        if ((e.key === "Delete" || e.key === "Backspace") && !editing) {
+        if (editing) return;
+        const mod = e.ctrlKey || e.metaKey;
+        const k = e.key.toLowerCase();
+        if (mod && k === "z") {
+          e.preventDefault();
+          if (e.shiftKey) fc.redo(); else fc.undo();
+          return;
+        }
+        if (mod && k === "y") {
+          e.preventDefault();
+          fc.redo();
+          return;
+        }
+        if (e.key === "Delete" || e.key === "Backspace") {
           e.preventDefault();
           deleteActive(c);
         }
       };
       window.addEventListener("keydown", onKey);
       return () => window.removeEventListener("keydown", onKey);
-    }, [readOnly, fc.fabricRef]);
+    }, [readOnly, fc.fabricRef, fc.undo, fc.redo]);
 
     // API imperativa pra barra de ferramentas do estúdio.
     const handle: AlbumCanvasEditorHandle = {
@@ -152,10 +167,36 @@ const AlbumCanvasEditor = React.forwardRef<AlbumCanvasEditorHandle, Props>(
 
     return (
       <div className="flex w-full flex-col gap-3 lg:flex-row">
-        <div ref={containerRef} className="flex min-w-0 flex-1 items-start justify-center">
-          {/* fabric controla o tamanho EXIBIDO via cssOnly (proporção exata). */}
-          <div className="shadow-lg ring-1 ring-black/10 dark:ring-white/10">
-            <canvas ref={fc.canvasElRef} />
+        <div className="flex min-w-0 flex-1 flex-col">
+          {!readOnly && (
+            <div className="mb-2 flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => fc.undo()}
+                disabled={!fc.canUndo}
+                title="Desfazer (Ctrl+Z)"
+                aria-label="Desfazer"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 dark:border-gray-700 px-2.5 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Undo2 size={14} /> Desfazer
+              </button>
+              <button
+                type="button"
+                onClick={() => fc.redo()}
+                disabled={!fc.canRedo}
+                title="Refazer (Ctrl+Shift+Z)"
+                aria-label="Refazer"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 dark:border-gray-700 px-2.5 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Redo2 size={14} /> Refazer
+              </button>
+            </div>
+          )}
+          <div ref={containerRef} className="flex w-full items-start justify-center">
+            {/* fabric controla o tamanho EXIBIDO via cssOnly (proporção exata). */}
+            <div className="shadow-lg ring-1 ring-black/10 dark:ring-white/10">
+              <canvas ref={fc.canvasElRef} />
+            </div>
           </div>
         </div>
 

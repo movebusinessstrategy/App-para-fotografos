@@ -61,6 +61,17 @@ export interface Album {
   studio_name?: string;
 }
 
+// Comentário/pedido de ajuste do cliente numa lâmina (ou geral).
+export interface AlbumComment {
+  id: string;
+  author_name: string | null;
+  spread_position: number | null;
+  body: string;
+  resolved: boolean;
+  created_at: string;
+  access_user_id?: string | null;
+}
+
 // Resposta de GET /api/albums/:id (e da rota pública).
 export interface AlbumDetail {
   album: Album;

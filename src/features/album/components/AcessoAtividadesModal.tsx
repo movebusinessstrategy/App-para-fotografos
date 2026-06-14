@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Activity, AlertTriangle, Check, CircleCheck, Download, Edit3, Eye, Loader2,
-  Lock, LogIn, Plus, ShieldCheck, ShieldOff, UserPlus, X,
+  Lock, LogIn, MessageSquare, Plus, ShieldCheck, ShieldOff, UserPlus, X,
 } from "lucide-react";
 
 import { authFetch } from "../../../utils/authFetch";
@@ -48,10 +48,20 @@ const ROLE_LABEL: Record<AccessUser["role"], string> = {
 const EVENT_META: Record<string, { label: string; icon: React.ComponentType<{ size?: number; className?: string }>; color: string }> = {
   login:      { label: "Entrou",          icon: LogIn,       color: "text-emerald-600 dark:text-emerald-400" },
   login_fail: { label: "Login falhou",    icon: ShieldOff,   color: "text-red-600 dark:text-red-400" },
-  view_album: { label: "Abriu o álbum",   icon: Eye,         color: "text-blue-600 dark:text-blue-400" },
-  edit_album: { label: "Editou o álbum",  icon: Edit3,       color: "text-amber-600 dark:text-amber-400" },
-  approve:    { label: "Aprovou o álbum", icon: CircleCheck, color: "text-emerald-600 dark:text-emerald-400" },
+  view_album: { label: "Abriu o álbum",   icon: Eye,           color: "text-blue-600 dark:text-blue-400" },
+  edit_album: { label: "Editou o álbum",  icon: Edit3,         color: "text-amber-600 dark:text-amber-400" },
+  comment:    { label: "Comentou",        icon: MessageSquare, color: "text-amber-600 dark:text-amber-400" },
+  approve:    { label: "Aprovou o álbum", icon: CircleCheck,   color: "text-emerald-600 dark:text-emerald-400" },
 };
+
+interface AlbumComment {
+  id: string;
+  author_name: string | null;
+  spread_position: number | null;
+  body: string;
+  resolved: boolean;
+  created_at: string;
+}
 
 function formatBR(d: string | null): string {
   if (!d) return "—";
@@ -67,7 +77,7 @@ interface Props {
 }
 
 export function AcessoAtividadesModal({ albumId, onClose, onNotify }: Props) {
-  const [tab, setTab] = useState<"acesso" | "atividades">("acesso");
+  const [tab, setTab] = useState<"acesso" | "atividades" | "comentarios">("acesso");
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -83,7 +93,7 @@ export function AcessoAtividadesModal({ albumId, onClose, onNotify }: Props) {
         </div>
 
         <div className="flex gap-1 px-3 pt-3">
-          {([["acesso", "Acesso e privacidade"], ["atividades", "Atividades do cliente"]] as const).map(([id, label]) => (
+          {([["acesso", "Acesso e privacidade"], ["comentarios", "Comentários"], ["atividades", "Atividades do cliente"]] as const).map(([id, label]) => (
             <button
               key={id}
               onClick={() => setTab(id)}
@@ -102,6 +112,8 @@ export function AcessoAtividadesModal({ albumId, onClose, onNotify }: Props) {
         <div className="flex-1 overflow-y-auto p-5">
           {tab === "acesso" ? (
             <AbaAcesso albumId={albumId} onNotify={onNotify} />
+          ) : tab === "comentarios" ? (
+            <AbaComentarios albumId={albumId} onNotify={onNotify} />
           ) : (
             <AbaAtividades albumId={albumId} />
           )}
@@ -560,5 +572,106 @@ function EventRow({ event }: { event: AuditEvent; key?: React.Key | null }) {
         </div>
       </div>
     </li>
+  );
+}
+
+// ── Aba Comentários ──────────────────────────────────────────────────────────
+
+function AbaComentarios({ albumId, onNotify }: { albumId: string; onNotify: (k: ToastKind, m: string) => void }) {
+  const [comments, setComments] = useState<AlbumComment[] | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const reload = async () => {
+    setLoading(true);
+    try {
+      const res = await authFetch(`/api/albums/${albumId}/comments`);
+      if (!res.ok) throw new Error("falha");
+      const data = await res.json();
+      setComments(data.comments || []);
+    } catch {
+      setComments(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { reload(); /* eslint-disable-line react-hooks/exhaustive-deps */ }, [albumId]);
+
+  const toggleResolved = async (c: AlbumComment) => {
+    try {
+      const res = await authFetch(`/api/albums/${albumId}/comments/${c.id}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resolved: !c.resolved }),
+      });
+      if (!res.ok) throw new Error("falha");
+      setComments((cs) => (cs || []).map((x) => (x.id === c.id ? { ...x, resolved: !x.resolved } : x)));
+    } catch {
+      onNotify("error", "Não foi possível atualizar.");
+    }
+  };
+
+  if (loading) {
+    return <div className="py-8 text-center text-sm text-gray-500"><Loader2 size={16} className="inline animate-spin mr-2" />Carregando…</div>;
+  }
+  if (!comments) {
+    return <div className="py-8 text-center text-sm text-gray-500 flex items-center justify-center gap-2"><AlertTriangle size={14} /> Não foi possível carregar.</div>;
+  }
+  if (comments.length === 0) {
+    return (
+      <div className="py-10 text-center">
+        <MessageSquare size={22} className="mx-auto mb-2 text-gray-300 dark:text-gray-600" />
+        <p className="text-sm text-gray-500">Nenhum comentário do cliente ainda.</p>
+        <p className="mt-1 text-xs text-gray-400">Quando o cliente pedir um ajuste na apresentação, aparece aqui.</p>
+      </div>
+    );
+  }
+
+  const pendentes = comments.filter((c) => !c.resolved).length;
+
+  return (
+    <div className="space-y-3">
+      {pendentes > 0 && (
+        <div className="rounded-lg bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs font-medium text-amber-700 dark:text-amber-300">
+          {pendentes} pedido{pendentes === 1 ? "" : "s"} de ajuste em aberto
+        </div>
+      )}
+      <ul className="space-y-2">
+        {comments.map((c) => (
+          <li
+            key={c.id}
+            className={
+              "rounded-xl border p-3 " +
+              (c.resolved
+                ? "border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/20 opacity-70"
+                : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900")
+            }
+          >
+            <div className="mb-1 flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
+              {c.spread_position != null && (
+                <span className="rounded-full bg-violet-100 dark:bg-violet-900/40 px-2 py-0.5 font-medium text-violet-700 dark:text-violet-300">
+                  Lâmina {c.spread_position + 1}
+                </span>
+              )}
+              <span className="font-medium text-gray-700 dark:text-gray-300">{c.author_name || "Cliente"}</span>
+              <span>· {formatBR(c.created_at)}</span>
+              <button
+                onClick={() => toggleResolved(c)}
+                className={
+                  "ml-auto inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors " +
+                  (c.resolved
+                    ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                    : "border border-gray-200 dark:border-gray-700 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800")
+                }
+              >
+                <Check size={11} /> {c.resolved ? "Resolvido" : "Marcar resolvido"}
+              </button>
+            </div>
+            <p className={"whitespace-pre-wrap text-sm " + (c.resolved ? "text-gray-500 line-through" : "text-gray-800 dark:text-gray-100")}>
+              {c.body}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

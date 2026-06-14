@@ -8935,6 +8935,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.status(400).json({ error: 'Tabelas do álbum não existem. Rode a migration 033_album.sql no Supabase.' });
   const albumSecurityMigrationError = (res: express.Response) =>
     res.status(400).json({ error: 'Tabelas de acesso do álbum não existem. Rode a migration 035_album_security.sql no Supabase.' });
+  const albumCommentsMigrationError = (res: express.Response) =>
+    res.status(400).json({ error: 'Tabela de comentários do álbum não existe. Rode a migration 036_album_comments.sql no Supabase.' });
   const newAlbumToken = () => crypto.randomBytes(18).toString('base64url');
   const albumLink = (token: string) => `${galleryPublicBase()}/a/${token}`;
 
@@ -9696,6 +9698,38 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ users: usersQ.data || [], events, summary });
   });
 
+  // ── Comentários do cliente — lado do estúdio ──────────────────────────────
+
+  app.get('/api/albums/:id/comments', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const album = await carregarAlbum(supabase, userId, req.params.id).catch(() => null);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+    const { data, error } = await supabase
+      .from('album_comments')
+      .select('id, access_user_id, author_name, spread_position, body, resolved, created_at')
+      .eq('album_id', album.id)
+      .order('created_at', { ascending: false });
+    if (error) {
+      return albumTableMissing(error) ? albumCommentsMigrationError(res) : res.status(500).json({ error: error.message });
+    }
+    res.json({ comments: data || [] });
+  });
+
+  app.put('/api/albums/:id/comments/:commentId', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const album = await carregarAlbum(supabase, userId, req.params.id).catch(() => null);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+    const { error } = await supabase
+      .from('album_comments')
+      .update({ resolved: !!req.body?.resolved })
+      .eq('id', req.params.commentId)
+      .eq('album_id', album.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+  });
+
   // ── Rotas PÚBLICAS (cliente final, validação por share_token) ─────────────
 
   async function findAlbumByToken(token: string): Promise<any | null> {
@@ -9779,9 +9813,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       return res.json({ album: meta, needs_login: true, assets: [], spreads: [] });
     }
 
-    const [assetsQ, spreadsQ] = await Promise.all([
+    const [assetsQ, spreadsQ, commentsQ] = await Promise.all([
       supabaseAdmin.from('album_assets').select('*').eq('album_id', album.id).order('sort_order').order('created_at'),
       supabaseAdmin.from('album_spreads').select('*').eq('album_id', album.id).order('position'),
+      supabaseAdmin.from('album_comments')
+        .select('id, author_name, spread_position, body, resolved, created_at')
+        .eq('album_id', album.id).order('created_at', { ascending: false }),
     ]);
 
     await logAlbumEvent(album.id, access.accessUserId, 'view_album', req);
@@ -9790,6 +9827,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       album: meta,
       assets: (assetsQ.data || []).map(mapAlbumAsset),
       spreads: (spreadsQ.data || []).map(mapAlbumSpread),
+      comments: commentsQ.data || [], // [] se a migration 036 ainda não rodou
     });
   });
 
@@ -9873,6 +9911,70 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     notifyStudioAlbumApproved(album).catch((e: any) =>
       console.warn('[album] notificação de aprovação falhou:', e?.message));
     res.json({ ok: true });
+  });
+
+  // Avisa o estúdio (WhatsApp + e-mail) que o cliente pediu um ajuste/comentou.
+  async function notifyStudioAlbumComment(album: any, autor: string | null, body: string, pagina: number | null): Promise<void> {
+    const settings = await getGallerySettings(album.user_id);
+    const studioName = await getStudioNameForGallery(album.user_id);
+    const ref = pagina != null ? ` (lâmina ${pagina + 1})` : '';
+    const quem = autor || album.client_name || 'O cliente';
+    const txt = `💬 ${quem} comentou no álbum "${album.title}"${ref}: "${body.slice(0, 220)}"`;
+
+    if (isMailerConfigured() && supabaseAdmin) {
+      const { data } = await supabaseAdmin.auth.admin.getUserById(album.user_id);
+      const to = data?.user?.email;
+      if (to) {
+        await sendGalleryMessageEmail({
+          to,
+          from: settings.sender_email,
+          studioName,
+          subject: `Novo comentário no álbum — ${album.title}`,
+          messageText: txt,
+          link: albumLink(album.share_token),
+        }).catch(() => {});
+      }
+    }
+    if (settings.notify_studio_whatsapp !== false && BaileysManager.getStatus(album.user_id) === 'open') {
+      const own = BaileysManager.getConnectedPhone(album.user_id);
+      if (own) await BaileysManager.sendText(album.user_id, own.replace(/\D/g, ''), txt).catch(() => {});
+    }
+  }
+
+  app.post('/api/public/album/:token/comment', async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
+    if (!publicRateLimit(req, 'album_comment', 30, 60 * 1000)) {
+      return res.status(429).json({ error: 'Muitos comentários seguidos. Aguarde um instante.' });
+    }
+    const album = await findAlbumByToken(req.params.token);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+    const access = albumAccessState(req, album);
+    if (!access.ok) return res.status(401).json({ error: 'login_required' });
+
+    const body = String(req.body?.body || '').trim().slice(0, 2000);
+    if (!body) return res.status(400).json({ error: 'Escreva o comentário.' });
+    const spread_position = Number.isFinite(req.body?.spread_position) ? Number(req.body.spread_position) : null;
+
+    let author_name: string | null = null;
+    if (access.accessUserId) {
+      const { data: u } = await supabaseAdmin
+        .from('album_access_users').select('name, email').eq('id', access.accessUserId).maybeSingle();
+      author_name = u?.name || u?.email || null;
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('album_comments')
+      .insert({ album_id: album.id, access_user_id: access.accessUserId, author_name, spread_position, body })
+      .select('id, author_name, spread_position, body, resolved, created_at')
+      .single();
+    if (error) {
+      return albumTableMissing(error) ? albumCommentsMigrationError(res) : res.status(500).json({ error: error.message });
+    }
+
+    await logAlbumEvent(album.id, access.accessUserId, 'comment', req, (spread_position != null ? `lâmina ${spread_position + 1}: ` : '') + body.slice(0, 120));
+    notifyStudioAlbumComment(album, author_name, body, spread_position).catch((e: any) =>
+      console.warn('[album] notificação de comentário falhou:', e?.message));
+    res.json({ comment: data });
   });
 
   // Cria customer no Asaas + subscription. Retorna invoiceUrl pra pagamento.

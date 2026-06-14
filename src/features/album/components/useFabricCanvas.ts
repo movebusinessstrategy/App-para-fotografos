@@ -58,6 +58,91 @@ export function useFabricCanvas(params: Params) {
     }, 1200);
   }, [readOnly]);
 
+  // ── Histórico (desfazer / refazer) ───────────────────────────────────────
+  // Pilha linear de snapshots (JSON) da página atual. Cada ação "assentada"
+  // (mover/adicionar/remover/fundo/template) vira um snapshot — debounce de
+  // 250ms junta rajadas (ex.: aplicar template remove+adiciona vários objetos).
+  // É resetada ao trocar de página. NÃO grava durante carga/restauração.
+  const historyRef = useRef<string[]>([]);
+  const histIdxRef = useRef(-1);
+  const isRestoringRef = useRef(false);
+  const histTimer = useRef<number | null>(null);
+  const [, bumpHist] = useState(0);
+  const HIST_MAX = 60;
+
+  const snapshotNow = useCallback(() => {
+    const c = fabricRef.current;
+    if (!c) return;
+    const json = JSON.stringify(serializeCanvas(c));
+    if (historyRef.current[histIdxRef.current] === json) return; // sem mudança real
+    historyRef.current = historyRef.current.slice(0, histIdxRef.current + 1);
+    historyRef.current.push(json);
+    if (historyRef.current.length > HIST_MAX) historyRef.current = historyRef.current.slice(-HIST_MAX);
+    histIdxRef.current = historyRef.current.length - 1;
+    bumpHist((v) => v + 1);
+  }, []);
+
+  const scheduleHistory = useCallback(() => {
+    if (isRestoringRef.current || loadingRef.current || readOnly) return;
+    if (histTimer.current) window.clearTimeout(histTimer.current);
+    histTimer.current = window.setTimeout(snapshotNow, 250);
+  }, [readOnly, snapshotNow]);
+  const scheduleHistoryRef = useRef(scheduleHistory);
+  scheduleHistoryRef.current = scheduleHistory;
+
+  // Reinicia o histórico com o estado atual como base (idx 0). Usado ao trocar
+  // de página / carregar.
+  const resetHistory = useCallback(() => {
+    const c = fabricRef.current;
+    if (histTimer.current) { window.clearTimeout(histTimer.current); histTimer.current = null; }
+    if (!c) { historyRef.current = []; histIdxRef.current = -1; bumpHist((v) => v + 1); return; }
+    historyRef.current = [JSON.stringify(serializeCanvas(c))];
+    histIdxRef.current = 0;
+    bumpHist((v) => v + 1);
+  }, []);
+  const resetHistoryRef = useRef(resetHistory);
+  resetHistoryRef.current = resetHistory;
+
+  // Carrega um estado do histórico no canvas (sem registrar como nova ação) e
+  // persiste o resultado.
+  const applyHistory = useCallback(async (json: string) => {
+    const c = fabricRef.current;
+    if (!c) return;
+    isRestoringRef.current = true;
+    if (histTimer.current) { window.clearTimeout(histTimer.current); histTimer.current = null; }
+    try {
+      const obj = JSON.parse(json);
+      await c.loadFromJSON(obj);
+      const bg = (obj as { background?: string }).background;
+      setBgColor(typeof bg === "string" ? bg : "#ffffff");
+      c.getObjects().forEach((o) => {
+        o.selectable = !readOnly;
+        o.evented = !readOnly;
+        o.set({ cornerColor: "#D4537E", cornerStyle: "circle", transparentCorners: false });
+      });
+      c.discardActiveObject();
+      setSelection(EMPTY_SELECTION);
+      c.requestRenderAll();
+    } finally {
+      isRestoringRef.current = false;
+    }
+    if (fabricRef.current && !readOnly) onSaveRef.current(serializeCanvas(fabricRef.current));
+  }, [readOnly]);
+
+  const undo = useCallback(() => {
+    if (readOnly || histIdxRef.current <= 0) return;
+    histIdxRef.current -= 1;
+    bumpHist((v) => v + 1);
+    void applyHistory(historyRef.current[histIdxRef.current]);
+  }, [applyHistory, readOnly]);
+
+  const redo = useCallback(() => {
+    if (readOnly || histIdxRef.current >= historyRef.current.length - 1) return;
+    histIdxRef.current += 1;
+    bumpHist((v) => v + 1);
+    void applyHistory(historyRef.current[histIdxRef.current]);
+  }, [applyHistory, readOnly]);
+
   // Cria o canvas fabric uma vez.
   useEffect(() => {
     if (!canvasElRef.current || fabricRef.current) return;
@@ -89,6 +174,10 @@ export function useFabricCanvas(params: Params) {
     c.on("object:modified", scheduleSave);
     c.on("object:added", scheduleSave);
     c.on("object:removed", scheduleSave);
+    // Histórico (desfazer/refazer) — só ações assentadas.
+    c.on("object:modified", () => scheduleHistoryRef.current());
+    c.on("object:added", () => scheduleHistoryRef.current());
+    c.on("object:removed", () => scheduleHistoryRef.current());
 
     setReady(true);
     return () => {
@@ -144,26 +233,36 @@ export function useFabricCanvas(params: Params) {
     loadingRef.current = true;
     const dims = canvasDims(size, spread?.kind);
     c.setDimensions({ width: dims.w, height: dims.h });
-    const json = spread?.canvas_json;
-    if (json && typeof json === "object") {
-      await c.loadFromJSON(json);
-      const bg = (json as { background?: string }).background;
-      if (typeof bg === "string") setBgColor(bg);
-      else setBgColor("#ffffff");
-    } else {
+    try {
+      const json = spread?.canvas_json;
+      if (json && typeof json === "object") {
+        await c.loadFromJSON(json);
+        const bg = (json as { background?: string }).background;
+        setBgColor(typeof bg === "string" ? bg : "#ffffff");
+      } else {
+        c.clear();
+        c.backgroundColor = "#ffffff";
+        setBgColor("#ffffff");
+      }
+    } catch {
+      // Carga falhou: não deixa a lâmina meio-carregada (e o finally destrava
+      // loadingRef, senão autosave/histórico parariam pra sempre).
       c.clear();
       c.backgroundColor = "#ffffff";
       setBgColor("#ffffff");
+    } finally {
+      c.getObjects().forEach((o) => {
+        o.selectable = !readOnly;
+        o.evented = !readOnly;
+        o.set({ cornerColor: "#D4537E", cornerStyle: "circle", transparentCorners: false });
+      });
+      c.discardActiveObject();
+      setSelection(EMPTY_SELECTION);
+      c.requestRenderAll();
+      loadingRef.current = false;
+      // Página carregada vira o ponto-base do histórico (desfazer/refazer).
+      resetHistoryRef.current();
     }
-    c.getObjects().forEach((o) => {
-      o.selectable = !readOnly;
-      o.evented = !readOnly;
-      o.set({ cornerColor: "#D4537E", cornerStyle: "circle", transparentCorners: false });
-    });
-    c.discardActiveObject();
-    setSelection(EMPTY_SELECTION);
-    c.requestRenderAll();
-    loadingRef.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size, readOnly]);
 
@@ -188,7 +287,7 @@ export function useFabricCanvas(params: Params) {
     return serializeCanvas(c);
   }, []);
 
-  // Muda a cor de fundo + agenda salvar.
+  // Muda a cor de fundo + agenda salvar + registra no histórico.
   const changeBackground = useCallback((color: string) => {
     const c = fabricRef.current;
     if (!c) return;
@@ -196,9 +295,13 @@ export function useFabricCanvas(params: Params) {
     setBgColor(color);
     c.requestRenderAll();
     scheduleSave();
+    scheduleHistoryRef.current();
   }, [scheduleSave]);
 
-  useEffect(() => () => { if (saveTimer.current) window.clearTimeout(saveTimer.current); }, []);
+  useEffect(() => () => {
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    if (histTimer.current) window.clearTimeout(histTimer.current);
+  }, []);
 
   return {
     canvasElRef,
@@ -211,6 +314,10 @@ export function useFabricCanvas(params: Params) {
     fitToWidth,
     scheduleSave,
     changeBackground,
+    undo,
+    redo,
+    canUndo: histIdxRef.current > 0,
+    canRedo: histIdxRef.current < historyRef.current.length - 1,
     refreshSelection: () => setSelection(selectionFromObject(fabricRef.current?.getActiveObject() ?? null)),
   };
 }

@@ -24,15 +24,17 @@ const kindOf = (s: AlbumSpread): SpreadKind =>
   s.kind === "cover" || s.kind === "backcover" ? s.kind : "spread";
 
 // Renderiza uma lâmina em JPEG na resolução de impressão (300 DPI).
-// bleedCm > 0 estende o fundo pra sangria (a arte é centralizada).
+// bleedCm > 0: a arte é ESTENDIDA (cover) pra preencher a sangria — sem borda
+// branca (full-bleed de verdade) e com UMA única compressão JPEG.
 async function renderSpreadJpeg(
   spread: AlbumSpread,
   size: string,
   bleedCm: number,
+  quality = 0.95,
 ): Promise<string> {
   const kind = kindOf(spread);
   const editor = canvasDims(size, kind);          // proporção do editor
-  const print = printDims(size, kind, { bleedCm: 0 }); // px finais (sem sangria)
+  const print = printDims(size, kind, { bleedCm: 0 }); // px de refile (sem sangria)
   const multiplier = print.w / editor.w;          // editor → 300 DPI exato
 
   const c = new StaticCanvas(undefined, {
@@ -46,41 +48,51 @@ async function renderSpreadJpeg(
       await c.loadFromJSON(spread.canvas_json);
     }
     c.renderAll();
-    const artUrl = c.toDataURL({ format: "jpeg", quality: 0.95, multiplier });
-    if (bleedCm <= 0) return artUrl;
+    if (bleedCm <= 0) {
+      return c.toDataURL({ format: "jpeg", quality, multiplier });
+    }
 
-    // Sangria: desenha a arte centralizada num canvas maior (fundo branco).
+    // Arte sem perda (HTMLCanvasElement em 300 DPI) — evita a 2ª compressão JPEG.
+    const art = c.toCanvasElement(multiplier);
     const full = printDims(size, kind, { bleedCm });
     const off = document.createElement("canvas");
     off.width = full.w;
     off.height = full.h;
     const ctx = off.getContext("2d");
-    if (!ctx) return artUrl;
+    if (!ctx) return c.toDataURL({ format: "jpeg", quality, multiplier });
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, full.w, full.h);
-    const img = new Image();
-    await new Promise<void>((res, rej) => {
-      img.onload = () => res();
-      img.onerror = () => rej(new Error("img"));
-      img.src = artUrl;
-    });
-    const bleedPx = Math.round((full.w - print.w) / 2);
-    ctx.drawImage(img, bleedPx, bleedPx, print.w, print.h);
-    return off.toDataURL("image/jpeg", 0.95);
+    // cover: escala uniforme pra cobrir refile+sangria; a foto sangra até a
+    // borda do refile (sem filete branco). Crop ~sangria é a margem esperada.
+    const scale = Math.max(full.w / art.width, full.h / art.height);
+    const dw = art.width * scale;
+    const dh = art.height * scale;
+    ctx.drawImage(art, (full.w - dw) / 2, (full.h - dh) / 2, dw, dh);
+    return off.toDataURL("image/jpeg", quality);
   } finally {
     c.dispose();
   }
 }
+
+// Resolve a sangria a usar: bleedCm explícito (preset de gráfica) tem prioridade;
+// senão o boolean bleed liga/desliga a sangria padrão.
+function resolverBleed(opts: { bleed?: boolean; bleedCm?: number }): number {
+  if (typeof opts.bleedCm === "number") return Math.max(0, opts.bleedCm);
+  return opts.bleed ? BLEED_CM : 0;
+}
+
+interface ExportOpts { bleed?: boolean; bleedCm?: number; jpegQuality?: number }
 
 // Gera o PDF do álbum (cada lâmina = 1 página em mm exatos, 300 DPI).
 export async function exportAlbumPdf(
   title: string,
   spreads: AlbumSpread[],
   size: string,
-  opts: { bleed?: boolean } = {},
+  opts: ExportOpts = {},
   onProgress?: (done: number, total: number) => void,
 ): Promise<void> {
-  const bleedCm = opts.bleed ? BLEED_CM : 0;
+  const bleedCm = resolverBleed(opts);
+  const quality = opts.jpegQuality ?? 0.95;
   let doc: jsPDF | null = null;
   for (let i = 0; i < spreads.length; i++) {
     const kind = kindOf(spreads[i]);
@@ -91,7 +103,7 @@ export async function exportAlbumPdf(
     } else {
       doc.addPage([dim.wmm, dim.hmm], orientation);
     }
-    const jpeg = await renderSpreadJpeg(spreads[i], size, bleedCm);
+    const jpeg = await renderSpreadJpeg(spreads[i], size, bleedCm, quality);
     doc.addImage(jpeg, "JPEG", 0, 0, dim.wmm, dim.hmm, undefined, "FAST");
     onProgress?.(i + 1, spreads.length);
   }
@@ -103,13 +115,14 @@ export async function exportFreeSpreadsAsJpg(
   title: string,
   spreads: AlbumSpread[],
   size: string,
-  opts: { bleed?: boolean } = {},
+  opts: ExportOpts = {},
   onProgress?: (done: number, total: number) => void,
 ): Promise<void> {
   const base = slug(title);
-  const bleedCm = opts.bleed ? BLEED_CM : 0;
+  const bleedCm = resolverBleed(opts);
+  const quality = opts.jpegQuality ?? 0.95;
   for (let i = 0; i < spreads.length; i++) {
-    const url = await renderSpreadJpeg(spreads[i], size, bleedCm);
+    const url = await renderSpreadJpeg(spreads[i], size, bleedCm, quality);
     triggerDownload(url, `${base}-lamina-${String(i + 1).padStart(2, "0")}.jpg`);
     onProgress?.(i + 1, spreads.length);
   }

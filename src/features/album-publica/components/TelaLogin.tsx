@@ -2,7 +2,6 @@ import React, { useState } from "react";
 import { Eye, EyeOff, Loader2, Lock, ShieldCheck } from "lucide-react";
 
 import { ErroApiPublica, publicPost, salvarSessao } from "../api";
-import { ROSA } from "../utils";
 
 interface LoginInfo {
   title: string;
@@ -20,8 +19,10 @@ interface TelaLoginProps {
   onSucesso: () => void;
 }
 
-// Tela de login que a cliente vê quando o álbum exige acesso. Mostra o nome do
-// estúdio + título do álbum e pede o e-mail e senha que o estúdio cadastrou.
+const STAGE_BG = "radial-gradient(125% 85% at 50% -5%, #211e1a 0%, #131210 45%, #0a0a0a 100%)";
+
+// Tela de login que a cliente vê quando o álbum é privado. Tema premium da
+// marca: palco escuro, acento dourado, serifada elegante.
 export function TelaLogin({ shareToken, info, onSucesso }: TelaLoginProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -54,31 +55,36 @@ export function TelaLogin({ shareToken, info, onSucesso }: TelaLoginProps) {
   };
 
   return (
-    <div className="h-full overflow-y-auto bg-[#FAF8F6] text-neutral-900">
+    <div className="h-full overflow-y-auto text-luxury-cream" style={{ background: STAGE_BG }}>
       <div className="min-h-full flex items-center justify-center px-5 py-10">
-        <div className="w-full max-w-sm">
-          <div className="flex flex-col items-center text-center mb-6">
-            <div
-              className="w-14 h-14 rounded-full flex items-center justify-center mb-4"
-              style={{ backgroundColor: `${ROSA}1A`, color: ROSA }}
-            >
-              <ShieldCheck size={26} />
+        <div className="w-full max-w-sm animate-album-rise">
+          <div className="mb-7 flex flex-col items-center text-center">
+            <div className="relative mb-5 flex items-center justify-center">
+              <div
+                className="absolute h-20 w-20 rounded-full blur-2xl"
+                style={{ background: "radial-gradient(circle, rgba(241,198,101,.35), rgba(241,198,101,0) 70%)" }}
+              />
+              <div className="relative flex h-14 w-14 items-center justify-center rounded-full border border-gold-400/30 bg-white/5 text-gold-400 backdrop-blur-sm">
+                <ShieldCheck size={24} />
+              </div>
             </div>
             {info.studio_name && (
-              <div className="text-xs uppercase tracking-wide text-neutral-500">{info.studio_name}</div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.3em] text-gold-400/80">
+                {info.studio_name}
+              </div>
             )}
-            <h1 className="mt-1 font-serif text-xl font-medium text-neutral-900">{info.title}</h1>
-            <p className="mt-2 text-sm text-neutral-500">
-              Este álbum é privado. Entre com o e-mail e senha que o estúdio enviou pra você.
+            <h1 className="mt-2 font-serif text-3xl font-light">{info.title}</h1>
+            <p className="mt-3 text-sm text-luxury-cream/55">
+              Este álbum é exclusivo. Entre com o e-mail e a senha que o estúdio enviou pra você.
             </p>
           </div>
 
           <form
             onSubmit={submeter}
-            className="bg-white rounded-2xl border border-neutral-200 p-5 space-y-3 shadow-sm"
+            className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.04] p-5 shadow-2xl backdrop-blur-md"
           >
             <div>
-              <label className="block text-xs font-medium text-neutral-600 mb-1">E-mail</label>
+              <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-luxury-cream/50">E-mail</label>
               <input
                 type="email"
                 value={email}
@@ -86,25 +92,25 @@ export function TelaLogin({ shareToken, info, onSucesso }: TelaLoginProps) {
                 required
                 autoComplete="email"
                 placeholder="seu@email.com"
-                className="w-full px-3 py-2.5 rounded-lg border border-neutral-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#D4537E]/30 focus:border-[#D4537E]"
+                className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-luxury-cream placeholder:text-luxury-cream/30 focus:border-gold-400/60 focus:outline-none focus:ring-2 focus:ring-gold-400/20"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-neutral-600 mb-1">Senha</label>
+              <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-luxury-cream/50">Senha</label>
               <div className="relative">
-                <Lock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
+                <Lock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-luxury-cream/30" />
                 <input
                   type={showPwd ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
                   autoComplete="current-password"
-                  className="w-full pl-9 pr-10 py-2.5 rounded-lg border border-neutral-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#D4537E]/30 focus:border-[#D4537E]"
+                  className="w-full rounded-lg border border-white/10 bg-black/30 py-2.5 pl-9 pr-10 text-sm text-luxury-cream placeholder:text-luxury-cream/30 focus:border-gold-400/60 focus:outline-none focus:ring-2 focus:ring-gold-400/20"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPwd(!showPwd)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-neutral-400 hover:text-neutral-700"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-luxury-cream/40 hover:text-luxury-cream"
                   aria-label={showPwd ? "Ocultar senha" : "Mostrar senha"}
                 >
                   {showPwd ? <EyeOff size={15} /> : <Eye size={15} />}
@@ -113,7 +119,7 @@ export function TelaLogin({ shareToken, info, onSucesso }: TelaLoginProps) {
             </div>
 
             {erro && (
-              <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+              <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
                 {erro}
               </div>
             )}
@@ -121,14 +127,13 @@ export function TelaLogin({ shareToken, info, onSucesso }: TelaLoginProps) {
             <button
               type="submit"
               disabled={enviando}
-              className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-white font-medium text-sm rounded-lg transition-colors disabled:opacity-60"
-              style={{ backgroundColor: ROSA }}
+              className="bg-gold-gradient flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-luxury-black transition-opacity hover:opacity-90 disabled:opacity-60"
             >
               {enviando ? <Loader2 size={15} className="animate-spin" /> : null}
-              Entrar
+              Entrar no álbum
             </button>
 
-            <p className="text-[11px] text-neutral-400 text-center pt-1">
+            <p className="pt-1 text-center text-[11px] text-luxury-cream/35">
               Não tem o acesso? Fale com {info.studio_name || "seu fotógrafo"}.
             </p>
           </form>
