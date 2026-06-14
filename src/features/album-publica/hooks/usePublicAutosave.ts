@@ -27,7 +27,7 @@ export function usePublicAutosave(token: string | undefined, podeEditar: boolean
           slots: s.slots || [],
           canvas_json: s.canvas_json ?? null,
         })),
-      });
+      }, token);
       setEstado("salvo");
     } catch {
       setEstado("erro");

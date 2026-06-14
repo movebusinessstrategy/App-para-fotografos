@@ -15,6 +15,7 @@ import * as Asaas from './asaas-client.js';
 import { initSentry } from './sentry-server.js';
 import { encryptIfNeeded, decryptIfNeeded, isEncryptionConfigured } from './lib/wa-token-crypto.js';
 import { signGallerySession, verifyGallerySession, isGallerySessionConfigured, type GallerySessionPayload } from './lib/gallery-session.js';
+import { signAlbumSession, verifyAlbumSession, type AlbumSessionPayload } from './lib/album-session.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 
@@ -8932,6 +8933,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   const albumTableMissing = (error: any) => error?.code === '42P01';
   const albumMigrationError = (res: express.Response) =>
     res.status(400).json({ error: 'Tabelas do álbum não existem. Rode a migration 033_album.sql no Supabase.' });
+  const albumSecurityMigrationError = (res: express.Response) =>
+    res.status(400).json({ error: 'Tabelas de acesso do álbum não existem. Rode a migration 035_album_security.sql no Supabase.' });
   const newAlbumToken = () => crypto.randomBytes(18).toString('base64url');
   const albumLink = (token: string) => `${galleryPublicBase()}/a/${token}`;
 
@@ -8955,6 +8958,81 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       slots: Array.isArray(s.slots) ? s.slots : [],
       canvas_json: s.canvas_json || null,
     };
+  }
+
+  // ── Acesso & auditoria do álbum (espelho do padrão da galeria) ─────────────
+
+  // Insere um evento no log do álbum — best-effort, NUNCA quebra a request.
+  async function logAlbumEvent(
+    albumId: string,
+    accessUserId: string | null,
+    event: string,
+    req: express.Request,
+    detail?: string | null,
+  ): Promise<void> {
+    if (!supabaseAdmin) return;
+    try {
+      const { ip, ua } = reqIpUa(req);
+      await supabaseAdmin.from('album_access_log').insert({
+        album_id: albumId,
+        access_user_id: accessUserId,
+        event,
+        detail: detail || null,
+        ip, user_agent: ua,
+      });
+    } catch (e: any) {
+      console.warn('[album] log falhou:', e?.message);
+    }
+  }
+
+  // Throttle do log de edição (autosave dispara muito): só registra um
+  // 'edit_album' por álbum+cliente a cada 90s — vira uma trilha legível em vez
+  // de centenas de linhas. Em memória; best-effort.
+  const albumEditLogged = new Map<string, number>();
+  function shouldLogAlbumEdit(albumId: string, accessUserId: string | null): boolean {
+    const key = `${albumId}:${accessUserId || 'anon'}`;
+    const now = Date.now();
+    const last = albumEditLogged.get(key) || 0;
+    if (now - last < 90 * 1000) return false;
+    albumEditLogged.set(key, now);
+    if (albumEditLogged.size > 5000) {
+      for (const [k, t] of albumEditLogged) if (now - t > 10 * 60 * 1000) albumEditLogged.delete(k);
+    }
+    return true;
+  }
+
+  // Lê o session token do header Authorization (formato as:v1:...).
+  function albumSessionFromReq(req: express.Request): AlbumSessionPayload | null {
+    const auth = req.headers.authorization || '';
+    if (!auth.startsWith('Bearer ')) return null;
+    return verifyAlbumSession(auth.slice(7));
+  }
+
+  // Estado de acesso ao álbum público. Se require_login=false, acesso anônimo
+  // (mas respeita a sessão se vier). Se require_login=true, exige sessão válida
+  // do mesmo album_id. Não responde nada — quem chama decide (login vs 401).
+  function albumAccessState(req: express.Request, album: any): { ok: boolean; accessUserId: string | null } {
+    const sess = albumSessionFromReq(req);
+    const valid = sess && sess.aid === album.id ? sess.uid : null;
+    if (!album.require_login) return { ok: true, accessUserId: valid };
+    return { ok: !!valid, accessUserId: valid };
+  }
+
+  // Conta login_fail recentes (15 min) pra lockout por álbum.
+  async function recentAlbumLoginFails(albumId: string): Promise<number> {
+    if (!supabaseAdmin) return 0;
+    try {
+      const since = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+      const { count } = await supabaseAdmin
+        .from('album_access_log')
+        .select('id', { count: 'exact', head: true })
+        .eq('album_id', albumId)
+        .eq('event', 'login_fail')
+        .gte('created_at', since);
+      return count || 0;
+    } catch {
+      return 0;
+    }
   }
 
   // Importa as fotos SELECIONADAS de uma galeria como album_assets (source
@@ -9158,6 +9236,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (body.size !== undefined && ALBUM_SIZES_VALID.has(body.size)) patch.size = body.size;
     if (body.status !== undefined && ALBUM_STATUSES.includes(body.status)) patch.status = body.status;
     if (body.allow_client_edit !== undefined) patch.allow_client_edit = !!body.allow_client_edit;
+    if (body.require_login !== undefined) patch.require_login = !!body.require_login;
     for (const k of ['client_id', 'client_name', 'client_email', 'client_phone']) {
       if (body[k] !== undefined) patch[k] = body[k] || null;
     }
@@ -9494,6 +9573,129 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ ok: email.sent || whatsapp.sent, link, email, whatsapp });
   });
 
+  // ── Acesso (login/senha) do cliente — lado do estúdio ─────────────────────
+
+  app.get('/api/albums/:id/access', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const album = await carregarAlbum(supabase, userId, req.params.id).catch(() => null);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+    const { data, error } = await supabase
+      .from('album_access_users')
+      .select('id, email, name, role, last_login_at, login_count, created_at')
+      .eq('album_id', album.id)
+      .order('created_at');
+    if (error) {
+      return albumTableMissing(error) ? albumSecurityMigrationError(res) : res.status(500).json({ error: error.message });
+    }
+    res.json({ users: data || [], require_login: !!album.require_login });
+  });
+
+  app.post('/api/albums/:id/access', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const album = await carregarAlbum(supabase, userId, req.params.id).catch(() => null);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    const name = req.body?.name ? String(req.body.name).trim() : null;
+    const role: 'owner' | 'guest' = req.body?.role === 'guest' ? 'guest' : 'owner';
+    if (!email.includes('@')) return res.status(400).json({ error: 'E-mail inválido' });
+    if (password.length < 6) return res.status(400).json({ error: 'Senha curta demais (mínimo 6 caracteres).' });
+
+    const password_hash = await bcrypt.hash(password, 10);
+    const { data, error } = await supabase
+      .from('album_access_users')
+      .insert({ album_id: album.id, email, password_hash, name, role, invited_by: userId })
+      .select('id, email, name, role, created_at')
+      .single();
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'Esse e-mail já tem acesso a este álbum.' });
+      return albumTableMissing(error) ? albumSecurityMigrationError(res) : res.status(500).json({ error: error.message });
+    }
+    res.json({ user: data });
+  });
+
+  app.put('/api/albums/:id/access/:userId', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const album = await carregarAlbum(supabase, userId, req.params.id).catch(() => null);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+
+    const patch: any = { updated_at: new Date().toISOString() };
+    if (req.body?.name !== undefined) patch.name = req.body.name ? String(req.body.name).trim() : null;
+    if (req.body?.role === 'owner' || req.body?.role === 'guest') patch.role = req.body.role;
+    if (typeof req.body?.password === 'string' && req.body.password.length >= 6) {
+      patch.password_hash = await bcrypt.hash(req.body.password, 10);
+    }
+    const { error } = await supabase
+      .from('album_access_users').update(patch).eq('id', req.params.userId).eq('album_id', album.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+  });
+
+  app.delete('/api/albums/:id/access/:userId', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const album = await carregarAlbum(supabase, userId, req.params.id).catch(() => null);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+    const { error } = await supabase
+      .from('album_access_users').delete().eq('id', req.params.userId).eq('album_id', album.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+  });
+
+  // Log de auditoria + sumário pras abas "Acesso" / "Atividades" do estúdio.
+  app.get('/api/albums/:id/audit', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const album = await carregarAlbum(supabase, userId, req.params.id).catch(() => null);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+
+    const [logQ, usersQ] = await Promise.all([
+      supabase
+        .from('album_access_log')
+        .select('id, event, detail, ip, user_agent, created_at, access_user_id')
+        .eq('album_id', album.id)
+        .order('created_at', { ascending: false })
+        .limit(500),
+      supabase
+        .from('album_access_users')
+        .select('id, email, name, role, last_login_at, login_count')
+        .eq('album_id', album.id),
+    ]);
+    if (logQ.error && albumTableMissing(logQ.error)) return albumSecurityMigrationError(res);
+
+    const usersById = new Map<string, any>();
+    for (const u of usersQ.data || []) usersById.set(u.id, u);
+
+    const events = (logQ.data || []).map((e: any) => ({
+      id: e.id,
+      event: e.event,
+      detail: e.detail,
+      ip: e.ip,
+      user_agent: e.user_agent,
+      created_at: e.created_at,
+      user: e.access_user_id ? {
+        id: e.access_user_id,
+        email: usersById.get(e.access_user_id)?.email || null,
+        name: usersById.get(e.access_user_id)?.name || null,
+      } : null,
+    }));
+
+    const summary = {
+      total_users: (usersQ.data || []).length,
+      total_views: events.filter((e) => e.event === 'view_album').length,
+      total_logins: events.filter((e) => e.event === 'login').length,
+      total_login_fails: events.filter((e) => e.event === 'login_fail').length,
+      total_edits: events.filter((e) => e.event === 'edit_album').length,
+      last_event_at: events[0]?.created_at || null,
+      approved_at: events.find((e) => e.event === 'approve')?.created_at || null,
+    };
+    res.json({ users: usersQ.data || [], events, summary });
+  });
+
   // ── Rotas PÚBLICAS (cliente final, validação por share_token) ─────────────
 
   async function findAlbumByToken(token: string): Promise<any | null> {
@@ -9501,6 +9703,56 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const { data } = await supabaseAdmin.from('album_projects').select('*').eq('share_token', token).maybeSingle();
     return data || null;
   }
+
+  // Login público do cliente / convidado do álbum.
+  app.post('/api/public/album/:token/login', async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
+    if (!publicRateLimit(req, 'album_login', 8, 15 * 60 * 1000)) {
+      return res.status(429).json({ error: 'Muitas tentativas. Aguarde alguns minutos e tente de novo.' });
+    }
+    const album = await findAlbumByToken(req.params.token);
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    if (!email || !password) return res.status(400).json({ error: 'E-mail e senha são obrigatórios.' });
+
+    if (await recentAlbumLoginFails(album.id) >= 20) {
+      return res.status(429).json({ error: 'Acesso bloqueado por excesso de tentativas. Tente novamente em 15 minutos.' });
+    }
+
+    const { data: user } = await supabaseAdmin
+      .from('album_access_users')
+      .select('id, email, name, role, password_hash, login_count')
+      .eq('album_id', album.id)
+      .eq('email', email)
+      .maybeSingle();
+
+    if (!user) {
+      await logAlbumEvent(album.id, null, 'login_fail', req, `email=${email}`);
+      return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
+    }
+    const ok = await bcrypt.compare(password, user.password_hash);
+    if (!ok) {
+      await logAlbumEvent(album.id, user.id, 'login_fail', req);
+      return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
+    }
+
+    await supabaseAdmin
+      .from('album_access_users')
+      .update({ last_login_at: new Date().toISOString(), login_count: (user.login_count || 0) + 1 })
+      .eq('id', user.id);
+    await logAlbumEvent(album.id, user.id, 'login', req);
+
+    const session = signAlbumSession({ aid: album.id, uid: user.id, role: user.role });
+    if (!session) {
+      return res.status(503).json({ error: 'Login temporariamente indisponível. Avise o estúdio.' });
+    }
+    res.json({
+      session_token: session,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+    });
+  });
 
   app.get('/api/public/album/:token', async (req, res) => {
     if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
@@ -9510,20 +9762,32 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const album = await findAlbumByToken(req.params.token);
     if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
 
-    const [studioName, assetsQ, spreadsQ] = await Promise.all([
-      getStudioNameForGallery(album.user_id),
+    const studioName = await getStudioNameForGallery(album.user_id);
+    const meta = {
+      title: album.title,
+      size: album.size,
+      status: album.status,
+      studio_name: studioName,
+      allow_client_edit: !!album.allow_client_edit,
+      require_login: !!album.require_login,
+    };
+
+    // Se exige login e o cliente ainda não entrou, devolve só a "capa" (título +
+    // estúdio) pra montar a tela de login — sem expor as fotos/lâminas.
+    const access = albumAccessState(req, album);
+    if (!access.ok) {
+      return res.json({ album: meta, needs_login: true, assets: [], spreads: [] });
+    }
+
+    const [assetsQ, spreadsQ] = await Promise.all([
       supabaseAdmin.from('album_assets').select('*').eq('album_id', album.id).order('sort_order').order('created_at'),
       supabaseAdmin.from('album_spreads').select('*').eq('album_id', album.id).order('position'),
     ]);
 
+    await logAlbumEvent(album.id, access.accessUserId, 'view_album', req);
+
     res.json({
-      album: {
-        title: album.title,
-        size: album.size,
-        status: album.status,
-        studio_name: studioName,
-        allow_client_edit: !!album.allow_client_edit,
-      },
+      album: meta,
       assets: (assetsQ.data || []).map(mapAlbumAsset),
       spreads: (spreadsQ.data || []).map(mapAlbumSpread),
     });
@@ -9536,6 +9800,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
     const album = await findAlbumByToken(req.params.token);
     if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+    // Exige login quando configurado.
+    const access = albumAccessState(req, album);
+    if (!access.ok) return res.status(401).json({ error: 'login_required' });
     // Fail-closed: cliente só edita se permitido E enquanto não aprovado.
     if (!album.allow_client_edit) return res.status(403).json({ error: 'Edição pela cliente desativada.' });
     if (album.status === 'approved') return res.status(409).json({ error: 'Álbum já aprovado — fale com o estúdio pra reabrir.' });
@@ -9545,6 +9812,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     try {
       await replaceAlbumSpreads(album.id, spreads);
       await supabaseAdmin.from('album_projects').update({ updated_at: new Date().toISOString() }).eq('id', album.id);
+      // Trilha de edição (throttle de 90s pra não floodar com o autosave).
+      if (shouldLogAlbumEdit(album.id, access.accessUserId)) {
+        await logAlbumEvent(album.id, access.accessUserId, 'edit_album', req);
+      }
       res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || 'Falha ao salvar lâminas.' });
@@ -9587,6 +9858,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
     const album = await findAlbumByToken(req.params.token);
     if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+    // Exige login quando configurado.
+    const access = albumAccessState(req, album);
+    if (!access.ok) return res.status(401).json({ error: 'login_required' });
     if (album.status === 'approved') return res.json({ ok: true, already: true });
 
     const { error } = await supabaseAdmin
@@ -9595,6 +9869,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('id', album.id);
     if (error) return res.status(500).json({ error: error.message });
 
+    await logAlbumEvent(album.id, access.accessUserId, 'approve', req);
     notifyStudioAlbumApproved(album).catch((e: any) =>
       console.warn('[album] notificação de aprovação falhou:', e?.message));
     res.json({ ok: true });

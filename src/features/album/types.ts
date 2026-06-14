@@ -54,6 +54,7 @@ export interface Album {
   status: AlbumStatus;
   share_token?: string;
   allow_client_edit: boolean;
+  require_login?: boolean;
   created_at?: string;
   updated_at?: string;
   // Presente apenas na visão pública (cliente).

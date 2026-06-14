@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Check, Loader2, Send } from "lucide-react";
+import { ArrowLeft, Check, Loader2, Send, ShieldCheck } from "lucide-react";
 
 import { authFetch } from "../../utils/authFetch";
 import { ALBUM_SIZES } from "./templates";
@@ -11,6 +11,7 @@ import { FerramentasPanel, Ferramenta } from "./components/FerramentasPanel";
 import { TiraPaginas } from "./components/TiraPaginas";
 import { ExportarMenu } from "./components/ExportarMenu";
 import { EnviarAlbumModal } from "./components/EnviarAlbumModal";
+import { AcessoAtividadesModal } from "./components/AcessoAtividadesModal";
 import { useAlbumFreeEditor, SaveState } from "./components/useAlbumFreeEditor";
 import { Toast, ToastKind, ToastState } from "../galeria/Toast";
 
@@ -31,6 +32,7 @@ export default function AlbumEditorPage() {
   const [current, setCurrent] = useState(0);
   const [ferramenta, setFerramenta] = useState<Ferramenta>("fotos");
   const [showSend, setShowSend] = useState(false);
+  const [showAcesso, setShowAcesso] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
   const toastTimer = useRef<number | null>(null);
   const canvasHandleRef = useRef<AlbumCanvasEditorHandle | null>(null);
@@ -84,6 +86,13 @@ export default function AlbumEditorPage() {
             {ALBUM_SIZES.find((s) => s.id === album.size)?.label || album.size}
           </span>
           <ExportarMenu albumId={id} title={album.title} size={album.size} spreads={spreads} onNotify={notify} />
+          <button
+            onClick={() => setShowAcesso(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 dark:border-gray-700 px-3 py-1.5 text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800"
+            title="Login do cliente + registro de tudo que ele faz"
+          >
+            <ShieldCheck size={13} /> Acesso
+          </button>
           <button
             onClick={() => setShowSend(true)}
             className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 px-3 py-1.5 text-xs font-semibold text-white"
@@ -144,6 +153,14 @@ export default function AlbumEditorPage() {
           album={album}
           onClose={() => setShowSend(false)}
           onSent={() => editor.load()}
+          onNotify={notify}
+        />
+      )}
+
+      {showAcesso && (
+        <AcessoAtividadesModal
+          albumId={id}
+          onClose={() => setShowAcesso(false)}
           onNotify={notify}
         />
       )}

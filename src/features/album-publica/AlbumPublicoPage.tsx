@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Check, ChevronLeft, ChevronRight, CloudOff, Loader2 } from "lucide-react";
 
-import { ErroApiPublica, publicGet, publicPost } from "./api";
+import { publicGet, publicPost } from "./api";
 import { TelaAprovado, TelaCarregando, TelaPreparacao, TelaTokenInvalido } from "./components/Telas";
+import { TelaLogin } from "./components/TelaLogin";
 import { usePublicAutosave } from "./hooks/usePublicAutosave";
 import type { Album, AlbumAsset, AlbumSpread } from "../album/types";
 import AlbumCanvasEditor, { AlbumCanvasEditorHandle } from "../album/components/AlbumCanvasEditor";
@@ -13,10 +14,12 @@ interface RespostaAlbumPublico {
   album: Album;
   assets: AlbumAsset[];
   spreads: AlbumSpread[];
+  needs_login?: boolean;
 }
 
 // Editor público do álbum (cliente). Abre /a/:token no celular, vê as lâminas
-// no canvas, edita (se permitido) e aprova.
+// no canvas, edita (se permitido) e aprova. Se o álbum exige login, mostra a
+// tela de login antes de liberar o conteúdo.
 export default function AlbumPublicoPage() {
   const { token } = useParams<{ token: string }>();
   const [carregando, setCarregando] = useState(true);
@@ -25,23 +28,30 @@ export default function AlbumPublicoPage() {
   const [assets, setAssets] = useState<AlbumAsset[]>([]);
   const [spreads, setSpreads] = useState<AlbumSpread[]>([]);
   const [aprovado, setAprovado] = useState(false);
+  const [precisaLogin, setPrecisaLogin] = useState(false);
 
-  useEffect(() => {
+  const carregar = useCallback(async (): Promise<void> => {
     if (!token) { setErro(true); setCarregando(false); return; }
-    let ativo = true;
     setCarregando(true);
-    publicGet<RespostaAlbumPublico>(`/api/public/album/${token}`)
-      .then((dados) => {
-        if (!ativo) return;
-        setAlbum(dados.album);
+    try {
+      const dados = await publicGet<RespostaAlbumPublico>(`/api/public/album/${token}`, token);
+      setAlbum(dados.album);
+      if (dados.needs_login) {
+        setPrecisaLogin(true);
+      } else {
+        setPrecisaLogin(false);
         setAssets(dados.assets || []);
         setSpreads([...(dados.spreads || [])].sort((a, b) => a.position - b.position));
         if (dados.album?.status === "approved") setAprovado(true);
-      })
-      .catch((e) => { if (ativo) { setErro(e instanceof ErroApiPublica ? true : true); } })
-      .finally(() => ativo && setCarregando(false));
-    return () => { ativo = false; };
+      }
+    } catch {
+      setErro(true);
+    } finally {
+      setCarregando(false);
+    }
   }, [token]);
+
+  useEffect(() => { void carregar(); }, [carregar]);
 
   useEffect(() => {
     if (!album) return;
@@ -50,6 +60,15 @@ export default function AlbumPublicoPage() {
 
   if (carregando) return <TelaCarregando />;
   if (erro || !album || !token) return <TelaTokenInvalido />;
+  if (precisaLogin) {
+    return (
+      <TelaLogin
+        shareToken={token}
+        info={{ title: album.title, studio_name: album.studio_name }}
+        onSucesso={() => { void carregar(); }}
+      />
+    );
+  }
   if (aprovado || album.status === "approved") return <TelaAprovado estudio={album.studio_name} />;
   if (album.status === "draft") return <TelaPreparacao estudio={album.studio_name} />;
 
@@ -88,7 +107,7 @@ function Editor(p: PropsEditor) {
     setAprovando(true);
     setErroAprovar(null);
     try {
-      await publicPost(`/api/public/album/${p.token}/approve`);
+      await publicPost(`/api/public/album/${p.token}/approve`, undefined, p.token);
       p.onAprovado();
     } catch {
       setErroAprovar("Não foi possível aprovar agora. Tente novamente.");
