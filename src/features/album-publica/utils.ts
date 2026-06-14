@@ -1,12 +1,15 @@
 import type React from "react";
-import { ALBUM_SIZES } from "../album/templates";
+import { ALBUM_SIZES, parsePageCm } from "../album/templates";
 
 export const ROSA = "#D4537E";
 
-// Razão largura/altura de UMA página do álbum (default quadrado).
+// Razão largura/altura de UMA página do álbum (default quadrado). Aceita preset
+// (id) ou medida custom "LxA".
 export function ratioDoTamanho(size: string | undefined): number {
   const found = ALBUM_SIZES.find((s) => s.id === size);
-  return found?.ratio || 1;
+  if (found) return found.ratio || 1;
+  const cm = parsePageCm(size);
+  return cm ? cm.w / cm.h : 1;
 }
 
 const prevenir = (e: React.SyntheticEvent) => e.preventDefault();

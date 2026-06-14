@@ -30,6 +30,33 @@ const SIZE_INDEX: Record<string, AlbumSize> = Object.fromEntries(
   ALBUM_SIZES.map((s) => [s.id, s]),
 );
 
+// Aceita medida arbitrária "LxA" em cm (ex.: "30x30", "29.7x29,7", "20x25"),
+// pra cada linha de gráfica ter o tamanho EXATO dela — não só os 8 presets.
+export function parsePageCm(size: string | undefined): { w: number; h: number } | null {
+  if (!size) return null;
+  const m = /^\s*(\d+(?:[.,]\d+)?)\s*x\s*(\d+(?:[.,]\d+)?)\s*$/i.exec(size);
+  if (!m) return null;
+  const w = parseFloat(m[1].replace(",", "."));
+  const h = parseFloat(m[2].replace(",", "."));
+  if (!(w > 0 && h > 0) || w > 200 || h > 200) return null;
+  return { w, h };
+}
+
+// Página fechada (cm) de um size (id de preset OU "LxA").
+function pageCmDe(size: string): { w: number; h: number } {
+  const preset = SIZE_INDEX[size];
+  if (preset) return preset.pageCm;
+  return parsePageCm(size) || ALBUM_SIZES[1].pageCm;
+}
+
+// Rótulo amigável: usa o label do preset, ou "L × A cm" pra medida custom.
+export function sizeLabel(size: string): string {
+  const preset = SIZE_INDEX[size];
+  if (preset) return preset.label;
+  const cm = parsePageCm(size);
+  return cm ? `${cm.w} × ${cm.h} cm` : size;
+}
+
 export type SpreadKind = "cover" | "spread" | "backcover";
 
 // Sangria padrão pra gráfica (cm de cada lado). Lab típico pede 0,5 cm.
@@ -40,9 +67,9 @@ const EDITOR_LONG = 1400;
 
 // Medida REAL (cm) da página aberta: capa/contracapa = 1 página; lâmina = 2.
 export function spreadCm(size: string, kind: SpreadKind = "spread"): { w: number; h: number } {
-  const s = SIZE_INDEX[size] || ALBUM_SIZES[1];
-  const w = kind === "spread" ? s.pageCm.w * 2 : s.pageCm.w;
-  return { w, h: s.pageCm.h };
+  const page = pageCmDe(size);
+  const w = kind === "spread" ? page.w * 2 : page.w;
+  return { w, h: page.h };
 }
 
 // Dimensão do canvas do EDITOR (px), proporção EXATA da medida real.

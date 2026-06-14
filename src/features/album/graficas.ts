@@ -5,6 +5,12 @@
 
 export type FormatoEnvio = "pdf" | "jpg" | "both";
 
+// Um tamanho de álbum (medida da PÁGINA FECHADA, em cm).
+export interface TamanhoModelo { label: string; w: number; h: number }
+
+// Uma linha/coleção da gráfica, com seus tamanhos.
+export interface LinhaGrafica { id: string; nome: string; tamanhos: TamanhoModelo[]; obs?: string }
+
 export interface Grafica {
   id: string;
   nome: string;
@@ -18,6 +24,12 @@ export interface Grafica {
   gabaritoUrl?: string;  // link do gabarito oficial
   portalUrl?: string;    // link do portal de envio (quando há)
   obs?: string;          // checklist/observações importantes
+  linhas?: LinhaGrafica[]; // linhas/coleções com seus tamanhos (cm)
+}
+
+// Converte um tamanho de modelo no `size` string do álbum ("LxA" em cm).
+export function tamanhoToSize(t: TamanhoModelo): string {
+  return `${t.w}x${t.h}`;
 }
 
 // Maioria das encadernadoras premium = sRGB + JPEG/PDF 300 DPI + sangria ~0,5 cm
@@ -59,6 +71,15 @@ export const GRAFICAS: Grafica[] = [
     gabaritoUrl: "https://www.digipix.com.br/gabaritos",
     portalUrl: "https://direto.digipix.com.br/enviar-projeto/",
     obs: "Mínimo de 20 páginas. Cor RGB (sRGB/AdobeRGB) — nunca CMYK. PDF (padrão X-3).",
+    linhas: [
+      { id: "photo-hd-prime", nome: "Photo HD Prime", tamanhos: [
+        { label: "14,8×14,8", w: 14.8, h: 14.8 }, { label: "21×21", w: 21, h: 21 }, { label: "25×25", w: 25, h: 25 }, { label: "29,7×29,7", w: 29.7, h: 29.7 },
+        { label: "14,8×21", w: 14.8, h: 21 }, { label: "21×14,8", w: 21, h: 14.8 }, { label: "21×29,7", w: 21, h: 29.7 }, { label: "29,7×21", w: 29.7, h: 21 },
+      ] },
+      { id: "180-flat", nome: "180° Flat", tamanhos: [
+        { label: "29,7×29,7", w: 29.7, h: 29.7 }, { label: "29,7×42", w: 29.7, h: 42 }, { label: "42×29,7", w: 42, h: 29.7 },
+      ] },
+    ],
   },
   {
     id: "premiere",
@@ -95,6 +116,12 @@ export const GRAFICAS: Grafica[] = [
     envio: "Suba as lâminas (JPG) no editor Dreambooks, ou diagrame pelo gabarito PSD.",
     gabaritoUrl: "https://www.dreambooks.com.br/gabaritos",
     obs: "sRGB (perfil incorporado) · 300 DPI · JPG qualidade máxima · não aceita HEIC.",
+    linhas: [
+      { id: "album", nome: "Álbum / Fotolivro", tamanhos: [
+        { label: "15×15", w: 15, h: 15 }, { label: "21×21", w: 21, h: 21 }, { label: "25×25", w: 25, h: 25 }, { label: "30×30", w: 30, h: 30 },
+        { label: "20×30", w: 20, h: 30 }, { label: "30×20", w: 30, h: 20 }, { label: "23×31", w: 23, h: 31 }, { label: "31×23", w: 31, h: 23 }, { label: "40×30", w: 40, h: 30 },
+      ] },
+    ],
   },
   {
     id: "goimage",
@@ -118,6 +145,12 @@ export const GRAFICAS: Grafica[] = [
     cor: "sRGB",
     envio: "Baixe o gabarito (Linha Ravenna) e envie as lâminas no padrão deles.",
     gabaritoUrl: "https://wp.profoxlab.com.br/downloads/",
+    linhas: [
+      { id: "ravenna", nome: "Linha Clássica Ravenna", tamanhos: [
+        { label: "25×20", w: 25, h: 20 }, { label: "30×20", w: 30, h: 20 }, { label: "30×24", w: 30, h: 24 }, { label: "30×25", w: 30, h: 25 },
+        { label: "35×25", w: 35, h: 25 }, { label: "38×25", w: 38, h: 25 }, { label: "35×30", w: 35, h: 30 }, { label: "40×30", w: 40, h: 30 }, { label: "45×30", w: 45, h: 30 },
+      ] },
+    ],
   },
   {
     id: "criativa",

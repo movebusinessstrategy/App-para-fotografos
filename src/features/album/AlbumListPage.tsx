@@ -6,7 +6,8 @@ import { authFetch } from "../../utils/authFetch";
 import { useApi, refreshApi } from "../../utils/useApi";
 import { cn } from "../../utils/cn";
 import { ConfirmModal } from "../../components/ui/ConfirmModal";
-import { ALBUM_SIZES } from "./templates";
+import { ALBUM_SIZES, spreadCm } from "./templates";
+import { GRAFICAS, graficaById, tamanhoToSize, type Grafica } from "./graficas";
 import type { Album, AlbumListItem } from "./types";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -189,15 +190,41 @@ function NovoAlbumModal({ onClose, onCreated }: { onClose: () => void; onCreated
     return Array.isArray(galData?.galleries) ? galData!.galleries! : [];
   }, [galData]);
 
+  const firstSizeOf = (g: Grafica): string => {
+    const t = g.linhas?.[0]?.tamanhos?.[0];
+    return t ? tamanhoToSize(t) : (ALBUM_SIZES[0]?.id || "sq30");
+  };
+
   const [title, setTitle] = useState("");
-  const [size, setSize] = useState(ALBUM_SIZES[0]?.id || "sq30");
+  const [graficaId, setGraficaId] = useState("generico");
+  const [size, setSize] = useState<string>(() => firstSizeOf(graficaById("generico")));
+  const [customW, setCustomW] = useState("30");
+  const [customH, setCustomH] = useState("30");
   const [galleryId, setGalleryId] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  const g = graficaById(graficaId);
+  const temLinhas = !!(g.linhas && g.linhas.length);
+  const isCustom = size === "__custom";
+
+  const trocarGrafica = (id: string) => {
+    setGraficaId(id);
+    setSize(firstSizeOf(graficaById(id)));
+  };
+
+  // Medida resolvida (pra mostrar a prévia da lâmina).
+  const sizeFinal = isCustom ? `${customW.replace(",", ".")}x${customH.replace(",", ".")}` : size;
+  const sc = spreadCm(sizeFinal, "spread");
+  const pg = spreadCm(sizeFinal, "cover");
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) { setErr("Dê um nome pro álbum."); return; }
+    if (isCustom && !(Number(customW) > 0 && Number(customH) > 0)) {
+      setErr("Informe um tamanho personalizado válido (cm).");
+      return;
+    }
     setLoading(true);
     setErr(null);
     try {
@@ -206,12 +233,14 @@ function NovoAlbumModal({ onClose, onCreated }: { onClose: () => void; onCreated
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: title.trim(),
-          size,
+          size: sizeFinal,
           gallery_id: galleryId || undefined,
         }),
       });
       if (!res.ok) throw new Error();
       const data = (await res.json()) as { album: Album };
+      // Lembra a gráfica escolhida pra o export já vir selecionado nela.
+      try { localStorage.setItem(`album_grafica:${data.album.id}`, graficaId); } catch { /* ignora */ }
       onCreated();
       navigate(`/album/${data.album.id}`);
     } catch {
@@ -244,12 +273,51 @@ function NovoAlbumModal({ onClose, onCreated }: { onClose: () => void; onCreated
           </div>
 
           <div>
-            <label className={LABEL_CLS}>Tamanho</label>
-            <select value={size} onChange={(e) => setSize(e.target.value)} className={INPUT_CLS}>
-              {ALBUM_SIZES.map((s) => (
-                <option key={s.id} value={s.id}>{s.label}</option>
+            <label className={LABEL_CLS}>Gráfica / laboratório</label>
+            <select value={graficaId} onChange={(e) => trocarGrafica(e.target.value)} className={INPUT_CLS}>
+              {GRAFICAS.map((op) => (
+                <option key={op.id} value={op.id}>{op.nome}</option>
               ))}
             </select>
+            <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">
+              A diagramação já nasce no tamanho exato da gráfica. O tamanho não muda depois de criar.
+            </p>
+          </div>
+
+          <div>
+            <label className={LABEL_CLS}>Linha e tamanho</label>
+            <select value={size} onChange={(e) => setSize(e.target.value)} className={INPUT_CLS}>
+              {temLinhas ? (
+                g.linhas!.map((l) => (
+                  <optgroup key={l.id} label={l.nome}>
+                    {l.tamanhos.map((t) => (
+                      <option key={l.id + tamanhoToSize(t)} value={tamanhoToSize(t)}>{l.nome} — {t.label} cm</option>
+                    ))}
+                  </optgroup>
+                ))
+              ) : (
+                <optgroup label="Tamanhos padrão">
+                  {ALBUM_SIZES.map((s) => (
+                    <option key={s.id} value={s.id}>{s.label}</option>
+                  ))}
+                </optgroup>
+              )}
+              <option value="__custom">Outro tamanho (personalizado)…</option>
+            </select>
+
+            {isCustom && (
+              <div className="mt-2 flex items-center gap-2">
+                <input type="number" min={5} max={100} step="0.1" value={customW} onChange={(e) => setCustomW(e.target.value)} className={INPUT_CLS} placeholder="Largura" />
+                <span className="text-gray-400">×</span>
+                <input type="number" min={5} max={100} step="0.1" value={customH} onChange={(e) => setCustomH(e.target.value)} className={INPUT_CLS} placeholder="Altura" />
+                <span className="text-sm text-gray-500">cm</span>
+              </div>
+            )}
+
+            <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
+              Página {pg.w}×{pg.h} cm · lâmina aberta {sc.w}×{sc.h} cm{g.linhas ? "" : ""}
+              {!temLinhas && graficaId !== "generico" ? " · (linhas dessa gráfica em breve — use personalizado se faltar)" : ""}
+            </p>
           </div>
 
           <div>

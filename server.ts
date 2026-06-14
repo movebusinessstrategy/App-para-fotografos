@@ -8891,7 +8891,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // ════════════════════════════════════════════════════════════════════════
 
   const ALBUM_ASSETS_BUCKET = 'album-assets';
-  const ALBUM_SIZES_VALID = new Set(['sq30', 'sq20', 'land40x30', 'port20x30']);
+  const ALBUM_SIZES_VALID = new Set(['sq15', 'sq20', 'sq25', 'sq30', 'port20x30', 'port30x40', 'land30x20', 'land40x30']);
+  // Aceita os presets OU medida arbitrária "LxA" em cm (ex.: "29.7x29,7"),
+  // pra cada linha de gráfica ter o tamanho exato dela.
+  const ALBUM_SIZE_CUSTOM_RE = /^\d{1,3}([.,]\d{1,2})?x\d{1,3}([.,]\d{1,2})?$/i;
+  const validAlbumSize = (s: any): boolean =>
+    typeof s === 'string' && (ALBUM_SIZES_VALID.has(s) || ALBUM_SIZE_CUSTOM_RE.test(s.trim()));
+  const normAlbumSize = (s: any): string => (typeof s === 'string' ? s.trim() : '');
   const ALBUM_STATUSES = ['draft', 'sent', 'approved'];
   const ALBUM_SPREAD_COUNT = 10; // lâminas em branco ao criar
   const ALBUM_DEFAULT_TEMPLATE = 'classico';
@@ -9162,7 +9168,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const title = String(body.title || '').trim();
     if (!title) return res.status(400).json({ error: 'Informe um título pro álbum.' });
 
-    const size = ALBUM_SIZES_VALID.has(body.size) ? body.size : 'sq30';
+    const size = validAlbumSize(body.size) ? normAlbumSize(body.size) : 'sq30';
     const insert: any = {
       user_id: userId,
       title: title.slice(0, 200),
@@ -9235,7 +9241,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   function buildAlbumPatch(body: any): any {
     const patch: any = { updated_at: new Date().toISOString() };
     if (body.title !== undefined) patch.title = String(body.title || '').trim().slice(0, 200) || 'Álbum';
-    if (body.size !== undefined && ALBUM_SIZES_VALID.has(body.size)) patch.size = body.size;
+    if (body.size !== undefined && validAlbumSize(body.size)) patch.size = normAlbumSize(body.size);
     if (body.status !== undefined && ALBUM_STATUSES.includes(body.status)) patch.status = body.status;
     if (body.allow_client_edit !== undefined) patch.allow_client_edit = !!body.allow_client_edit;
     if (body.require_login !== undefined) patch.require_login = !!body.require_login;

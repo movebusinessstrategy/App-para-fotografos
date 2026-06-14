@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Check, Loader2, Send, ShieldCheck } from "lucide-react";
 
 import { authFetch } from "../../utils/authFetch";
-import { ALBUM_SIZES } from "./templates";
+import { sizeLabel } from "./templates";
 import { medidasResumo } from "./components/exportFreeCanvas";
 import type { AlbumSpread } from "./types";
 import AlbumCanvasEditor, { AlbumCanvasEditorHandle } from "./components/AlbumCanvasEditor";
@@ -83,7 +83,7 @@ export default function AlbumEditorPage() {
             className="rounded-lg bg-gray-100 dark:bg-gray-800 px-2.5 py-1.5 text-xs font-medium text-gray-600 dark:text-gray-300"
             title="O tamanho é definido ao criar o álbum e não muda depois (evita bagunçar a diagramação)."
           >
-            {ALBUM_SIZES.find((s) => s.id === album.size)?.label || album.size}
+            {sizeLabel(album.size)}
           </span>
           <ExportarMenu albumId={id} title={album.title} size={album.size} spreads={spreads} onNotify={notify} />
           <button
