@@ -270,6 +270,7 @@ export default function TenantDetailPage() {
             <Row label="Status"        value={STATUS_LABEL[data.account.status] ?? data.account.status} />
             <Row label="Cadastro"      value={fmtDate(data.created_at)} />
             <Row label="Último login"  value={fmtDate(data.last_sign_in_at)} />
+            <Row label="Trial iniciado" value={fmtDate(data.account.trial_started_at ?? null)} />
             <Row label="Trial até"     value={fmtDate(data.account.trial_ends_at)} />
             {data.account.subscription_status && (
               <Row label="Assinatura" value={data.account.subscription_status} />

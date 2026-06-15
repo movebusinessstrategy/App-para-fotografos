@@ -1335,10 +1335,15 @@ async function startServer() {
           (req as any).userId = member.owner_user_id;
           (req as any).realUserId = user.id;
           (req as any).isImpersonating = true;
-          (req as any).isPlatformAdmin = true;
+          // NÃO marca isPlatformAdmin=true: ao "ver como membro" o admin deve
+          // enxergar EXATAMENTE o que o membro vê (respeita o RBAC dele, inclusive
+          // ocultar financeiro do papel de produção). Pra acesso total, impersone
+          // o DONO. (Antes vazava valores financeiros.)
+          (req as any).isPlatformAdmin = false;
           (req as any).memberPermissions = member.permissions;
           (req as any).isMember = true;
           (req as any).supabase = supabaseAdmin;
+          console.log(`[impersonate] admin=${user.id} → membro=${impersonateMemberHeader} (dono=${member.owner_user_id}) ${req.method} ${req.path}`);
           return next();
         }
 
@@ -1349,6 +1354,7 @@ async function startServer() {
         (req as any).memberPermissions = null;
         (req as any).isMember = false;
         (req as any).supabase = supabaseAdmin;
+        console.log(`[impersonate] admin=${user.id} → dono=${impersonateOwnerHeader} ${req.method} ${req.path}`);
         return next();
       }
 
@@ -10200,45 +10206,39 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const pageSize = Math.min(100, Math.max(10, parseInt((req.query.page_size as string) || '25', 10)));
 
     try {
-      // Lista usuários do auth.users via admin API
-      const { data: usersData, error: usersErr } = await supabaseAdmin.auth.admin.listUsers({
-        page,
-        perPage: pageSize,
-      });
-      if (usersErr) return res.status(500).json({ error: usersErr.message });
+      // 1) Busca TODOS os usuários do auth (em páginas de 1000) — paginação e
+      // filtros precisam rodar sobre o conjunto COMPLETO de donos, não sobre
+      // uma fatia crua de auth.users (era o bug: donos sumiam da lista).
+      const allUsers: Array<{ id: string; email?: string | null; created_at?: string; last_sign_in_at?: string | null }> = [];
+      for (let p = 1; p <= 20; p++) {
+        const { data: usersData, error: usersErr } = await supabaseAdmin.auth.admin.listUsers({ page: p, perPage: 1000 });
+        if (usersErr) return res.status(500).json({ error: usersErr.message });
+        const batch = usersData?.users ?? [];
+        allUsers.push(...(batch as any));
+        if (batch.length < 1000) break; // última página
+      }
 
-      let users = usersData?.users ?? [];
-
-      // Filtra fora os membros de equipe — só queremos donos de conta
+      // 2) Remove membros de equipe — só donos de conta.
       const { data: memberRows } = await supabaseAdmin
         .from('team_members')
         .select('member_user_id')
         .not('member_user_id', 'is', null);
       const memberIds = new Set((memberRows ?? []).map((r) => r.member_user_id));
-      users = users.filter((u) => !memberIds.has(u.id));
+      const owners = allUsers.filter((u) => !memberIds.has(u.id));
 
-      const totalUsers = users.length;
-      if (search) {
-        users = users.filter((u) => (u.email ?? '').toLowerCase().includes(search));
-      }
-
-      const userIds = users.map((u) => u.id);
-      if (userIds.length === 0) {
-        return res.json({ tenants: [], page, page_size: pageSize, total: totalUsers });
-      }
-
+      // 3) Contas + planos de TODOS (limit alto p/ não bater o teto 1000 do PostgREST).
       const [{ data: accounts }, { data: plans }] = await Promise.all([
         supabaseAdmin
           .from('platform_accounts')
           .select('owner_user_id, plan_id, status, suspended_reason, trial_ends_at, notes, created_at')
-          .in('owner_user_id', userIds),
+          .limit(100000),
         supabaseAdmin.from('platform_plans').select('id, slug, name'),
       ]);
-
       const acctByOwner = new Map((accounts ?? []).map((a) => [a.owner_user_id, a]));
       const planById = new Map((plans ?? []).map((p) => [p.id, p]));
 
-      let tenants = users.map((u) => {
+      // 4) Monta a lista completa de tenants.
+      let tenants = owners.map((u) => {
         const acct = acctByOwner.get(u.id);
         const plan = acct?.plan_id ? planById.get(acct.plan_id) : null;
         return {
@@ -10256,10 +10256,17 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         };
       });
 
+      // 5) Filtros sobre o conjunto COMPLETO.
+      if (search) tenants = tenants.filter((t) => (t.email ?? '').toLowerCase().includes(search));
       if (status) tenants = tenants.filter((t) => t.status === status);
       if (planId) tenants = tenants.filter((t) => t.plan_id === planId);
 
-      res.json({ tenants, page, page_size: pageSize, total: totalUsers });
+      // 6) Total real + fatia da página pedida.
+      const total = tenants.length;
+      const start = (page - 1) * pageSize;
+      const pageItems = tenants.slice(start, start + pageSize);
+
+      res.json({ tenants: pageItems, page, page_size: pageSize, total });
     } catch (err: any) {
       console.error('[platform/tenants] erro:', err);
       res.status(500).json({ error: err.message ?? 'Falha ao listar tenants' });
@@ -10576,6 +10583,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
     const adminId = (req as any).realUserId as string;
     const id = req.params.id;
+    // Trava: não deixa excluir plano em uso (senão os tenants ficam sem plano =
+    // quota ilimitada / fail-open). Manda trocar o plano dessas empresas antes.
+    const { count: emUso } = await supabaseAdmin
+      .from('platform_accounts')
+      .select('owner_user_id', { count: 'exact', head: true })
+      .eq('plan_id', id);
+    if ((emUso || 0) > 0) {
+      return res.status(409).json({ error: `Plano em uso por ${emUso} empresa(s). Troque o plano delas antes de excluir.` });
+    }
     const { error } = await supabaseAdmin.from('platform_plans').delete().eq('id', id);
     if (error) return res.status(500).json({ error: error.message });
     await logAdminAction(adminId, 'plan_delete', null, { plan_id: id }, req.ip ?? null);
@@ -10670,14 +10686,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.get('/api/platform/audit-log', requireAuth, requireSuperAdmin, async (req, res) => {
     if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
     const limit = Math.min(200, Math.max(10, parseInt((req.query.limit as string) || '50', 10)));
+    const page = Math.max(1, parseInt((req.query.page as string) || '1', 10));
+    const from = (page - 1) * limit;
     const targetOwnerId = req.query.target_owner_id as string | undefined;
     const action = req.query.action as string | undefined;
 
+    // range(from, to) → permite navegar pro histórico antigo (antes só dava as
+    // últimas N e o resto ficava inalcançável).
     let q = supabaseAdmin
       .from('platform_audit_log')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(limit);
+      .range(from, from + limit - 1);
     if (targetOwnerId) q = q.eq('target_owner_id', targetOwnerId);
     if (action) q = q.eq('action', action);
 
