@@ -1162,7 +1162,7 @@ async function startServer() {
   }
   // Só bloqueia quando a flag é explicitamente false.
   const planAllowsFeature = (limits: any, feature: 'gallery' | 'album'): boolean => limits?.[feature] !== false;
-  const planStorageGb = (limits: any): number => Number(limits?.storage_gb || 0);
+  const planStorageGb = (limits: any): number => Math.max(0, Number(limits?.storage_gb || 0));
   function invalidatePlanLimits(ownerUserId: string) { planLimitsCache.delete(ownerUserId); }
 
   const ensurePlatformAccount = async (ownerUserId: string) => {
@@ -6973,14 +6973,22 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!supabaseAdmin || depth > 6) return 0;
     let total = 0;
     try {
-      const { data } = await supabaseAdmin.storage.from(bucket).list(prefix, { limit: 1000 });
-      for (const item of data || []) {
-        const isFolder = (item as any).id == null && (item as any).metadata == null;
-        if (isFolder) {
-          total += await sumBucketPrefix(bucket, prefix ? `${prefix}/${item.name}` : item.name, depth + 1);
-        } else {
-          total += Number((item as any).metadata?.size || 0);
+      // Pagina (1000 por página) — pasta com muitas fotos não pode subcontar.
+      let offset = 0;
+      for (;;) {
+        const { data } = await supabaseAdmin.storage.from(bucket).list(prefix, { limit: 1000, offset });
+        const items = data || [];
+        for (const item of items) {
+          const isFolder = (item as any).id == null && (item as any).metadata == null;
+          if (isFolder) {
+            total += await sumBucketPrefix(bucket, prefix ? `${prefix}/${item.name}` : item.name, depth + 1);
+          } else {
+            total += Number((item as any).metadata?.size || 0);
+          }
         }
+        if (items.length < 1000) break;
+        offset += 1000;
+        if (offset > 200000) break; // teto de segurança
       }
     } catch { /* fail-open */ }
     return total;
