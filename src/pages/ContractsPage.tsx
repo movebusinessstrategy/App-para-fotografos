@@ -447,15 +447,21 @@ function NewContractPicker({ onClose, onCreated, onError }: { onClose: () => voi
     const cd: any = {};
 
     if (client) {
-      cd.clientName = client.name || '';
-      cd.clientCPF = (client as any).cpf || '';
-      cd.clientPhone = (client as any).phone || '';
-      cd.clientEmail = (client as any).email || '';
-      cd.clientCEP = (client as any).cep || '';
-      const addr = (client as any).address || '';
-      const city = (client as any).city || '';
-      const state = (client as any).state || '';
-      cd.clientAddress = [addr, [city, state].filter(Boolean).join('/')].filter(Boolean).join(' - ');
+      // Só grava campos preenchidos (não persiste '' — evita sobrescrever o
+      // dado atual do cliente ao reabrir o contrato).
+      if (client.name) cd.clientName = client.name;
+      if ((client as any).cpf) cd.clientCPF = (client as any).cpf;
+      if ((client as any).phone) cd.clientPhone = (client as any).phone;
+      if ((client as any).email) cd.clientEmail = (client as any).email;
+      if ((client as any).cep) cd.clientCEP = (client as any).cep;
+      const addr = [
+        (client as any).address,
+        (client as any).address_number,
+        (client as any).address_complement,
+        (client as any).neighborhood,
+        [(client as any).city, (client as any).state].filter(Boolean).join('/'),
+      ].filter(Boolean).join(', ');
+      if (addr) cd.clientAddress = addr;
     }
 
     if (job) {

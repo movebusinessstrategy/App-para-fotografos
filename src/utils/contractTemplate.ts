@@ -63,15 +63,21 @@ export function buildContractDataFromTemplate(
   const cd: Record<string, any> = {};
 
   if (client) {
-    cd.clientName = client.name || '';
-    cd.clientCPF = client.cpf || '';
-    cd.clientPhone = client.phone || '';
-    cd.clientEmail = client.email || '';
-    cd.clientCEP = client.cep || '';
-    const addr = client.address || '';
-    const city = client.city || '';
-    const state = client.state || '';
-    cd.clientAddress = [addr, [city, state].filter(Boolean).join('/')].filter(Boolean).join(' - ');
+    // Só grava campos PREENCHIDOS — não persiste '' (senão o vazio velho
+    // sobrescrevia o dado atual do cliente ao reabrir o contrato).
+    if (client.name) cd.clientName = client.name;
+    if (client.cpf) cd.clientCPF = client.cpf;
+    if (client.phone) cd.clientPhone = client.phone;
+    if (client.email) cd.clientEmail = client.email;
+    if (client.cep) cd.clientCEP = client.cep;
+    const addr = [
+      client.address,
+      client.address_number,
+      client.address_complement,
+      client.neighborhood,
+      [client.city, client.state].filter(Boolean).join('/'),
+    ].filter(Boolean).join(', ');
+    if (addr) cd.clientAddress = addr;
   }
 
   if (job) {

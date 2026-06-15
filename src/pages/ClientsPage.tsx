@@ -673,7 +673,9 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
 
           clientId = await findExisting('cpf', cpf);
           if (!clientId && phone) clientId = await findExisting('phone', phone);
-          if (!clientId) clientId = await findExisting('name', name);
+          // Só casa por NOME quando não há CPF NEM telefone na linha — senão dois
+          // homônimos sobrescreviam o cadastro um do outro (endereço trocado).
+          if (!clientId && !cpf && !phone) clientId = await findExisting('name', name);
 
           const clientData = {
             name,
@@ -683,6 +685,8 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
             cpf: cpf || '',
             cep: (getVal(row, 'CEP') || '').trim() || '',
             address: (getVal(row, 'Endereco') || '').trim() || '',
+            address_number: (getVal(row, 'Número') || getVal(row, 'Numero') || getVal(row, 'Nº') || '').trim() || '',
+            address_complement: (getVal(row, 'Complemento') || '').trim() || '',
             neighborhood: (getVal(row, 'Bairro') || '').trim() || '',
             city: (getVal(row, 'Cidade') || '').trim() || '',
             state: (getVal(row, 'UF') || '').trim() || '',
@@ -697,7 +701,12 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
           };
 
           if (clientId) {
-            const { error: updateError } = await supabase.from('clients').update(clientData).eq('id', clientId);
+            // Atualizar SEM apagar dado existente com célula vazia do CSV
+            // (só sobrescreve campos que vieram preenchidos).
+            const updateData = Object.fromEntries(
+              Object.entries(clientData).filter(([k, v]) => k === 'name' || k === 'user_id' || (v !== '' && v != null && v !== 0)),
+            );
+            const { error: updateError } = await supabase.from('clients').update(updateData).eq('id', clientId);
             if (updateError) {
               throw new Error(`Erro ao atualizar cliente: ${updateError.message}`);
             }
@@ -1328,6 +1337,8 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
     cpf: initialClient?.cpf || '',
     cep: initialClient?.cep || '',
     address: initialClient?.address || '',
+    address_number: initialClient?.address_number || '',
+    address_complement: initialClient?.address_complement || '',
     neighborhood: initialClient?.neighborhood || '',
     city: initialClient?.city || '',
     state: initialClient?.state || '',
@@ -1366,7 +1377,13 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
     }
   }, [formData.birth_date]);
 
+  // Só busca o CEP quando o USUÁRIO digita o CEP — NUNCA ao abrir um cliente
+  // existente (senão o ViaCEP sobrescrevia o endereço real já salvo, perdendo
+  // número/complemento, e "trocava" o endereço da pessoa). Bug de "endereço
+  // diferente no banco".
+  const cepUserEdited = useRef(false);
   useEffect(() => {
+    if (!cepUserEdited.current) return;
     const cep = formData.cep.replace(/\D/g, '');
     if (cep.length === 8) {
       const fetchAddress = async () => {
@@ -1374,12 +1391,13 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
           const res = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
           const data = await res.json();
           if (!data.erro) {
+            // Preenche rua/bairro/cidade/UF; NÃO mexe em número/complemento.
             setFormData(prev => ({
               ...prev,
-              address: data.logradouro,
-              neighborhood: data.bairro,
-              city: data.localidade,
-              state: data.uf
+              address: data.logradouro || prev.address,
+              neighborhood: data.bairro || prev.neighborhood,
+              city: data.localidade || prev.city,
+              state: data.uf || prev.state,
             }));
           }
         } catch (error) {
@@ -1583,19 +1601,40 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
 
                 <div>
                   <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">CEP</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={formData.cep}
-                    onChange={e => setFormData({...formData, cep: e.target.value})}
+                    onChange={e => { cepUserEdited.current = true; setFormData({...formData, cep: e.target.value}); }}
                     className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                   />
                 </div>
                 <div className="md:col-span-2">
-                  <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Endereço</label>
-                  <input 
-                    type="text" 
+                  <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Endereço (rua)</label>
+                  <input
+                    type="text"
                     value={formData.address}
                     onChange={e => setFormData({...formData, address: e.target.value})}
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Número</label>
+                  <input
+                    type="text"
+                    value={formData.address_number}
+                    onChange={e => setFormData({...formData, address_number: e.target.value})}
+                    placeholder="123"
+                    className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Complemento (opcional)</label>
+                  <input
+                    type="text"
+                    value={formData.address_complement}
+                    onChange={e => setFormData({...formData, address_complement: e.target.value})}
+                    placeholder="Apto 42, Bloco B…"
                     className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                   />
                 </div>

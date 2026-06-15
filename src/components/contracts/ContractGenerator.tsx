@@ -130,7 +130,14 @@ function buildInitialForm(contract: Contract, client: any, studio: StudioSetting
   const fromClient: Partial<ContractData> = client ? {
     clientName: client.name || '',
     clientCPF: client.cpf || '',
-    clientAddress: client.address || [client.city, client.state].filter(Boolean).join('/') || '',
+    // Endereço COMPLETO: rua, número, complemento, bairro, cidade/UF.
+    clientAddress: [
+      client.address,
+      client.address_number,
+      client.address_complement,
+      client.neighborhood,
+      [client.city, client.state].filter(Boolean).join('/'),
+    ].filter(Boolean).join(', '),
     clientCEP: client.cep || '',
     clientPhone: client.phone || '',
     clientEmail: client.email || '',
@@ -142,8 +149,14 @@ function buildInitialForm(contract: Contract, client: any, studio: StudioSetting
     const d = parseDate(cd.serviceDate);
     if (d) cd.serviceDate = format(d, 'dd/MM/yyyy', { locale: ptBR });
   }
+  // Remove valores VAZIOS do contract_data salvo — senão um campo gravado em
+  // branco na CRIAÇÃO (cliente ainda sem CPF/endereço) sobrescrevia o dado
+  // atual do cliente pra sempre. Vazio agora cai no fromClient/fromStudio.
+  for (const k of Object.keys(cd)) {
+    if (cd[k] === '' || cd[k] == null) delete cd[k];
+  }
 
-  // Order: empty defaults -> studio defaults -> client info -> stored contract_data (highest priority)
+  // Order: empty defaults -> studio defaults -> client info -> stored contract_data (não-vazio)
   return { ...EMPTY_FORM, ...fromStudio, ...fromClient, ...cd } as ContractData;
 }
 
