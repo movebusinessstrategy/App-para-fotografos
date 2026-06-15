@@ -9997,16 +9997,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
 
     const { planSlug, billingType, cpfCnpj, mobilePhone, creditCard, creditCardHolderInfo } = req.body || {};
-    if (!planSlug || !['pro', 'business'].includes(planSlug)) return res.status(400).json({ error: 'planSlug inválido' });
+    if (!planSlug || typeof planSlug !== 'string') return res.status(400).json({ error: 'planSlug inválido' });
     if (!['PIX', 'CREDIT_CARD'].includes(billingType)) return res.status(400).json({ error: 'billingType inválido' });
     if (!cpfCnpj) return res.status(400).json({ error: 'CPF/CNPJ obrigatório' });
 
+    // Aceita qualquer plano ATIVO (start/pro/studio/premium); aposentados não.
     const { data: plan } = await supabaseAdmin
       .from('platform_plans')
       .select('id, slug, name, price_cents')
       .eq('slug', planSlug)
+      .eq('is_active', true)
       .maybeSingle();
-    if (!plan) return res.status(404).json({ error: 'Plano não encontrado' });
+    if (!plan) return res.status(404).json({ error: 'Plano não encontrado ou indisponível' });
 
     // Email/nome do user logado pra criar customer no Asaas
     const { data: userInfo } = await supabaseAdmin.auth.admin.getUserById(ownerId);
