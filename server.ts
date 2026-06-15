@@ -1137,6 +1137,34 @@ async function startServer() {
     return { allowed: current < max, current, max, planSlug: plan?.slug };
   };
 
+  // ── Features do plano (galeria/álbum/armazenamento) ───────────────────────
+  // Lê limits do plano do tenant (cache 60s). Default-allow: só bloqueia se a
+  // flag for explicitamente false — assim conta sem plano / plano antigo nunca
+  // é barrada por engano.
+  const planLimitsCache = new Map<string, { limits: any; at: number }>();
+  const PLAN_LIMITS_TTL = 60_000;
+  async function getPlanLimits(ownerUserId: string): Promise<any> {
+    if (!supabaseAdmin) return {};
+    const c = planLimitsCache.get(ownerUserId);
+    if (c && Date.now() - c.at < PLAN_LIMITS_TTL) return c.limits;
+    let limits: any = {};
+    try {
+      const { data: acct } = await supabaseAdmin
+        .from('platform_accounts').select('plan_id').eq('owner_user_id', ownerUserId).maybeSingle();
+      if (acct?.plan_id) {
+        const { data: plan } = await supabaseAdmin
+          .from('platform_plans').select('limits').eq('id', acct.plan_id).maybeSingle();
+        limits = plan?.limits || {};
+      }
+    } catch { /* fail-open */ }
+    planLimitsCache.set(ownerUserId, { limits, at: Date.now() });
+    return limits;
+  }
+  // Só bloqueia quando a flag é explicitamente false.
+  const planAllowsFeature = (limits: any, feature: 'gallery' | 'album'): boolean => limits?.[feature] !== false;
+  const planStorageGb = (limits: any): number => Number(limits?.storage_gb || 0);
+  function invalidatePlanLimits(ownerUserId: string) { planLimitsCache.delete(ownerUserId); }
+
   const ensurePlatformAccount = async (ownerUserId: string) => {
     if (!supabaseAdmin) return null;
     const { data: existing, error: selErr } = await supabaseAdmin
@@ -6734,6 +6762,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       if (data) currentMember = { id: data.id, name: data.name, color: data.color };
     } catch { /* ignora — endpoint não pode quebrar */ }
 
+    const planLimits = await getPlanLimits(ownerId);
     res.json({
       isMember: (req as any).isMember ?? false,
       permissions: (req as any).memberPermissions ?? null,
@@ -6742,6 +6771,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       impersonatingOwnerId: (req as any).isImpersonating ? (req as any).userId : null,
       productionOnly: isProductionOnly(req),
       currentMember,
+      // Features liberadas pelo plano (default-allow; só false bloqueia).
+      planFeatures: {
+        gallery: planLimits?.gallery !== false,
+        album: planLimits?.album !== false,
+        storage_gb: Number(planLimits?.storage_gb || 0),
+      },
     });
   });
 
@@ -6789,6 +6824,23 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       return [r, { current: l.current, max: l.max, allowed: l.allowed }];
     }));
     res.json(Object.fromEntries(results));
+  });
+
+  // Uso de armazenamento (galeria + álbum) vs limite do plano (GB).
+  app.get('/api/billing/storage', requireAuth, async (req, res) => {
+    const ownerId = (req as any).userId;
+    const fresh = req.query.fresh === '1';
+    const limits = await getPlanLimits(ownerId);
+    const capGb = planStorageGb(limits);
+    if (capGb <= 0) return res.json({ enabled: false, used_gb: 0, cap_gb: 0, pct: 0 });
+    const usedBytes = await getStorageUsageBytes(ownerId, fresh);
+    const usedGb = usedBytes / 1e9;
+    res.json({
+      enabled: true,
+      used_gb: Math.round(usedGb * 100) / 100,
+      cap_gb: capGb,
+      pct: Math.min(100, Math.round((usedGb / capGb) * 100)),
+    });
   });
 
   // ============================================================================
@@ -6910,6 +6962,50 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   const GALLERY_ORIGINALS_BUCKET = 'galeria-originais';
   const GALLERY_PREVIEWS_BUCKET = 'galeria-previews';
   const GALLERY_STATUSES = ['draft', 'sent', 'selected', 'delivered'];
+
+  // ── Uso de armazenamento por tenant (galeria + álbum) ─────────────────────
+  // Soma os bytes nos buckets sob o prefixo do user. Recursivo + cache 5min.
+  // FAIL-OPEN: qualquer erro → retorna o que tiver (nunca trava upload por bug
+  // de medição).
+  const storageUsageCache = new Map<string, { bytes: number; at: number }>();
+  const STORAGE_TTL = 5 * 60 * 1000;
+  async function sumBucketPrefix(bucket: string, prefix: string, depth = 0): Promise<number> {
+    if (!supabaseAdmin || depth > 6) return 0;
+    let total = 0;
+    try {
+      const { data } = await supabaseAdmin.storage.from(bucket).list(prefix, { limit: 1000 });
+      for (const item of data || []) {
+        const isFolder = (item as any).id == null && (item as any).metadata == null;
+        if (isFolder) {
+          total += await sumBucketPrefix(bucket, prefix ? `${prefix}/${item.name}` : item.name, depth + 1);
+        } else {
+          total += Number((item as any).metadata?.size || 0);
+        }
+      }
+    } catch { /* fail-open */ }
+    return total;
+  }
+  async function getStorageUsageBytes(userId: string, fresh = false): Promise<number> {
+    const c = storageUsageCache.get(userId);
+    if (!fresh && c && Date.now() - c.at < STORAGE_TTL) return c.bytes;
+    let bytes = 0;
+    for (const b of [GALLERY_ORIGINALS_BUCKET, GALLERY_PREVIEWS_BUCKET, 'album-assets']) {
+      bytes += await sumBucketPrefix(b, userId);
+    }
+    storageUsageCache.set(userId, { bytes, at: Date.now() });
+    return bytes;
+  }
+  // Checa se cabe `incomingBytes` no plano. Retorna {ok, usedGb, capGb}. capGb=0
+  // (Start/Pro/sem plano) → sem trava de espaço aqui (galeria/álbum já é barrado
+  // antes pelo gating de feature).
+  async function storageWouldFit(userId: string, incomingBytes: number): Promise<{ ok: boolean; usedGb: number; capGb: number }> {
+    const limits = await getPlanLimits(userId);
+    const capGb = planStorageGb(limits);
+    if (capGb <= 0) return { ok: true, usedGb: 0, capGb: 0 };
+    const used = await getStorageUsageBytes(userId);
+    const cap = capGb * 1_000_000_000;
+    return { ok: used + Math.max(0, incomingBytes) <= cap, usedGb: used / 1e9, capGb };
+  }
 
   let galleryBucketsReady = false;
   async function ensureGalleryBuckets() {
@@ -7533,6 +7629,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
     const body = req.body || {};
 
+    // Gating de plano: Galeria só nos planos Studio/Premium.
+    if (!planAllowsFeature(await getPlanLimits(userId), 'gallery')) {
+      return res.status(403).json({ error: 'A Galeria de seleção está disponível nos planos Studio e Premium.', feature_locked: 'gallery' });
+    }
+
     const jobId = body.job_id ? Number(body.job_id) : null;
     const fromJob = jobId && !body.title ? await galleryDefaultsFromJob(supabase, userId, jobId) : {};
     const title = String(body.title || fromJob.title || '').trim();
@@ -7723,6 +7824,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
     if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
     await ensureGalleryBuckets();
+
+    // Trava de armazenamento do plano (fail-open: erro de medição não bloqueia).
+    const incoming = files.reduce((s: number, f: any) => s + (Number(f?.size) || 0), 0);
+    const fit = await storageWouldFit(userId, incoming);
+    if (!fit.ok) {
+      return res.status(403).json({ error: `Armazenamento cheio (${fit.usedGb.toFixed(1)} de ${fit.capGb} GB). Apague fotos antigas ou suba pro plano Premium.`, storage_full: true });
+    }
 
     const { count } = await supabase
       .from('gallery_photos').select('id', { count: 'exact', head: true }).eq('gallery_id', gallery.id);
@@ -9174,6 +9282,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const title = String(body.title || '').trim();
     if (!title) return res.status(400).json({ error: 'Informe um título pro álbum.' });
 
+    // Gating de plano: Designer de Álbum só nos planos Studio/Premium.
+    if (!planAllowsFeature(await getPlanLimits(userId), 'album')) {
+      return res.status(403).json({ error: 'O Designer de Álbum está disponível nos planos Studio e Premium.', feature_locked: 'album' });
+    }
+
     const size = validAlbumSize(body.size) ? normAlbumSize(body.size) : 'sq30';
     const insert: any = {
       user_id: userId,
@@ -9312,6 +9425,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const album = await carregarAlbum(supabase, userId, req.params.id).catch(() => null);
     if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
     await ensureAlbumBucket();
+
+    // Trava de armazenamento do plano (fail-open).
+    const incoming = files.reduce((s: number, f: any) => s + (Number(f?.size) || 0), 0);
+    const fit = await storageWouldFit(userId, incoming);
+    if (!fit.ok) {
+      return res.status(403).json({ error: `Armazenamento cheio (${fit.usedGb.toFixed(1)} de ${fit.capGb} GB). Apague fotos antigas ou suba pro plano Premium.`, storage_full: true });
+    }
 
     const { count } = await supabase
       .from('album_assets').select('id', { count: 'exact', head: true }).eq('album_id', album.id);
@@ -10405,6 +10525,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Invalida cache pra mudanças refletirem imediatamente (suspender,
     // mudar plano, etc.) — senão o user fica até 30s usando estado antigo.
     await invalidateAuthCacheForTenant(ownerId);
+    invalidatePlanLimits(ownerId);
 
     await logAdminAction(adminId, 'tenant_update', ownerId, update, req.ip ?? null);
     res.json(data);

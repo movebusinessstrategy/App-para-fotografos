@@ -11,9 +11,13 @@ interface AuthContextType {
   permissions: Record<string, boolean> | null;
   isPlatformAdmin: boolean;
   isProductionOnly: boolean;
+  features: PlanFeatures;
   canAccess: (module: string) => boolean;
   signOut: () => Promise<void>;
 }
+
+interface PlanFeatures { gallery: boolean; album: boolean; storage_gb: number }
+const DEFAULT_FEATURES: PlanFeatures = { gallery: true, album: true, storage_gb: 0 };
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
@@ -23,6 +27,7 @@ const AuthContext = createContext<AuthContextType>({
   permissions: null,
   isPlatformAdmin: false,
   isProductionOnly: false,
+  features: DEFAULT_FEATURES,
   canAccess: () => true,
   signOut: async () => {},
 });
@@ -45,6 +50,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   const [permissions, setPermissions] = useState<Record<string, boolean> | null>(null);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [isProductionOnly, setIsProductionOnly] = useState(false);
+  const [features, setFeatures] = useState<PlanFeatures>(DEFAULT_FEATURES);
   // Qual usuário já teve as permissões carregadas — evita re-fetch em refresh de
   // token e, principalmente, garante que NÃO renderizamos o app antes de saber
   // as permissões (senão o menu pisca "tudo liberado" por alguns segundos).
@@ -59,6 +65,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         setPermissions(data.permissions ?? null);
         setIsPlatformAdmin(data.isPlatformAdmin ?? false);
         setIsProductionOnly(data.productionOnly ?? false);
+        setFeatures(data.planFeatures ?? DEFAULT_FEATURES);
       }
     } catch {
       // silencia - se falhar, trata como dono
@@ -73,6 +80,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     setPermissions(null);
     setIsPlatformAdmin(false);
     setIsProductionOnly(false);
+    setFeatures(DEFAULT_FEATURES);
   };
 
   useEffect(() => {
@@ -128,7 +136,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, isMember, permissions, isPlatformAdmin, isProductionOnly, canAccess, signOut }}>
+    <AuthContext.Provider value={{ user, session, loading, isMember, permissions, isPlatformAdmin, isProductionOnly, features, canAccess, signOut }}>
       {children}
     </AuthContext.Provider>
   );

@@ -35,8 +35,8 @@ const ALL_NAV_ITEMS = [
   { to: "/clients",       label: "Clientes",         icon: Users,           module: "clients" },
   { to: "/jobs",          label: "Produção",         icon: Workflow,        module: "jobs" },
   { to: "/tarefas",       label: "Tarefas",          icon: ListChecks,      module: "jobs" },
-  { to: "/galeria",       label: "Galeria",          icon: Images,          module: "jobs" },
-  { to: "/album",         label: "Álbuns",           icon: BookImage,       module: "jobs" },
+  { to: "/galeria",       label: "Galeria",          icon: Images,          module: "jobs", feature: "gallery" },
+  { to: "/album",         label: "Álbuns",           icon: BookImage,       module: "jobs", feature: "album" },
   { to: "/finance",       label: "Financeiro",       icon: DollarSign,      module: "finance" },
   { to: "/calendar",      label: "Agenda",           icon: Calendar,        module: "calendar" },
   { to: "/agente",        label: "Agente IA",        icon: Bot,             module: "agente" },
@@ -64,16 +64,20 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
-  const { canAccess, isMember, isPlatformAdmin, isProductionOnly } = useAuth();
+  const { canAccess, isMember, isPlatformAdmin, isProductionOnly, features } = useAuth();
   const location = useLocation();
 
   const isCatalogo = location.pathname === "/catalogo";
   const [catalogoOpen, setCatalogoOpen] = useState(isCatalogo);
 
+  // Esconde itens não liberados pelo plano (galeria/álbum só Studio/Premium).
+  const planAllowsItem = (item: { feature?: string }) =>
+    !item.feature || (features as Record<string, boolean>)[item.feature] !== false;
+
   // Papel de produção: vê SÓ "Produção", nada mais (sem catálogo/config/tarefas).
   const navItems = isProductionOnly
     ? ALL_NAV_ITEMS.filter(item => item.to === "/jobs")
-    : ALL_NAV_ITEMS.filter(item => canAccess(item.module));
+    : ALL_NAV_ITEMS.filter(item => canAccess(item.module) && planAllowsItem(item));
   const bottomItems = isProductionOnly ? [] : (isMember ? MEMBER_BOTTOM_ITEMS : OWNER_ITEMS);
 
   const currentAba = new URLSearchParams(location.search).get("aba") ?? "produtos";
