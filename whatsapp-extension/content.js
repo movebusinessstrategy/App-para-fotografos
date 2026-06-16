@@ -6364,10 +6364,12 @@
     if (detectPoll) clearInterval(detectPoll);
     let n = 0;
     detectState();
+    // Mesma janela de ~3s pra pegar o chat enquanto o WhatsApp renderiza, mas
+    // com METADE das varreduras (150ms em vez de 80ms) — menos CPU e menos "pisca".
     detectPoll = setInterval(() => {
       detectState();
-      if (++n >= 38) { clearInterval(detectPoll); detectPoll = null; }
-    }, 80);
+      if (++n >= 20) { clearInterval(detectPoll); detectPoll = null; }
+    }, 150);
   }
 
   function startObserver() {
@@ -6417,11 +6419,16 @@
       }
     }, true);
 
+    let lastStripPos = 0;
     new MutationObserver(() => {
       // Garante que a rail nativa sobreviva às re-renderizações da sidebar
       if (!document.getElementById('fp-rail-mounted')?.isConnected) mountNativeRail();
       if (kanbanVisible) return;
-      positionChatStrip();
+      // O WhatsApp re-renderiza o DOM dezenas de vezes/seg (digitando, rolando).
+      // positionChatStrip faz getBoundingClientRect (reflow) — limitamos a ~8x/seg
+      // pra não travar a digitação. A detecção do chat já é debounced (500ms).
+      const now = Date.now();
+      if (now - lastStripPos >= 120) { lastStripPos = now; positionChatStrip(); }
       clearTimeout(detectDebounce);
       detectDebounce = setTimeout(detectState, 500);
     }).observe(document.body, { childList: true, subtree: true });
@@ -6625,7 +6632,7 @@
       if (kanbanEl && !kanbanEl.classList.contains('fp-hidden')) {
         loadKanban({ silent: true });
       }
-    }, 5000);
+    }, 12000);
   }
 
   function init() {

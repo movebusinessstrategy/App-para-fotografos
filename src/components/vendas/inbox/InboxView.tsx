@@ -4,6 +4,7 @@ import { ChatView } from "./ChatView";
 import { CrmPanel } from "./CrmPanel";
 import { ConnectChannelModal } from "../ConnectChannelModal";
 import { authFetch } from "../../../utils/authFetch";
+import { startVisiblePoll } from "../../../utils/poll";
 import { Deal, PipelineStage } from "../../../types";
 import { MessageCircle, RefreshCw, Wifi, WifiOff, Loader2, AlertCircle } from "lucide-react";
 
@@ -24,7 +25,7 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
   const [waStatus, setWaStatus] = useState<WaStatus>("checking");
   const [connectOpen, setConnectOpen] = useState(false);
   const [metaDiag, setMetaDiag] = useState<{ state: 'ready' | 'provisioning' | 'error'; message: string } | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<(() => void) | null>(null);
 
   const fetchConversations = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -87,11 +88,11 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
     checkWaStatus();
     checkMetaDiag();
     fetchConversations();
-    pollRef.current = setInterval(() => {
+    pollRef.current = startVisiblePoll(() => {
       fetchConversations(true);
       checkWaStatus();
-    }, 4000);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    }, 12000);
+    return () => { if (pollRef.current) pollRef.current(); };
   }, [fetchConversations, checkWaStatus, checkMetaDiag]);
 
   useEffect(() => {

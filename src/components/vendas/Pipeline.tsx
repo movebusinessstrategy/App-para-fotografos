@@ -30,6 +30,7 @@ import { ConnectChannelModal } from "./ConnectChannelModal";
 import { Lead, Message, PipelineStage } from "../../types/vendas";
 import { quickReplies } from "../../data/mockLeads";
 import { authFetch } from "../../utils/authFetch";
+import { startVisiblePoll } from "../../utils/poll";
 
 const BADGE_COLORS = [
   "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
@@ -459,8 +460,7 @@ export function Pipeline() {
   useEffect(() => {
     if (!waConnected) return undefined;
     pollLiveContacts();
-    const interval = setInterval(pollLiveContacts, 10_000);
-    return () => clearInterval(interval);
+    return startVisiblePoll(pollLiveContacts, 15_000);
   }, [pollLiveContacts, waConnected]);
 
   useEffect(() => {
@@ -534,8 +534,7 @@ export function Pipeline() {
     };
 
     syncSelectedChatMessages();
-    const interval = setInterval(syncSelectedChatMessages, 5_000);
-    return () => clearInterval(interval);
+    return startVisiblePoll(syncSelectedChatMessages, 10_000);
   }, [selectedLeadId, selectedWhatsappPhone, waConnected]);
 
   const handleSelectLead = useCallback((id: string) => {

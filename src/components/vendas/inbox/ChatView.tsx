@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { Send, Loader2, Phone, MessageCircle, Check, CheckCheck, Clock, Paperclip, Mic, X, FileText, Smile } from "lucide-react";
 import { authFetch } from "../../../utils/authFetch";
+import { startVisiblePoll } from "../../../utils/poll";
 
 const EMOJI_LIST = [
   "😀","😂","🤣","😍","😘","🥰","😊","😉","😎","🤩","😢","😭","🥺","😱","🤔","🙄","😏","🤗","😤",
@@ -158,7 +159,7 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const prevMsgCountRef = useRef(0);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<(() => void) | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -208,8 +209,8 @@ export function ChatView({ phone, contactName, showHeader = true }: Props) {
     fetchMessages();
     authFetch(`/api/inbox/mark-read/${phone}`, { method: "POST" }).catch(() => {});
 
-    pollRef.current = setInterval(() => fetchMessages(true), 4000);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    pollRef.current = startVisiblePoll(() => fetchMessages(true), 8000);
+    return () => { if (pollRef.current) pollRef.current(); };
   }, [phone, fetchMessages]);
 
   useEffect(() => {

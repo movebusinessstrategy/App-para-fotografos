@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../../integrations/supabase/client';
+import { startVisiblePoll } from '../../../utils/poll';
 
 export function useWaStatus() {
   const [connected, setConnected] = useState<boolean | null>(null);
@@ -22,8 +23,7 @@ export function useWaStatus() {
 
   useEffect(() => {
     check();
-    const id = setInterval(check, 5000);
-    return () => clearInterval(id);
+    return startVisiblePoll(check, 20000);
   }, []);
 
   return { connected, check };

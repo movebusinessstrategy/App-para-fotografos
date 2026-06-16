@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowLeft, Phone, Send, Loader2, MessageCircle } from 'lucide-react';
 import { authFetch } from '../../utils/authFetch';
+import { startVisiblePoll } from '../../utils/poll';
 
 interface Message {
   message_id: string;
@@ -52,7 +53,7 @@ export function ChatPopup({ phone, contactName, onClose }: ChatPopupProps) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<(() => void) | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const cleanPhone = phone.replace(/\D/g, '');
@@ -89,8 +90,8 @@ export function ChatPopup({ phone, contactName, onClose }: ChatPopupProps) {
     setMessages([]);
     fetchMessages();
     authFetch(`/api/inbox/mark-read/${cleanPhone}`, { method: 'POST' }).catch(() => {});
-    pollRef.current = setInterval(() => fetchMessages(true), 4000);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    pollRef.current = startVisiblePoll(() => fetchMessages(true), 8000);
+    return () => { if (pollRef.current) pollRef.current(); };
   }, [cleanPhone, fetchMessages]);
 
   useEffect(() => {

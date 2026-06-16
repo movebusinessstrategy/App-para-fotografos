@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../../integrations/supabase/client';
 import { Message } from '../types';
+import { startVisiblePoll } from '../../../utils/poll';
 
 export function useMessages(phone: string | null) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const intervalRef = useRef<(() => void) | null>(null);
 
   async function fetchMessages() {
     if (!phone) return;
@@ -39,9 +40,9 @@ export function useMessages(phone: string | null) {
     setMessages([]);
 
     fetchMessages().finally(() => setLoading(false));
-    intervalRef.current = setInterval(fetchMessages, 5000);
+    intervalRef.current = startVisiblePoll(fetchMessages, 8000);
 
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+    return () => { if (intervalRef.current) intervalRef.current(); };
   }, [phone]);
 
   async function sendText(text: string): Promise<void> {

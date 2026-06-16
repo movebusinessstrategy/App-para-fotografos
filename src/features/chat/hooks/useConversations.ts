@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../../integrations/supabase/client';
 import { Conversation } from '../types';
+import { startVisiblePoll } from '../../../utils/poll';
 
 export function useConversations() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const intervalRef = useRef<(() => void) | null>(null);
 
   async function fetchConversations() {
     try {
@@ -41,8 +42,8 @@ export function useConversations() {
 
   useEffect(() => {
     fetchConversations();
-    intervalRef.current = setInterval(fetchConversations, 10000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+    intervalRef.current = startVisiblePoll(fetchConversations, 25000);
+    return () => { if (intervalRef.current) intervalRef.current(); };
   }, []);
 
   return { conversations, loading, refresh: fetchConversations };
