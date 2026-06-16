@@ -5206,11 +5206,17 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           .in('deal_id', dealIds)).data || []
       : [];
 
-    type Cat = { tipo: string; numEnsaios: number; valorEnsaios: number; valorExtras: number; pacotes: Map<string, any>; extras: Map<string, any> };
+    // Agrupa tipos de ensaio ignorando acento/maiúscula ("Aniversário" e
+    // "Aniversario" caem na mesma categoria). O nome exibido é a variante mais
+    // frequente entre os jobs daquele grupo.
+    const normTipo = (s: any): string =>
+      String(s || 'Sem tipo').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase() || 'sem tipo';
+    type Cat = { tipo: string; labelCount: Map<string, number>; numEnsaios: number; valorEnsaios: number; valorExtras: number; pacotes: Map<string, any>; extras: Map<string, any> };
     const cats = new Map<string, Cat>();
     const getCat = (tipo: string): Cat => {
-      if (!cats.has(tipo)) cats.set(tipo, { tipo, numEnsaios: 0, valorEnsaios: 0, valorExtras: 0, pacotes: new Map(), extras: new Map() });
-      return cats.get(tipo)!;
+      const k = normTipo(tipo);
+      if (!cats.has(k)) cats.set(k, { tipo: tipo || 'Sem tipo', labelCount: new Map(), numEnsaios: 0, valorEnsaios: 0, valorExtras: 0, pacotes: new Map(), extras: new Map() });
+      return cats.get(k)!;
     };
 
     // Extras por job (pra somar e pra fallback do valor do ensaio)
@@ -5247,6 +5253,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Conta ensaios + valor do ensaio (pacote detalhado, ou amount - extras)
     for (const j of jobs as any[]) {
       const cat = getCat(j.job_type || 'Sem tipo');
+      const lbl = j.job_type || 'Sem tipo';
+      cat.labelCount.set(lbl, (cat.labelCount.get(lbl) || 0) + 1);
       cat.numEnsaios += 1;
       const pkg = pkgSumByJob.get(j.id);
       const ensaioVal = (pkg != null && pkg > 0) ? pkg : Math.max(0, (Number(j.amount) || 0) - (extrasSumByJob.get(j.id) || 0));
@@ -5254,7 +5262,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
 
     const categorias = [...cats.values()].map((c) => ({
-      tipo: c.tipo,
+      // nome exibido = variante mais frequente do tipo (ex.: "Aniversário")
+      tipo: [...c.labelCount.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || c.tipo,
       numEnsaios: c.numEnsaios,
       valorEnsaios: c.valorEnsaios,
       valorExtras: c.valorExtras,

@@ -258,12 +258,14 @@ export default function DashboardPage() {
         <div className="space-y-3">
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
             <Card>
-              <CardHeader icon={<DollarSign size={16} />} title="Faturamento" />
+              <CardHeader icon={<DollarSign size={16} />} title="Entrada" />
               <CardValue value={formatBRL(a.finance.revenueThisMonth, hideValues)} />
-              {periodDelta !== null && (
+              {periodDelta !== null ? (
                 <CardHint tone={periodDelta >= 0 ? 'pos' : 'neg'}>
                   {periodDelta >= 0 ? '↑' : '↓'} {Math.abs(periodDelta)}% vs período anterior
                 </CardHint>
+              ) : (
+                <CardHint>Recebido no período</CardHint>
               )}
             </Card>
 
