@@ -7,6 +7,7 @@ import {
   CalendarClock,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   Clock,
   Columns3,
@@ -21,18 +22,22 @@ import {
 } from "lucide-react";
 import { authFetch } from "../utils/authFetch";
 import { cn } from "../utils/cn";
-import { ProductionProcess, ProductionStageV2, Task, TeamMember } from "../types";
+import { ProductionProcess, ProductionStageV2, Task, TaskTemplate, TeamMember } from "../types";
 import { JobWithProduction } from "../components/producao/ProductionBoard";
 import { ConfirmModal } from "../components/ui/ConfirmModal";
 import { SearchableSelect } from "../components/ui/SearchableSelect";
 import { DateTimePicker } from "../components/ui/DateTimePicker";
+import { TaskTemplatesManager } from "../features/taskTemplates/TaskTemplatesManager";
+import { ApplyTemplateModal } from "../features/taskTemplates/ApplyTemplateModal";
+import { FolderTree, ListChecks as ListChecksIcon } from "lucide-react";
 
 type Urgency = "ok" | "warning" | "overdue" | "completed";
 type TaskBucket = "overdue" | "today" | "upcoming" | "completed";
-type ViewMode = "list" | "board";
+type ViewMode = "list" | "board" | "blocks";
 
 function getUrgency(task: Task): Urgency {
   if (task.completed_at) return "completed";
+  if (!task.due_date) return "ok"; // tarefa sem prazo (checklist)
   const now = Date.now();
   const created = new Date(task.created_at).getTime();
   const due = new Date(task.due_date).getTime();
@@ -43,6 +48,7 @@ function getUrgency(task: Task): Urgency {
 
 function getTaskBucket(task: Task): TaskBucket {
   if (task.completed_at) return "completed";
+  if (!task.due_date) return "upcoming"; // sem prazo → não fica atrasada
   const due = new Date(task.due_date);
   if (Date.now() >= due.getTime()) return "overdue";
   if (isToday(due)) return "today";
@@ -53,6 +59,7 @@ function formatDueRelative(task: Task): string {
   if (task.completed_at) {
     return `Concluída ${format(new Date(task.completed_at), "dd/MM 'às' HH:mm", { locale: ptBR })}`;
   }
+  if (!task.due_date) return "Sem prazo";
 
   const now = Date.now();
   const due = new Date(task.due_date).getTime();
@@ -72,6 +79,7 @@ function formatDueRelative(task: Task): string {
 }
 
 function formatDueDate(task: Task): string {
+  if (!task.due_date) return "Sem prazo";
   const due = new Date(task.due_date);
   if (isToday(due)) return `Hoje, ${format(due, "HH:mm", { locale: ptBR })}`;
   if (isTomorrow(due)) return `Amanhã, ${format(due, "HH:mm", { locale: ptBR })}`;
@@ -694,6 +702,107 @@ function TaskModal({ task, teamMembers, jobs, stages, processes, onSave, onClose
   );
 }
 
+// ─── Visão por blocos (padrões aplicados): bloco → tarefa → subtarefa ────────
+interface BlockGroup { block: string; position: number; items: { task: Task; subtasks: Task[] }[] }
+
+function BlocksView({
+  tasks, memberById, onToggle, onEdit, onDelete,
+}: {
+  tasks: Task[];
+  memberById: (id?: string | null) => TeamMember | undefined;
+  onToggle: (task: Task) => void;
+  onEdit: (task: Task) => void;
+  onDelete: (task: Task) => void;
+}) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const groups = useMemo<BlockGroup[]>(() => {
+    const subByParent: Record<string, Task[]> = {};
+    for (const t of tasks) if (t.parent_task_id) (subByParent[t.parent_task_id] ||= []).push(t);
+    const byBlock = new Map<string, BlockGroup>();
+    for (const t of tasks.filter((x) => !x.parent_task_id)) {
+      const key = t.block || "Avulsas";
+      if (!byBlock.has(key)) byBlock.set(key, { block: key, position: t.block_position ?? 9999, items: [] });
+      byBlock.get(key)!.items.push({
+        task: t,
+        subtasks: (subByParent[t.id] || []).sort((a, b) => (a.position || 0) - (b.position || 0)),
+      });
+    }
+    const arr = [...byBlock.values()];
+    arr.forEach((g) => g.items.sort((a, b) => (a.task.position || 0) - (b.task.position || 0)));
+    arr.sort((a, b) => a.position - b.position || a.block.localeCompare(b.block));
+    return arr;
+  }, [tasks]);
+
+  if (groups.length === 0) {
+    return (
+      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-12 text-center">
+        <FolderTree size={40} className="text-gray-200 dark:text-gray-700 mx-auto mb-3" />
+        <p className="text-gray-400 dark:text-gray-500 text-sm">Nenhuma tarefa em blocos. Aplique um <b>padrão</b> numa venda pra ver as etapas aqui.</p>
+      </div>
+    );
+  }
+
+  const Row = ({ task, sub }: { key?: React.Key; task: Task; sub?: boolean }) => {
+    const member = memberById(task.assignee_id);
+    const done = !!task.completed_at;
+    return (
+      <div className={cn("group flex items-center gap-2.5 px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-800/50", sub && "pl-11")}>
+        <button onClick={() => onToggle(task)} className="flex-shrink-0">
+          {done ? <CheckCircle2 size={sub ? 16 : 18} className="text-emerald-500" /> : <div className={cn("rounded-full border-2 border-gray-300 dark:border-gray-600 hover:border-gold-400", sub ? "w-4 h-4" : "w-[18px] h-[18px]")} />}
+        </button>
+        <span className={cn("flex-1 text-sm truncate", done ? "line-through text-gray-400" : sub ? "text-gray-600 dark:text-gray-300" : "text-gray-800 dark:text-gray-100")}>{task.title}</span>
+        {task.due_date && (
+          <span className={cn("text-[11px] px-1.5 py-0.5 rounded-full flex-shrink-0", getUrgency(task) === "overdue" ? "bg-red-50 text-red-500 dark:bg-red-500/10" : "text-gray-400")}>
+            {formatDueDate(task)}
+          </span>
+        )}
+        <div className="flex-shrink-0"><MemberAvatar member={member} /></div>
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+          <button onClick={() => onEdit(task)} className="p-1 rounded text-gray-300 hover:text-gray-600"><Edit2 size={13} /></button>
+          <button onClick={() => onDelete(task)} className="p-1 rounded text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-3">
+      {groups.map((g) => {
+        const isCol = collapsed.has(g.block);
+        const all = g.items.flatMap((it) => [it.task, ...it.subtasks]);
+        const total = all.length;
+        const doneCount = all.filter((t) => t.completed_at).length;
+        const pct = total ? Math.round((doneCount / total) * 100) : 0;
+        return (
+          <div key={g.block} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden">
+            <button
+              onClick={() => setCollapsed((prev) => { const n = new Set(prev); n.has(g.block) ? n.delete(g.block) : n.add(g.block); return n; })}
+              className="w-full flex items-center gap-2 px-4 py-3 bg-gray-50 dark:bg-gray-800/60 hover:bg-gray-100 dark:hover:bg-gray-800"
+            >
+              {isCol ? <ChevronRight size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+              <h3 className="text-sm font-bold text-gray-800 dark:text-white text-left flex-1 truncate">{g.block}</h3>
+              <div className="w-24 h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden hidden sm:block">
+                <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+              </div>
+              <span className="text-xs font-bold text-gray-400 tabular-nums">{doneCount}/{total}</span>
+            </button>
+            {!isCol && (
+              <div className="divide-y divide-gray-50 dark:divide-gray-800/60">
+                {g.items.map((it) => (
+                  <div key={it.task.id}>
+                    <Row task={it.task} />
+                    {it.subtasks.map((s) => <Row key={s.id} task={s} sub />)}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [jobs, setJobs] = useState<JobWithProduction[]>([]);
@@ -709,6 +818,8 @@ export default function TasksPage() {
   const [taskModal, setTaskModal] = useState<Partial<Task> | null | false>(false);
   const [viewTask, setViewTask] = useState<Task | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [applyTemplate, setApplyTemplate] = useState<TaskTemplate | null>(null);
 
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<TaskBucket | null>(null);
@@ -839,7 +950,9 @@ export default function TasksPage() {
       .sort((a, b) => {
         const bucketDiff = order[getTaskBucket(a)] - order[getTaskBucket(b)];
         if (bucketDiff !== 0) return bucketDiff;
-        return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+        const da = a.due_date ? new Date(a.due_date).getTime() : Infinity;
+        const db = b.due_date ? new Date(b.due_date).getTime() : Infinity;
+        return da - db;
       });
   }, [tasks, jobs, searchQuery, statusFilter, assigneeFilter]);
 
@@ -930,13 +1043,30 @@ export default function TasksPage() {
               Organize o que precisa ser feito, por prazo, responsável e trabalho vinculado.
             </p>
           </div>
-          <button
-            onClick={() => setTaskModal({})}
-            className="flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
-          >
-            <Plus size={16} />
-            Nova tarefa
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowTemplates(true)}
+              className="flex items-center gap-2 px-3 py-2 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 text-sm font-semibold rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+            >
+              <FolderTree size={16} />
+              Padrões
+            </button>
+            <button
+              onClick={() => setShowTemplates(true)}
+              className="hidden sm:flex items-center gap-2 px-3 py-2 border border-gold-300 text-gold-700 dark:text-gold-400 text-sm font-semibold rounded-xl hover:bg-gold-50 dark:hover:bg-gold-500/10 transition-colors"
+              title="Escolha um padrão e aplique numa venda"
+            >
+              <ListChecksIcon size={16} />
+              Aplicar padrão
+            </button>
+            <button
+              onClick={() => setTaskModal({})}
+              className="flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
+            >
+              <Plus size={16} />
+              Nova tarefa
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -1030,6 +1160,18 @@ export default function TasksPage() {
               <Columns3 size={15} />
               Quadro
             </button>
+            <button
+              onClick={() => setViewMode("blocks")}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all",
+                viewMode === "blocks"
+                  ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
+                  : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+              )}
+            >
+              <FolderTree size={15} />
+              Blocos
+            </button>
           </div>
         </div>
 
@@ -1075,6 +1217,14 @@ export default function TasksPage() {
               })
             )}
           </div>
+        ) : viewMode === "blocks" ? (
+          <BlocksView
+            tasks={filteredTasks}
+            memberById={memberById}
+            onToggle={handleToggleComplete}
+            onEdit={(task) => setTaskModal(task)}
+            onDelete={(task) => setConfirmDelete({ id: task.id, title: task.title })}
+          />
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 items-start">
             {columns.map((column) => {
@@ -1176,6 +1326,24 @@ export default function TasksPage() {
         onConfirm={() => confirmDelete && handleDeleteTask(confirmDelete.id)}
         onCancel={() => setConfirmDelete(null)}
       />
+
+      {showTemplates && (
+        <TaskTemplatesManager
+          members={teamMembers}
+          onClose={() => setShowTemplates(false)}
+          onApply={(tpl) => { setShowTemplates(false); setApplyTemplate(tpl); }}
+        />
+      )}
+
+      {applyTemplate && (
+        <ApplyTemplateModal
+          template={applyTemplate}
+          members={teamMembers}
+          jobs={jobs}
+          onClose={() => setApplyTemplate(null)}
+          onApplied={() => { setApplyTemplate(null); setViewMode("blocks"); fetchAll(); }}
+        />
+      )}
     </>
   );
 }

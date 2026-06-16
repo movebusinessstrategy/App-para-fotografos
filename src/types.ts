@@ -294,9 +294,50 @@ export interface Task {
   assignee_id?: string | null;
   job_id?: number | null;
   stage_id?: string | null;
-  due_date: string;
+  client_id?: number | null;
+  due_date?: string | null;
   created_at: string;
   completed_at?: string | null;
+  // Padrões de tarefas (playbooks)
+  block?: string | null;
+  block_position?: number | null;
+  parent_task_id?: string | null;
+  position?: number | null;
+  template_id?: string | null;
+}
+
+// ===== Padrões de tarefas (playbooks estilo ClickUp) =====
+export interface TaskTemplateItem {
+  id?: string;
+  template_id?: string;
+  block_id?: string;
+  parent_id?: string | null;
+  title: string;
+  description?: string | null;
+  position?: number;
+  default_assignee_id?: string | null;
+  due_offset_days?: number | null;
+  due_offset_ref?: 'ensaio' | 'aplicacao' | string | null;
+  children?: TaskTemplateItem[];
+}
+export interface TaskTemplateBlock {
+  id?: string;
+  template_id?: string;
+  title: string;
+  note?: string | null;
+  position?: number;
+  items?: TaskTemplateItem[];
+}
+export interface TaskTemplate {
+  id: string;
+  user_id?: string;
+  name: string;
+  description?: string | null;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+  item_count?: number;
+  blocks?: TaskTemplateBlock[];
 }
 
 export interface Aniversariante {

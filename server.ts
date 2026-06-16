@@ -6314,9 +6314,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.post('/api/tasks', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { title, description, assignee_id, job_id, stage_id, client_id, due_date } = req.body;
+    const { title, description, assignee_id, job_id, stage_id, client_id, due_date,
+            block, block_position, parent_task_id, position, template_id } = req.body;
     if (!title?.trim()) return res.status(400).json({ error: 'Título obrigatório' });
-    if (!due_date) return res.status(400).json({ error: 'Prazo obrigatório' });
+    // Prazo agora é OPCIONAL (tarefas tipo checklist).
     const { data, error } = await supabase
       .from('tasks')
       .insert({
@@ -6327,7 +6328,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         job_id: job_id || null,
         stage_id: stage_id || null,
         client_id: client_id || null,
-        due_date,
+        due_date: due_date || null,
+        block: block || null,
+        block_position: block_position ?? null,
+        parent_task_id: parent_task_id || null,
+        position: position ?? 0,
+        template_id: template_id || null,
       })
       .select().single();
     if (error) return res.status(500).json({ error: error.message });
@@ -6337,18 +6343,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.put('/api/tasks/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { title, description, assignee_id, job_id, stage_id, client_id, due_date } = req.body;
+    const b = req.body || {};
+    // Update parcial: só toca nos campos enviados (não zera o que não veio).
+    const patch: any = {};
+    if (b.title !== undefined) patch.title = b.title?.trim();
+    if (b.description !== undefined) patch.description = b.description?.trim() || null;
+    if (b.assignee_id !== undefined) patch.assignee_id = b.assignee_id || null;
+    if (b.job_id !== undefined) patch.job_id = b.job_id || null;
+    if (b.stage_id !== undefined) patch.stage_id = b.stage_id || null;
+    if (b.client_id !== undefined) patch.client_id = b.client_id || null;
+    if (b.due_date !== undefined) patch.due_date = b.due_date || null;
+    if (b.block !== undefined) patch.block = b.block || null;
+    if (b.position !== undefined) patch.position = b.position ?? 0;
     const { error } = await supabase
       .from('tasks')
-      .update({
-        title: title?.trim(),
-        description: description?.trim() || null,
-        assignee_id: assignee_id || null,
-        job_id: job_id || null,
-        stage_id: stage_id || null,
-        client_id: client_id || null,
-        due_date,
-      })
+      .update(patch)
       .eq('id', req.params.id)
       .eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
@@ -6378,6 +6387,243 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
+  });
+
+  // ============ PADRÕES DE TAREFAS (playbooks) ============
+
+  // Helper: regrava blocos+itens de um padrão (apaga e reinsere a estrutura).
+  async function saveTemplateStructure(supabase: SupabaseClient, templateId: string, blocks: any[]) {
+    await supabase.from('task_template_blocks').delete().eq('template_id', templateId); // cascade remove itens
+    let bPos = 0;
+    for (const bl of (blocks || [])) {
+      const { data: newBlock } = await supabase.from('task_template_blocks').insert({
+        template_id: templateId, title: (bl.title || 'Bloco').trim(), note: bl.note?.trim() || null, position: bl.position ?? bPos,
+      }).select().single();
+      bPos++;
+      if (!newBlock) continue;
+      let iPos = 0;
+      for (const it of (bl.items || [])) {
+        const { data: newItem } = await supabase.from('task_template_items').insert({
+          template_id: templateId, block_id: newBlock.id, parent_id: null,
+          title: (it.title || 'Tarefa').trim(), description: it.description?.trim() || null, position: it.position ?? iPos,
+          default_assignee_id: it.default_assignee_id || null, due_offset_days: it.due_offset_days ?? null, due_offset_ref: it.due_offset_ref || 'ensaio',
+        }).select().single();
+        iPos++;
+        if (!newItem) continue;
+        let cPos = 0;
+        for (const ch of (it.children || [])) {
+          await supabase.from('task_template_items').insert({
+            template_id: templateId, block_id: newBlock.id, parent_id: newItem.id,
+            title: (ch.title || 'Subtarefa').trim(), description: ch.description?.trim() || null, position: ch.position ?? cPos,
+            default_assignee_id: ch.default_assignee_id || null, due_offset_days: ch.due_offset_days ?? null, due_offset_ref: ch.due_offset_ref || 'ensaio',
+          });
+          cPos++;
+        }
+      }
+    }
+  }
+
+  // Monta a estrutura aninhada (blocos → itens → subtarefas) a partir das linhas.
+  function nestTemplate(blocks: any[], items: any[]) {
+    const topByBlock: Record<string, any[]> = {};
+    const childrenByParent: Record<string, any[]> = {};
+    for (const it of (items || [])) {
+      if (it.parent_id) (childrenByParent[it.parent_id] ||= []).push(it);
+      else (topByBlock[it.block_id] ||= []).push(it);
+    }
+    return (blocks || []).map((bl: any) => ({
+      ...bl,
+      items: (topByBlock[bl.id] || []).map((it: any) => ({ ...it, children: childrenByParent[it.id] || [] })),
+    }));
+  }
+
+  // Lista padrões (leve, com contagem de itens).
+  app.get('/api/task-templates', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data: templates, error } = await supabase
+      .from('task_templates').select('*').eq('user_id', userId).order('created_at', { ascending: true });
+    if (error) {
+      if (/task_templates/i.test(error.message)) return res.json({ tableMissing: true, templates: [] });
+      return res.status(500).json({ error: error.message });
+    }
+    const ids = (templates || []).map((t: any) => t.id);
+    const counts: Record<string, number> = {};
+    if (ids.length) {
+      const { data: items } = await supabase.from('task_template_items').select('template_id').in('template_id', ids);
+      for (const it of (items || [])) counts[it.template_id] = (counts[it.template_id] || 0) + 1;
+    }
+    res.json({ templates: (templates || []).map((t: any) => ({ ...t, item_count: counts[t.id] || 0 })) });
+  });
+
+  // Padrão completo (blocos + itens aninhados).
+  app.get('/api/task-templates/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data: tpl, error } = await supabase.from('task_templates').select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!tpl) return res.status(404).json({ error: 'Padrão não encontrado' });
+    const { data: blocks } = await supabase.from('task_template_blocks').select('*').eq('template_id', tpl.id).order('position');
+    const { data: items } = await supabase.from('task_template_items').select('*').eq('template_id', tpl.id).order('position');
+    res.json({ ...tpl, blocks: nestTemplate(blocks || [], items || []) });
+  });
+
+  // Cria padrão (com estrutura opcional).
+  app.post('/api/task-templates', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { name, description, blocks } = req.body || {};
+    if (!name?.trim()) return res.status(400).json({ error: 'Nome obrigatório' });
+    const { data: tpl, error } = await supabase.from('task_templates').insert({
+      user_id: userId, name: name.trim(), description: description?.trim() || null,
+    }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    if (Array.isArray(blocks) && blocks.length) await saveTemplateStructure(supabase, tpl.id, blocks);
+    res.json(tpl);
+  });
+
+  // Substitui o padrão inteiro (nome/descrição + estrutura).
+  app.put('/api/task-templates/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { name, description, is_active, blocks } = req.body || {};
+    const { data: tpl, error } = await supabase.from('task_templates').update({
+      ...(name !== undefined ? { name: name?.trim() } : {}),
+      ...(description !== undefined ? { description: description?.trim() || null } : {}),
+      ...(is_active !== undefined ? { is_active: !!is_active } : {}),
+      updated_at: new Date().toISOString(),
+    }).eq('id', req.params.id).eq('user_id', userId).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!tpl) return res.status(404).json({ error: 'Padrão não encontrado' });
+    if (Array.isArray(blocks)) await saveTemplateStructure(supabase, tpl.id, blocks);
+    res.json({ success: true });
+  });
+
+  // Duplica um padrão (com toda a estrutura).
+  app.post('/api/task-templates/:id/duplicate', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data: tpl } = await supabase.from('task_templates').select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!tpl) return res.status(404).json({ error: 'Padrão não encontrado' });
+    const { data: blocks } = await supabase.from('task_template_blocks').select('*').eq('template_id', tpl.id).order('position');
+    const { data: items } = await supabase.from('task_template_items').select('*').eq('template_id', tpl.id).order('position');
+    const nested = nestTemplate(blocks || [], items || []);
+    const { data: copy } = await supabase.from('task_templates').insert({ user_id: userId, name: `${tpl.name} (cópia)`, description: tpl.description }).select().single();
+    if (copy) await saveTemplateStructure(supabase, copy.id, nested);
+    res.json(copy);
+  });
+
+  app.delete('/api/task-templates/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { error } = await supabase.from('task_templates').delete().eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  // Aplica um padrão: cria as tarefas (blocos → tarefas → subtarefas) numa venda.
+  app.post('/api/task-templates/:id/apply', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { job_id, client_id, reference_date, default_assignee_id } = req.body || {};
+    const { data: tpl } = await supabase.from('task_templates').select('id').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!tpl) return res.status(404).json({ error: 'Padrão não encontrado' });
+    const { data: blocks } = await supabase.from('task_template_blocks').select('*').eq('template_id', tpl.id).order('position');
+    const { data: items } = await supabase.from('task_template_items').select('*').eq('template_id', tpl.id).order('position');
+    const topByBlock: Record<string, any[]> = {}; const childrenByParent: Record<string, any[]> = {};
+    for (const it of (items || [])) { if (it.parent_id) (childrenByParent[it.parent_id] ||= []).push(it); else (topByBlock[it.block_id] ||= []).push(it); }
+    const refDate = reference_date ? new Date(`${reference_date}T12:00:00`) : new Date();
+    const dueFrom = (item: any): string | null => {
+      if (item.due_offset_days == null) return null;
+      const base = (item.due_offset_ref === 'aplicacao') ? new Date() : new Date(refDate);
+      base.setDate(base.getDate() + Number(item.due_offset_days));
+      return base.toISOString();
+    };
+    let created = 0;
+    for (const bl of (blocks || [])) {
+      for (const it of (topByBlock[bl.id] || [])) {
+        const { data: parent } = await supabase.from('tasks').insert({
+          user_id: userId, title: it.title, description: it.description || null,
+          assignee_id: it.default_assignee_id || default_assignee_id || null,
+          job_id: job_id || null, client_id: client_id || null,
+          due_date: dueFrom(it), block: bl.title, block_position: bl.position, position: it.position,
+          template_id: tpl.id, parent_task_id: null,
+        }).select().single();
+        created++;
+        if (!parent) continue;
+        for (const ch of (childrenByParent[it.id] || [])) {
+          await supabase.from('tasks').insert({
+            user_id: userId, title: ch.title, description: ch.description || null,
+            assignee_id: ch.default_assignee_id || default_assignee_id || null,
+            job_id: job_id || null, client_id: client_id || null,
+            due_date: dueFrom(ch), block: bl.title, block_position: bl.position, position: ch.position,
+            template_id: tpl.id, parent_task_id: parent.id,
+          });
+          created++;
+        }
+      }
+    }
+    res.json({ success: true, created });
+  });
+
+  // Cria o "Ensaio Padrão" de exemplo (as 7 etapas do fluxo do estúdio).
+  app.post('/api/task-templates/seed-default', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const t = (title: string, children?: string[]) => ({ title, children: (children || []).map(c => ({ title: c })) });
+    const blocks = [
+      { title: 'Etapa 1 — Atendimento / Sistema da empresa', note: 'Todo ensaio fechado precisa passar por contrato + alinhamento antes de ir para a semana do ensaio.', items: [
+        t('Ensaio vendido'),
+        t('Fazer o contrato no próprio sistema'),
+        t('Fazer o alinhamento com a cliente'),
+        t('Mover para "Ensaio a realizar"'),
+        t('Separar na coluna "Ensaios da semana"'),
+        t('Conferir quais ensaios da semana já estão com contrato e alinhamento feitos'),
+        { title: 'Enviar a mensagem de lembrança do ensaio (2 dias antes)', due_offset_days: -2, due_offset_ref: 'ensaio' },
+        t('Para eventos, cobrar o restante do pagamento antes'),
+      ]},
+      { title: 'Etapa 2 — Preparação e realização do ensaio', note: 'Cada tipo de ensaio tem sua forma de organização conforme os processos internos.', items: [
+        t('Antes do cliente chegar', ['Arrumar o estúdio', 'Varrer e passar pano', 'Conferir café e banheiro', 'Ver se está tudo limpo e organizado', 'Nos ensaios específicos, montar as produções combinadas (ex.: newborn, smash e acompanhamento)']),
+        t('Durante o ensaio', ['Recepção do cliente', 'Bastidores', 'Auxílio com as crianças', 'Fazer café e dar suporte aos pais']),
+        t('Depois do ensaio', ['Arrumar o estúdio novamente', 'Limpar o que sujou', 'Deixar tudo pronto para o próximo atendimento']),
+      ]},
+      { title: 'Etapa 3 — Sistema "Enviar fotos"', note: 'Sempre conferir seleção, produtos comprados e fotos extras antes de avançar.', items: [
+        t('Importar fotos do SSD para o HD (sempre confirmar se passou tudo)'),
+        t('Fazer seleção no Aftershoot'),
+        t('Enviar para o cliente selecionar pelo sistema e pelo WhatsApp'),
+        t('Cliente selecionou: conferir se a seleção deu certo, ver se comprou álbum e anotar fotos extras'),
+        t('Se houver pendência de pagamento: registrar pendência'),
+        t('Se não houver pendência: marcar como prontos para editar'),
+      ]},
+      { title: 'Etapa 4 — Sistema "Edição"', note: 'Essas etapas ajudam a saber em que ponto o ensaio está. Normalmente é feita por Giovana e Talise, mas é importante conhecer o fluxo para informar a cliente.', items: [
+        t('Fila de edição'), t('Em edição'), t('Editados'), t('Vídeo a fazer'), t('Revisado'), t('Aprovado'), t('Mandou prévia'),
+      ]},
+      { title: 'Etapa 5 — Sistema "Revelação"', note: 'Quando os produtos chegarem, essa etapa deve ser feita com urgência. Responsabilidade da Giovana, exceto a etapa 8.', items: [
+        t('Fila de edição'), t('Mandou revelar'), t('Defing sendo desenvolvido'), t('Designer finalizar'),
+        t('Enviado para aprovação'), t('Aprovado'), t('Mandou para produção'), t('Produto chegou no estúdio'),
+        t('Quando o produto chegar', ['Abrir e separar as fotos', 'Embalar o quanto antes', 'Não postergar essa etapa', 'Se tiver álbum: fotografar o álbum', 'Mandar o álbum para a Cris embalar', 'Passar as fotos do álbum para o HD']),
+      ]},
+      { title: 'Etapa 6 — Sistema "Embalagem"', note: 'Essa etapa exige atenção para não esquecer de avisar nenhum cliente.', items: [
+        t('Aguardando embalagens', ['Colocar aqui ensaios que chegaram, mas ainda aguardam embalagem', 'Também usar quando chegou a foto, mas ainda falta o álbum']),
+        t('Embalado e pronto', ['Quando já está tudo embalado e pronto para avisar o cliente']),
+        t('Avisou o cliente que está pronto', ['Conferir com atenção se a mensagem foi enviada para todos os clientes certos']),
+        t('Combinou com o cliente para retirar'),
+        t('Retirado', ['Sempre mudar para "Retirado" quando o cliente pegar as fotos']),
+      ]},
+      { title: 'Etapa 7 — Sistema "Pós-venda"', note: 'Objetivo final: cada cliente deve passar por todas as etapas até o pós-venda, com organização, atenção e carinho.', items: [
+        t('Perguntar se deu certo as fotos', ['Sempre perguntar, exceto em casos de clientes que deram trabalho']),
+        t('Pedido de avaliação no Google', ['Sempre pedir, exceto em casos de clientes que deram trabalho']),
+        t('Não pedimos avaliação'),
+        t('Avaliaram no Google', ['Colocar nessa etiqueta todos os clientes que avaliaram']),
+      ]},
+    ];
+    const { data: tpl, error } = await supabase.from('task_templates').insert({
+      user_id: userId, name: 'Ensaio Padrão',
+      description: 'Fluxo completo de atendimento e produção. Dica: sempre confirmar antes de avançar de etapa, registrar observações no sistema e não deixar pendências para depois.',
+    }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    await saveTemplateStructure(supabase, tpl.id, blocks);
+    res.json(tpl);
   });
 
   // ============ AGENTE IA ============
