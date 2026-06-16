@@ -34,7 +34,7 @@ export const TEMPLATE_VARIABLES = [
 
 export type TemplateVariable = typeof TEMPLATE_VARIABLES[number];
 
-// Helpers de formatação de valor (usado pelo checkbox "Sessão no domingo")
+// Helpers de formatação de valor (usado pelo checkbox "Sessão em domingo/feriado")
 export function parseBRL(value: string | number | undefined | null): number {
   if (value == null) return 0;
   if (typeof value === 'number') return value;
@@ -53,12 +53,13 @@ export const SUNDAY_SURCHARGE = 300;
 import { Client, ContractTemplate, Job } from '../types';
 
 // Monta o contract_data inicial a partir do cliente, trabalho (opcional) e modelo.
-// Aplica acréscimo de R$300 quando sundaySession=true.
+// Aplica acréscimo de domingo/feriado quando sundaySession=true. O valor é
+// editável (opts.surcharge); na ausência usa SUNDAY_SURCHARGE como padrão.
 export function buildContractDataFromTemplate(
   client: Client | null,
   job: Job | null,
   template: ContractTemplate | null,
-  opts: { sundaySession?: boolean } = {},
+  opts: { sundaySession?: boolean; surcharge?: number } = {},
 ): Record<string, any> {
   const cd: Record<string, any> = {};
 
@@ -97,9 +98,12 @@ export function buildContractDataFromTemplate(
     } else if (job?.amount) {
       baseValue = job.amount;
     }
-    if (opts.sundaySession) baseValue += SUNDAY_SURCHARGE;
+    const surcharge = opts.sundaySession ? Math.max(0, opts.surcharge ?? SUNDAY_SURCHARGE) : 0;
+    if (surcharge > 0) baseValue += surcharge;
     if (baseValue > 0) cd.serviceValue = formatBRL(baseValue);
-    if (defs.valor_extenso && !opts.sundaySession) cd.serviceValueWords = String(defs.valor_extenso);
+    // Com acréscimo, o "valor por extenso" padrão do modelo não bate mais — omite
+    // pra não gravar um extenso incoerente (o usuário ajusta no formulário).
+    if (defs.valor_extenso && surcharge === 0) cd.serviceValueWords = String(defs.valor_extenso);
     if (defs.prazo_entrega_dias) cd.deliveryDays = Number(defs.prazo_entrega_dias);
   } else if (job?.amount) {
     cd.serviceValue = formatBRL(job.amount);

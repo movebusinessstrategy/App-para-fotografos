@@ -213,7 +213,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
     setTemplatePickerOpen(true);
   };
 
-  const createContractWithTemplate = async (template: ContractTemplate | null, sundaySession: boolean) => {
+  const createContractWithTemplate = async (template: ContractTemplate | null, sundaySession: boolean, surcharge?: number) => {
     if (!job?.client_id) return;
     setCreatingContract(true);
     setTemplatePickerOpen(false);
@@ -227,7 +227,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
         amount: job.amount,
       };
 
-      const contract_data = buildContractDataFromTemplate(client, jobAsRow, template, { sundaySession });
+      const contract_data = buildContractDataFromTemplate(client, jobAsRow, template, { sundaySession, surcharge });
 
       const payload: any = {
         client_id: job.client_id,
@@ -270,6 +270,8 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
   const [jobItemSearch, setJobItemSearch] = useState('');
   const [jobItemOpen, setJobItemOpen] = useState(false);
   const [jobItemQty, setJobItemQty] = useState(1);
+  // Pro seletor de catálogo: define se o item escolhido vai pro pacote (deal) ou adicionais (job)
+  const [addTarget, setAddTarget] = useState<'job' | 'deal'>('job');
   // Catálogos via SWR - cache compartilhado entre JobDetailDrawer, DealDetailDrawer e NewDealModal
   const { data: catalogProdutosData } = useApi<any[]>("/api/produtos");
   const { data: catalogServicosData } = useApi<any[]>("/api/servicos");
@@ -473,6 +475,62 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
       body: JSON.stringify(patch),
     });
     if (res.ok) loadFinanceiro(job.id);
+  };
+
+  // ── Itens do PACOTE (deal_items): editar qtd/preço, remover, adicionar ──
+  // Os endpoints recalculam deal.value E o financeiro do job (nexo + total).
+  const applyDealItemResult = (data: any) => {
+    if (!job) return;
+    if (data && data.newAmount != null) {
+      setJobAmount(data.newAmount);
+      if (onJobUpdate) onJobUpdate(job.id, { amount: data.newAmount, payment_status: data.payment_status });
+    } else {
+      loadFinanceiro(job.id);
+    }
+  };
+  const handleUpdateDealItemQty = async (id: string, newQty: number) => {
+    if (!job || newQty < 1) return;
+    setDealItems(prev => prev.map(i => i.id === id ? { ...i, quantidade: newQty } : i));
+    const res = await authFetch(`/api/deal-items/${id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quantidade: newQty }),
+    });
+    if (res.ok) applyDealItemResult(await res.json()); else loadFinanceiro(job.id);
+  };
+  const handleUpdateDealItemPrice = async (id: string, patch: { catalog_value?: number }) => {
+    if (!job) return;
+    setDealItems(prev => prev.map(i => i.id === id ? { ...i, ...patch } : i));
+    const res = await authFetch(`/api/deal-items/${id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ catalog_value: patch.catalog_value }),
+    });
+    if (res.ok) applyDealItemResult(await res.json()); else loadFinanceiro(job.id);
+  };
+  const handleDeleteDealItem = async (id: string) => {
+    if (!job) return;
+    const wasLast = dealItems.filter(i => i.id !== id).length === 0;
+    setDealItems(prev => prev.filter(i => i.id !== id));
+    const res = await authFetch(`/api/deal-items/${id}`, { method: 'DELETE' });
+    if (!res.ok) { loadFinanceiro(job.id); return; }
+    // Esvaziou o pacote: recarrega tudo pra reconciliar packageItem/seção/summary
+    // com o servidor (que agora zera a base corretamente). Senão, edita otimista.
+    if (wasLast) loadFinanceiro(job.id);
+    else applyDealItemResult(await res.json());
+  };
+  const handleAddDealItem = async (catalogId: string, nome: string, value: number) => {
+    if (!job) return;
+    const qty = Math.max(1, jobItemQty);
+    setJobItemOpen(false); setJobItemSearch(''); setShowAddJobItem(false); setJobItemQty(1); setAddTarget('job');
+    const res = await authFetch(`/api/jobs/${job.id}/deal-items`, {
+      method: 'POST',
+      body: JSON.stringify({ catalog_type: jobItemType, catalog_id: catalogId, catalog_name: nome, catalog_value: value, quantidade: qty }),
+    });
+    if (res.ok) loadFinanceiro(job.id);
+  };
+  // Roteia o item escolhido no seletor pro pacote (deal) ou adicionais (job).
+  const handlePickCatalogItem = (catalogId: string, nome: string, value: number) => {
+    if (addTarget === 'deal') handleAddDealItem(catalogId, nome, value);
+    else handleAddJobItem(catalogId, nome, value);
   };
 
   if (!job) return null;
@@ -1085,6 +1143,78 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
               ? jobCatalogList.filter((i: any) => i.nome.toLowerCase().includes(jobItemSearch.toLowerCase()))
               : jobCatalogList;
 
+            // Seletor de catálogo compartilhado: roteia o item escolhido pro pacote
+            // (deal) ou pros adicionais (job) conforme addTarget.
+            const renderItemSelector = () => (
+              <div ref={jobItemRef} className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800 space-y-2">
+                <div className="grid grid-cols-3 gap-1">
+                  {(['combo', 'produto', 'servico'] as const).map(t => {
+                    const cfg = CATALOG_CFG[t];
+                    return (
+                      <button key={t} onMouseDown={e => e.preventDefault()}
+                        onClick={() => { setJobItemType(t); setJobItemOpen(true); setJobItemSearch(''); }}
+                        className={`flex items-center justify-center gap-1 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
+                          jobItemType === t ? `${cfg.bg} ${cfg.border} ${cfg.color}` : 'border-gray-200 dark:border-gray-600 text-gray-400'
+                        }`}>
+                        {cfg.icon}
+                        <span>{t === 'servico' ? 'Serviço' : t.charAt(0).toUpperCase() + t.slice(1)}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="relative">
+                  <div className="flex items-center gap-2 border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-1.5 bg-gray-50 dark:bg-gray-900 focus-within:border-gold-400 transition-colors">
+                    <Search size={12} className="text-gray-400" />
+                    <input
+                      value={jobItemSearch}
+                      onChange={e => { setJobItemSearch(e.target.value); setJobItemOpen(true); }}
+                      onFocus={() => setJobItemOpen(true)}
+                      placeholder="Buscar..."
+                      className="flex-1 text-sm bg-transparent outline-none text-gray-800 dark:text-gray-100 placeholder-gray-400"
+                    />
+                  </div>
+                  {jobItemOpen && filteredJobCatalog.length > 0 && (
+                    <div className="absolute z-30 top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl overflow-hidden">
+                      <div className="max-h-40 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700/50">
+                        {filteredJobCatalog.map((item: any) => (
+                          <button key={item.id} onMouseDown={e => e.preventDefault()}
+                            onClick={() => handlePickCatalogItem(item.id, item.nome, item.value)}
+                            className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/60 text-left text-sm">
+                            <span className="text-gray-800 dark:text-gray-100 truncate">{item.nome}</span>
+                            <span className="text-xs font-semibold text-gray-400 ml-2 flex-shrink-0">{formatCurrency(item.value)}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-xs text-gray-500 dark:text-gray-400">Quantidade</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => setJobItemQty(q => Math.max(1, q - 1))}
+                      className="w-6 h-6 rounded-md border border-gray-200 dark:border-gray-600 flex items-center justify-center text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm font-bold"
+                    >−</button>
+                    <input
+                      type="number"
+                      min={1}
+                      value={jobItemQty}
+                      onChange={e => setJobItemQty(Math.max(1, parseInt(e.target.value) || 1))}
+                      className="w-10 text-center text-sm font-semibold border border-gray-200 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gold-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    />
+                    <button
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => setJobItemQty(q => q + 1)}
+                      className="w-6 h-6 rounded-md border border-gray-200 dark:border-gray-600 flex items-center justify-center text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm font-bold"
+                    >+</button>
+                  </div>
+                </div>
+                <button onMouseDown={e => e.preventDefault()} onClick={() => { setShowAddJobItem(false); setJobItemQty(1); setAddTarget('job'); }}
+                  className="w-full text-[11px] text-gray-400 hover:text-gray-600 py-0.5">Cancelar</button>
+              </div>
+            );
+
             return (
               <div className="p-5 space-y-5">
                 {loadingFin ? (
@@ -1124,20 +1254,68 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                     {/* ── Itens do negócio (deal) / valor base do trabalho ── */}
                     {(dealItems.length > 0 || packageItem) && (
                       <section>
-                        <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-2">
-                          {packageItem?.source === 'job' && dealItems.length === 0 ? 'Valor do trabalho' : 'Itens do negócio'}
-                        </h3>
+                        <div className="flex items-center justify-between mb-2">
+                          <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                            {packageItem?.source === 'job' && dealItems.length === 0 ? 'Valor do trabalho' : 'Itens do negócio'}
+                          </h3>
+                          {dealItems.length > 0 && (
+                            <button
+                              onMouseDown={e => e.preventDefault()}
+                              onClick={() => {
+                                if (showAddJobItem && addTarget === 'deal') { setShowAddJobItem(false); }
+                                else { setAddTarget('deal'); setShowAddJobItem(true); setJobItemOpen(false); setJobItemSearch(''); }
+                              }}
+                              className="flex items-center gap-1 text-xs font-semibold text-gold-600 dark:text-gold-400 hover:text-gold-700 dark:hover:text-gold-300"
+                            >
+                              <Plus size={12} /> Adicionar
+                            </button>
+                          )}
+                        </div>
                         <div className="space-y-1.5">
                           {dealItems.length > 0 ? dealItems.map(item => {
                             const cfg = CATALOG_CFG[item.catalog_type] || CATALOG_CFG.produto;
                             return (
                               <div key={item.id} className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${cfg.bg} ${cfg.border}`}>
                                 <span className={`flex-shrink-0 ${cfg.color}`}>{cfg.icon}</span>
-                                <span className="flex-1 text-sm text-gray-800 dark:text-gray-100 truncate">{item.catalog_name}</span>
-                                <span className="text-xs text-gray-400">{item.quantidade}x</span>
-                                <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">
-                                  {formatCurrency(item.catalog_value * item.quantidade)}
-                                </span>
+                                <span className="flex-1 text-sm text-gray-800 dark:text-gray-100 truncate min-w-0">{item.catalog_name}</span>
+                                {/* Stepper de quantidade editável */}
+                                <div className="flex items-center gap-0.5 flex-shrink-0">
+                                  <button
+                                    onMouseDown={e => e.preventDefault()}
+                                    onClick={() => handleUpdateDealItemQty(item.id, item.quantidade - 1)}
+                                    disabled={item.quantidade <= 1}
+                                    className="w-5 h-5 rounded flex items-center justify-center text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 text-xs font-bold"
+                                  >−</button>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    value={item.quantidade}
+                                    onChange={e => {
+                                      const v = parseInt(e.target.value) || 1;
+                                      setDealItems(prev => prev.map(i => i.id === item.id ? { ...i, quantidade: Math.max(1, v) } : i));
+                                    }}
+                                    onBlur={e => {
+                                      const v = Math.max(1, parseInt(e.target.value) || 1);
+                                      if (v !== item.quantidade) handleUpdateDealItemQty(item.id, v);
+                                    }}
+                                    onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                                    className="w-8 text-center text-xs font-semibold text-gray-700 dark:text-gray-200 bg-transparent border-0 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                  />
+                                  <button
+                                    onMouseDown={e => e.preventDefault()}
+                                    onClick={() => handleUpdateDealItemQty(item.id, item.quantidade + 1)}
+                                    className="w-5 h-5 rounded flex items-center justify-center text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 text-xs font-bold"
+                                  >+</button>
+                                </div>
+                                <JobItemPriceEditor
+                                  item={item}
+                                  hideDiscount
+                                  onSave={(patch) => handleUpdateDealItemPrice(item.id, { catalog_value: patch.catalog_value })}
+                                />
+                                <button onMouseDown={e => e.preventDefault()} onClick={() => handleDeleteDealItem(item.id)}
+                                  className="text-gray-300 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400 flex-shrink-0">
+                                  <X size={13} />
+                                </button>
                               </div>
                             );
                           }) : packageItem && (
@@ -1150,6 +1328,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                               onSave={handleSavePackage}
                             />
                           )}
+                          {dealItems.length > 0 && showAddJobItem && addTarget === 'deal' && renderItemSelector()}
                         </div>
                       </section>
                     )}
@@ -1162,7 +1341,10 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                         </h3>
                         <button
                           onMouseDown={e => e.preventDefault()}
-                          onClick={() => setShowAddJobItem(v => !v)}
+                          onClick={() => {
+                            if (showAddJobItem && addTarget === 'job') { setShowAddJobItem(false); }
+                            else { setAddTarget('job'); setShowAddJobItem(true); setJobItemOpen(false); setJobItemSearch(''); }
+                          }}
                           className="flex items-center gap-1 text-xs font-semibold text-gold-600 dark:text-gold-400 hover:text-gold-700 dark:hover:text-gold-300"
                         >
                           <Plus size={12} /> Adicionar
@@ -1220,81 +1402,12 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                         </div>
                       )}
 
-                      {jobItems.length === 0 && !showAddJobItem && (
+                      {jobItems.length === 0 && !(showAddJobItem && addTarget === 'job') && (
                         <p className="text-xs text-gray-400 dark:text-gray-500 text-center py-2">Nenhum item adicional</p>
                       )}
 
-                      {/* Seletor de item */}
-                      {showAddJobItem && (
-                        <div ref={jobItemRef} className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800 space-y-2">
-                          <div className="grid grid-cols-3 gap-1">
-                            {(['combo', 'produto', 'servico'] as const).map(t => {
-                              const cfg = CATALOG_CFG[t];
-                              return (
-                                <button key={t} onMouseDown={e => e.preventDefault()}
-                                  onClick={() => { setJobItemType(t); setJobItemOpen(true); setJobItemSearch(''); }}
-                                  className={`flex items-center justify-center gap-1 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
-                                    jobItemType === t ? `${cfg.bg} ${cfg.border} ${cfg.color}` : 'border-gray-200 dark:border-gray-600 text-gray-400'
-                                  }`}>
-                                  {cfg.icon}
-                                  <span>{t === 'servico' ? 'Serviço' : t.charAt(0).toUpperCase() + t.slice(1)}</span>
-                                </button>
-                              );
-                            })}
-                          </div>
-                          <div className="relative">
-                            <div className="flex items-center gap-2 border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-1.5 bg-gray-50 dark:bg-gray-900 focus-within:border-gold-400 transition-colors">
-                              <Search size={12} className="text-gray-400" />
-                              <input
-                                value={jobItemSearch}
-                                onChange={e => { setJobItemSearch(e.target.value); setJobItemOpen(true); }}
-                                onFocus={() => setJobItemOpen(true)}
-                                placeholder="Buscar..."
-                                className="flex-1 text-sm bg-transparent outline-none text-gray-800 dark:text-gray-100 placeholder-gray-400"
-                              />
-                            </div>
-                            {jobItemOpen && filteredJobCatalog.length > 0 && (
-                              <div className="absolute z-30 top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl overflow-hidden">
-                                <div className="max-h-40 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700/50">
-                                  {filteredJobCatalog.map((item: any) => (
-                                    <button key={item.id} onMouseDown={e => e.preventDefault()}
-                                      onClick={() => handleAddJobItem(item.id, item.nome, item.value)}
-                                      className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/60 text-left text-sm">
-                                      <span className="text-gray-800 dark:text-gray-100 truncate">{item.nome}</span>
-                                      <span className="text-xs font-semibold text-gray-400 ml-2 flex-shrink-0">{formatCurrency(item.value)}</span>
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                          {/* Quantidade */}
-                          <div className="flex items-center justify-between px-1">
-                            <span className="text-xs text-gray-500 dark:text-gray-400">Quantidade</span>
-                            <div className="flex items-center gap-1">
-                              <button
-                                onMouseDown={e => e.preventDefault()}
-                                onClick={() => setJobItemQty(q => Math.max(1, q - 1))}
-                                className="w-6 h-6 rounded-md border border-gray-200 dark:border-gray-600 flex items-center justify-center text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm font-bold"
-                              >−</button>
-                              <input
-                                type="number"
-                                min={1}
-                                value={jobItemQty}
-                                onChange={e => setJobItemQty(Math.max(1, parseInt(e.target.value) || 1))}
-                                className="w-10 text-center text-sm font-semibold border border-gray-200 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gold-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                              />
-                              <button
-                                onMouseDown={e => e.preventDefault()}
-                                onClick={() => setJobItemQty(q => q + 1)}
-                                className="w-6 h-6 rounded-md border border-gray-200 dark:border-gray-600 flex items-center justify-center text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm font-bold"
-                              >+</button>
-                            </div>
-                          </div>
-                          <button onMouseDown={e => e.preventDefault()} onClick={() => { setShowAddJobItem(false); setJobItemQty(1); }}
-                            className="w-full text-[11px] text-gray-400 hover:text-gray-600 py-0.5">Cancelar</button>
-                        </div>
-                      )}
+                      {/* Seletor de item (compartilhado; aqui só quando o alvo é o job) */}
+                      {showAddJobItem && addTarget === 'job' && renderItemSelector()}
                     </section>
 
                     {/* ── Pagamentos ── */}
@@ -1477,7 +1590,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
         <TemplatePickerModal
           subtitle={`Cliente: ${job?.client_name || 'sem nome'}`}
           onClose={() => setTemplatePickerOpen(false)}
-          onPick={({ template, sundaySession }) => createContractWithTemplate(template, sundaySession)}
+          onPick={({ template, sundaySession, surcharge }) => createContractWithTemplate(template, sundaySession, surcharge)}
         />
       )}
 
@@ -2047,9 +2160,11 @@ function PackageEditor({
 function JobItemPriceEditor({
   item,
   onSave,
+  hideDiscount = false,
 }: {
   item: CatalogItem;
   onSave: (patch: { catalog_value?: number; discount_value?: number }) => void;
+  hideDiscount?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [price, setPrice] = useState(String(item.catalog_value));
@@ -2079,15 +2194,16 @@ function JobItemPriceEditor({
 
   function apply() {
     const newPrice = Math.max(0, parseFloat(price.replace(',', '.')) || 0);
-    let newDiscount = Math.max(0, parseFloat(discount.replace(',', '.')) || 0);
-    if (discountMode === 'percent') {
-      // % do bruto pós-quantidade
-      const grossWithNewPrice = newPrice * item.quantidade;
-      newDiscount = (grossWithNewPrice * newDiscount) / 100;
-    }
     const patch: { catalog_value?: number; discount_value?: number } = {};
     if (newPrice !== item.catalog_value) patch.catalog_value = newPrice;
-    if (newDiscount !== (item.discount_value || 0)) patch.discount_value = newDiscount;
+    if (!hideDiscount) {
+      let newDiscount = Math.max(0, parseFloat(discount.replace(',', '.')) || 0);
+      if (discountMode === 'percent') {
+        const grossWithNewPrice = newPrice * item.quantidade;
+        newDiscount = (grossWithNewPrice * newDiscount) / 100;
+      }
+      if (newDiscount !== (item.discount_value || 0)) patch.discount_value = newDiscount;
+    }
     if (Object.keys(patch).length > 0) onSave(patch);
     setOpen(false);
   }
@@ -2134,6 +2250,7 @@ function JobItemPriceEditor({
               Total bruto: {((parseFloat(price.replace(',', '.')) || 0) * item.quantidade).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
             </p>
           </div>
+          {!hideDiscount && (
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
@@ -2157,6 +2274,7 @@ function JobItemPriceEditor({
               className="w-full px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none focus:border-gold-400 dark:bg-gray-900"
             />
           </div>
+          )}
           <div className="flex gap-1.5 justify-end">
             <button
               onClick={() => setOpen(false)}

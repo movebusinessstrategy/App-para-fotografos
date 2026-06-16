@@ -4436,7 +4436,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // Helper: recalcula amount e payment_status de um job a partir de todos os itens
-  async function recalcJobFinancials(supabase: SupabaseClient, adminClient: SupabaseClient, jobId: number, userId: string) {
+  async function recalcJobFinancials(supabase: SupabaseClient, adminClient: SupabaseClient, jobId: number, userId: string, dealBaseOverride?: number) {
     const { data: job } = await supabase.from('jobs').select('id, amount').eq('id', jobId).eq('user_id', userId).single();
     if (!job) return { newAmount: 0, payment_status: 'pending' };
 
@@ -4453,10 +4453,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (deal?.id) {
       // Job convertido de deal: base = soma dos deal_items (se houver) ou deal.value como fallback.
       // Sem fallback, vendas sem itens detalhados zeravam o job.amount.
-      const { data: dItems } = await adminClient.from('deal_items').select('catalog_value, quantidade').eq('deal_id', deal.id);
-      const items = dItems || [];
-      const dealTotal = items.reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
-      const dealBase = items.length > 0 ? dealTotal : (deal.value || job.amount || 0);
+      let dealBase: number;
+      if (dealBaseOverride !== undefined) {
+        // Quem chama (syncDealAndJob) já calculou a base autoritativa a partir dos
+        // deal_items recém-editados. Usar direto evita o fallback `|| job.amount`
+        // ressuscitar o valor antigo quando o usuário ESVAZIA o pacote (base = 0).
+        dealBase = dealBaseOverride;
+      } else {
+        const { data: dItems } = await adminClient.from('deal_items').select('catalog_value, quantidade').eq('deal_id', deal.id);
+        const items = dItems || [];
+        const dealTotal = items.reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
+        dealBase = items.length > 0 ? dealTotal : (deal.value || job.amount || 0);
+      }
       realTotal = dealBase + jobItemsTotal;
       // Atualiza job.amount para refletir o total real
       await supabase.from('jobs').update({ amount: realTotal }).eq('id', jobId).eq('user_id', userId);
@@ -11477,6 +11485,23 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // ── Deal Items (múltiplos produtos/serviços/combos por deal) ──────────────────
+  // Sincroniza valor do DEAL (soma dos deal_items) e, se houver job convertido,
+  // recalcula o financeiro do job (amount + status). Mantém o NEXO deal↔job e
+  // garante que editar o pacote reflita certo em todo lugar.
+  async function syncDealAndJob(supabase: SupabaseClient, adminClient: SupabaseClient, dealId: number, userId: string) {
+    const { data: items } = await adminClient.from('deal_items').select('catalog_value, quantidade').eq('deal_id', dealId);
+    const total = (items || []).reduce((s: number, i: any) => s + ((i.catalog_value || 0) * (i.quantidade || 1)), 0);
+    await supabase.from('deals').update({ value: total }).eq('id', dealId).eq('user_id', userId);
+    const { data: deal } = await supabase.from('deals').select('converted_job_id').eq('id', dealId).eq('user_id', userId).maybeSingle();
+    let job: any = null;
+    if (deal?.converted_job_id) {
+      // Passa `total` (soma autoritativa dos deal_items) como base: ao esvaziar o
+      // pacote a base vira 0 de fato, sem o fallback ressuscitar o valor antigo.
+      job = await recalcJobFinancials(supabase, adminClient, deal.converted_job_id, userId, total).catch(() => null);
+    }
+    return { total, job };
+  }
+
   app.post('/api/deals/:id/items', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
@@ -11500,15 +11525,39 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     if (error) return res.status(500).json({ error: error.message });
 
-    // Recalcula valor total dos itens e atualiza o deal
-    const { data: allItems } = await adminClient.from('deal_items').select('catalog_value, quantidade').eq('deal_id', dealId);
-    const total = (allItems || []).reduce((sum: number, i: any) => sum + (i.catalog_value * i.quantidade), 0);
-    await supabase.from('deals').update({ value: total }).eq('id', dealId).eq('user_id', userId);
-
-    res.json({ item: newItem, total });
+    const { total, job } = await syncDealAndJob(supabase, adminClient, dealId, userId);
+    res.json({ item: newItem, total, ...(job || {}) });
   });
 
-  app.delete('/api/deal-items/:itemId', requireAuth, async (req, res) => {
+  // POST /api/jobs/:id/deal-items — adiciona item AO PACOTE do negócio vinculado
+  // ao job (a partir do drawer financeiro). Mantém o nexo e recalcula tudo.
+  app.post('/api/jobs/:id/deal-items', requireAuth, denyProductionOnly, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+    const jobId = Number(req.params.id);
+
+    const { data: job } = await supabase.from('jobs').select('id').eq('id', jobId).eq('user_id', userId).single();
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    const { data: deal } = await supabase.from('deals').select('id').eq('converted_job_id', jobId).eq('user_id', userId).maybeSingle();
+    if (!deal?.id) return res.status(400).json({ error: 'Este trabalho não tem negócio vinculado.' });
+
+    const { catalog_type, catalog_id, catalog_name, catalog_value, quantidade = 1 } = req.body;
+    if (!catalog_type || !catalog_id || !catalog_name) {
+      return res.status(400).json({ error: 'catalog_type, catalog_id, catalog_name são obrigatórios' });
+    }
+    const { data: newItem, error } = await adminClient
+      .from('deal_items')
+      .insert({ deal_id: deal.id, catalog_type, catalog_id, catalog_name, catalog_value: catalog_value || 0, quantidade })
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+
+    const { total, job: jobFin } = await syncDealAndJob(supabase, adminClient, deal.id, userId);
+    res.json({ item: newItem, total, ...(jobFin || {}) });
+  });
+
+  app.delete('/api/deal-items/:itemId', requireAuth, denyProductionOnly, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -11525,22 +11574,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const { error } = await adminClient.from('deal_items').delete().eq('id', itemId);
     if (error) return res.status(500).json({ error: error.message });
 
-    // Recalcula valor total dos itens restantes e atualiza o deal
-    const { data: remaining } = await adminClient.from('deal_items').select('catalog_value, quantidade').eq('deal_id', item.deal_id);
-    const total = (remaining || []).reduce((sum: number, i: any) => sum + (i.catalog_value * i.quantidade), 0);
-    await supabase.from('deals').update({ value: total }).eq('id', item.deal_id).eq('user_id', userId);
-
-    res.json({ success: true, total });
+    const { total, job } = await syncDealAndJob(supabase, adminClient, item.deal_id, userId);
+    res.json({ success: true, total, ...(job || {}) });
   });
 
-  app.put('/api/deal-items/:itemId', requireAuth, async (req, res) => {
+  // Edita um item do pacote: quantidade e/ou preço (catalog_value). Patch parcial.
+  app.put('/api/deal-items/:itemId', requireAuth, denyProductionOnly, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
     const itemId = req.params.itemId;
-    const { quantidade } = req.body;
-
-    if (!quantidade || quantidade < 1) return res.status(400).json({ error: 'quantidade deve ser >= 1' });
 
     const { data: item } = await adminClient.from('deal_items').select('id, deal_id').eq('id', itemId).single();
     if (!item) return res.status(404).json({ error: 'Item not found' });
@@ -11548,15 +11591,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const { data: deal } = await supabase.from('deals').select('id').eq('id', item.deal_id).eq('user_id', userId).single();
     if (!deal) return res.status(403).json({ error: 'Forbidden' });
 
-    const { error } = await adminClient.from('deal_items').update({ quantidade }).eq('id', itemId);
+    const patch: any = {};
+    if (req.body.quantidade !== undefined) patch.quantidade = Math.max(1, parseInt(req.body.quantidade) || 1);
+    if (req.body.catalog_value !== undefined) patch.catalog_value = Math.max(0, Number(req.body.catalog_value) || 0);
+    if (Object.keys(patch).length === 0) return res.json({ success: true });
+
+    const { error } = await adminClient.from('deal_items').update(patch).eq('id', itemId);
     if (error) return res.status(500).json({ error: error.message });
 
-    // Recalcula total
-    const { data: allItems } = await adminClient.from('deal_items').select('catalog_value, quantidade').eq('deal_id', item.deal_id);
-    const total = (allItems || []).reduce((sum: number, i: any) => sum + (i.catalog_value * i.quantidade), 0);
-    await supabase.from('deals').update({ value: total }).eq('id', item.deal_id).eq('user_id', userId);
-
-    res.json({ success: true, total });
+    const { total, job } = await syncDealAndJob(supabase, adminClient, item.deal_id, userId);
+    res.json({ success: true, total, ...(job || {}) });
   });
 
   app.get('/api/pipeline/analytics', requireAuth, async (req, res) => {

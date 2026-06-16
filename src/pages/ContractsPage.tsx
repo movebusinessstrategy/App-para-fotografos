@@ -402,6 +402,7 @@ function NewContractPicker({ onClose, onCreated, onError }: { onClose: () => voi
   const [selectedTemplate, setSelectedTemplate] = useState<ContractTemplate | null>(null);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [sundaySession, setSundaySession] = useState(false);
+  const [surcharge, setSurcharge] = useState<number>(SUNDAY_SURCHARGE);
 
   useEffect(() => {
     Promise.all([
@@ -482,9 +483,11 @@ function NewContractPicker({ onClose, onCreated, onError }: { onClose: () => voi
       } else if (job?.amount) {
         baseValue = job.amount;
       }
-      if (sundaySession) baseValue += SUNDAY_SURCHARGE;
+      const extra = sundaySession ? Math.max(0, surcharge) : 0;
+      if (extra > 0) baseValue += extra;
       if (baseValue > 0) cd.serviceValue = formatBRL(baseValue);
-      if (defs.valor_extenso && !sundaySession) cd.serviceValueWords = String(defs.valor_extenso);
+      // Acréscimo aplicado → o extenso padrão do modelo fica incoerente; omite.
+      if (defs.valor_extenso && extra === 0) cd.serviceValueWords = String(defs.valor_extenso);
       if (defs.prazo_entrega_dias) cd.deliveryDays = Number(defs.prazo_entrega_dias);
     } else if (job?.amount) {
       cd.serviceValue = formatBRL(job.amount);
@@ -660,19 +663,38 @@ function NewContractPicker({ onClose, onCreated, onError }: { onClose: () => voi
                     );
                   })}
                 </div>
-                {/* Domingo checkbox */}
-                <label className="mt-4 flex items-center gap-2 px-3 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
-                  <input
-                    type="checkbox"
-                    checked={sundaySession}
-                    onChange={e => setSundaySession(e.target.checked)}
-                    className="rounded border-gray-300"
-                  />
-                  <div className="flex-1">
-                    <p className="text-sm text-gray-800 dark:text-gray-200 font-medium">Sessão no domingo</p>
-                    <p className="text-[11px] text-gray-500 dark:text-gray-400">Acrescenta R$ {SUNDAY_SURCHARGE.toFixed(2).replace('.', ',')} ao valor do modelo</p>
-                  </div>
-                </label>
+                {/* Domingo / Feriado com acréscimo editável */}
+                <div className="mt-4 border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
+                  <label className="flex items-center gap-2 px-3 py-2.5 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={sundaySession}
+                      onChange={e => setSundaySession(e.target.checked)}
+                      className="rounded border-gray-300"
+                    />
+                    <div className="flex-1">
+                      <p className="text-sm text-gray-800 dark:text-gray-200 font-medium">Sessão em domingo / feriado</p>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400">Acrescenta um valor extra ao total do contrato</p>
+                    </div>
+                  </label>
+                  {sundaySession && (
+                    <div className="flex items-center gap-2 px-3 py-2.5 border-t border-gray-100 dark:border-gray-800 bg-gray-50/60 dark:bg-gray-800/30">
+                      <span className="text-xs text-gray-600 dark:text-gray-300">Acréscimo</span>
+                      <div className="flex items-center gap-1">
+                        <span className="text-xs text-gray-400">R$</span>
+                        <input
+                          type="number"
+                          min={0}
+                          step={10}
+                          value={surcharge}
+                          onChange={e => setSurcharge(Math.max(0, parseFloat(e.target.value) || 0))}
+                          className="w-24 px-2 py-1 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 outline-none focus:border-gold-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        />
+                      </div>
+                      <span className="text-[11px] text-gray-400 ml-auto">somado ao valor do modelo</span>
+                    </div>
+                  )}
+                </div>
               </>
             )
           )}
