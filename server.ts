@@ -15878,7 +15878,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Cliente real vazada no seed (ordem importa: endereço antes da cidade)
     [/Micheli\s+Fioravanti(?:\s+Alves)?/gi, '{{cliente_nome}}'],
     [/075\.?722\.?709-?05/g, '{{cliente_cpf}}'],
-    [/(?:Rua\s+)?Alameda\s+Cris[âa]ntemo[^\n]*/gi, '{{cliente_endereco}}'],
+    // Endereço: NÃO comer até o fim da linha — para no início do próximo trecho
+    // (conjunção/placeholder/fim de linha). Antes, [^\n]* engolia o que vinha
+    // depois no MESMO parágrafo (ex.: a qualificação da CONTRATANTE).
+    [/(?:Rua\s+)?Alameda\s+Cris[âa]ntemo[^\n{]*?(?=\s+e[,.]?\s+de\s+outro|\s*denominad[ao]\s+CONTRATANTE|\s*na\s+qualidade\s+de|\s+t[êe]m\s+entre|\s+doravante|\s+justo\s+e\s+contratad|\s*\{\{|\n|$)/gi, '{{cliente_endereco}}'],
     [/\(?43\)?\s*9?9634-?5322/g, '{{cliente_telefone}}'],
     [/michelifioalves@hotmail\.com/gi, '{{cliente_email}}'],
     // Dados do estúdio do seed (terceiros para as demais contas) → placeholders
@@ -15887,14 +15890,49 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     [/39\.?732\.?374\/?0001-?37/g, '{{studio_cnpj}}'],
     [/Giovana\s+Vit[óo]ria\s+Pitori(?:\s+Macena)?/gi, '{{studio_responsavel}}'],
     [/103\.?177\.?439-?45/g, '{{studio_responsavel_cpf}}'],
-    [/Rua\s+Dinamarca[^\n]*/gi, '{{studio_endereco}}'],
+    [/Rua\s+Dinamarca[^\n{]*?(?=\s+e[,.]?\s+de\s+outro|\s*denominad[ao]\s+CONTRATANTE|\s*na\s+qualidade\s+de|\s+t[êe]m\s+entre|\s+doravante|\s+justo\s+e\s+contratad|\s*\{\{|\n|$)/gi, '{{studio_endereco}}'],
     [/Camb[ée]\s*\/\s*PR/g, '{{studio_cidade}}'],
   ];
+
+  // Templatização: valores que ficaram CHUMBADOS no corpo de alguns modelos
+  // (não puxam o que o formulário coleta). Trocamos por placeholders. Genérico
+  // e idempotente (modelos que já usam o placeholder não casam de novo).
+  const LEGACY_TEMPLATIZE_RULES: Array<[RegExp, string]> = [
+    // "...é de R$ 2.200,00 (Dois mil e duzentos reais)..." → puxa do form.
+    // (Para a NF/contrato refletir o valor real do negócio, não um preço fixo.)
+    [/(é\s+de\s+)R\$\s*[\d][\d.,]*\s*\([^)]*\)/gi, '$1R$ {{valor_total}} ({{valor_extenso}})'],
+    // "A CONTRATANTE autoriza o uso das imagens" → respeita o "NÃO autoriza".
+    [/A\s+CONTRATANTE\s+autoriza\s+o\s+uso\s+das\s+imagens/gi, 'A CONTRATANTE {{autorizacao_imagem}} autoriza o uso das imagens'],
+  ];
+
+  // Reparo do estrago do saneamento antigo: a regra 'Rua Dinamarca[^\n]*' chegou
+  // a comer a cauda do parágrafo do preâmbulo — levando junto a qualificação da
+  // CONTRATANTE que ficava na MESMA linha. Resultado: o contrato nomeia a
+  // CONTRATADA e pula direto pra Cláusula 1ª, sem nome/CPF/endereço da cliente.
+  // Se NÃO houver o bloco de qualificação da CONTRATANTE, reinsere o padrão com
+  // placeholders (preenchidos pelo gerador com os dados reais). Detecta pela
+  // QUALIFICAÇÃO ("denominada/qualidade de CONTRATANTE"), não pelo {{cliente_nome}}
+  // solto — que pode estar só na assinatura.
+  function ensureContratanteBlock(body: string): string {
+    if (!body) return body;
+    if (/denominad[ao]\s+CONTRATANTE|na\s+qualidade\s+de\s+CONTRATANTE/i.test(body)) return body;
+    // Só age em contratos com preâmbulo de CONTRATADA (evita docs importados soltos).
+    if (!/denominad[ao]\s+CONTRATADA/i.test(body)) return body;
+    const bloco = 'E, de outro lado, na qualidade de CONTRATANTE, {{cliente_nome}}, '
+      + 'inscrito(a) no CPF nº {{cliente_cpf}}, residente e domiciliado(a) em {{cliente_endereco}}.';
+    const m = body.match(/\n\s*CL[ÁA]USULA\s+1/i);
+    if (m && m.index !== undefined) {
+      return body.slice(0, m.index) + '\n\n' + bloco + body.slice(m.index);
+    }
+    return body.replace(/\s+$/, '') + '\n\n' + bloco;
+  }
 
   function sanitizeLegacyContractBody(body: string): string | null {
     if (!body) return null;
     let out = body;
     for (const [re, repl] of LEGACY_SANITIZE_RULES) out = out.replace(re, repl);
+    for (const [re, repl] of LEGACY_TEMPLATIZE_RULES) out = out.replace(re, repl);
+    out = ensureContratanteBlock(out);
     return out === body ? null : out;
   }
 
