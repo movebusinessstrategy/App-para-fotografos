@@ -15936,6 +15936,54 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return out === body ? null : out;
   }
 
+  // Templatiza os termos do PACOTE que estavam chumbados (duração, parcelas,
+  // prazo de entrega, descrição do pacote) → placeholders, e CAPTURA o valor de
+  // cada modelo no default_data. Assim cada contrato puxa o termo DAQUELE modelo
+  // (ex.: modelo de 60 dias mostra 60, não o padrão 30) e o usuário pode editar
+  // no formulário. Captura só quando o default ainda não existe (respeita edição).
+  function templatizePackageFields(body: string, defaultData: any): { body: string; defaults: Record<string, any> } {
+    let out = body;
+    const defaults: Record<string, any> = {};
+    const dd = defaultData || {};
+    // Duração: "até 3 (três) horas" → {{servico_duracao}} (texto livre do form)
+    const dur = out.match(/at[ée]\s+\d+\s*\([^)]*\)\s*horas?/i);
+    if (dur && !/\{\{/.test(dur[0])) {
+      if (dd.servico_duracao == null) defaults.servico_duracao = dur[0].trim();
+      out = out.replace(/at[ée]\s+\d+\s*\([^)]*\)\s*horas?/gi, '{{servico_duracao}}');
+    }
+    // Parcelas: "parcelado em até 6 (seis) vezes" → número + extenso
+    const parc = out.match(/parcelad[oa]\s+em\s+at[ée]\s+(\d+)\s*\([^)]*\)\s*vezes/i);
+    if (parc) {
+      if (dd.parcelas == null) defaults.parcelas = Number(parc[1]);
+      out = out.replace(/(parcelad[oa]\s+em\s+at[ée]\s+)\d+\s*\([^)]*\)(\s*vezes)/gi, '$1{{parcelas}} ({{parcelas_extenso}})$2');
+    }
+    // Prazo de entrega: SÓ a cláusula de entrega ("terá o prazo de até N dias
+    // úteis") — não toca em outros "N dias" (devolução, abandono, etc.).
+    const prazo = out.match(/ter[áa]\s+o\s+prazo\s+de\s+at[ée]\s+(\d+)\s*\([^)]*\)\s*dias\s+[úu]teis/i);
+    if (prazo) {
+      if (dd.prazo_entrega == null) defaults.prazo_entrega = Number(prazo[1]);
+      out = out.replace(/(ter[áa]\s+o\s+prazo\s+de\s+at[ée]\s+)\d+\s*\([^)]*\)(\s*dias\s+[úu]teis)/gi, '$1{{prazo_entrega}} ({{prazo_extenso}})$2');
+    }
+    // Descrição do pacote: "...disponibiliza no pacote acima citado, <texto>"
+    const pac = out.match(/(disponibiliza\s+no\s+pacote\s+acima\s+citado,\s*)([^\n]+)/i);
+    if (pac && !/\{\{/.test(pac[2])) {
+      if (dd.pacote_descricao == null) defaults.pacote_descricao = pac[2].trim();
+      out = out.replace(/(disponibiliza\s+no\s+pacote\s+acima\s+citado,\s*)[^\n]+/i, '$1{{pacote_descricao}}');
+    }
+    return { body: out, defaults };
+  }
+
+  // Repara um modelo: saneia/templatiza o corpo + captura defaults do pacote.
+  // Retorna null se nada mudou. Idempotente.
+  function repairContractTemplate(body: string, defaultData: any): { body: string; default_data: any } | null {
+    const cleaned = sanitizeLegacyContractBody(body || '');
+    const work = cleaned ?? (body || '');
+    const { body: tBody, defaults } = templatizePackageFields(work, defaultData || {});
+    const changed = (cleaned !== null) || (tBody !== work) || Object.keys(defaults).length > 0;
+    if (!changed) return null;
+    return { body: tBody, default_data: { ...(defaultData || {}), ...defaults } };
+  }
+
   // GET studio settings (returns null if user has none yet)
   app.get('/api/studio-settings', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
@@ -16237,14 +16285,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .order('name', { ascending: true });
     if (error) return res.status(500).json({ error: error.message });
 
-    // Saneamento LGPD: troca dados reais do seed antigo por placeholders e persiste
+    // Saneamento LGPD + templatização do pacote: persiste corpo e default_data
     const templates = data || [];
     for (const t of templates) {
-      const cleaned = sanitizeLegacyContractBody(t.body || '');
-      if (cleaned) {
-        t.body = cleaned;
-        await supabase.from('contract_templates').update({ body: cleaned }).eq('id', t.id).eq('user_id', userId);
-        console.log(`[contracts] modelo "${t.name}" saneado (dados de terceiros → placeholders) user=${userId}`);
+      const fixed = repairContractTemplate(t.body || '', t.default_data || {});
+      if (fixed) {
+        t.body = fixed.body;
+        t.default_data = fixed.default_data;
+        await supabase.from('contract_templates').update({ body: fixed.body, default_data: fixed.default_data }).eq('id', t.id).eq('user_id', userId);
+        console.log(`[contracts] modelo "${t.name}" reparado (saneado/templatizado) user=${userId}`);
       }
     }
     res.json(templates);
@@ -16261,12 +16310,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .maybeSingle();
     if (error) return res.status(500).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'not found' });
-    // Mesmo saneamento do GET de lista (cobre quem abre o modelo direto)
-    const cleaned = sanitizeLegacyContractBody(data.body || '');
-    if (cleaned) {
-      data.body = cleaned;
-      await supabase.from('contract_templates').update({ body: cleaned }).eq('id', data.id).eq('user_id', userId);
-      console.log(`[contracts] modelo "${data.name}" saneado (dados de terceiros → placeholders) user=${userId}`);
+    // Mesmo reparo do GET de lista (cobre quem abre o modelo direto)
+    const fixed = repairContractTemplate(data.body || '', data.default_data || {});
+    if (fixed) {
+      data.body = fixed.body;
+      data.default_data = fixed.default_data;
+      await supabase.from('contract_templates').update({ body: fixed.body, default_data: fixed.default_data }).eq('id', data.id).eq('user_id', userId);
+      console.log(`[contracts] modelo "${data.name}" reparado (saneado/templatizado) user=${userId}`);
     }
     res.json(data);
   });

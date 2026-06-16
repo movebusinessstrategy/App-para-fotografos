@@ -110,7 +110,7 @@ const EMPTY_FORM: ContractData = {
   imageAuthorization: 'autoriza',
 };
 
-function buildInitialForm(contract: Contract, client: any, studio: StudioSettings | null): ContractData {
+function buildInitialForm(contract: Contract, client: any, studio: StudioSettings | null, template?: ContractTemplate | null): ContractData {
   const fromStudio: Partial<ContractData> = studio ? {
     studioName: studio.studio_name || '',
     studioCNPJ: studio.studio_cnpj || '',
@@ -156,8 +156,18 @@ function buildInitialForm(contract: Contract, client: any, studio: StudioSetting
     if (cd[k] === '' || cd[k] == null) delete cd[k];
   }
 
-  // Order: empty defaults -> studio defaults -> client info -> stored contract_data (não-vazio)
-  return { ...EMPTY_FORM, ...fromStudio, ...fromClient, ...cd } as ContractData;
+  // Termos do pacote vindos do modelo (default_data): cada modelo tem os SEUS
+  // valores (duração/parcelas/prazo/pacote). Prioridade sobre o estúdio, mas
+  // abaixo do contrato salvo (cd) — se o usuário editou, o dele prevalece.
+  const td: any = template?.default_data || {};
+  const fromTemplate: Partial<ContractData> = {};
+  if (td.servico_duracao) fromTemplate.sessionDuration = String(td.servico_duracao);
+  if (td.pacote_descricao) fromTemplate.packageDescription = String(td.pacote_descricao);
+  if (td.parcelas != null && td.parcelas !== '') fromTemplate.installments = Number(td.parcelas);
+  if (td.prazo_entrega != null && td.prazo_entrega !== '') fromTemplate.deliveryDays = Number(td.prazo_entrega);
+
+  // Order: empty -> studio -> template (termos do pacote) -> client -> stored (cd)
+  return { ...EMPTY_FORM, ...fromStudio, ...fromTemplate, ...fromClient, ...cd } as ContractData;
 }
 
 function buildDefaultSigners(form: ContractData, existing: Signer[] | undefined): Signer[] {
@@ -370,6 +380,13 @@ function buildTemplateVariables(d: ContractData): Record<string, string | undefi
     studio_responsavel_cpf: d.studioResponsibleCPF || undefined,
     studio_endereco: d.studioAddress || undefined,
     studio_cidade: d.studioCity || undefined,
+    // Termos do pacote (puxam do formulário; semeados pelo default_data do modelo)
+    servico_duracao: d.sessionDuration || undefined,
+    pacote_descricao: d.packageDescription || undefined,
+    parcelas: d.installments != null ? String(d.installments) : undefined,
+    parcelas_extenso: d.installments != null ? percentWord(Number(d.installments)) : undefined,
+    prazo_entrega: d.deliveryDays != null ? String(d.deliveryDays) : undefined,
+    prazo_extenso: d.deliveryDays != null ? percentWord(Number(d.deliveryDays)) : undefined,
   };
 }
 
@@ -582,7 +599,7 @@ export function ContractGenerator({ contractId, onClose, onSaved, onDeleted }: C
         const tpl: ContractTemplate | null = templateRes && templateRes.ok ? await templateRes.json() : null;
 
         if (cancelled) return;
-        const initial = buildInitialForm(c, client, s);
+        const initial = buildInitialForm(c, client, s, tpl);
         setContract(c);
         setStudio(s);
         setTemplate(tpl);

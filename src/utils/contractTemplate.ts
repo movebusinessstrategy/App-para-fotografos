@@ -25,6 +25,10 @@ export const TEMPLATE_VARIABLES = [
   'valor_total', 'valor_extenso',
   'sinal', 'sinal_extenso',
   'autorizacao_imagem', 'ano',
+  // Termos do pacote (puxam do formulário; semeados pelo default_data do modelo)
+  'servico_duracao', 'pacote_descricao',
+  'parcelas', 'parcelas_extenso',
+  'prazo_entrega', 'prazo_extenso',
   // Dados do estúdio (CONTRATADA) — preenchidos pelos settings da conta
   // (Configurações de contrato). Usados também pelo saneamento de modelos
   // legados que tinham esses dados em texto fixo.
