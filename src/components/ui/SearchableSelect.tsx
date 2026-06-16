@@ -55,10 +55,17 @@ export function SearchableSelect({
     const dropHeight = Math.min(filtered.length * 36 + 56, 260); // estimate
     const openUpward = spaceBelow < dropHeight && rect.top > dropHeight;
 
+    // Largura MÍNIMA legível (gatilhos estreitos geravam dropdown apertado, difícil
+    // de ler) e clamp pra não sair da borda direita da tela.
+    const width = Math.max(rect.width, 220);
+    let left = rect.left;
+    const rightOverflow = left + width - (window.innerWidth - 8);
+    if (rightOverflow > 0) left = Math.max(8, left - rightOverflow);
+
     setDropdownStyle({
       position: "fixed",
-      left: rect.left,
-      width: rect.width,
+      left,
+      width,
       zIndex: 9999,
       ...(openUpward
         ? { bottom: window.innerHeight - rect.top + 4 }

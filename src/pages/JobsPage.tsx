@@ -70,6 +70,10 @@ export default function JobsPage() {
   const [editingJob, setEditingJob] = useState<Job | null>(null);
   const [filters, setFilters] = useState({ type: "all" });
   const [searchQuery, setSearchQuery] = useState("");
+  // Filtro por DATA DO ENSAIO (job_date) — pra ver quem fez ensaio no período
+  // (ex.: junho, ou de X a Y) e gerir nota fiscal. Vazio = sem filtro de data.
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [selectedJob, setSelectedJob] = useState<JobWithProduction | null>(null);
   const [confirmModal, setConfirmModal] = useState<{
     open: boolean;
@@ -94,8 +98,29 @@ export default function JobsPage() {
     const matchesSearch = !q
       || normalizeText(job.client_name || '').includes(q)
       || normalizeText(job.job_name || '').includes(q);
-    return matchesType && matchesSearch;
-  }), [jobs, filters, searchQuery]);
+    // Data do ensaio (job_date 'YYYY-MM-DD'): se há filtro, exige data dentro do
+    // intervalo (jobs sem data não entram quando o filtro de período está ativo).
+    let matchesDate = true;
+    if (dateFrom || dateTo) {
+      const d = (job.job_date || '').slice(0, 10);
+      if (!d) matchesDate = false;
+      else if (dateFrom && d < dateFrom) matchesDate = false;
+      else if (dateTo && d > dateTo) matchesDate = false;
+    }
+    return matchesType && matchesSearch && matchesDate;
+  }), [jobs, filters, searchQuery, dateFrom, dateTo]);
+
+  // Atalhos de período (mês atual / mês passado) pro filtro de data do ensaio.
+  const setMonthRange = (offset: number) => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth() + offset;
+    const first = new Date(y, m, 1);
+    const last = new Date(y, m + 1, 0);
+    const fmt = (dt: Date) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+    setDateFrom(fmt(first));
+    setDateTo(fmt(last));
+  };
 
   const handleAssigneeChange = async (jobId: number, assigneeId: string | null) => {
     holdRefresh();
@@ -314,15 +339,39 @@ export default function JobsPage() {
             onChange={v => setFilters(prev => ({ ...prev, type: v }))}
             placeholder="Tipo de ensaio"
             highlighted
+            triggerClassName="min-w-[150px]"
             options={[
               { value: "all", label: "Todos os tipos" },
               ...jobTypes.map(t => ({ value: t, label: t })),
             ]}
           />
 
-          {(filters.type !== 'all' || searchQuery) && (
+          {/* Filtro por DATA DO ENSAIO (mês / intervalo) — pra nota fiscal */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs text-gray-400 dark:text-gray-500 hidden sm:inline">Ensaio:</span>
+            <input
+              type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+              title="Data inicial do ensaio"
+              className="px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 outline-none focus:border-gold-400 [color-scheme:light] dark:[color-scheme:dark]"
+            />
+            <span className="text-xs text-gray-400">até</span>
+            <input
+              type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+              title="Data final do ensaio"
+              className="px-2 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 outline-none focus:border-gold-400 [color-scheme:light] dark:[color-scheme:dark]"
+            />
+            <button onClick={() => setMonthRange(0)} className="px-2 py-1.5 text-xs font-semibold rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gold-400 hover:text-gold-600 transition-colors">Mês atual</button>
+            <button onClick={() => setMonthRange(-1)} className="px-2 py-1.5 text-xs font-semibold rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gold-400 hover:text-gold-600 transition-colors">Mês passado</button>
+            {(dateFrom || dateTo) && (
+              <span className="text-xs font-semibold text-gold-600 dark:text-gold-400 px-2 py-0.5 rounded-full bg-gold-50 dark:bg-gold-500/10">
+                {filteredJobs.length} ensaio{filteredJobs.length === 1 ? '' : 's'}
+              </span>
+            )}
+          </div>
+
+          {(filters.type !== 'all' || searchQuery || dateFrom || dateTo) && (
             <button
-              onClick={() => { setFilters({ type: "all" }); setSearchQuery(""); }}
+              onClick={() => { setFilters({ type: "all" }); setSearchQuery(""); setDateFrom(""); setDateTo(""); }}
               className="flex items-center gap-1 text-sm text-gray-500 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
             >
               <X size={14} />
