@@ -5158,6 +5158,121 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ periodo: { ano, mes }, resumo: { totalVendido, numTrabalhos, ticketMedio }, produtos, compras });
   });
 
+  // GET /api/relatorios/vendas-por-tipo?ano=&mes_inicio=&mes_fim=
+  // Relatório gerencial: vendas separadas por TIPO DE ENSAIO (categoria), com o
+  // valor dos ENSAIOS (pacote/base), os EXTRAS vendidos (fotos avulsas, álbuns,
+  // produtos = job_items) e a subdivisão de quais PACOTES (deal_items) foram
+  // vendidos em cada categoria. "Vendido" = job criado (created_at) no período.
+  // Isolamento por conta: jobs/deals filtrados por user_id; itens via .in(ids).
+  app.get('/api/relatorios/vendas-por-tipo', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+
+    const now = new Date();
+    const ano = Number(req.query.ano) || now.getFullYear();
+    const mi = Math.min(12, Math.max(1, Number(req.query.mes_inicio) || 1));
+    const mf = Math.min(12, Math.max(mi, Number(req.query.mes_fim) || 12));
+    const inicio = new Date(Date.UTC(ano, mi - 1, 1)).toISOString();
+    const fim = new Date(Date.UTC(ano, mf, 1)).toISOString(); // 1º dia após o mês final
+
+    // Ensaios (jobs) vendidos no período
+    const { data: jobsData } = await supabase
+      .from('jobs')
+      .select('id, job_type, amount, created_at')
+      .eq('user_id', userId)
+      .gte('created_at', inicio)
+      .lt('created_at', fim);
+    const jobs = jobsData || [];
+    const jobIds = jobs.map((j: any) => j.id);
+    const tipoByJob = new Map<number, string>(jobs.map((j: any) => [j.id, j.job_type || 'Sem tipo']));
+
+    // Extras (job_items) desses jobs
+    const itemsRaw = jobIds.length
+      ? (await adminClient.from('job_items')
+          .select('job_id, catalog_name, catalog_type, catalog_value, quantidade, discount_value')
+          .in('job_id', jobIds)).data || []
+      : [];
+
+    // Pacotes: deal_items dos deals convertidos nesses jobs
+    const dealsData = jobIds.length
+      ? (await supabase.from('deals').select('id, converted_job_id').eq('user_id', userId).in('converted_job_id', jobIds)).data || []
+      : [];
+    const jobByDeal = new Map<string, number>(dealsData.map((d: any) => [d.id, d.converted_job_id]));
+    const dealIds = dealsData.map((d: any) => d.id);
+    const dealItemsRaw = dealIds.length
+      ? (await adminClient.from('deal_items')
+          .select('deal_id, catalog_name, catalog_type, catalog_value, quantidade')
+          .in('deal_id', dealIds)).data || []
+      : [];
+
+    type Cat = { tipo: string; numEnsaios: number; valorEnsaios: number; valorExtras: number; pacotes: Map<string, any>; extras: Map<string, any> };
+    const cats = new Map<string, Cat>();
+    const getCat = (tipo: string): Cat => {
+      if (!cats.has(tipo)) cats.set(tipo, { tipo, numEnsaios: 0, valorEnsaios: 0, valorExtras: 0, pacotes: new Map(), extras: new Map() });
+      return cats.get(tipo)!;
+    };
+
+    // Extras por job (pra somar e pra fallback do valor do ensaio)
+    const extrasSumByJob = new Map<number, number>();
+    for (const it of itemsRaw as any[]) {
+      const tipo = tipoByJob.get(it.job_id);
+      if (tipo === undefined) continue;
+      const qtd = Number(it.quantidade) || 1;
+      const valor = Math.max(0, (Number(it.catalog_value) || 0) * qtd - (Number(it.discount_value) || 0));
+      extrasSumByJob.set(it.job_id, (extrasSumByJob.get(it.job_id) || 0) + valor);
+      const cat = getCat(tipo);
+      cat.valorExtras += valor;
+      const key = it.catalog_name || 'Item';
+      const e = cat.extras.get(key) || { nome: key, tipo: it.catalog_type || 'produto', quantidade: 0, valor: 0 };
+      e.quantidade += qtd; e.valor += valor; cat.extras.set(key, e);
+    }
+
+    // Pacotes (deal_items) por job → tipo
+    const pkgSumByJob = new Map<number, number>();
+    for (const di of dealItemsRaw as any[]) {
+      const jobId = jobByDeal.get(di.deal_id);
+      if (jobId == null) continue;
+      const tipo = tipoByJob.get(jobId);
+      if (tipo === undefined) continue;
+      const qtd = Number(di.quantidade) || 1;
+      const valor = (Number(di.catalog_value) || 0) * qtd;
+      pkgSumByJob.set(jobId, (pkgSumByJob.get(jobId) || 0) + valor);
+      const cat = getCat(tipo);
+      const key = di.catalog_name || 'Pacote';
+      const p = cat.pacotes.get(key) || { nome: key, quantidade: 0, valor: 0 };
+      p.quantidade += qtd; p.valor += valor; cat.pacotes.set(key, p);
+    }
+
+    // Conta ensaios + valor do ensaio (pacote detalhado, ou amount - extras)
+    for (const j of jobs as any[]) {
+      const cat = getCat(j.job_type || 'Sem tipo');
+      cat.numEnsaios += 1;
+      const pkg = pkgSumByJob.get(j.id);
+      const ensaioVal = (pkg != null && pkg > 0) ? pkg : Math.max(0, (Number(j.amount) || 0) - (extrasSumByJob.get(j.id) || 0));
+      cat.valorEnsaios += ensaioVal;
+    }
+
+    const categorias = [...cats.values()].map((c) => ({
+      tipo: c.tipo,
+      numEnsaios: c.numEnsaios,
+      valorEnsaios: c.valorEnsaios,
+      valorExtras: c.valorExtras,
+      valorTotal: c.valorEnsaios + c.valorExtras,
+      pacotes: [...c.pacotes.values()].sort((a, b) => b.valor - a.valor),
+      extras: [...c.extras.values()].sort((a, b) => b.valor - a.valor),
+    })).sort((a, b) => b.valorTotal - a.valorTotal);
+
+    const totais = categorias.reduce((t, c) => ({
+      numEnsaios: t.numEnsaios + c.numEnsaios,
+      valorEnsaios: t.valorEnsaios + c.valorEnsaios,
+      valorExtras: t.valorExtras + c.valorExtras,
+      valorTotal: t.valorTotal + c.valorTotal,
+    }), { numEnsaios: 0, valorEnsaios: 0, valorExtras: 0, valorTotal: 0 });
+
+    res.json({ periodo: { ano, mes_inicio: mi, mes_fim: mf }, totais, categorias });
+  });
+
   // ============ CATÁLOGO: SERVIÇOS ============
 
   app.get('/api/servicos', requireAuth, async (req, res) => {
