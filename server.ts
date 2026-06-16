@@ -3472,7 +3472,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       supabase.from('clients').select('*').eq('user_id', userId).order('name'),
       supabase
         .from('jobs')
-        .select('*')
+        // PERF: só as colunas que o front lê de client.jobs[] (ClientsPage:
+        // histórico/getActivityDates/filtro por tipo; ContractsPage: .length).
+        // total_invested continua somando amount; tenant isolation por user_id
+        // intacto. Antes era select('*') trazendo TODO o histórico (~2700 linhas
+        // x todas as colunas) por conta. NÃO fatiar (mudaria total_invested).
+        .select('id, client_id, job_name, job_type, job_date, amount, status, payment_method, payment_status')
         .eq('user_id', userId)
         .order('job_date', { ascending: false }),
       supabase
@@ -3654,9 +3659,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // com production_stage). Sem limit, o cap default de 1000 retornava
     // só os mais recentes (job_date desc), escondendo os jobs reais com
     // production_stage e fazendo o board de Produção parecer vazio.
+    // PERF: lista EXPLÍCITA das colunas que os consumidores leem (JobsPage,
+    // CalendarPage, GerenciaPage, TasksPage, ProductionBoard). Remove só colunas
+    // órfãs do schema (legado/galeria/álbum que vivem na tabela jobs mas ninguém
+    // lê aqui). NÃO mexer no limit(10000) (board da Pitora depende), na ordem nem
+    // no .eq('user_id') (isolamento por conta). client_name e amount_paid são
+    // derivados no .map abaixo; clients(name) é a única relação (só expõe name).
     const { data: jobs } = await supabase
       .from('jobs')
-      .select('*, clients(name)')
+      .select('id, client_id, job_type, job_name, job_date, job_time, job_end_time, amount, payment_status, payment_method, status, production_stage, production_stage_entered_at, position, assignee_id, labels, cover_image_url, notes, created_at, google_event_id, clients(name)')
       .eq('user_id', userId)
       .order('job_date', { ascending: false })
       .limit(10000);
