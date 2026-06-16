@@ -366,7 +366,9 @@ function buildTemplateVariables(d: ContractData): Record<string, string | undefi
     servico_hora: d.serviceTime || undefined,
     servico_endereco: d.sessionLocation || undefined,
     valor_total: d.serviceValue || undefined,
-    valor_extenso: d.serviceValueWords || undefined,
+    // Descasca parênteses do extenso: o modelo já escreve "({{valor_extenso}})",
+    // e alguns valores vêm com parênteses no dado → evita "((... reais))".
+    valor_extenso: (d.serviceValueWords || '').trim().replace(/^\(\s*/, '').replace(/\s*\)$/, '') || undefined,
     sinal: String(pct),
     sinal_extenso: percentWord(pct),
     // SEMPRE preenchido: 'NÃO' ou '' (vazio = "A CONTRATANTE  autoriza")
