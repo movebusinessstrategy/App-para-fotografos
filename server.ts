@@ -5474,13 +5474,36 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (wonStageIds.length) {
       const { data } = await supabase
         .from('deals')
-        .select('id, assigned_to, value, converted_at')
+        .select('id, assigned_to, value, converted_at, converted_job_id')
         .eq('user_id', userId)
         .in('stage', wonStageIds)
         .gte('converted_at', dInicio)
         .lt('converted_at', nextDay)
         .limit(10000);
       deals = data || [];
+    }
+
+    // VENDA CANCELADA: deal que ficou "ganho" mas cujo ensaio (job) foi APAGADO
+    // ou marcado como cancelado. Não conta como venda. (Quem usa "Cancelar venda"
+    // já cai em "perdido"; isto pega quem só apagou o ensaio.)
+    if (deals.length) {
+      const jobIds = deals.map((d) => d.converted_job_id).filter(Boolean);
+      const jobStatusById = new Map<number, string>();
+      if (jobIds.length) {
+        const { data: jobsRows } = await supabase
+          .from('jobs')
+          .select('id, status')
+          .eq('user_id', userId)
+          .in('id', jobIds);
+        for (const j of jobsRows || []) jobStatusById.set(j.id, String((j as any).status || ''));
+      }
+      const isCancelled = (s: string) => /cancel/i.test(s); // 'cancelled' / 'cancelado'
+      deals = deals.filter((d) => {
+        if (!d.converted_job_id) return true; // venda sem job (ganho por arrasto) conta
+        const st = jobStatusById.get(d.converted_job_id);
+        if (st === undefined) return false;     // job apagado → cancelada
+        return !isCancelled(st);                // job cancelado → fora
+      });
     }
 
     // Carrega TODOS os membros (ativo ou não) pra resolver nome; mostra na lista
