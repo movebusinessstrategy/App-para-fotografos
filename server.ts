@@ -16677,12 +16677,33 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Só age em contratos com preâmbulo de CONTRATADA (evita docs importados soltos).
     if (!/denominad[ao]\s+CONTRATADA/i.test(body)) return body;
     const bloco = 'E, de outro lado, na qualidade de CONTRATANTE, {{cliente_nome}}, '
-      + 'inscrito(a) no CPF nº {{cliente_cpf}}, residente e domiciliado(a) em {{cliente_endereco}}.';
+      + 'inscrito(a) no CPF nº {{cliente_cpf}}, residente e domiciliado(a) em {{cliente_endereco}}, '
+      + 'telefone {{cliente_telefone}}, e-mail: {{cliente_email}}.';
     const m = body.match(/\n\s*CL[ÁA]USULA\s+1/i);
     if (m && m.index !== undefined) {
       return body.slice(0, m.index) + '\n\n' + bloco + body.slice(m.index);
     }
     return body.replace(/\s+$/, '') + '\n\n' + bloco;
+  }
+
+  // O cabeçalho de vários modelos não cita o RESPONSÁVEL da CONTRATADA (nome +
+  // CPF) nem o CONTATO da CONTRATANTE (telefone/e-mail), que o modelo de
+  // referência tem. Insere os placeholders que faltam logo após o endereço de
+  // cada parte. Idempotente: não duplica se já existirem (os placeholders são
+  // resolvidos pelo gerador com os dados da conta/cliente).
+  function ensureStudioRepresentante(body: string): string {
+    if (!body) return body;
+    if (/representad[oa]\s+por/i.test(body) || /\{\{studio_responsavel_cpf\}\}/.test(body)) return body;
+    if (!body.includes('{{studio_endereco}}')) return body;
+    return body.replace('{{studio_endereco}}',
+      '{{studio_endereco}}, neste ato representado por sua responsável, {{studio_responsavel}}, inscrita no CPF nº {{studio_responsavel_cpf}}');
+  }
+  function ensureClienteContato(body: string): string {
+    if (!body) return body;
+    if (body.includes('{{cliente_telefone}}') || body.includes('{{cliente_email}}')) return body;
+    if (!body.includes('{{cliente_endereco}}')) return body;
+    return body.replace('{{cliente_endereco}}',
+      '{{cliente_endereco}}, telefone {{cliente_telefone}}, e-mail: {{cliente_email}}');
   }
 
   function sanitizeLegacyContractBody(body: string): string | null {
@@ -16691,6 +16712,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     for (const [re, repl] of LEGACY_SANITIZE_RULES) out = out.replace(re, repl);
     for (const [re, repl] of LEGACY_TEMPLATIZE_RULES) out = out.replace(re, repl);
     out = ensureContratanteBlock(out);
+    out = ensureStudioRepresentante(out);
+    out = ensureClienteContato(out);
     return out === body ? null : out;
   }
 
