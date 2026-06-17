@@ -96,9 +96,13 @@ export default function Relatorios() {
             rows.push({
               Categoria: c.tipo, Linha: 'Pessoa', Pacote: p.nome, Cliente: cl.nome, Data: cl.data, Qtd: 1,
               Faturamento: cl.valor, 'Produtos (fora do faturamento)': cl.totalProdutos,
-              'Produtos detalhe': cl.produtos.map(x => `${x.nome} ${qtdProd(x)}x (${fmtBRL(x.valor)})`).join('; '),
+              'Produtos detalhe': cl.produtos.map(x => `${x.nome} ${qtdProd(x)}x (${fmtBRL(x.valor)})`).join(' | '),
             });
           }
+        }
+        // Resumo de produtos da categoria (fora do faturamento), espelhando a UI
+        for (const pr of c.produtos) {
+          rows.push({ Categoria: c.tipo, Linha: 'Produto (fora do faturamento)', Pacote: '', Cliente: '', Data: '', Qtd: qtdProd(pr), Faturamento: 0, 'Produtos (fora do faturamento)': pr.valor, 'Produtos detalhe': pr.nome });
         }
       }
       exportCSV(rows, `vendas_por_tipo_${range.from}_a_${range.to}.csv`);

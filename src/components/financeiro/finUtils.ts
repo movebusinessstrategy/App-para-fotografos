@@ -74,8 +74,14 @@ export const GRUPOS_DRE_PADRAO = [
 export function exportCSV(linhas: any[], nomeArquivo: string) {
   if (!linhas.length) return;
   const keys = Object.keys(linhas[0]);
-  const header = keys.join(';');
-  const rows = linhas.map(l => keys.map(k => String(l[k] ?? '')).join(';')).join('\n');
+  // Aspas RFC-4180: campo com ; " ou quebra de linha vai entre "..." (e aspas
+  // internas viram ""), senão um nome com ";" quebraria as colunas do arquivo.
+  const cell = (v: any) => {
+    const s = String(v ?? '');
+    return /[";\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const header = keys.map(cell).join(';');
+  const rows = linhas.map(l => keys.map(k => cell(l[k])).join(';')).join('\n');
   const blob = new Blob(['\uFEFF' + header + '\n' + rows], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

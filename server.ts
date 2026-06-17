@@ -5077,6 +5077,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ created: novas.length });
   });
 
+  // Valida que a string é uma data YYYY-MM-DD REAL (não só no formato): rejeita
+  // 2025-99-99 / 2025-02-30 etc. pra não estourar new Date().toISOString().
+  const okYMD = (s: string): boolean => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+    const d = new Date(`${s}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+  };
+
   // GET /api/relatorios/vendas?from=YYYY-MM-DD&to=YYYY-MM-DD (ou ?mes=YYYY-MM)
   // Relatório de PRODUTOS vendidos: filtra pela data da VENDA (created_at do
   // item), com precisão de dia e "até" inclusivo. Mantém ?mes= por compat.
@@ -5089,7 +5097,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const fromQ = String(req.query.from || '').trim();
     const toQ = String(req.query.to || '').trim();
     let inicio: string, fim: string, labelFrom: string, labelTo: string;
-    if (/^\d{4}-\d{2}-\d{2}$/.test(fromQ) && /^\d{4}-\d{2}-\d{2}$/.test(toQ)) {
+    if (okYMD(fromQ) && okYMD(toQ)) {
       labelFrom = fromQ <= toQ ? fromQ : toQ;
       labelTo = fromQ <= toQ ? toQ : fromQ;
       const next = new Date(`${labelTo}T12:00:00Z`); // meio-dia evita borda de fuso
@@ -5117,16 +5125,22 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const totalVendido = (jobsMes || []).reduce((s: number, j: any) => s + (Number(j.amount) || 0), 0);
     const ticketMedio = numTrabalhos > 0 ? totalVendido / numTrabalhos : 0;
 
-    // Todos os trabalhos do usuário — pra filtrar job_items por dono
-    const { data: allJobs } = await supabase.from('jobs').select('id').eq('user_id', userId);
-    const jobIds = new Set((allJobs || []).map((j: any) => j.id));
+    // Trabalhos do usuário — pra restringir job_items ao dono JÁ NA QUERY
+    // (job_items não tem user_id; sem o .in abaixo a busca varreria itens de
+    // todas as contas e filtraria só em memória — vazamento em logs + lento).
+    const { data: allJobs } = await supabase.from('jobs').select('id').eq('user_id', userId).limit(10000);
+    const jobIdsArr = (allJobs || []).map((j: any) => j.id);
+    const jobIds = new Set(jobIdsArr);
 
-    // Produtos vendidos: itens de trabalho criados no mês, agrupados por nome
-    const { data: items } = await adminClient
-      .from('job_items')
-      .select('catalog_name, catalog_type, catalog_value, quantidade, discount_value, job_id')
-      .gte('created_at', inicio)
-      .lt('created_at', fim);
+    // Produtos vendidos: itens de trabalho criados no período, por nome
+    const { data: items } = jobIdsArr.length
+      ? await adminClient
+          .from('job_items')
+          .select('catalog_name, catalog_type, catalog_value, quantidade, discount_value, job_id')
+          .in('job_id', jobIdsArr)
+          .gte('created_at', inicio)
+          .lt('created_at', fim)
+      : { data: [] as any[] };
     const prodMap = new Map<string, any>();
     for (const it of items || []) {
       if (!jobIds.has((it as any).job_id)) continue;
@@ -5192,7 +5206,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const fromQ = String(req.query.from || '').trim();
     const toQ = String(req.query.to || '').trim();
     let dInicio: string, dFimIncl: string;
-    if (/^\d{4}-\d{2}-\d{2}$/.test(fromQ) && /^\d{4}-\d{2}-\d{2}$/.test(toQ)) {
+    if (okYMD(fromQ) && okYMD(toQ)) {
       dInicio = fromQ <= toQ ? fromQ : toQ;
       dFimIncl = fromQ <= toQ ? toQ : fromQ;
     } else {
@@ -5388,7 +5402,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const fromQ = String(req.query.from || '').trim();
     const toQ = String(req.query.to || '').trim();
     let dInicio: string, dFimIncl: string;
-    if (/^\d{4}-\d{2}-\d{2}$/.test(fromQ) && /^\d{4}-\d{2}-\d{2}$/.test(toQ)) {
+    if (okYMD(fromQ) && okYMD(toQ)) {
       dInicio = fromQ <= toQ ? fromQ : toQ;
       dFimIncl = fromQ <= toQ ? toQ : fromQ;
     } else {
