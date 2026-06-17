@@ -1916,9 +1916,12 @@
 
   function openMassFollowUpModal(stage, customDeals = null) {
     document.getElementById('fp-mass-modal')?.remove();
-    const stageDeals = (customDeals || deals.filter(d => d.stage === stage.id))
+    // Respeita o filtro ATIVO do board (responsável + período + busca) via
+    // matches(): se o Luan filtra "Responsável: Luan", o disparo em massa só vai
+    // pros leads DELE naquela etapa — não pra todo mundo.
+    const stageDeals = (customDeals || deals.filter(d => d.stage === stage.id && matches(d)))
       .filter(d => d.contact_phone);
-    if (!stageDeals.length) return toast('Nenhum lead com telefone', true);
+    if (!stageDeals.length) return toast('Nenhum lead com telefone pro filtro atual', true);
 
     const template = collapseRepeatedMessage(stage.follow_up_message || '') || `Oi {nome}, tudo bem? Passando pra ver se você tem alguma dúvida 😊`;
     const singleMode = stageDeals.length === 1;
