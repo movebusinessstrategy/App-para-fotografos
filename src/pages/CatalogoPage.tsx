@@ -396,6 +396,8 @@ function ProdutoModal({ item, fornecedores, categorias, onSave, onClose }: {
   onSave: (d: Partial<Produto>) => Promise<void>;
   onClose: () => void;
 }) {
+  const { canAccess } = useAuth();
+  const canSeeFinance = canAccess('finance'); // funcionário sem permissão não vê custo/margem
   const [form, setForm] = useState<Partial<Produto>>(
     item ?? { nome: "", categoria: "", preco_custo: 0, preco_venda: 0, unidade: "un", estoque: 0, ativo: true }
   );
@@ -453,20 +455,24 @@ function ProdutoModal({ item, fornecedores, categorias, onSave, onClose }: {
             </div>
           </div>
 
-          {/* Preços */}
-          <div className="grid grid-cols-3 gap-3">
+          {/* Preços — custo e markup só pra quem tem permissão "Financeiro" */}
+          <div className={`grid ${canSeeFinance ? 'grid-cols-3' : 'grid-cols-1'} gap-3`}>
+            {canSeeFinance && (
             <div>
               <FieldLabel>Custo (R$)</FieldLabel>
               <NumInput value={form.preco_custo ?? 0} onChange={(n) => set("preco_custo", n)} step="0.01" />
             </div>
+            )}
             <div>
               <FieldLabel>Venda (R$)</FieldLabel>
               <NumInput value={form.preco_venda ?? 0} onChange={(n) => set("preco_venda", n)} step="0.01" />
             </div>
+            {canSeeFinance && (
             <div>
               <FieldLabel>Markup</FieldLabel>
               <div className={`${INPUT} text-gray-400`}>{markup !== "-" ? `${markup}%` : "-"}</div>
             </div>
+            )}
           </div>
 
           {/* Fornecedor + Prazo */}
@@ -1175,9 +1181,9 @@ export default function CatalogoPage() {
                       <thead><tr className="border-b border-gray-100 dark:border-gray-800">
                         <th className={tableHeaderCls}>Nome</th>
                         <th className={`${tableHeaderCls} hidden md:table-cell`}>Categoria</th>
-                        <th className={`${tableHeaderCls} text-right`}>Custo</th>
+                        {canSeeFinance && <th className={`${tableHeaderCls} text-right`}>Custo</th>}
                         <th className={`${tableHeaderCls} text-right`}>Venda</th>
-                        <th className={`${tableHeaderCls} text-right hidden sm:table-cell`}>Markup</th>
+                        {canSeeFinance && <th className={`${tableHeaderCls} text-right hidden sm:table-cell`}>Markup</th>}
                         <th className={`${tableHeaderCls} text-center hidden lg:table-cell`}>Prazo</th>
                         <th className={`${tableHeaderCls} text-center`}>Estoque</th>
                         <th className={`${tableHeaderCls} text-center`}>Status</th>
@@ -1198,8 +1204,9 @@ export default function CatalogoPage() {
                                 </span>
                               ) : "-"}
                             </td>
-                            <td className="px-5 py-3 text-right text-gray-700 dark:text-gray-300">R$ {p.preco_custo.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</td>
+                            {canSeeFinance && <td className="px-5 py-3 text-right text-gray-700 dark:text-gray-300">R$ {p.preco_custo.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</td>}
                             <td className="px-5 py-3 text-right font-semibold text-gray-900 dark:text-white">R$ {p.preco_venda.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</td>
+                            {canSeeFinance && (
                             <td className="px-5 py-3 text-right hidden sm:table-cell">
                               {p.margem_lucro != null ? (
                                 <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${p.margem_lucro >= 30 ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400" : p.margem_lucro >= 10 ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400" : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400"}`}>
@@ -1207,6 +1214,7 @@ export default function CatalogoPage() {
                                 </span>
                               ) : "-"}
                             </td>
+                            )}
                             <td className="px-5 py-3 text-center text-gray-500 dark:text-gray-400 hidden lg:table-cell">
                               {p.prazo_entrega ? `${p.prazo_entrega}d` : "-"}
                             </td>
