@@ -12386,7 +12386,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // permissão "finance" do membro. Dono e platform admin sempre passam.
   // Isso é defesa-em-profundidade: o frontend já bloqueia a rota, mas
   // sem isso um membro poderia chamar a API direto.
-  app.use('/api/fin', requireAuth, requirePermission('finance'));
+  // Financeiro inteiro é EXCLUSIVO do dono (mostra valores). Antes era
+  // requirePermission('finance'), mas o padrão dá finance=true aos membros —
+  // então funcionário via tudo. requireOwnerOrPlatformAdmin bloqueia membros.
+  app.use('/api/fin', requireAuth, requireOwnerOrPlatformAdmin);
 
   // ─── Categorias ────────────────────────────────────────────────────────────
   app.get('/api/fin/categorias', requireAuth, async (req, res) => {
@@ -13397,7 +13400,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Painel "Vendas recentes" da extensão — vendas (deals convertidos) num
   // período, com cross-reference do status na produção (em qual etapa o job
   // está, ou se ficou fora da produção).
-  app.get('/api/extension/sales-overview', requireAuth, async (req, res) => {
+  app.get('/api/extension/sales-overview', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const days = Math.max(1, Math.min(365, parseInt(String(req.query.days || '7'), 10)));
@@ -18072,7 +18075,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         },
         production: { processes: productionByProcess },
         opportunities: opportunitiesData,
-        finance: {
+        // Funcionário não vê valores: zera o finance (a UI também esconde os
+        // cards; aqui é a trava de verdade, pra não vazar pela rede).
+        finance: (req as any).isMember ? {
+          revenueThisMonth: 0, revenueLastMonth: 0, futureRevenue: 0,
+          toReceiveOpen: 0, sinalRecebidoOpen: 0, openJobsCount: 0,
+          expensesThisMonth: 0, dailyRevenue: [],
+        } : {
           revenueThisMonth,
           revenueLastMonth,
           futureRevenue,

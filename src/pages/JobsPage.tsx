@@ -30,7 +30,7 @@ function getLabelColor(label: string) {
 }
 
 export default function JobsPage() {
-  const { isProductionOnly } = useAuth();
+  const { isProductionOnly, isMember } = useAuth();
   // Auto-refresh (tempo real): /api/jobs revalida a cada 5s. Pausa por ~2.5s
   // após uma ação local (boardBusy) pra um poll com dado antigo não desfazer
   // visualmente a mudança otimista — o card "voltando" sozinho. O drag é HTML5
@@ -274,6 +274,7 @@ export default function JobsPage() {
                 <List size={15} />
                 Lista
               </button>
+              {!isMember && (
               <button
                 onClick={() => setActiveTab("vendas")}
                 className={cn(
@@ -286,6 +287,7 @@ export default function JobsPage() {
                 <Inbox size={15} />
                 Vendas recentes
               </button>
+              )}
               <button
                 onClick={() => setActiveTab("gerencia")}
                 className={cn(
@@ -398,8 +400,8 @@ export default function JobsPage() {
         {/* Tarefas tab */}
         {activeTab === "tarefas" && <TasksPage />}
 
-        {/* Vendas recentes tab */}
-        {activeTab === "vendas" && (
+        {/* Vendas recentes tab — só o dono (mostra valores de venda) */}
+        {activeTab === "vendas" && !isMember && (
           <SalesOverviewPanel
             processes={processes}
             stages={stages}

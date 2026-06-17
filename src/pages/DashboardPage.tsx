@@ -17,6 +17,7 @@ import { LayoutOutletContext } from "../components/layout/AppLayout";
 import { authFetch } from "../utils/authFetch";
 import { cn } from "../utils/cn";
 import { Client, Opportunity } from "../types";
+import { useAuth } from "../contexts/AuthContext";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -128,13 +129,16 @@ function formatRangeShort(range: DashboardDateRange) {
 
 export default function DashboardPage() {
   const navigate = useNavigate();
+  const { isMember } = useAuth(); // funcionário não vê valores em dinheiro
   const { openContactModal } = useOutletContext<LayoutOutletContext>();
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [hideValues, setHideValues] = useState(() => localStorage.getItem("dashboard_hide_values") === "true");
+  const [hideValuesPref, setHideValues] = useState(() => localStorage.getItem("dashboard_hide_values") === "true");
+  // Funcionário SEMPRE com valores mascarados (pega o que sobrou: funil, hot deals).
+  const hideValues = isMember || hideValuesPref;
   const [datePreset, setDatePreset] = useState<DatePreset>("month");
   const [dateRange, setDateRange] = useState<DashboardDateRange>(() => buildPresetRange("month"));
   const fetchSeq = useRef(0);
@@ -246,6 +250,7 @@ export default function DashboardPage() {
             onPreset={applyPreset}
             onCustomRange={applyCustomRange}
           />
+          {!isMember && (
           <button
             onClick={toggleHideValues}
             className="p-2 rounded-full text-gray-400 hover:text-gold-500 hover:bg-gold-500/10 transition-colors"
@@ -253,6 +258,7 @@ export default function DashboardPage() {
           >
             {hideValues ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
+          )}
         </div>
       </div>
 
@@ -261,6 +267,7 @@ export default function DashboardPage() {
         {/* Left column: KPIs grid + Linha do tempo */}
         <div className="space-y-3">
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+            {!isMember && (<>
             <Card>
               <CardHeader icon={<DollarSign size={16} />} title="Entrada" />
               <CardValue value={formatBRL(a.finance.revenueThisMonth, hideValues)} />
@@ -278,6 +285,7 @@ export default function DashboardPage() {
               <CardValue value={formatBRL(a.finance.expensesThisMonth, hideValues)} />
               <CardHint>Despesas pagas no período</CardHint>
             </Card>
+            </>)}
 
             <Card>
               <CardHeader icon={<Camera size={16} />} title="Ensaios no período" />
@@ -288,9 +296,10 @@ export default function DashboardPage() {
             <Card onClick={() => navigate("/vendas")}>
               <CardHeader icon={<Target size={16} />} title="Funil ativo" />
               <CardValue value={String(a.sales.activeCount)} />
-              <CardHint>{formatBRLShort(a.sales.activeValue, hideValues)} em pipeline</CardHint>
+              <CardHint>{isMember ? 'leads ativos' : `${formatBRLShort(a.sales.activeValue, hideValues)} em pipeline`}</CardHint>
             </Card>
 
+            {!isMember && (<>
             <Card>
               <CardHeader icon={<Check size={16} />} title="Sinal recebido" />
               <CardValue value={formatBRL(a.finance.sinalRecebidoOpen, hideValues)} />
@@ -304,6 +313,7 @@ export default function DashboardPage() {
                 Saldo de {a.finance.openJobsCount} ensaio{a.finance.openJobsCount === 1 ? '' : 's'} em produção
               </CardHint>
             </Card>
+            </>)}
 
             <Card>
               <CardHeader icon={<FileClock size={16} />} title="Pendências" />
@@ -318,7 +328,8 @@ export default function DashboardPage() {
             </Card>
           </div>
 
-          {/* Linha do tempo (gráfico) */}
+          {/* Linha do tempo (receita ao longo do tempo) — só o dono vê valores */}
+          {!isMember && (
           <Card>
             <div className="flex items-center justify-between mb-3">
               <CardHeader icon={<TrendingUp size={16} />} title="Linha do tempo" inline />
@@ -371,6 +382,7 @@ export default function DashboardPage() {
               </ResponsiveContainer>
             </div>
           </Card>
+          )}
         </div>
 
         {/* Right column: Funnel */}
