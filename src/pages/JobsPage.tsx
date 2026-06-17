@@ -110,6 +110,18 @@ export default function JobsPage() {
     return matchesType && matchesSearch && matchesDate;
   }), [jobs, filters, searchQuery, dateFrom, dateTo]);
 
+  // "Em produção" = jobs que estão DENTRO de uma etapa de um processo existente
+  // (exatamente os que aparecem no Kanban). A lista espelha o quadro: ninguém
+  // fora de etapa aparece. (Antes a lista puxava TODOS os ensaios já criados.)
+  const productionStageIds = useMemo(() => {
+    const procIds = new Set(processes.map(p => p.id));
+    return new Set(stages.filter(s => procIds.has(s.process_id)).map(s => s.id));
+  }, [processes, stages]);
+  const productionJobs = useMemo(
+    () => filteredJobs.filter(j => !!j.production_stage && productionStageIds.has(j.production_stage)),
+    [filteredJobs, productionStageIds]
+  );
+
   // Atalhos de período (mês atual / mês passado) pro filtro de data do ensaio.
   const setMonthRange = (offset: number) => {
     const now = new Date();
@@ -364,7 +376,7 @@ export default function JobsPage() {
             <button onClick={() => setMonthRange(-1)} className="px-2 py-1.5 text-xs font-semibold rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gold-400 hover:text-gold-600 transition-colors">Mês passado</button>
             {(dateFrom || dateTo) && (
               <span className="text-xs font-semibold text-gold-600 dark:text-gold-400 px-2 py-0.5 rounded-full bg-gold-50 dark:bg-gold-500/10">
-                {filteredJobs.length} ensaio{filteredJobs.length === 1 ? '' : 's'}
+                {productionJobs.length} ensaio{productionJobs.length === 1 ? '' : 's'}
               </span>
             )}
           </div>
@@ -458,7 +470,7 @@ export default function JobsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                {filteredJobs.map(job => {
+                {productionJobs.map(job => {
                   const jobDate = parseDate(job.job_date);
                   const stageInfo = getStageLabel(job);
                   return (
@@ -547,10 +559,10 @@ export default function JobsPage() {
                   );
                 })}
 
-                {filteredJobs.length === 0 && (
+                {productionJobs.length === 0 && (
                   <tr>
                     <td colSpan={8} className="px-6 py-12 text-center text-sm text-gray-400 dark:text-gray-500">
-                      Nenhum trabalho encontrado.
+                      Nenhum ensaio em produção. A lista mostra só quem está dentro de uma etapa (igual ao quadro).
                     </td>
                   </tr>
                 )}

@@ -1,13 +1,10 @@
 import React, { useState } from 'react';
 import { Download, BarChart3, Users, Tag, Camera, ChevronDown, ChevronRight, Package, Image } from 'lucide-react';
-import { FinSelect } from './FinInputs';
+import { format } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 import { authFetch } from '../../utils/authFetch';
 import { fmtBRL, exportCSV } from './finUtils';
-
-const MESES = [
-  'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
-  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro',
-];
+import { DateRangePicker, buildPresetRange, fromDateOnly, type DateRange } from '../ui/DateRangePicker';
 
 type RelatorioTipo = 'vendas_tipo' | 'receitas_categoria' | 'despesas_categoria' | 'receitas_cliente' | 'fluxo_mensal';
 
@@ -37,27 +34,25 @@ interface ResultadoLinha {
 }
 
 export default function Relatorios() {
-  const hoje = new Date();
-  const [ano, setAno] = useState(hoje.getFullYear());
-  const [mesInicio, setMesInicio] = useState(1);
-  const [mesFim, setMesFim] = useState(hoje.getMonth() + 1);
+  const [range, setRange] = useState<DateRange>(() => buildPresetRange('month'));
   const [tipo, setTipo] = useState<RelatorioTipo>('vendas_tipo');
   const [resultado, setResultado] = useState<ResultadoLinha[] | null>(null);
   const [vendas, setVendas] = useState<VendasReport | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
 
-  const anos = Array.from({ length: 5 }, (_, i) => hoje.getFullYear() - i);
+  const rangeLabel =
+    `${format(fromDateOnly(range.from), 'dd MMM yyyy', { locale: ptBR })} – ${format(fromDateOnly(range.to), 'dd MMM yyyy', { locale: ptBR })}`;
 
   const gerar = async () => {
     setLoading(true);
     try {
       if (tipo === 'vendas_tipo') {
-        const params = new URLSearchParams({ ano: String(ano), mes_inicio: String(mesInicio), mes_fim: String(mesFim) });
+        const params = new URLSearchParams({ from: range.from, to: range.to });
         const res = await authFetch(`/api/relatorios/vendas-por-tipo?${params}`);
         if (res.ok) { setVendas(await res.json()); setResultado(null); }
       } else {
-        const params = new URLSearchParams({ tipo, ano: String(ano), mes_inicio: String(mesInicio), mes_fim: String(mesFim) });
+        const params = new URLSearchParams({ tipo, from: range.from, to: range.to });
         const res = await authFetch(`/api/fin/relatorios?${params}`);
         if (res.ok) { setResultado(await res.json()); setVendas(null); }
       }
@@ -75,12 +70,12 @@ export default function Relatorios() {
         for (const p of c.pacotes) rows.push({ Categoria: c.tipo, Item: p.nome, Tipo: 'pacote', Qtd: p.quantidade, 'Valor Ensaios': p.valor, 'Valor Extras': 0, 'Valor Total': p.valor });
         for (const e of c.extras) rows.push({ Categoria: c.tipo, Item: e.nome, Tipo: e.tipo, Qtd: e.quantidade, 'Valor Ensaios': 0, 'Valor Extras': e.valor, 'Valor Total': e.valor });
       }
-      exportCSV(rows, `vendas_por_tipo_${ano}.csv`);
+      exportCSV(rows, `vendas_por_tipo_${range.from}_a_${range.to}.csv`);
       return;
     }
     if (!resultado?.length) return;
     const cfg = RELATORIOS.find(r => r.key === tipo)!;
-    exportCSV(resultado, `${cfg.key}_${ano}.csv`);
+    exportCSV(resultado, `${cfg.key}_${range.from}_a_${range.to}.csv`);
   };
 
   const toggleCat = (tipoCat: string) =>
@@ -122,42 +117,18 @@ export default function Relatorios() {
 
       {/* Filtros de período */}
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-        <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Período</p>
-        <div className="flex flex-wrap gap-3 items-end">
-          <div>
-            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Ano</label>
-            <FinSelect
-              value={String(ano)}
-              onChange={v => setAno(parseInt(v))}
-              nullable={false}
-              options={anos.map(a => ({ value: String(a), label: String(a) }))}
-              className="w-24"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">De</label>
-            <FinSelect
-              value={String(mesInicio)}
-              onChange={v => setMesInicio(parseInt(v))}
-              nullable={false}
-              options={MESES.map((m, i) => ({ value: String(i + 1), label: m }))}
-              className="w-36"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Até</label>
-            <FinSelect
-              value={String(mesFim)}
-              onChange={v => setMesFim(parseInt(v))}
-              nullable={false}
-              options={MESES.map((m, i) => ({ value: String(i + 1), label: m }))}
-              className="w-36"
-            />
-          </div>
+        <div className="flex items-baseline justify-between gap-2 mb-3">
+          <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Período</p>
+          {tipo === 'vendas_tipo' && (
+            <p className="text-xs text-gray-400 dark:text-gray-500">Conta pelos ensaios <span className="font-medium">realizados</span> no período (data do ensaio)</p>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-3 items-center justify-between">
+          <DateRangePicker range={range} onChange={setRange} />
           <button
             onClick={gerar}
             disabled={loading}
-            className="px-4 py-1.5 text-sm rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+            className="px-4 py-2 text-sm rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 whitespace-nowrap"
           >
             {loading ? 'Gerando...' : 'Gerar Relatório'}
           </button>
@@ -171,9 +142,7 @@ export default function Relatorios() {
             <div className="flex items-center gap-2">
               <cfg.icon className={`w-4 h-4 ${cfg.color}`} />
               <span className="text-sm font-semibold text-gray-800 dark:text-gray-200">{cfg.label}</span>
-              <span className="text-xs text-gray-400">
-                {MESES[mesInicio - 1]} - {MESES[mesFim - 1]} {ano}
-              </span>
+              <span className="text-xs text-gray-400">{rangeLabel}</span>
             </div>
             {((tipo === 'vendas_tipo' ? (vendas?.categorias.length || 0) : (resultado?.length || 0)) > 0) && (
               <button

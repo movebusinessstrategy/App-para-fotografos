@@ -5170,19 +5170,32 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const adminClient = supabaseAdmin || supabase;
 
     const now = new Date();
-    const ano = Number(req.query.ano) || now.getFullYear();
-    const mi = Math.min(12, Math.max(1, Number(req.query.mes_inicio) || 1));
-    const mf = Math.min(12, Math.max(mi, Number(req.query.mes_fim) || 12));
-    const inicio = new Date(Date.UTC(ano, mi - 1, 1)).toISOString();
-    const fim = new Date(Date.UTC(ano, mf, 1)).toISOString(); // 1º dia após o mês final
+    // Filtra por ENSAIO REALIZADO (job_date = a data do ensaio), NÃO pela data
+    // da venda (created_at). Aceita intervalo de datas (from/to em YYYY-MM-DD,
+    // "até" inclusivo) OU o formato antigo ano/mes_inicio/mes_fim. job_date é uma
+    // coluna DATE, então comparamos por string de data (sem fuso, dia cravado).
+    const fromQ = String(req.query.from || '').trim();
+    const toQ = String(req.query.to || '').trim();
+    let dInicio: string, dFimIncl: string;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(fromQ) && /^\d{4}-\d{2}-\d{2}$/.test(toQ)) {
+      dInicio = fromQ <= toQ ? fromQ : toQ;
+      dFimIncl = fromQ <= toQ ? toQ : fromQ;
+    } else {
+      const ano = Number(req.query.ano) || now.getFullYear();
+      const mi = Math.min(12, Math.max(1, Number(req.query.mes_inicio) || 1));
+      const mf = Math.min(12, Math.max(mi, Number(req.query.mes_fim) || 12));
+      const lastDay = new Date(Date.UTC(ano, mf, 0)).getUTCDate(); // último dia do mês mf
+      dInicio = `${ano}-${String(mi).padStart(2, '0')}-01`;
+      dFimIncl = `${ano}-${String(mf).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    }
 
-    // Ensaios (jobs) vendidos no período
+    // Ensaios (jobs) REALIZADOS no período (por job_date, "até" inclusivo)
     const { data: jobsData } = await supabase
       .from('jobs')
-      .select('id, job_type, amount, created_at')
+      .select('id, job_type, amount, job_date')
       .eq('user_id', userId)
-      .gte('created_at', inicio)
-      .lt('created_at', fim);
+      .gte('job_date', dInicio)
+      .lte('job_date', dFimIncl);
     const jobs = jobsData || [];
     const jobIds = jobs.map((j: any) => j.id);
     const tipoByJob = new Map<number, string>(jobs.map((j: any) => [j.id, j.job_type || 'Sem tipo']));
@@ -5279,7 +5292,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       valorTotal: t.valorTotal + c.valorTotal,
     }), { numEnsaios: 0, valorEnsaios: 0, valorExtras: 0, valorTotal: 0 });
 
-    res.json({ periodo: { ano, mes_inicio: mi, mes_fim: mf }, totais, categorias });
+    res.json({ periodo: { from: dInicio, to: dFimIncl }, totais, categorias });
   });
 
   // ============ CATÁLOGO: SERVIÇOS ============
@@ -12759,10 +12772,19 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // ─── Relatórios ────────────────────────────────────────────────────────────
   app.get('/api/fin/relatorios', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const { tipo, ano, mes_inicio, mes_fim } = req.query as Record<string, string>;
+    const { tipo, ano, mes_inicio, mes_fim, from, to } = req.query as Record<string, string>;
 
-    const inicio = `${ano}-${String(mes_inicio).padStart(2, '0')}-01`;
-    const fim = `${ano}-${String(mes_fim).padStart(2, '0')}-31`;
+    // Novo: intervalo de datas (from/to em YYYY-MM-DD, precisão de dia, "até"
+    // inclusivo). Mantém o formato antigo ano/mes_inicio/mes_fim por compat.
+    const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+    let inicio: string, fim: string;
+    if (dateRe.test(from || '') && dateRe.test(to || '')) {
+      inicio = (from <= to ? from : to);
+      fim = (from <= to ? to : from);
+    } else {
+      inicio = `${ano}-${String(mes_inicio).padStart(2, '0')}-01`;
+      fim = `${ano}-${String(mes_fim).padStart(2, '0')}-31`;
+    }
 
     if (tipo === 'receitas_categoria') {
       const [{ data: receitas }, { data: categorias }] = await Promise.all([
