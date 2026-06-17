@@ -5483,22 +5483,32 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       deals = data || [];
     }
 
+    // Carrega TODOS os membros (ativo ou não) pra resolver nome; mostra na lista
+    // só os ativos (mesmo com 0 vendas). assigned_to que não casa com nenhum
+    // membro cai num único balde "Sem vendedor" (não vira vários baldes).
     const { data: membersData } = await supabase
       .from('team_members')
-      .select('id, name, color, meta_venda, comissao_percentual')
-      .eq('owner_user_id', userId)
-      .eq('is_active', true);
+      .select('id, name, color, meta_venda, comissao_percentual, is_active')
+      .eq('owner_user_id', userId);
     const members = membersData || [];
+    const memberById = new Map<string, any>((members as any[]).map((m) => [m.id, m]));
 
     type Row = { id: string | null; nome: string; cor: string | null; meta: number; percentual: number; numVendas: number; valorVendido: number };
+    const mkRow = (m: any): Row => ({ id: m.id, nome: m.name || 'Vendedor', cor: m.color || null, meta: Number(m.meta_venda) || 0, percentual: Number(m.comissao_percentual) || 0, numVendas: 0, valorVendido: 0 });
     const rows = new Map<string, Row>();
     for (const m of members as any[]) {
-      rows.set(m.id, { id: m.id, nome: m.name || 'Vendedor', cor: m.color || null, meta: Number(m.meta_venda) || 0, percentual: Number(m.comissao_percentual) || 0, numVendas: 0, valorVendido: 0 });
+      if (m.is_active === false) continue; // só ativos pré-semeados
+      rows.set(m.id, mkRow(m));
     }
     for (const d of deals) {
-      const k = d.assigned_to || '__none__';
+      const k = (d.assigned_to && memberById.has(d.assigned_to)) ? d.assigned_to : '__none__';
       let r = rows.get(k);
-      if (!r) { r = { id: null, nome: 'Sem vendedor', cor: null, meta: 0, percentual: 0, numVendas: 0, valorVendido: 0 }; rows.set(k, r); }
+      if (!r) {
+        r = k !== '__none__'
+          ? mkRow(memberById.get(k)) // membro inativo com vendas no período
+          : { id: null, nome: 'Sem vendedor', cor: null, meta: 0, percentual: 0, numVendas: 0, valorVendido: 0 };
+        rows.set(k, r);
+      }
       r.numVendas += 1;
       r.valorVendido += Number(d.value) || 0;
     }
