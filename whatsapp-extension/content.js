@@ -794,9 +794,10 @@
           <div class="fpc-meta">${inboxItems.length} conversa${inboxItems.length !== 1 ? 's' : ''}</div>
         </div>
         <div class="fpc-newcontact">
-          <input id="fp-inbox-phone" type="tel" placeholder="55 11 99999-9999" class="fp-inbox-input" />
+          <input id="fp-inbox-phone" type="text" placeholder="Nome ou número…" class="fp-inbox-input" autocomplete="off" />
           <button id="fp-inbox-open" class="fp-btn-g">Abrir</button>
         </div>
+        <div id="fp-inbox-results" style="display:none;margin:0 0 6px;border:1px solid var(--fp-border,#e5e7eb);border-radius:8px;overflow:hidden;background:#fff;max-height:220px;overflow-y:auto"></div>
         <div class="fpc-body" id="fpb-inbox">
           ${inboxItems.length
             ? inboxItems.map((it, idx) => inboxCard(it, idx)).join('')
@@ -954,20 +955,84 @@
   function bindInboxNewContact() {
     const input = document.getElementById('fp-inbox-phone');
     const btn = document.getElementById('fp-inbox-open');
+    const resultsBox = document.getElementById('fp-inbox-results');
     if (!input || !btn) return;
 
-    const trigger = async () => {
-      const p = digits(input.value);
-      if (!p || p.length < 10) {
-        toast('Número inválido — inclua DDD (ex: 11999999999)', true);
-        return;
-      }
-      const full = p.startsWith('55') ? p : '55' + p;
-      await openByNumberInApp(full);
+    const closeResults = () => { if (resultsBox) { resultsBox.style.display = 'none'; resultsBox.innerHTML = ''; } };
+
+    // Considera "número" se o texto digitado é só dígitos/sinais de telefone.
+    const looksLikeNumber = (raw) => /^[\d\s()+\-.]+$/.test(raw) && digits(raw).length >= 8;
+
+    const openContact = async (d) => {
+      closeResults();
+      input.value = '';
+      await openByNumberInApp(d.contact_phone, d.contact_name || d.title || '');
     };
 
+    // Busca por NOME no pipeline (deals com telefone). Mostra os que batem.
+    const searchByName = (raw) => {
+      if (!resultsBox) return;
+      const q = normalizeNameForMatch(raw);
+      if (!q) { closeResults(); return; }
+      const matches = deals
+        .filter((d) => d.contact_phone && normalizeNameForMatch(d.contact_name || d.title || '').includes(q))
+        .slice(0, 8);
+      if (!matches.length) {
+        resultsBox.innerHTML = `<div style="padding:8px 10px;font-size:12px;color:#888">Nenhum contato com esse nome no pipeline</div>`;
+        resultsBox.style.display = 'block';
+        return;
+      }
+      resultsBox.innerHTML = matches.map((d, i) =>
+        `<button class="fp-inbox-result" data-i="${i}" style="display:flex;flex-direction:column;align-items:flex-start;gap:1px;width:100%;text-align:left;padding:7px 10px;border:0;border-bottom:1px solid #f0f0f0;background:#fff;cursor:pointer">
+          <span style="font-size:13px;font-weight:600;color:#111b21">${esc(d.contact_name || d.title || 'Contato')}</span>
+          <span style="font-size:11px;color:#888">${esc(d.contact_phone)}</span>
+        </button>`).join('');
+      resultsBox.style.display = 'block';
+      resultsBox.querySelectorAll('.fp-inbox-result').forEach((b) => {
+        b.addEventListener('click', () => openContact(matches[Number(b.getAttribute('data-i'))]));
+        b.addEventListener('mouseenter', () => { b.style.background = '#f5f6f6'; });
+        b.addEventListener('mouseleave', () => { b.style.background = '#fff'; });
+      });
+    };
+
+    const trigger = async () => {
+      const raw = input.value.trim();
+      if (!raw) return;
+      if (looksLikeNumber(raw)) {
+        const p = digits(raw);
+        if (p.length < 10) { toast('Número inválido — inclua DDD (ex: 11999999999)', true); return; }
+        closeResults();
+        const full = p.startsWith('55') ? p : '55' + p;
+        await openByNumberInApp(full);
+        return;
+      }
+      // Nome: se só 1 bate, abre direto; senão mostra a lista pra escolher.
+      const q = normalizeNameForMatch(raw);
+      const matches = deals.filter((d) => d.contact_phone && normalizeNameForMatch(d.contact_name || d.title || '').includes(q));
+      if (matches.length === 1) { await openContact(matches[0]); return; }
+      searchByName(raw);
+    };
+
+    // Busca ao vivo enquanto digita um nome (não dispara pra número).
+    input.addEventListener('input', () => {
+      const raw = input.value.trim();
+      if (!raw || looksLikeNumber(raw)) { closeResults(); return; }
+      searchByName(raw);
+    });
     btn.addEventListener('click', trigger);
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') trigger(); });
+    // Fecha a lista ao clicar fora — listener ÚNICO (bindInboxNewContact roda a
+    // cada render; busca os elementos por id no clique pra não acumular handlers).
+    if (!window.__fpInboxOutsideBound) {
+      window.__fpInboxOutsideBound = true;
+      document.addEventListener('mousedown', (e) => {
+        const box = document.getElementById('fp-inbox-results');
+        const inp = document.getElementById('fp-inbox-phone');
+        if (box && box.style.display !== 'none' && !box.contains(e.target) && e.target !== inp) {
+          box.style.display = 'none'; box.innerHTML = '';
+        }
+      });
+    }
   }
 
   function normalizeWhatsappPhone(phone) {
