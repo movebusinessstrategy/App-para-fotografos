@@ -6927,7 +6927,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Lista padrões (leve, com contagem de itens).
   app.get('/api/task-templates', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    // Service role + filtro por user_id: a tabela tem RLS (user_id = auth.uid()),
+    // que bloqueia MEMBROS da equipe (auth.uid() = membro ≠ dono). Isolamento
+    // garantido pelo .eq('user_id', userId) explícito.
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
     const { data: templates, error } = await supabase
       .from('task_templates').select('*').eq('user_id', userId).order('created_at', { ascending: true });
     if (error) {
@@ -6946,7 +6949,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Padrão completo (blocos + itens aninhados).
   app.get('/api/task-templates/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient; // RLS bloqueia membros — ver GET /api/task-templates
     const { data: tpl, error } = await supabase.from('task_templates').select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
     if (error) return res.status(500).json({ error: error.message });
     if (!tpl) return res.status(404).json({ error: 'Padrão não encontrado' });
@@ -6958,7 +6961,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Cria padrão (com estrutura opcional).
   app.post('/api/task-templates', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient; // RLS bloqueia membros — ver GET /api/task-templates
     const { name, description, blocks } = req.body || {};
     if (!name?.trim()) return res.status(400).json({ error: 'Nome obrigatório' });
     const { data: tpl, error } = await supabase.from('task_templates').insert({
@@ -6972,7 +6975,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Substitui o padrão inteiro (nome/descrição + estrutura).
   app.put('/api/task-templates/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient; // RLS bloqueia membros — ver GET /api/task-templates
     const { name, description, is_active, blocks } = req.body || {};
     const { data: tpl, error } = await supabase.from('task_templates').update({
       ...(name !== undefined ? { name: name?.trim() } : {}),
@@ -6989,7 +6992,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Duplica um padrão (com toda a estrutura).
   app.post('/api/task-templates/:id/duplicate', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient; // RLS bloqueia membros — ver GET /api/task-templates
     const { data: tpl } = await supabase.from('task_templates').select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
     if (!tpl) return res.status(404).json({ error: 'Padrão não encontrado' });
     const { data: blocks } = await supabase.from('task_template_blocks').select('*').eq('template_id', tpl.id).order('position');
@@ -7002,7 +7005,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   app.delete('/api/task-templates/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient; // RLS bloqueia membros — ver GET /api/task-templates
     const { error } = await supabase.from('task_templates').delete().eq('id', req.params.id).eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
@@ -7011,7 +7014,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Aplica um padrão: cria as tarefas (blocos → tarefas → subtarefas) numa venda.
   app.post('/api/task-templates/:id/apply', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient; // RLS bloqueia membros — ver GET /api/task-templates
     const { job_id, client_id, reference_date, default_assignee_id } = req.body || {};
     const { data: tpl } = await supabase.from('task_templates').select('id').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
     if (!tpl) return res.status(404).json({ error: 'Padrão não encontrado' });
@@ -7056,7 +7059,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Cria o "Ensaio Padrão" de exemplo (as 7 etapas do fluxo do estúdio).
   app.post('/api/task-templates/seed-default', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient; // RLS bloqueia membros — ver GET /api/task-templates
     const t = (title: string, children?: string[]) => ({ title, children: (children || []).map(c => ({ title: c })) });
     const blocks = [
       { title: 'Etapa 1 — Atendimento / Sistema da empresa', note: 'Todo ensaio fechado precisa passar por contrato + alinhamento antes de ir para a semana do ensaio.', items: [
