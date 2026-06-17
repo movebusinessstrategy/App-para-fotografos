@@ -5442,6 +5442,83 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ periodo: { from: dInicio, to: dFimIncl }, entrada, saida, lucro: entrada - saida });
   });
 
+  // GET /api/relatorios/vendas-por-vendedor?from=YYYY-MM-DD&to=YYYY-MM-DD
+  // Quanto cada VENDEDOR (team_member via deals.assigned_to) converteu no
+  // período (deals em etapa ganha, por converted_at) + comissão devida
+  // (valor vendido × % do vendedor) e progresso da meta. Inclui todos os
+  // membros ativos (mesmo com 0) e um balde "Sem vendedor".
+  app.get('/api/relatorios/vendas-por-vendedor', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    const now = new Date();
+    const fromQ = String(req.query.from || '').trim();
+    const toQ = String(req.query.to || '').trim();
+    let dInicio: string, dFimIncl: string;
+    if (okYMD(fromQ) && okYMD(toQ)) {
+      dInicio = fromQ <= toQ ? fromQ : toQ;
+      dFimIncl = fromQ <= toQ ? toQ : fromQ;
+    } else {
+      dInicio = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1)).toISOString().slice(0, 10);
+      dFimIncl = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 0)).toISOString().slice(0, 10);
+    }
+    const nd = new Date(`${dFimIncl}T12:00:00Z`);
+    nd.setUTCDate(nd.getUTCDate() + 1);
+    const nextDay = nd.toISOString().slice(0, 10);
+
+    const stages = await ensurePipelineStages(supabase, userId);
+    const wonStageIds = stages.filter((s: any) => s.is_won).map((s: any) => s.id);
+
+    // Vendas ganhas no período (por converted_at)
+    let deals: any[] = [];
+    if (wonStageIds.length) {
+      const { data } = await supabase
+        .from('deals')
+        .select('id, assigned_to, value, converted_at')
+        .eq('user_id', userId)
+        .in('stage', wonStageIds)
+        .gte('converted_at', dInicio)
+        .lt('converted_at', nextDay)
+        .limit(10000);
+      deals = data || [];
+    }
+
+    const { data: membersData } = await supabase
+      .from('team_members')
+      .select('id, name, color, meta_venda, comissao_percentual')
+      .eq('owner_user_id', userId)
+      .eq('is_active', true);
+    const members = membersData || [];
+
+    type Row = { id: string | null; nome: string; cor: string | null; meta: number; percentual: number; numVendas: number; valorVendido: number };
+    const rows = new Map<string, Row>();
+    for (const m of members as any[]) {
+      rows.set(m.id, { id: m.id, nome: m.name || 'Vendedor', cor: m.color || null, meta: Number(m.meta_venda) || 0, percentual: Number(m.comissao_percentual) || 0, numVendas: 0, valorVendido: 0 });
+    }
+    for (const d of deals) {
+      const k = d.assigned_to || '__none__';
+      let r = rows.get(k);
+      if (!r) { r = { id: null, nome: 'Sem vendedor', cor: null, meta: 0, percentual: 0, numVendas: 0, valorVendido: 0 }; rows.set(k, r); }
+      r.numVendas += 1;
+      r.valorVendido += Number(d.value) || 0;
+    }
+
+    const vendedores = [...rows.values()].map((r) => ({
+      id: r.id, nome: r.nome, cor: r.cor, meta: r.meta, percentual: r.percentual,
+      numVendas: r.numVendas, valorVendido: r.valorVendido,
+      comissao: r.valorVendido * (r.percentual / 100),
+      metaPct: r.meta > 0 ? Math.round((r.valorVendido / r.meta) * 100) : null,
+    })).sort((a, b) => b.valorVendido - a.valorVendido);
+
+    const totais = vendedores.reduce((t, v) => ({
+      numVendas: t.numVendas + v.numVendas,
+      valorVendido: t.valorVendido + v.valorVendido,
+      comissao: t.comissao + v.comissao,
+    }), { numVendas: 0, valorVendido: 0, comissao: 0 });
+
+    res.json({ periodo: { from: dInicio, to: dFimIncl }, totais, vendedores });
+  });
+
   // ============ CATÁLOGO: SERVIÇOS ============
 
   app.get('/api/servicos', requireAuth, async (req, res) => {
@@ -6477,7 +6554,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.post('/api/team-members', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { name, email, color, permissions, password } = req.body;
+    const { name, email, color, permissions, password, meta_venda, comissao_percentual } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'Nome obrigatório' });
 
     const limit = await checkPlanLimit(supabase, userId, 'team_members');
@@ -6496,7 +6573,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Cria o registro na tabela team_members
     const { data, error } = await supabase
       .from('team_members')
-      .insert({ owner_user_id: userId, name: name.trim(), email: email?.trim() || null, color: color || '#6366f1', permissions: permissions || defaultPermissions })
+      .insert({
+        owner_user_id: userId, name: name.trim(), email: email?.trim() || null,
+        color: color || '#6366f1', permissions: permissions || defaultPermissions,
+        meta_venda: Math.max(0, Number(meta_venda) || 0),
+        comissao_percentual: Math.min(100, Math.max(0, Number(comissao_percentual) || 0)),
+      })
       .select().single();
     if (error) return res.status(500).json({ error: error.message });
 
@@ -6530,12 +6612,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.put('/api/team-members/:id', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { name, email, color, permissions, password } = req.body;
+    const { name, email, color, permissions, password, meta_venda, comissao_percentual } = req.body;
 
-    // Atualiza dados do membro
+    // Atualiza dados do membro (meta/comissão só se vierem no body)
+    const upd: any = { name: name?.trim(), email: email?.trim() || null, color, permissions };
+    if (meta_venda !== undefined) upd.meta_venda = Math.max(0, Number(meta_venda) || 0);
+    if (comissao_percentual !== undefined) upd.comissao_percentual = Math.min(100, Math.max(0, Number(comissao_percentual) || 0));
     const { error } = await supabase
       .from('team_members')
-      .update({ name: name?.trim(), email: email?.trim() || null, color, permissions })
+      .update(upd)
       .eq('id', req.params.id)
       .eq('owner_user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
@@ -6575,6 +6660,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
     }
 
+    res.json({ success: true });
+  });
+
+  // Atualiza SÓ meta + comissão (edição inline no relatório de vendas por vendedor).
+  app.put('/api/team-members/:id/comissao', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const meta = Math.max(0, Number(req.body.meta_venda) || 0);
+    const pct = Math.min(100, Math.max(0, Number(req.body.comissao_percentual) || 0));
+    const { error } = await supabase
+      .from('team_members')
+      .update({ meta_venda: meta, comissao_percentual: pct })
+      .eq('id', req.params.id)
+      .eq('owner_user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
   });
 

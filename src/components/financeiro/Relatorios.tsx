@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import { Download, BarChart3, Users, Tag, Camera, ChevronDown, ChevronRight, Package, AlertCircle, ArrowDownCircle, ArrowUpCircle, User } from 'lucide-react';
+import { Download, BarChart3, Users, Tag, Camera, ChevronDown, ChevronRight, Package, AlertCircle, ArrowDownCircle, ArrowUpCircle, User, Award, Pencil, Check, Target } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { authFetch } from '../../utils/authFetch';
 import { fmtBRL, exportCSV } from './finUtils';
 import { DateRangePicker, buildPresetRange, fromDateOnly, type DateRange } from '../ui/DateRangePicker';
 
-type RelatorioTipo = 'vendas_tipo' | 'receitas_categoria' | 'despesas_categoria' | 'receitas_cliente' | 'fluxo_mensal';
+type RelatorioTipo = 'vendas_tipo' | 'vendas_vendedor' | 'receitas_categoria' | 'despesas_categoria' | 'receitas_cliente' | 'fluxo_mensal';
 
 interface RelatorioCfg {
   key: RelatorioTipo;
@@ -18,6 +18,7 @@ interface RelatorioCfg {
 
 const RELATORIOS: RelatorioCfg[] = [
   { key: 'vendas_tipo', label: 'Vendas por Tipo de Ensaio', desc: 'Ensaios realizados por categoria, com pacotes, pessoas e produtos vendidos', icon: Camera, color: 'text-gold-500' },
+  { key: 'vendas_vendedor', label: 'Vendas por Vendedor', desc: 'Quanto cada vendedor converteu no período + meta e comissão a pagar', icon: Award, color: 'text-indigo-500' },
   { key: 'receitas_categoria', label: 'Receitas por Categoria', desc: 'Receitas agrupadas por categoria no período', icon: Tag, color: 'text-emerald-500' },
   { key: 'despesas_categoria', label: 'Despesas por Categoria', desc: 'Despesas agrupadas por categoria no período', icon: Tag, color: 'text-red-500' },
   { key: 'receitas_cliente', label: 'Receitas por Cliente', desc: 'Ranking de clientes por receita gerada', icon: Users, color: 'text-blue-500' },
@@ -38,6 +39,16 @@ interface VendasReport {
 }
 interface EntradaSaida { entrada: number; saida: number; lucro: number }
 
+interface VendedorRow {
+  id: string | null; nome: string; cor: string | null;
+  meta: number; percentual: number; numVendas: number; valorVendido: number;
+  comissao: number; metaPct: number | null;
+}
+interface VendedoresReport {
+  totais: { numVendas: number; valorVendido: number; comissao: number };
+  vendedores: VendedorRow[];
+}
+
 interface ResultadoLinha {
   [key: string]: string | number;
 }
@@ -53,9 +64,12 @@ export default function Relatorios() {
   const [tipo, setTipo] = useState<RelatorioTipo>('vendas_tipo');
   const [resultado, setResultado] = useState<ResultadoLinha[] | null>(null);
   const [vendas, setVendas] = useState<VendasReport | null>(null);
+  const [vendedores, setVendedores] = useState<VendedoresReport | null>(null);
   const [entradaSaida, setEntradaSaida] = useState<EntradaSaida | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [expandedPkg, setExpandedPkg] = useState<Set<string>>(new Set());
+  const [editVend, setEditVend] = useState<{ id: string; meta: string; pct: string } | null>(null);
+  const [savingVend, setSavingVend] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const rangeLabel =
@@ -73,14 +87,33 @@ export default function Relatorios() {
       if (tipo === 'vendas_tipo') {
         const params = new URLSearchParams({ from: range.from, to: range.to });
         const res = await authFetch(`/api/relatorios/vendas-por-tipo?${params}`);
-        if (res.ok) { setVendas(await res.json()); setResultado(null); }
+        if (res.ok) { setVendas(await res.json()); setResultado(null); setVendedores(null); }
+      } else if (tipo === 'vendas_vendedor') {
+        const params = new URLSearchParams({ from: range.from, to: range.to });
+        const res = await authFetch(`/api/relatorios/vendas-por-vendedor?${params}`);
+        if (res.ok) { setVendedores(await res.json()); setVendas(null); setResultado(null); }
       } else {
         const params = new URLSearchParams({ tipo, from: range.from, to: range.to });
         const res = await authFetch(`/api/fin/relatorios?${params}`);
-        if (res.ok) { setResultado(await res.json()); setVendas(null); }
+        if (res.ok) { setResultado(await res.json()); setVendas(null); setVendedores(null); }
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const salvarComissao = async () => {
+    if (!editVend) return;
+    setSavingVend(true);
+    try {
+      await authFetch(`/api/team-members/${editVend.id}/comissao`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meta_venda: Number(editVend.meta) || 0, comissao_percentual: Number(editVend.pct) || 0 }),
+      });
+      setEditVend(null);
+      await gerar();
+    } finally {
+      setSavingVend(false);
     }
   };
 
@@ -106,6 +139,15 @@ export default function Relatorios() {
         }
       }
       exportCSV(rows, `vendas_por_tipo_${range.from}_a_${range.to}.csv`);
+      return;
+    }
+    if (tipo === 'vendas_vendedor') {
+      if (!vendedores?.vendedores.length) return;
+      const rows = vendedores.vendedores.map(v => ({
+        Vendedor: v.nome, 'Nº vendas': v.numVendas, 'Valor vendido': v.valorVendido,
+        Meta: v.meta, 'Meta atingida (%)': v.metaPct ?? '', 'Comissão (%)': v.percentual, 'Comissão a pagar': v.comissao,
+      }));
+      exportCSV(rows, `vendas_por_vendedor_${range.from}_a_${range.to}.csv`);
       return;
     }
     if (!resultado?.length) return;
@@ -137,7 +179,7 @@ export default function Relatorios() {
           return (
             <button
               key={r.key}
-              onClick={() => { setTipo(r.key); setResultado(null); setVendas(null); setExpanded(new Set()); setExpandedPkg(new Set()); }}
+              onClick={() => { setTipo(r.key); setResultado(null); setVendas(null); setVendedores(null); setEditVend(null); setExpanded(new Set()); setExpandedPkg(new Set()); }}
               className={`text-left p-4 rounded-xl border transition-all ${
                 selected
                   ? 'border-violet-500 bg-violet-50 dark:bg-violet-900/20 shadow-sm'
@@ -159,6 +201,9 @@ export default function Relatorios() {
           {tipo === 'vendas_tipo' && (
             <p className="text-xs text-gray-400 dark:text-gray-500">Conta pelos ensaios <span className="font-medium">realizados</span> no período (data do ensaio)</p>
           )}
+          {tipo === 'vendas_vendedor' && (
+            <p className="text-xs text-gray-400 dark:text-gray-500">Conta pelas vendas <span className="font-medium">convertidas</span> no período (data da venda)</p>
+          )}
         </div>
         <div className="flex flex-wrap gap-3 items-center justify-between">
           <DateRangePicker range={range} onChange={setRange} />
@@ -173,7 +218,7 @@ export default function Relatorios() {
       </div>
 
       {/* Resultado */}
-      {(resultado !== null || vendas !== null) && (
+      {(resultado !== null || vendas !== null || vendedores !== null) && (
         <div className="space-y-3">
           {/* Entrada x Saída x Lucro do período */}
           {entradaSaida && (
@@ -208,7 +253,9 @@ export default function Relatorios() {
               <span className="text-sm font-semibold text-gray-800 dark:text-gray-200">{cfg.label}</span>
               <span className="text-xs text-gray-400">{rangeLabel}</span>
             </div>
-            {((tipo === 'vendas_tipo' ? (vendas?.categorias.length || 0) : (resultado?.length || 0)) > 0) && (
+            {((tipo === 'vendas_tipo' ? (vendas?.categorias.length || 0)
+              : tipo === 'vendas_vendedor' ? (vendedores?.vendedores.length || 0)
+              : (resultado?.length || 0)) > 0) && (
               <button
                 onClick={baixarCSV}
                 className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
@@ -334,8 +381,98 @@ export default function Relatorios() {
             )
           )}
 
+          {/* ── Vendas por Vendedor ── */}
+          {tipo === 'vendas_vendedor' && vendedores && (
+            vendedores.vendedores.length === 0 ? (
+              <div className="text-center py-10 text-gray-400 dark:text-gray-500 text-sm">Nenhum vendedor cadastrado e nenhuma venda no período.</div>
+            ) : (
+              <div className="space-y-3">
+                {/* Totais */}
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                  <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3">
+                    <p className="text-[11px] uppercase font-semibold text-gray-400">Vendas convertidas</p>
+                    <p className="text-xl font-bold text-gray-900 dark:text-white">{vendedores.totais.numVendas}</p>
+                  </div>
+                  <div className="bg-white dark:bg-gray-800 border border-gold-200 dark:border-gold-900/30 rounded-xl px-4 py-3">
+                    <p className="text-[11px] uppercase font-semibold text-gold-500">Valor vendido</p>
+                    <p className="text-xl font-bold text-gold-600 dark:text-gold-400">{fmtBRL(vendedores.totais.valorVendido)}</p>
+                  </div>
+                  <div className="bg-white dark:bg-gray-800 border border-indigo-200 dark:border-indigo-900/30 rounded-xl px-4 py-3">
+                    <p className="text-[11px] uppercase font-semibold text-indigo-500">Comissão a pagar</p>
+                    <p className="text-xl font-bold text-indigo-600 dark:text-indigo-400">{fmtBRL(vendedores.totais.comissao)}</p>
+                  </div>
+                </div>
+
+                {/* Lista de vendedores */}
+                <div className="space-y-2">
+                  {vendedores.vendedores.map((v, i) => {
+                    const editing = editVend?.id === v.id;
+                    return (
+                      <div key={v.id || `none-${i}`} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <span className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0" style={{ background: v.cor || '#9ca3af' }}>
+                            {v.nome.slice(0, 2).toUpperCase()}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <p className="font-semibold text-gray-800 dark:text-gray-100 truncate">{v.nome}</p>
+                            <p className="text-xs text-gray-400">{v.numVendas} venda{v.numVendas === 1 ? '' : 's'} · {fmtBRL(v.valorVendido)}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-[11px] uppercase font-semibold text-indigo-500">Comissão ({v.percentual}%)</p>
+                            <p className="text-base font-bold text-indigo-600 dark:text-indigo-400">{fmtBRL(v.comissao)}</p>
+                          </div>
+                          {v.id && !editing && (
+                            <button onClick={() => setEditVend({ id: v.id!, meta: String(v.meta || ''), pct: String(v.percentual || '') })}
+                              className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-gray-100 dark:hover:bg-gray-700" title="Editar meta e comissão">
+                              <Pencil size={14} />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Meta (progresso) */}
+                        {!editing && v.meta > 0 && (
+                          <div className="mt-2">
+                            <div className="flex items-center justify-between text-[11px] text-gray-400 mb-0.5">
+                              <span className="flex items-center gap-1"><Target size={11} /> Meta {fmtBRL(v.meta)}</span>
+                              <span className={v.metaPct != null && v.metaPct >= 100 ? 'text-emerald-600 dark:text-emerald-400 font-semibold' : ''}>{v.metaPct}%</span>
+                            </div>
+                            <div className="h-1.5 rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden">
+                              <div className="h-full rounded-full bg-indigo-500" style={{ width: `${Math.min(100, Math.max(0, v.metaPct || 0))}%` }} />
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Edição inline de meta + % */}
+                        {editing && editVend && (
+                          <div className="mt-3 flex flex-wrap items-end gap-3 border-t border-gray-100 dark:border-gray-700 pt-3">
+                            <label className="text-xs text-gray-500 dark:text-gray-400">
+                              Meta (R$)
+                              <input type="number" min="0" value={editVend.meta} onChange={e => setEditVend({ ...editVend, meta: e.target.value })}
+                                className="mt-1 block w-32 px-2 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-800 dark:text-gray-100 outline-none focus:border-indigo-400" />
+                            </label>
+                            <label className="text-xs text-gray-500 dark:text-gray-400">
+                              Comissão (%)
+                              <input type="number" min="0" max="100" step="0.5" value={editVend.pct} onChange={e => setEditVend({ ...editVend, pct: e.target.value })}
+                                className="mt-1 block w-24 px-2 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-800 dark:text-gray-100 outline-none focus:border-indigo-400" />
+                            </label>
+                            <button onClick={salvarComissao} disabled={savingVend}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm hover:bg-indigo-700 disabled:opacity-50">
+                              <Check size={14} /> {savingVend ? 'Salvando...' : 'Salvar'}
+                            </button>
+                            <button onClick={() => setEditVend(null)} className="px-3 py-1.5 rounded-lg text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-200">Cancelar</button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-gray-400 dark:text-gray-500">Comissão = valor vendido × % do vendedor. Edite a meta e a % no lápis de cada um.</p>
+              </div>
+            )
+          )}
+
           {/* ── Demais relatórios (tabela plana) ── */}
-          {tipo !== 'vendas_tipo' && resultado && (resultado.length === 0 ? (
+          {tipo !== 'vendas_tipo' && tipo !== 'vendas_vendedor' && resultado && (resultado.length === 0 ? (
             <div className="text-center py-10 text-gray-400 dark:text-gray-500 text-sm">
               Sem dados para o período selecionado.
             </div>
