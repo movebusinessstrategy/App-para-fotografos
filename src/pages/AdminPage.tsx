@@ -18,6 +18,8 @@ const MODULES = [
   { key: "finance",          label: "Financeiro",                   group: "Módulos" },
   { key: "oportunidades",    label: "Oportunidades",                group: "Módulos" },
   { key: "contratos",        label: "Contratos",                    group: "Módulos" },
+  { key: "vendas_analises",  label: "Vendas - Análises",            group: "Ações" },
+  { key: "jobs_gerencia",    label: "Produção - Gerência",          group: "Ações" },
   { key: "vendas_add_stage", label: "Vendas - Adicionar etapa",     group: "Ações" },
   { key: "vendas_edit_stage",label: "Vendas - Editar/excluir etapa",group: "Ações" },
   { key: "calendar_create",  label: "Agenda - Criar tarefa",        group: "Ações" },
@@ -36,11 +38,14 @@ const PRODUCTION_PRESET: Record<string, boolean> = {
   dashboard: false, clients: false, vendas: false, calendar: false,
   finance: false, oportunidades: false, contratos: false,
   catalogo: false, whatsapp: false, agente: false,
+  // Produção restrita NUNCA vê telas de gestão/análise (mostram números do estúdio).
+  jobs_gerencia: false, vendas_analises: false,
 };
-// Acesso padrão de um membro normal (igual ao default do backend).
+// Acesso padrão de um membro normal. finance começa DESLIGADO (igual ao default
+// do backend) — o dono liga manualmente pra quem pode ver valores.
 const FULL_PRESET: Record<string, boolean> = {
   dashboard: true, clients: true, jobs: true, vendas: true,
-  calendar: true, finance: true, oportunidades: true, contratos: true,
+  calendar: true, finance: false, oportunidades: true, contratos: true,
 };
 
 function getInitials(name: string) {
@@ -294,7 +299,10 @@ export default function AdminPage({ lockedTab, embedded = false }: AdminPageProp
   };
 
   const togglePermission = async (member: TeamMember, moduleKey: string) => {
-    const newPerms = { ...member.permissions, [moduleKey]: !member.permissions[moduleKey] };
+    // Usa o estado EFETIVO (ausente = liberado, igual ao render). Sem isso, o 1º
+    // clique numa permissão ausente gravava `true` (mesmo visual) e parecia "morto".
+    const currentlyAllowed = member.permissions?.[moduleKey] !== false;
+    const newPerms = { ...member.permissions, [moduleKey]: !currentlyAllowed };
     setMembers(prev => prev.map(m => m.id === member.id ? { ...m, permissions: newPerms } : m));
     await authFetch(`/api/team-members/${member.id}`, {
       method: "PUT",

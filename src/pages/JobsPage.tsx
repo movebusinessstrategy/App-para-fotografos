@@ -32,6 +32,8 @@ function getLabelColor(label: string) {
 export default function JobsPage() {
   const { isProductionOnly, canAccess } = useAuth();
   const canSeeFinance = canAccess('finance'); // dono ou funcionário com permissão "Financeiro"
+  // aba Gerência (análise de produção): produção restrita NUNCA vê; demais seguem o toggle por funcionário.
+  const canSeeGerencia = !isProductionOnly && canAccess('jobs_gerencia');
   // Auto-refresh (tempo real): /api/jobs revalida a cada 5s. Pausa por ~2.5s
   // após uma ação local (boardBusy) pra um poll com dado antigo não desfazer
   // visualmente a mudança otimista — o card "voltando" sozinho. O drag é HTML5
@@ -289,6 +291,7 @@ export default function JobsPage() {
                 Vendas recentes
               </button>
               )}
+              {canSeeGerencia && (
               <button
                 onClick={() => setActiveTab("gerencia")}
                 className={cn(
@@ -301,6 +304,7 @@ export default function JobsPage() {
                 <BarChart2 size={15} />
                 Gerência
               </button>
+              )}
               <button
                 onClick={() => setActiveTab("tarefas")}
                 className={cn(
@@ -396,7 +400,7 @@ export default function JobsPage() {
         </div>}
 
         {/* Gerência tab */}
-        {activeTab === "gerencia" && <GerenciaPage />}
+        {activeTab === "gerencia" && canSeeGerencia && <GerenciaPage />}
 
         {/* Tarefas tab */}
         {activeTab === "tarefas" && <TasksPage />}

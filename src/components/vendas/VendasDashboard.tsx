@@ -6,6 +6,7 @@ import { NewDealModal } from "./NewDealModal";
 import { StageCustomizer } from "./StageCustomizer";
 import { useApi, refreshApi, liveRefresh } from "../../utils/useApi";
 import { Deal, PipelineStage, Client } from "../../types";
+import { useAuth } from "../../contexts/AuthContext";
 
 // Lazy: cada tab vira um chunk próprio, baixado só quando o usuário clicar.
 // FunilTab fica eager porque é a tab default (Kanban) - render instantâneo.
@@ -28,6 +29,9 @@ type Tab = "inbox" | "kanban" | "historico" | "analises";
 type HistoryFilter = "todos" | "ativos" | "convertidos" | "perdidos";
 
 export function VendasDashboard() {
+  const { canAccess } = useAuth();
+  const canSeeAnalises = canAccess('vendas_analises'); // aba Análises — pode desmarcar por funcionário
+  const canSeeFinance = canAccess('finance'); // mostra/esconde os valores R$ dentro das telas de Vendas
   const [searchParams, setSearchParams] = useSearchParams();
   const initialTab = (searchParams.get("tab") as Tab) || "kanban";
   const initialPhone = searchParams.get("phone") || "";
@@ -101,6 +105,11 @@ export function VendasDashboard() {
     }
   }, [searchParams]);
 
+  // Funcionário sem permissão de Análises não fica preso nessa aba (ex: ?tab=analises).
+  useEffect(() => {
+    if (tab === "analises" && !canSeeAnalises) setTab("kanban");
+  }, [tab, canSeeAnalises]);
+
   const activeDeals = deals.filter((d) => {
     const stage = stages.find((s) => s.id === d.stage);
     return !stage?.is_final;
@@ -110,7 +119,8 @@ export function VendasDashboard() {
     { id: "kanban" as Tab, label: "Kanban", icon: LayoutGrid },
     { id: "inbox" as Tab, label: "Conversas", icon: MessageCircle },
     { id: "historico" as Tab, label: "Histórico", icon: History },
-    { id: "analises" as Tab, label: "Análises", icon: BarChart3 },
+    // Análises pode ser desmarcada por funcionário (permissão "vendas_analises").
+    ...(canSeeAnalises ? [{ id: "analises" as Tab, label: "Análises", icon: BarChart3 }] : []),
   ];
 
   return (
@@ -208,11 +218,12 @@ export function VendasDashboard() {
                 initialFilter={historyInitialFilter}
                 onUpdate={() => fetchData({ silent: true })}
               />
-            ) : (
+            ) : tab === "analises" && canSeeAnalises ? (
               <div className="h-full overflow-y-auto p-6">
                 <AnalisesTab
                   deals={deals}
                   stages={stages}
+                  canSeeMoney={canSeeFinance}
                   onOpenHistory={() => {
                     setHistoryInitialFilter("perdidos");
                     setTab("historico");
@@ -222,7 +233,7 @@ export function VendasDashboard() {
                   }}
                 />
               </div>
-            )}
+            ) : null}
           </Suspense>
         )}
       </div>

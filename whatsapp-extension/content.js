@@ -818,6 +818,9 @@
         (s.id === firstOpenId && d.stage && !knownStageIds.has(d.stage) && !d.converted)
       ) && matches(d));
       const total = sd.reduce((t, d) => t + (d.value || 0), 0);
+      // Funcionário sem permissão "Financeiro" recebe os deals com value=null
+      // (zerado no backend) — aí escondemos o total em R$ em vez de mostrar "R$ 0".
+      const hasValues = sd.some(d => d.value != null);
       const hasLeadsWithPhone = sd.some(d => d.contact_phone);
       return `
         <div class="fpc" data-stage-id="${s.id}">
@@ -826,7 +829,7 @@
               <span class="fpc-dot" style="background:${c.dot}"></span>${esc(s.name)}
             </div>
             <div class="fpc-meta-row">
-              <span class="fpc-meta">${sd.length} lead${sd.length !== 1 ? 's' : ''} · ${brl.format(total)}</span>
+              <span class="fpc-meta">${sd.length} lead${sd.length !== 1 ? 's' : ''}${hasValues ? ` · ${brl.format(total)}` : ''}</span>
               ${hasLeadsWithPhone ? `<button class="fpc-blast" data-stage-id="${esc(s.id)}" title="Disparar follow-up em massa pra esta etapa">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
               </button>` : ''}
@@ -4969,7 +4972,7 @@
           <div class="fp-mf"><label class="fp-ml">Nome</label><input class="fp-mi" id="fp-ed-name" value="${esc(deal.contact_name || deal.title || '')}" /></div>
           <div class="fp-mf"><label class="fp-ml">Telefone</label><input class="fp-mi" id="fp-ed-phone" value="${esc(digits(deal.contact_phone || ''))}" /></div>
           <div class="fp-mf"><label class="fp-ml">Tipo de ensaio</label><div id="fp-ed-type-slot"></div></div>
-          <div class="fp-mf"><label class="fp-ml">Valor (R$)</label><input class="fp-mi" id="fp-ed-value" type="number" value="${Number(deal.value) || 0}" /></div>
+          ${deal.value != null ? `<div class="fp-mf"><label class="fp-ml">Valor (R$)</label><input class="fp-mi" id="fp-ed-value" type="number" value="${Number(deal.value) || 0}" /></div>` : ''}
           <div class="fp-mf"><label class="fp-ml">E-mail</label><input class="fp-mi" id="fp-ed-email" value="${esc(deal.contact_email || '')}" /></div>
           <div class="fp-mf"><label class="fp-ml">Origem</label><div id="fp-ed-source-slot"></div></div>
           <div class="fp-mf"><label class="fp-ml">Etapa do funil</label><div id="fp-ed-stage-slot"></div></div>
@@ -5028,7 +5031,9 @@
     const name = modal.querySelector('#fp-ed-name')?.value.trim() || deal.contact_phone || deal.title || 'Lead';
     const phone = digits(modal.querySelector('#fp-ed-phone')?.value || '');
     const shootType = (modal.querySelector('#fp-ed-type-slot')?._fpSel?.getValue() || '').trim();
-    const value = Number(modal.querySelector('#fp-ed-value')?.value) || 0;
+    // Campo de valor só existe pra quem tem permissão "Financeiro" (senão vem null
+    // do backend e o input nem é renderizado) — aí NÃO mexe no value do deal.
+    const valueEl = modal.querySelector('#fp-ed-value');
     const email = modal.querySelector('#fp-ed-email')?.value.trim() || null;
     const source = (modal.querySelector('#fp-ed-source-slot')?._fpSel?.getValue() || '').trim() || null;
     const stage = modal.querySelector('#fp-ed-stage-slot')?._fpSel?.getValue() || deal.stage;
@@ -5050,7 +5055,7 @@
       contact_phone: phone,
       contact_email: email,
       lead_source: source,
-      value,
+      ...(valueEl ? { value: Number(valueEl.value) || 0 } : {}),
       stage,
       assigned_to,
       notes: buildDealNotes(shootType, notes),

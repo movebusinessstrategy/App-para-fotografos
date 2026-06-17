@@ -6,9 +6,11 @@ interface AnalisesTabProps {
   deals: Deal[];
   stages: PipelineStage[];
   onOpenHistory?: () => void;
+  // Funcionário sem permissão "Financeiro" vê as contagens/taxas, mas não os R$.
+  canSeeMoney?: boolean;
 }
 
-export function AnalisesTab({ deals, stages, onOpenHistory }: AnalisesTabProps) {
+export function AnalisesTab({ deals, stages, onOpenHistory, canSeeMoney = true }: AnalisesTabProps) {
   const stats = useMemo(() => {
     const activeStages = stages.filter((s) => !s.is_final);
     const wonStage = stages.find((s) => s.is_final && s.is_won);
@@ -84,7 +86,7 @@ export function AnalisesTab({ deals, stages, onOpenHistory }: AnalisesTabProps) 
   }, [deals, stages]);
 
   const formatCurrency = (value: number) =>
-    `R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 0 })}`;
+    canSeeMoney ? `R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 0 })}` : "•••";
 
   const formatMonth = (month: string) => {
     const [year, m] = month.split("-");

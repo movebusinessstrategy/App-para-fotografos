@@ -1607,6 +1607,21 @@ async function startServer() {
     const { amount, amount_paid, payment_status, payment_method, ...rest } = job;
     return rest;
   }
+  // Membro SEM permissão 'finance' (e que não é dono/admin). Mesma regra do
+  // requirePermission('finance'): bloqueia só quando finance === false.
+  function memberLacksFinance(req: express.Request) {
+    return (req as any).isMember === true
+      && (req as any).isPlatformAdmin !== true
+      && (((req as any).memberPermissions || {}).finance === false);
+  }
+  // Zera o valor (R$) de um deal e dos seus itens — pra não vazar pela rede
+  // (app/extensão) a quem não tem permissão 'finance'. O funil segue visível.
+  function stripDealMoney(deal: any) {
+    const items = Array.isArray(deal.items)
+      ? deal.items.map((it: any) => ({ ...it, value: null, catalog_value: null }))
+      : deal.items;
+    return { ...deal, value: null, estimated_value: null, items };
+  }
 
   // ============ SUPER-ADMIN MIDDLEWARE ============
   // Requer requireAuth antes. Bloqueia se o REAL user (não o impersonado) não for super-admin.
@@ -6750,6 +6765,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
     }
 
+    // Permissão mudou? Invalida o cache de auth (TTL 30s) do tenant pra valer na
+    // hora — senão o backend continuaria autorizando pela permissão antiga.
+    if (permissions !== undefined) {
+      try { await invalidateAuthCacheForTenant(userId); } catch { /* best-effort */ }
+    }
+
     res.json({ success: true });
   });
 
@@ -11732,7 +11753,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
     } catch { /* não bloqueia a resposta */ }
 
-    res.json(deals);
+    // Funcionário sem 'finance' recebe o funil SEM valores (R$) — fecha o
+    // vazamento pela rede (inclui a extensão, que consome este endpoint).
+    res.json(memberLacksFinance(req) ? deals.map(stripDealMoney) : deals);
   });
 
   app.post('/api/deals', requireAuth, async (req, res) => {
@@ -11871,6 +11894,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!existing) return res.status(404).json({ error: 'Deal not found' });
 
     const updates: any = { ...req.body, updated_at: new Date().toISOString() };
+    // Funcionário sem 'finance' não enxerga o valor (vem zerado pra ele) — então
+    // NÃO deixa sobrescrever value/estimated_value, senão zeraria o real ao editar
+    // outros campos (ex: nome/telefone pela extensão).
+    if (memberLacksFinance(req)) {
+      delete updates.value;
+      delete updates.estimated_value;
+    }
     const stageChanged = updates.stage && updates.stage !== existing.stage;
 
     if (stageChanged) {

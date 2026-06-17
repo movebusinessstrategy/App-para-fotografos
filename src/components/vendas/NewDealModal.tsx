@@ -9,6 +9,7 @@ import { normalizeText } from "../../utils/normalizeText";
 import { useSellers } from "../../hooks/useSellers";
 import { SellerPicker } from "./SellerPicker";
 import { useTiposEnsaio } from "../../hooks/useTiposEnsaio";
+import { useAuth } from "../../contexts/AuthContext";
 
 const LEAD_SOURCES = ["WhatsApp", "Instagram", "Facebook", "Google", "Indicação", "Site", "Outro"];
 
@@ -50,6 +51,8 @@ const CATALOG_ICONS: Record<CatalogType, React.ReactNode> = {
 
 export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewDealModalProps) {
   const { sellers, currentMemberId } = useSellers();
+  const { canAccess } = useAuth();
+  const canSeeFinance = canAccess('finance'); // funcionário sem permissão não define valor/itens
   const tiposEnsaio = useTiposEnsaio();
   const [form, setForm] = useState({
     title: "",
@@ -286,7 +289,8 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
             />
           </div>
 
-          {/* ── Itens do catálogo ── */}
+          {/* ── Itens do catálogo (mostram preços) — só com permissão "Financeiro" ── */}
+          {canSeeFinance && (
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Itens
@@ -387,8 +391,10 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
               </div>
             )}
           </div>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
+            {canSeeFinance && (
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Valor {items.length > 0 && <span className="text-[10px] font-normal text-gray-400">(soma dos itens)</span>}
@@ -407,6 +413,7 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
                 />
               )}
             </div>
+            )}
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Previsão de Fechamento

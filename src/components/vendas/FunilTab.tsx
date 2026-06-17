@@ -17,6 +17,7 @@ import { DealCard } from "./DealCard";
 import { DealDetailDrawer } from "./DealDetailDrawer";
 import { useSellers } from "../../hooks/useSellers";
 import { SellerAvatar } from "./SellerPicker";
+import { useAuth } from "../../contexts/AuthContext";
 
 interface FunilTabProps {
   deals: Deal[];
@@ -37,6 +38,8 @@ interface BlastResult {
 // ─── FunilTab ────────────────────────────────────────────────────────────────
 
 export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
+  const { canAccess } = useAuth();
+  const canSeeFinance = canAccess('finance'); // funcionário sem permissão não vê R$ dos negócios
   const [localDeals, setLocalDeals] = useState<Deal[]>(deals);
   const [activeDeal, setActiveDeal] = useState<Deal | null>(null);
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
@@ -213,6 +216,7 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
                     onDealClick={setSelectedDeal}
                     labelMap={labelMap}
                     sellerById={sellerById}
+                    canSeeFinance={canSeeFinance}
                   />
                 </React.Fragment>
               ))}
@@ -224,9 +228,11 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
           {activeDeal && (
             <div className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 shadow-lg w-[260px] opacity-95">
               <div className="font-medium text-gray-900 dark:text-white text-sm">{activeDeal.title}</div>
-              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                R$ {(activeDeal.value || 0).toLocaleString("pt-BR")}
-              </div>
+              {canSeeFinance && (
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  R$ {(activeDeal.value || 0).toLocaleString("pt-BR")}
+                </div>
+              )}
             </div>
           )}
         </DragOverlay>
@@ -253,9 +259,10 @@ interface StageColumnProps {
   onDealClick: (deal: Deal) => void;
   labelMap: Map<string, PipelineLabel>;
   sellerById: Map<string, TeamMember>;
+  canSeeFinance: boolean;
 }
 
-function StageColumn({ stage, deals, clientMap, onDealClick, labelMap, sellerById }: StageColumnProps) {
+function StageColumn({ stage, deals, clientMap, onDealClick, labelMap, sellerById, canSeeFinance }: StageColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const totalValue = deals.reduce((sum, d) => sum + (d.value || 0), 0);
 
@@ -278,9 +285,11 @@ function StageColumn({ stage, deals, clientMap, onDealClick, labelMap, sellerByI
             {deals.length}
           </span>
         </div>
-        <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-          R$ {totalValue.toLocaleString("pt-BR")}
-        </div>
+        {canSeeFinance && (
+          <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            R$ {totalValue.toLocaleString("pt-BR")}
+          </div>
+        )}
       </div>
 
       {/* Cards */}
@@ -294,6 +303,7 @@ function StageColumn({ stage, deals, clientMap, onDealClick, labelMap, sellerByI
                 onClick={() => onDealClick(deal)}
                 labelMap={labelMap}
                 seller={deal.assigned_to ? sellerById.get(deal.assigned_to) : undefined}
+                canSeeFinance={canSeeFinance}
               />
             </React.Fragment>
           ))}

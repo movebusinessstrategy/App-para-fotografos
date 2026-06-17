@@ -7,6 +7,7 @@ import { cn } from "../../utils/cn";
 import { normalizeText } from "../../utils/normalizeText";
 import { authFetch } from "../../utils/authFetch";
 import { ConfirmModal } from "../ui/ConfirmModal";
+import { useAuth } from "../../contexts/AuthContext";
 
 type Filter = "todos" | "ativos" | "convertidos" | "perdidos";
 
@@ -35,6 +36,8 @@ function getDealStatus(deal: Deal, stages: PipelineStage[]): "convertido" | "per
 }
 
 export function HistoricoTab({ deals, stages, clients, initialFilter = "todos", onOpenDeal, onUpdate }: HistoricoTabProps) {
+  const { canAccess } = useAuth();
+  const canSeeFinance = canAccess('finance'); // funcionário sem permissão não vê a coluna Valor
   const [filter, setFilter] = useState<Filter>(initialFilter);
   const [search, setSearch] = useState("");
   const [cancelDeal, setCancelDeal] = useState<Deal | null>(null);
@@ -184,7 +187,7 @@ export function HistoricoTab({ deals, stages, clients, initialFilter = "todos", 
             <tr>
               <th className="px-5 py-3 font-semibold">Lead</th>
               <th className="px-5 py-3 font-semibold">Etapa atual</th>
-              <th className="px-5 py-3 font-semibold">Valor</th>
+              {canSeeFinance && <th className="px-5 py-3 font-semibold">Valor</th>}
               <th className="px-5 py-3 font-semibold">Status</th>
               <th className="px-5 py-3 font-semibold">Motivo da perda</th>
               <th className="px-5 py-3 font-semibold">Criado em</th>
@@ -217,9 +220,11 @@ export function HistoricoTab({ deals, stages, clients, initialFilter = "todos", 
                       </span>
                     ) : <span className="text-xs text-gray-400">-</span>}
                   </td>
-                  <td className="px-5 py-3 text-sm font-semibold text-gray-900 dark:text-white whitespace-nowrap">
-                    {formatCurrency(d.value || 0)}
-                  </td>
+                  {canSeeFinance && (
+                    <td className="px-5 py-3 text-sm font-semibold text-gray-900 dark:text-white whitespace-nowrap">
+                      {formatCurrency(d.value || 0)}
+                    </td>
+                  )}
                   <td className="px-5 py-3">
                     <StatusBadge status={status} />
                   </td>
@@ -285,7 +290,7 @@ export function HistoricoTab({ deals, stages, clients, initialFilter = "todos", 
 
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-6 py-16 text-center text-sm text-gray-400 dark:text-gray-500">
+                <td colSpan={canSeeFinance ? 8 : 7} className="px-6 py-16 text-center text-sm text-gray-400 dark:text-gray-500">
                   {search
                     ? "Nenhum negócio encontrado para esta busca."
                     : filter === "convertidos"

@@ -16,6 +16,7 @@ import { DealConversionModal } from "../pipeline/DealConversionModal";
 import { LostDealModal } from "../pipeline/LostDealModal";
 import { useSellers } from "../../hooks/useSellers";
 import { SellerPicker } from "./SellerPicker";
+import { useAuth } from "../../contexts/AuthContext";
 
 // Wrapper seguro: retorna o texto formatado, ou null se a data não for parseável.
 function safeFormat(value: string | null | undefined, pattern: string): string | null {
@@ -193,6 +194,8 @@ const LABEL_COLORS = [
 export function DealDetailDrawer({
   deal, client, clients = [], stages, onClose, onUpdate,
 }: DealDetailDrawerProps) {
+  const { canAccess } = useAuth();
+  const canSeeFinance = canAccess('finance'); // funcionário sem permissão não vê/edita valores
   const [activities, setActivities] = useState<DealActivity[]>([]);
   const [loadingActivities, setLoadingActivities] = useState(false);
   const [newActivity, setNewActivity] = useState({ type: "note", description: "" });
@@ -836,7 +839,8 @@ export function DealDetailDrawer({
             {/* ── Info principal: Valor / Previsão / Prioridade ── */}
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
 
-              {/* Valor */}
+              {/* Valor — só quem tem permissão "Financeiro" vê/edita */}
+              {canSeeFinance && (
               <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-3">
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide">Valor</label>
@@ -875,6 +879,7 @@ export function DealDetailDrawer({
                   </div>
                 )}
               </div>
+              )}
 
               {/* Previsão */}
               <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-3">
@@ -1093,7 +1098,8 @@ export function DealDetailDrawer({
                               className="w-6 h-6 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 flex items-center justify-center text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors text-sm font-bold leading-none"
                             >+</button>
                           </div>
-                          {/* Preço */}
+                          {/* Preço — só quem tem permissão "Financeiro" */}
+                          {canSeeFinance && (
                           <div className="text-right">
                             <p className="text-xs text-gray-400 dark:text-gray-500">
                               R$ {item.catalog_value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} un.
@@ -1102,17 +1108,20 @@ export function DealDetailDrawer({
                               R$ {(item.catalog_value * item.quantidade).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                             </p>
                           </div>
+                          )}
                         </div>
                       </div>
                     );
                   })}
-                  {/* Total */}
+                  {/* Total — só quem tem permissão "Financeiro" */}
+                  {canSeeFinance && (
                   <div className="flex items-center justify-between px-2.5 py-2 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
                     <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Total dos itens</span>
                     <span className="text-sm font-bold text-gray-900 dark:text-white">
                       R$ {itemsTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                     </span>
                   </div>
+                  )}
                 </div>
               )}
 
@@ -1167,9 +1176,11 @@ export function DealDetailDrawer({
                                   <span className={CATALOG_CONFIG[catalogType].color}>{CATALOG_CONFIG[catalogType].icon}</span>
                                   <span className="text-sm text-gray-800 dark:text-gray-100 truncate">{item.nome}</span>
                                 </div>
+                                {canSeeFinance && (
                                 <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 ml-2 flex-shrink-0">
                                   R$ {item.value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                                 </span>
+                                )}
                               </button>
                             ))}
                           </div>
