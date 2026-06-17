@@ -5124,7 +5124,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // GET /api/relatorios/vendas?from=YYYY-MM-DD&to=YYYY-MM-DD (ou ?mes=YYYY-MM)
   // Relatório de PRODUTOS vendidos: filtra pela data da VENDA (created_at do
   // item), com precisão de dia e "até" inclusivo. Mantém ?mes= por compat.
-  app.get('/api/relatorios/vendas', requireAuth, async (req, res) => {
+  app.get('/api/relatorios/vendas', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -5229,7 +5229,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // produtos = job_items) e a subdivisão de quais PACOTES (deal_items) foram
   // vendidos em cada categoria. "Vendido" = job criado (created_at) no período.
   // Isolamento por conta: jobs/deals filtrados por user_id; itens via .in(ids).
-  app.get('/api/relatorios/vendas-por-tipo', requireAuth, async (req, res) => {
+  app.get('/api/relatorios/vendas-por-tipo', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -5429,7 +5429,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // ENTRADA = pagamentos reais recebidos no período (job_payments) — mesma base
   // do "Entrada" do Dashboard. SAÍDA = despesas pagas (fin_despesas status='pago')
   // no período, por data_pagamento. Lucro = entrada - saída. Tudo por conta.
-  app.get('/api/relatorios/entrada-saida', requireAuth, async (req, res) => {
+  app.get('/api/relatorios/entrada-saida', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -5483,7 +5483,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // período (deals em etapa ganha, por converted_at) + comissão devida
   // (valor vendido × % do vendedor) e progresso da meta. Inclui todos os
   // membros ativos (mesmo com 0) e um balde "Sem vendedor".
-  app.get('/api/relatorios/vendas-por-vendedor', requireAuth, async (req, res) => {
+  app.get('/api/relatorios/vendas-por-vendedor', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
 
@@ -13125,7 +13125,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // ─── Relatórios ────────────────────────────────────────────────────────────
-  app.get('/api/fin/relatorios', requireAuth, async (req, res) => {
+  app.get('/api/fin/relatorios', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
     const { tipo, ano, mes_inicio, mes_fim, from, to } = req.query as Record<string, string>;
 

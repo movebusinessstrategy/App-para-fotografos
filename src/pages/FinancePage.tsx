@@ -11,6 +11,7 @@ import Conciliacao from '../components/financeiro/Conciliacao';
 import DRE from '../components/financeiro/DRE';
 import Relatorios from '../components/financeiro/Relatorios';
 import Configuracoes from '../components/financeiro/Configuracoes';
+import { useAuth } from '../contexts/AuthContext';
 
 type TabKey = 'visao' | 'receber' | 'pagar' | 'conciliacao' | 'dre' | 'relatorios' | 'config';
 
@@ -32,13 +33,16 @@ const TABS: Tab[] = [
 
 export default function FinancePage() {
   const [tab, setTab] = useState<TabKey>('visao');
+  const { isMember } = useAuth();
+  // Relatórios (vendas/produtos) expõem valores agregados — só o DONO vê.
+  const visibleTabs = TABS.filter(t => !isMember || t.key !== 'relatorios');
 
   return (
     <div className="flex flex-col h-full">
       {/* Tab bar */}
       <div className="border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-4 md:px-6 overflow-x-auto">
         <nav className="flex gap-0 min-w-max">
-          {TABS.map(t => {
+          {visibleTabs.map(t => {
             const Icon = t.icon;
             const active = tab === t.key;
             return (
@@ -66,7 +70,7 @@ export default function FinancePage() {
         {tab === 'pagar'       && <ContasPagar />}
         {tab === 'conciliacao' && <Conciliacao />}
         {tab === 'dre'         && <DRE />}
-        {tab === 'relatorios'  && <Relatorios />}
+        {tab === 'relatorios'  && !isMember && <Relatorios />}
         {tab === 'config'      && <Configuracoes />}
       </div>
     </div>

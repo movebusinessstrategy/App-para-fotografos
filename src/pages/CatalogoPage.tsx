@@ -13,6 +13,7 @@ import {
 import { SearchableSelect } from "../components/ui/SearchableSelect";
 import { EstoqueTab } from "../components/catalogo/EstoqueTab";
 import { RelatorioVendas } from "../components/catalogo/RelatorioVendas";
+import { useAuth } from "../contexts/AuthContext";
 
 // ═══════════════════════════════════════════════════════════
 // HELPERS
@@ -951,6 +952,7 @@ function ErrorModal({ message, onClose }: { message: string; onClose: () => void
 // ═══════════════════════════════════════════════════════════
 export default function CatalogoPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { isMember } = useAuth();
   const aba = (searchParams.get("aba") as Aba) ?? "produtos";
   const subP = (searchParams.get("sub") as SubProdutos) ?? "produtos";
   const subS = (searchParams.get("subS") as SubServicos) ?? "servicos";
@@ -1144,7 +1146,12 @@ export default function CatalogoPage() {
           {aba === "produtos" && (
             <div>
               <SubTabBar
-                tabs={[{ id: "produtos", label: "Produtos" }, { id: "categorias", label: "Categorias" }, { id: "fornecedores", label: "Fornecedores" }, { id: "estoque", label: "Estoque" }, { id: "relatorio", label: "Relatório" }]}
+                tabs={[
+                  { id: "produtos", label: "Produtos" }, { id: "categorias", label: "Categorias" },
+                  { id: "fornecedores", label: "Fornecedores" }, { id: "estoque", label: "Estoque" },
+                  // Relatório (mostra valores de venda) — só o DONO vê.
+                  ...(isMember ? [] : [{ id: "relatorio", label: "Relatório" }]),
+                ]}
                 active={subP}
                 onChange={(s) => setSubP(s as SubProdutos)}
               />
@@ -1154,8 +1161,8 @@ export default function CatalogoPage() {
                 <EstoqueTab produtos={produtos} onChanged={() => load(true)} />
               )}
 
-              {/* Sub: Relatório */}
-              {subP === "relatorio" && <RelatorioVendas />}
+              {/* Sub: Relatório (só dono) */}
+              {subP === "relatorio" && !isMember && <RelatorioVendas />}
 
               {/* Sub: Produtos */}
               {subP === "produtos" && (
