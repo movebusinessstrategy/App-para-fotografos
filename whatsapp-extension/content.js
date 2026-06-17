@@ -1419,8 +1419,9 @@
     document.getElementById('fp-kpi-lost').textContent = lost;
     document.getElementById('fp-kpi-conv').textContent = closed > 0 ? `${conv}%` : '—';
 
-    // Estado visual dos chips
-    document.querySelectorAll('.fp-kpi-chip').forEach((b) => {
+    // Estado visual dos chips de PERÍODO (escopo no #fp-kpi-period pra não mexer
+    // nos chips de responsável, que têm seu próprio destaque em renderAssigneeFilter).
+    document.querySelectorAll('#fp-kpi-period .fp-kpi-chip').forEach((b) => {
       b.classList.toggle('fp-kpi-chip-active', b.getAttribute('data-period') === kanbanPeriod);
     });
 

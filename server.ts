@@ -6624,25 +6624,34 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const supabase = (req as any).supabase as SupabaseClient;
     const { name, email, color, permissions, password, meta_venda, comissao_percentual } = req.body;
 
-    // Atualiza dados do membro (meta/comissão só se vierem no body)
-    const upd: any = { name: name?.trim(), email: email?.trim() || null, color, permissions };
+    // Atualiza dados do membro. name/email/color/permissions só entram se vierem
+    // (evita zerar o nome quando o caller manda update parcial); meta/comissão idem.
+    const upd: any = {};
+    if (typeof name === 'string' && name.trim()) upd.name = name.trim();
+    if (email !== undefined) upd.email = email?.trim() || null;
+    if (color !== undefined) upd.color = color;
+    if (permissions !== undefined) upd.permissions = permissions;
     if (meta_venda !== undefined) upd.meta_venda = Math.max(0, Number(meta_venda) || 0);
     if (comissao_percentual !== undefined) upd.comissao_percentual = Math.min(100, Math.max(0, Number(comissao_percentual) || 0));
-    const { error } = await supabase
-      .from('team_members')
-      .update(upd)
-      .eq('id', req.params.id)
-      .eq('owner_user_id', userId);
-    if (error) return res.status(500).json({ error: error.message });
+    if (Object.keys(upd).length) {
+      const { error } = await supabase
+        .from('team_members')
+        .update(upd)
+        .eq('id', req.params.id)
+        .eq('owner_user_id', userId);
+      if (error) return res.status(500).json({ error: error.message });
+    }
 
     // Se veio nova senha, atualiza no Supabase Auth
     if (password && supabaseAdmin) {
-      // Busca o member_user_id vinculado
-      const { data: member } = await supabaseAdmin
-        .from('team_members')
-        .select('member_user_id, email')
-        .eq('id', req.params.id)
-        .single();
+      const isPlatformAdmin = (req as any).isPlatformAdmin === true;
+      // Isolamento: dono só mexe nos PRÓPRIOS membros (platform admin gerencia
+      // todos). Sem isso, um dono poderia vincular/redefinir acesso de membro
+      // de outro estúdio passando o id alheio.
+      const ownerScoped = (q: any) => (isPlatformAdmin ? q : q.eq('owner_user_id', userId));
+      const { data: member } = await ownerScoped(
+        supabaseAdmin.from('team_members').select('member_user_id, email').eq('id', req.params.id)
+      ).single();
 
       if (member?.member_user_id) {
         // Já tem usuário vinculado — apenas atualiza a senha
@@ -6662,10 +6671,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           const found = (existing?.users ?? []).find((u: any) => u.email === memberEmail);
           if (found) {
             await supabaseAdmin.auth.admin.updateUserById(found.id, { password });
-            await supabaseAdmin.from('team_members').update({ member_user_id: found.id }).eq('id', req.params.id);
+            await ownerScoped(supabaseAdmin.from('team_members').update({ member_user_id: found.id }).eq('id', req.params.id));
           }
         } else if (authUser?.user) {
-          await supabaseAdmin.from('team_members').update({ member_user_id: authUser.user.id }).eq('id', req.params.id);
+          await ownerScoped(supabaseAdmin.from('team_members').update({ member_user_id: authUser.user.id }).eq('id', req.params.id));
         }
       }
     }
@@ -11776,7 +11785,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const { data: existing } = await supabase
       .from('deals')
-      .select('id, stage, stage_entered_at, stage_history, current_stage_entered_at, contact_phone, contact_name, title')
+      .select('id, stage, stage_entered_at, stage_history, current_stage_entered_at, contact_phone, contact_name, title, converted_at')
       .eq('id', dealId)
       .eq('user_id', userId)
       .single();
@@ -11788,11 +11797,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     if (stageChanged) {
       const stages = await ensurePipelineStages(supabase, userId);
-      const stageName = stages.find((s) => s.id === updates.stage)?.name || updates.stage;
+      const newStage = stages.find((s) => s.id === updates.stage);
+      const stageName = newStage?.name || updates.stage;
       const nowIso = new Date().toISOString();
       updates.stage_entered_at = nowIso;
       updates.current_stage_entered_at = nowIso;
       updates.stage_history = appendStageHistory(existing.stage_history, updates.stage, stageName, nowIso);
+      // Ganho por ARRASTO (sem passar pela conversão): grava a data da venda
+      // pra aparecer no relatório de vendas por vendedor. Respeita converted_at
+      // que já venha no body ou que já exista.
+      if (newStage?.is_won && !(existing as any).converted_at && updates.converted_at === undefined) {
+        updates.converted_at = nowIso;
+      }
       await recordStageEvent(
         supabase, userId, dealId,
         existing.stage, updates.stage,
