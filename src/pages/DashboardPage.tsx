@@ -294,14 +294,14 @@ export default function DashboardPage() {
             <Card>
               <CardHeader icon={<Check size={16} />} title="Sinal recebido" />
               <CardValue value={formatBRL(a.finance.sinalRecebidoOpen, hideValues)} />
-              <CardHint>Já pago em ensaios em aberto</CardHint>
+              <CardHint>Já pago em ensaios em produção</CardHint>
             </Card>
 
             <Card>
               <CardHeader icon={<TrendingUp size={16} />} title="A receber" />
               <CardValue value={formatBRL(a.finance.toReceiveOpen, hideValues)} />
               <CardHint>
-                Saldo de {a.finance.openJobsCount} ensaio{a.finance.openJobsCount === 1 ? '' : 's'} em aberto
+                Saldo de {a.finance.openJobsCount} ensaio{a.finance.openJobsCount === 1 ? '' : 's'} em produção
               </CardHint>
             </Card>
 

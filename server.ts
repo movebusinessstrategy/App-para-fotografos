@@ -17904,12 +17904,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           return acc + Math.max(total - paid, 0);
         }, 0);
 
-      // "Ensaios em aberto" = têm saldo a receber (valor - pago > 0) e não foram
-      // cancelados. Inclui TUDO em aberto — futuros E em atraso — sem corte de
-      // data (≠ futureRevenue, que limita aos próximos meses). Separa o sinal já
-      // recebido desses ensaios do que ainda falta receber.
+      // "Ensaios em aberto a receber" = estão EM PRODUÇÃO (têm production_stage),
+      // não cancelados e com saldo a receber (valor - pago > 0). O filtro de
+      // produção é essencial: sem ele, centenas de ensaios ANTIGOS já entregues
+      // (cujo pagamento nunca foi lançado em job_payments) entravam com saldo
+      // "fantasma" e inflavam o "A receber" (ex.: R$596k → R$22k real).
       const openJobs = jobs.filter((j: any) => {
         if (j.status === 'cancelled') return false;
+        if (!j.production_stage) return false; // só conta o que está EM PRODUÇÃO
         const saldo = (Number(j.amount) || 0) - (amountPaidByJob.get(j.id) || 0);
         return saldo > 0.005;
       });
