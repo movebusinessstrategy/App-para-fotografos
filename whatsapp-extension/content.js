@@ -58,6 +58,8 @@
   // Pra 'custom', usa kanbanCustomRange = { from, to }
   let kanbanPeriod = 'all';
   let kanbanCustomRange = null;
+  // Filtro de responsável do Pipeline: '' (todos) | id do membro | 'none' (sem ninguém)
+  let kanbanAssignee = '';
 
   const LEAD_SOURCE_OPTIONS = ['WhatsApp', 'Anúncio', 'Indicação', 'Instagram', 'Facebook', 'Google', 'Site', 'Cliente antigo', 'Outro'];
 
@@ -448,6 +450,7 @@
           <button class="fp-kpi-chip fp-kpi-chip-custom" data-period="custom">📅 Personalizado</button>
           <span id="fp-kpi-range-label"></span>
         </div>
+        <div id="fp-kpi-assignee" style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:4px"></div>
         <div id="fp-kpi-stats">
           <div class="fp-kpi-stat" title="Total de leads no período">
             <span class="fp-kpi-num" id="fp-kpi-total">—</span>
@@ -774,6 +777,7 @@
     const prevScrollLeft = b.scrollLeft;
     const prevScrollTop = b.scrollTop;
     renderKpi();
+    renderAssigneeFilter();
     const all = orderedStages(stages);
     if (!all.length) { showBoardState('<p>Nenhuma etapa encontrada.</p>'); return; }
 
@@ -1321,10 +1325,39 @@
     return false;
   }
 
+  // Filtro de responsável: '' = todos; 'none' = sem ninguém; senão = id do membro.
+  function matchesAssignee(d) {
+    if (!kanbanAssignee) return true;
+    if (kanbanAssignee === 'none') return !d.assigned_to;
+    return d.assigned_to === kanbanAssignee;
+  }
+
   function matches(d) {
-    if (!q) return matchesPeriod(d);
+    if (!matchesPeriod(d) || !matchesAssignee(d)) return false;
+    if (!q) return true;
     const txt = `${d.contact_name || d.title || ''} ${d.contact_phone || ''} ${getDealShootType(d)}`.toLowerCase();
-    return txt.includes(q) && matchesPeriod(d);
+    return txt.includes(q);
+  }
+
+  // Monta os chips de filtro por responsável (Todos / cada vendedor / Sem ninguém),
+  // mutuamente exclusivos. Reaproveita o estilo dos chips de período.
+  function renderAssigneeFilter() {
+    const el = document.getElementById('fp-kpi-assignee');
+    if (!el) return;
+    if (!teamMembers.length) { el.innerHTML = ''; return; }
+    const chip = (val, label) =>
+      `<button class="fp-kpi-chip${kanbanAssignee === val ? ' fp-kpi-chip-active' : ''}" data-assignee="${esc(val)}">${esc(label)}</button>`;
+    el.innerHTML =
+      `<span class="fp-kpi-period-label">Responsável:</span>` +
+      chip('', 'Todos') +
+      teamMembers.map((m) => chip(m.id, m.name)).join('') +
+      chip('none', 'Sem ninguém');
+    el.querySelectorAll('.fp-kpi-chip').forEach((b) => {
+      b.addEventListener('click', () => {
+        kanbanAssignee = b.getAttribute('data-assignee') || '';
+        renderBoard();
+      });
+    });
   }
 
   // Retorna {from, to} (Date objects) do filtro atual; null se 'all'
@@ -1367,8 +1400,8 @@
     const totalEl = document.getElementById('fp-kpi-total');
     if (!totalEl) return;
 
-    // Aplica só o filtro de período (não a busca) — KPI mostra o panorama do período
-    const inPeriod = deals.filter((d) => matchesPeriod(d));
+    // Aplica período + responsável (não a busca) — KPI reflete o filtro ativo
+    const inPeriod = deals.filter((d) => matchesPeriod(d) && matchesAssignee(d));
     const stageById = new Map(stages.map((s) => [s.id, s]));
     const isWonStage = (s) => s && s.is_final && s.is_won;
     const isLostStage = (s) => s && s.is_final && !s.is_won;
@@ -4839,10 +4872,10 @@
         <div class="fp-deal-edit-body">
           <div class="fp-mf"><label class="fp-ml">Nome</label><input class="fp-mi" id="fp-ed-name" value="${esc(deal.contact_name || deal.title || '')}" /></div>
           <div class="fp-mf"><label class="fp-ml">Telefone</label><input class="fp-mi" id="fp-ed-phone" value="${esc(digits(deal.contact_phone || ''))}" /></div>
-          <div class="fp-mf"><label class="fp-ml">Tipo de ensaio</label><input class="fp-mi" id="fp-ed-type" value="${esc(shootType)}" placeholder="Ex: Gestante, newborn, família..." /></div>
+          <div class="fp-mf"><label class="fp-ml">Tipo de ensaio</label><div id="fp-ed-type-slot"></div></div>
           <div class="fp-mf"><label class="fp-ml">Valor (R$)</label><input class="fp-mi" id="fp-ed-value" type="number" value="${Number(deal.value) || 0}" /></div>
           <div class="fp-mf"><label class="fp-ml">E-mail</label><input class="fp-mi" id="fp-ed-email" value="${esc(deal.contact_email || '')}" /></div>
-          <div class="fp-mf"><label class="fp-ml">Origem</label><input class="fp-mi" id="fp-ed-source" value="${esc(deal.lead_source || '')}" placeholder="WhatsApp, Instagram..." /></div>
+          <div class="fp-mf"><label class="fp-ml">Origem</label><div id="fp-ed-source-slot"></div></div>
           <div class="fp-mf"><label class="fp-ml">Etapa do funil</label><div id="fp-ed-stage-slot"></div></div>
           <div class="fp-mf"><label class="fp-ml">Vendedor responsável</label><div id="fp-ed-assign-slot"></div></div>
           <div class="fp-mf"><label class="fp-ml">Observações</label><textarea class="fp-mi fp-edit-notes" id="fp-ed-notes" placeholder="Detalhes do atendimento, pacote, data provável...">${esc(notes)}</textarea></div>
@@ -4866,6 +4899,24 @@
     stageSlot.appendChild(stageSel.element);
     stageSlot._fpSel = stageSel;
 
+    // Tipo de ensaio e Origem como DROPDOWN (igual ao "Novo Lead"), não mais
+    // texto livre. Inclui o valor atual na lista se for legado fora do padrão.
+    const typeBase = getTiposEnsaio();
+    const typeItems = [{ value: '', label: 'Selecione (opcional)' }]
+      .concat(((shootType && !typeBase.includes(shootType)) ? [shootType, ...typeBase] : typeBase).map((t) => ({ value: t, label: t })));
+    const typeSlot = modal.querySelector('#fp-ed-type-slot');
+    const typeSel = fpSelect({ items: typeItems, value: shootType || '', placeholder: 'Selecione (opcional)', searchable: typeBase.length > 6 });
+    typeSlot.appendChild(typeSel.element);
+    typeSlot._fpSel = typeSel;
+
+    const curSource = deal.lead_source || '';
+    const sourceItems = [{ value: '', label: 'Sem origem definida' }]
+      .concat(((curSource && !LEAD_SOURCE_OPTIONS.includes(curSource)) ? [curSource, ...LEAD_SOURCE_OPTIONS] : LEAD_SOURCE_OPTIONS).map((s) => ({ value: s, label: s })));
+    const sourceSlot = modal.querySelector('#fp-ed-source-slot');
+    const sourceSel = fpSelect({ items: sourceItems, value: curSource, placeholder: 'Escolher origem', searchable: false });
+    sourceSlot.appendChild(sourceSel.element);
+    sourceSlot._fpSel = sourceSel;
+
     // Popula o select de vendedor (current value e lista) + re-popula após fetch
     populateAssigneeSelect('fp-ed-assign', deal.assigned_to);
     loadTeamAndMe().then(() => populateAssigneeSelect('fp-ed-assign', deal.assigned_to));
@@ -4880,10 +4931,10 @@
   async function saveDealEdit(deal, modal) {
     const name = modal.querySelector('#fp-ed-name')?.value.trim() || deal.contact_phone || deal.title || 'Lead';
     const phone = digits(modal.querySelector('#fp-ed-phone')?.value || '');
-    const shootType = modal.querySelector('#fp-ed-type')?.value.trim() || '';
+    const shootType = (modal.querySelector('#fp-ed-type-slot')?._fpSel?.getValue() || '').trim();
     const value = Number(modal.querySelector('#fp-ed-value')?.value) || 0;
     const email = modal.querySelector('#fp-ed-email')?.value.trim() || null;
-    const source = modal.querySelector('#fp-ed-source')?.value.trim() || null;
+    const source = (modal.querySelector('#fp-ed-source-slot')?._fpSel?.getValue() || '').trim() || null;
     const stage = modal.querySelector('#fp-ed-stage-slot')?._fpSel?.getValue() || deal.stage;
     const assigned_to = modal.querySelector('#fp-ed-assign-slot')?._fpSel?.getValue() || null;
     const notes = modal.querySelector('#fp-ed-notes')?.value.trim() || '';
