@@ -150,12 +150,24 @@ export function TaskTemplatesManager({
   const [seeding, setSeeding] = useState(false);
   const [selected, setSelected] = useState<TaskTemplate | null>(null);
   const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Lê a mensagem de erro do backend (ou monta uma genérica com o status).
+  const errFromRes = async (res: Response, fallback: string) => {
+    const j = await res.json().catch(() => ({} as any));
+    return j?.error || `${fallback} (erro ${res.status})`;
+  };
 
   const loadList = async () => {
-    const res = await authFetch("/api/task-templates");
-    const data = res.ok ? await res.json() : { templates: [] };
-    setList(data.templates || []);
-    setLoading(false);
+    try {
+      const res = await authFetch("/api/task-templates");
+      const data = res.ok ? await res.json() : { templates: [] };
+      setList(data.templates || []);
+    } catch (e: any) {
+      setErr(e?.message || "Erro de conexão ao carregar os padrões.");
+    } finally {
+      setLoading(false);
+    }
   };
   useEffect(() => { loadList(); }, []);
 
@@ -165,18 +177,28 @@ export function TaskTemplatesManager({
   };
 
   const createBlank = async () => {
-    const res = await authFetch("/api/task-templates", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "Novo padrão", blocks: [{ title: "Etapa 1", items: [{ title: "" }] }] }),
-    });
-    if (res.ok) { const t = await res.json(); await loadList(); openTemplate(t.id); }
+    setErr(null);
+    try {
+      const res = await authFetch("/api/task-templates", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Novo padrão", blocks: [{ title: "Etapa 1", items: [{ title: "" }] }] }),
+      });
+      if (!res.ok) { setErr(await errFromRes(res, "Não foi possível criar o padrão")); return; }
+      const t = await res.json(); await loadList(); openTemplate(t.id);
+    } catch (e: any) {
+      setErr(e?.message || "Erro de conexão ao criar o padrão.");
+    }
   };
 
   const seedExample = async () => {
     setSeeding(true);
+    setErr(null);
     try {
       const res = await authFetch("/api/task-templates/seed-default", { method: "POST" });
-      if (res.ok) { const t = await res.json(); await loadList(); openTemplate(t.id); }
+      if (!res.ok) { setErr(await errFromRes(res, "Não foi possível criar o exemplo")); return; }
+      const t = await res.json(); await loadList(); openTemplate(t.id);
+    } catch (e: any) {
+      setErr(e?.message || "Erro de conexão ao criar o exemplo.");
     } finally { setSeeding(false); }
   };
 
@@ -233,6 +255,9 @@ export function TaskTemplatesManager({
             <button onClick={seedExample} disabled={seeding} className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 text-xs font-semibold hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-60">
               {seeding ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />} Criar exemplo (Ensaio Padrão)
             </button>
+            {err && (
+              <p className="text-[11px] text-red-600 dark:text-red-400 leading-snug px-1 pt-1">{err}</p>
+            )}
           </div>
         </div>
 
