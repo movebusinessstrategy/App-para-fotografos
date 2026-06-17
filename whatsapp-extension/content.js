@@ -4722,13 +4722,35 @@
   async function onChatOpened(phone) {
     const cleanPhone = digits(phone || '');
     const chatName = getWAChatName();
-    const nextKey = cleanPhone ? `phone:${cleanPhone}` : (chatName ? `name:${chatName}` : '');
-    if (!nextKey || nextKey === chatKey) return;
+    // A chave inclui o NOME do header (atualiza rápido e é a identidade VISÍVEL da
+    // conversa) + telefone. Assim, trocar de conversa SEMPRE re-detecta. Antes a
+    // chave era só o telefone; se ele fosse lido "atrasado" (mensagens da conversa
+    // anterior ainda na tela = telefone antigo), a chave não mudava e o strip
+    // ficava preso na pessoa errada até dar refresh.
+    const nextKey = `${chatName || ''}|${cleanPhone || ''}`;
+    if ((!chatName && !cleanPhone) || nextKey === chatKey) return;
 
     chatKey = nextKey;
     chatPhone = cleanPhone || null;
     chatDeal = null;
     rememberContactPhoto(cleanPhone, getWAChatPhoto());
+
+    // Só exibe/usa um deal cujo NOME bate com o header visível. Protege contra o
+    // telefone "atrasado": se o telefone resolveu pra um deal de OUTRA pessoa
+    // (conversa anterior), o nome não bate → não mostra (espera as mensagens
+    // novas carregarem e o próximo detectState corrigir).
+    const headerNm = normalizeNameForMatch(chatName || '');
+    // "Mesma pessoa?" — tolerante: nome contém o outro OU compartilham ao menos um
+    // token (nome/sobrenome com 3+ letras). Só reprova quando são nomes CLARAMENTE
+    // diferentes (sinal de telefone atrasado apontando pra outra conversa).
+    const nameMatchesHeader = (d) => {
+      if (!headerNm) return true;
+      const dn = normalizeNameForMatch(d?.contact_name || d?.title || '');
+      if (!dn || headerNm.includes(dn) || dn.includes(headerNm)) return true;
+      const toks = (s) => s.split(' ').filter((w) => w.length >= 3);
+      const a = toks(headerNm), b = new Set(toks(dn));
+      return a.some((w) => b.has(w));
+    };
 
     if (!cleanPhone) {
       if (!chatStages.length && !stages.length) {
@@ -4751,7 +4773,7 @@
             return dd && pd && dd === pd;
           })
         : null;
-      if (cachedDeal) {
+      if (cachedDeal && nameMatchesHeader(cachedDeal)) {
         chatDeal = cachedDeal;
         chatStages = stgsNow;
         injectChatStrip(chatDeal, chatStages);
@@ -4769,6 +4791,11 @@
       if (result.deal && returnedDealPhone && returnedDealPhone !== pd) {
         console.warn('[fp-extension] deal-by-phone retornou phone diferente:',
           { expected: pd, got: returnedDealPhone });
+        chatDeal = null;
+      } else if (result.deal && !nameMatchesHeader(result.deal)) {
+        // Telefone "atrasado": resolveu pra um deal cujo nome não bate com o
+        // header visível → não usa (o próximo detectState pega a pessoa certa).
+        console.warn('[fp-extension] deal-by-phone com nome diferente do header — ignorado');
         chatDeal = null;
       } else {
         chatDeal = result.deal;
