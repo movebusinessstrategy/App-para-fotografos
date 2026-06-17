@@ -5077,19 +5077,34 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ created: novas.length });
   });
 
-  // GET /api/relatorios/vendas?mes=YYYY-MM — relatório mensal de vendas
+  // GET /api/relatorios/vendas?from=YYYY-MM-DD&to=YYYY-MM-DD (ou ?mes=YYYY-MM)
+  // Relatório de PRODUTOS vendidos: filtra pela data da VENDA (created_at do
+  // item), com precisão de dia e "até" inclusivo. Mantém ?mes= por compat.
   app.get('/api/relatorios/vendas', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
 
-    const mesParam = String(req.query.mes || '');
     const now = new Date();
-    const mm = mesParam.match(/^(\d{4})-(\d{2})$/);
-    const ano = mm ? Number(mm[1]) : now.getFullYear();
-    const mes = mm ? Number(mm[2]) : now.getMonth() + 1;
-    const inicio = new Date(Date.UTC(ano, mes - 1, 1)).toISOString();
-    const fim = new Date(Date.UTC(ano, mes, 1)).toISOString();
+    const fromQ = String(req.query.from || '').trim();
+    const toQ = String(req.query.to || '').trim();
+    let inicio: string, fim: string, labelFrom: string, labelTo: string;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(fromQ) && /^\d{4}-\d{2}-\d{2}$/.test(toQ)) {
+      labelFrom = fromQ <= toQ ? fromQ : toQ;
+      labelTo = fromQ <= toQ ? toQ : fromQ;
+      const next = new Date(`${labelTo}T12:00:00Z`); // meio-dia evita borda de fuso
+      next.setUTCDate(next.getUTCDate() + 1);          // fim exclusivo = dia seguinte
+      inicio = new Date(`${labelFrom}T00:00:00-03:00`).toISOString();
+      fim = new Date(`${next.toISOString().slice(0, 10)}T00:00:00-03:00`).toISOString();
+    } else {
+      const mm = String(req.query.mes || '').match(/^(\d{4})-(\d{2})$/);
+      const ano = mm ? Number(mm[1]) : now.getFullYear();
+      const mes = mm ? Number(mm[2]) : now.getMonth() + 1;
+      inicio = new Date(Date.UTC(ano, mes - 1, 1)).toISOString();
+      fim = new Date(Date.UTC(ano, mes, 1)).toISOString();
+      labelFrom = inicio.slice(0, 10);
+      labelTo = new Date(Date.UTC(ano, mes, 0)).toISOString().slice(0, 10); // último dia do mês
+    }
 
     // Resumo: trabalhos criados (vendidos) no mês
     const { data: jobsMes } = await supabase
@@ -5155,7 +5170,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       compras[st].custo += custo;
     }
 
-    res.json({ periodo: { ano, mes }, resumo: { totalVendido, numTrabalhos, ticketMedio }, produtos, compras });
+    res.json({ periodo: { from: labelFrom, to: labelTo }, resumo: { totalVendido, numTrabalhos, ticketMedio }, produtos, compras });
   });
 
   // GET /api/relatorios/vendas-por-tipo?ano=&mes_inicio=&mes_fim=
@@ -5192,13 +5207,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Ensaios (jobs) REALIZADOS no período (por job_date, "até" inclusivo)
     const { data: jobsData } = await supabase
       .from('jobs')
-      .select('id, job_type, amount, job_date')
+      .select('id, job_type, amount, job_date, client_id, clients(name)')
       .eq('user_id', userId)
       .gte('job_date', dInicio)
       .lte('job_date', dFimIncl);
     const jobs = jobsData || [];
     const jobIds = jobs.map((j: any) => j.id);
     const tipoByJob = new Map<number, string>(jobs.map((j: any) => [j.id, j.job_type || 'Sem tipo']));
+    const clienteByJob = new Map<number, string>(
+      jobs.map((j: any) => [j.id, ((j.clients as any)?.name) || 'Cliente']));
 
     // Extras (job_items) desses jobs
     const itemsRaw = jobIds.length
@@ -5219,70 +5236,132 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           .in('deal_id', dealIds)).data || []
       : [];
 
+    // PRODUTO (foto avulsa, álbum, produtos) NÃO entra no faturamento — vira
+    // observação por pessoa (o que ela comprou a mais). Combo/serviço continuam
+    // como ensaio. Aqui separamos, por job, os produtos do resto.
+    const isProduto = (t: any) => String(t || '').toLowerCase() === 'produto';
+    type ProdLinha = { nome: string; tipo: string; qtd: number; valor: number };
+    const produtosByJob = new Map<number, ProdLinha[]>();
+    const produtoSumByJob = new Map<number, number>();
+    const servExtraSumByJob = new Map<number, number>(); // extras NÃO-produto (faturamento)
+    const pacoteLinesByJob = new Map<number, Array<{ nome: string; qtd: number; valor: number }>>();
+    const pacoteSumByJob = new Map<number, number>();
+    const pushProduto = (jobId: number, p: ProdLinha) => {
+      if (!produtosByJob.has(jobId)) produtosByJob.set(jobId, []);
+      produtosByJob.get(jobId)!.push(p);
+      produtoSumByJob.set(jobId, (produtoSumByJob.get(jobId) || 0) + p.valor);
+    };
+
+    // job_items: produto → bucket de produtos; resto → extra de serviço (faturamento)
+    for (const it of itemsRaw as any[]) {
+      if (!tipoByJob.has(it.job_id)) continue;
+      const qtd = Number(it.quantidade) || 1;
+      const valor = Math.max(0, (Number(it.catalog_value) || 0) * qtd - (Number(it.discount_value) || 0));
+      if (isProduto(it.catalog_type)) {
+        pushProduto(it.job_id, { nome: it.catalog_name || 'Produto', tipo: it.catalog_type || 'produto', qtd, valor });
+      } else {
+        servExtraSumByJob.set(it.job_id, (servExtraSumByJob.get(it.job_id) || 0) + valor);
+      }
+    }
+
+    // deal_items: produto → bucket de produtos; resto → pacote (faturamento)
+    for (const di of dealItemsRaw as any[]) {
+      const jobId = jobByDeal.get(di.deal_id);
+      if (jobId == null || !tipoByJob.has(jobId)) continue;
+      const qtd = Number(di.quantidade) || 1;
+      const valor = (Number(di.catalog_value) || 0) * qtd;
+      if (isProduto(di.catalog_type)) {
+        pushProduto(jobId, { nome: di.catalog_name || 'Produto', tipo: di.catalog_type || 'produto', qtd, valor });
+      } else {
+        if (!pacoteLinesByJob.has(jobId)) pacoteLinesByJob.set(jobId, []);
+        pacoteLinesByJob.get(jobId)!.push({ nome: di.catalog_name || 'Pacote', qtd, valor });
+        pacoteSumByJob.set(jobId, (pacoteSumByJob.get(jobId) || 0) + valor);
+      }
+    }
+
     // Agrupa tipos de ensaio ignorando acento/maiúscula ("Aniversário" e
     // "Aniversario" caem na mesma categoria). O nome exibido é a variante mais
     // frequente entre os jobs daquele grupo.
     const normTipo = (s: any): string =>
       String(s || 'Sem tipo').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase() || 'sem tipo';
-    type Cat = { tipo: string; labelCount: Map<string, number>; numEnsaios: number; valorEnsaios: number; valorExtras: number; pacotes: Map<string, any>; extras: Map<string, any> };
+    type Cliente = { nome: string; data: string; valor: number; produtos: ProdLinha[]; totalProdutos: number };
+    type CatPacote = { nome: string; quantidade: number; valor: number; clientes: Cliente[] };
+    type Cat = {
+      tipo: string; labelCount: Map<string, number>; numEnsaios: number;
+      valorEnsaios: number; valorExtras: number; valorProdutos: number;
+      pacotes: Map<string, CatPacote>; produtos: Map<string, ProdLinha & { quantidade: number }>;
+    };
+    const AVULSO = '— Avulso (sem pacote) —';
     const cats = new Map<string, Cat>();
     const getCat = (tipo: string): Cat => {
       const k = normTipo(tipo);
-      if (!cats.has(k)) cats.set(k, { tipo: tipo || 'Sem tipo', labelCount: new Map(), numEnsaios: 0, valorEnsaios: 0, valorExtras: 0, pacotes: new Map(), extras: new Map() });
+      if (!cats.has(k)) cats.set(k, { tipo: tipo || 'Sem tipo', labelCount: new Map(), numEnsaios: 0, valorEnsaios: 0, valorExtras: 0, valorProdutos: 0, pacotes: new Map(), produtos: new Map() });
       return cats.get(k)!;
     };
 
-    // Extras por job (pra somar e pra fallback do valor do ensaio)
-    const extrasSumByJob = new Map<number, number>();
-    for (const it of itemsRaw as any[]) {
-      const tipo = tipoByJob.get(it.job_id);
-      if (tipo === undefined) continue;
-      const qtd = Number(it.quantidade) || 1;
-      const valor = Math.max(0, (Number(it.catalog_value) || 0) * qtd - (Number(it.discount_value) || 0));
-      extrasSumByJob.set(it.job_id, (extrasSumByJob.get(it.job_id) || 0) + valor);
-      const cat = getCat(tipo);
-      cat.valorExtras += valor;
-      const key = it.catalog_name || 'Item';
-      const e = cat.extras.get(key) || { nome: key, tipo: it.catalog_type || 'produto', quantidade: 0, valor: 0 };
-      e.quantidade += qtd; e.valor += valor; cat.extras.set(key, e);
-    }
-
-    // Pacotes (deal_items) por job → tipo
-    const pkgSumByJob = new Map<number, number>();
-    for (const di of dealItemsRaw as any[]) {
-      const jobId = jobByDeal.get(di.deal_id);
-      if (jobId == null) continue;
-      const tipo = tipoByJob.get(jobId);
-      if (tipo === undefined) continue;
-      const qtd = Number(di.quantidade) || 1;
-      const valor = (Number(di.catalog_value) || 0) * qtd;
-      pkgSumByJob.set(jobId, (pkgSumByJob.get(jobId) || 0) + valor);
-      const cat = getCat(tipo);
-      const key = di.catalog_name || 'Pacote';
-      const p = cat.pacotes.get(key) || { nome: key, quantidade: 0, valor: 0 };
-      p.quantidade += qtd; p.valor += valor; cat.pacotes.set(key, p);
-    }
-
-    // Conta ensaios + valor do ensaio (pacote detalhado, ou amount - extras)
+    // Por job: conta ensaio, soma faturamento (pacote OU amount-produto) e
+    // pendura o cliente em cada pacote (drill-down) com seus produtos.
     for (const j of jobs as any[]) {
       const cat = getCat(j.job_type || 'Sem tipo');
       const lbl = j.job_type || 'Sem tipo';
       cat.labelCount.set(lbl, (cat.labelCount.get(lbl) || 0) + 1);
       cat.numEnsaios += 1;
-      const pkg = pkgSumByJob.get(j.id);
-      const ensaioVal = (pkg != null && pkg > 0) ? pkg : Math.max(0, (Number(j.amount) || 0) - (extrasSumByJob.get(j.id) || 0));
-      cat.valorEnsaios += ensaioVal;
+
+      const cliente = clienteByJob.get(j.id) || 'Cliente';
+      const dataEnsaio = String(j.job_date || '').slice(0, 10);
+      const produtosJob = produtosByJob.get(j.id) || [];
+      const totalProdJob = produtoSumByJob.get(j.id) || 0;
+      const servExtra = servExtraSumByJob.get(j.id) || 0;
+      cat.valorProdutos += totalProdJob;
+      cat.valorExtras += servExtra;
+      for (const p of produtosJob) {
+        const e = cat.produtos.get(p.nome) || { nome: p.nome, tipo: p.tipo, qtd: 0, quantidade: 0, valor: 0 };
+        e.quantidade += p.qtd; e.valor += p.valor; cat.produtos.set(p.nome, e);
+      }
+
+      const pacoteLines = pacoteLinesByJob.get(j.id) || [];
+      const addCliente = (pacoteNome: string, valor: number) => {
+        const p = cat.pacotes.get(pacoteNome) || { nome: pacoteNome, quantidade: 0, valor: 0, clientes: [] };
+        p.clientes.push({ nome: cliente, data: dataEnsaio, valor, produtos: produtosJob, totalProdutos: totalProdJob });
+        cat.pacotes.set(pacoteNome, p);
+        return p;
+      };
+      if (pacoteLines.length > 0) {
+        cat.valorEnsaios += pacoteSumByJob.get(j.id) || 0;
+        // Produtos do job aparecem só na 1ª linha de pacote (evita repetir a obs).
+        let first = true;
+        for (const pl of pacoteLines) {
+          const p = cat.pacotes.get(pl.nome) || { nome: pl.nome, quantidade: 0, valor: 0, clientes: [] };
+          p.quantidade += pl.qtd; p.valor += pl.valor;
+          p.clientes.push({ nome: cliente, data: dataEnsaio, valor: pl.valor, produtos: first ? produtosJob : [], totalProdutos: first ? totalProdJob : 0 });
+          cat.pacotes.set(pl.nome, p);
+          first = false;
+        }
+      } else {
+        // Sem pacote: faturamento = amount - produtos - serviço (serviço entra em valorExtras).
+        const ensaioBase = Math.max(0, (Number(j.amount) || 0) - totalProdJob - servExtra);
+        cat.valorEnsaios += ensaioBase;
+        const p = addCliente(AVULSO, ensaioBase);
+        p.quantidade += 1; p.valor += ensaioBase;
+      }
     }
 
+    const ordClientes = (cs: Cliente[]) => cs.sort((a, b) => (a.data < b.data ? 1 : a.data > b.data ? -1 : 0));
     const categorias = [...cats.values()].map((c) => ({
       // nome exibido = variante mais frequente do tipo (ex.: "Aniversário")
       tipo: [...c.labelCount.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || c.tipo,
       numEnsaios: c.numEnsaios,
       valorEnsaios: c.valorEnsaios,
       valorExtras: c.valorExtras,
-      valorTotal: c.valorEnsaios + c.valorExtras,
-      pacotes: [...c.pacotes.values()].sort((a, b) => b.valor - a.valor),
-      extras: [...c.extras.values()].sort((a, b) => b.valor - a.valor),
+      valorTotal: c.valorEnsaios + c.valorExtras, // faturamento (SEM produtos)
+      valorProdutos: c.valorProdutos,             // produtos vendidos (fora do faturamento)
+      pacotes: [...c.pacotes.values()]
+        .map((p) => ({ nome: p.nome, quantidade: p.quantidade, valor: p.valor, clientes: ordClientes(p.clientes) }))
+        // "Avulso" sempre por último; o resto por valor desc.
+        .sort((a, b) => (a.nome === AVULSO ? 1 : b.nome === AVULSO ? -1 : b.valor - a.valor)),
+      produtos: [...c.produtos.values()]
+        .map((p) => ({ nome: p.nome, tipo: p.tipo, quantidade: p.quantidade, valor: p.valor }))
+        .sort((a, b) => b.valor - a.valor),
     })).sort((a, b) => b.valorTotal - a.valorTotal);
 
     const totais = categorias.reduce((t, c) => ({
@@ -5290,9 +5369,63 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       valorEnsaios: t.valorEnsaios + c.valorEnsaios,
       valorExtras: t.valorExtras + c.valorExtras,
       valorTotal: t.valorTotal + c.valorTotal,
-    }), { numEnsaios: 0, valorEnsaios: 0, valorExtras: 0, valorTotal: 0 });
+      valorProdutos: t.valorProdutos + c.valorProdutos,
+    }), { numEnsaios: 0, valorEnsaios: 0, valorExtras: 0, valorTotal: 0, valorProdutos: 0 });
 
     res.json({ periodo: { from: dInicio, to: dFimIncl }, totais, categorias });
+  });
+
+  // GET /api/relatorios/entrada-saida?from=YYYY-MM-DD&to=YYYY-MM-DD
+  // ENTRADA = pagamentos reais recebidos no período (job_payments) — mesma base
+  // do "Entrada" do Dashboard. SAÍDA = despesas pagas (fin_despesas status='pago')
+  // no período, por data_pagamento. Lucro = entrada - saída. Tudo por conta.
+  app.get('/api/relatorios/entrada-saida', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+
+    const now = new Date();
+    const fromQ = String(req.query.from || '').trim();
+    const toQ = String(req.query.to || '').trim();
+    let dInicio: string, dFimIncl: string;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(fromQ) && /^\d{4}-\d{2}-\d{2}$/.test(toQ)) {
+      dInicio = fromQ <= toQ ? fromQ : toQ;
+      dFimIncl = fromQ <= toQ ? toQ : fromQ;
+    } else {
+      dInicio = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1)).toISOString().slice(0, 10);
+      dFimIncl = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 0)).toISOString().slice(0, 10);
+    }
+    // fim exclusivo (dia seguinte ao "até") pra incluir o dia inteiro mesmo se a
+    // coluna for timestamp.
+    const nd = new Date(`${dFimIncl}T12:00:00Z`);
+    nd.setUTCDate(nd.getUTCDate() + 1);
+    const nextDay = nd.toISOString().slice(0, 10);
+
+    // ENTRADA: job_payments recebidos no período (só de jobs do usuário).
+    const { data: userJobs } = await supabase.from('jobs').select('id').eq('user_id', userId).limit(10000);
+    const jobIds = (userJobs || []).map((j: any) => j.id);
+    let entrada = 0;
+    if (jobIds.length) {
+      const { data: pmts } = await adminClient
+        .from('job_payments')
+        .select('amount, payment_date, job_id')
+        .in('job_id', jobIds)
+        .gte('payment_date', dInicio)
+        .lt('payment_date', nextDay);
+      entrada = (pmts || []).reduce((s: number, p: any) => s + (Number(p.amount) || 0), 0);
+    }
+
+    // SAÍDA: despesas pagas no período (por data_pagamento).
+    const { data: desp } = await adminClient
+      .from('fin_despesas')
+      .select('valor, data_pagamento, status, user_id')
+      .eq('user_id', userId)
+      .eq('status', 'pago')
+      .gte('data_pagamento', dInicio)
+      .lt('data_pagamento', nextDay);
+    const saida = (desp || []).reduce((s: number, d: any) => s + (Number(d.valor) || 0), 0);
+
+    res.json({ periodo: { from: dInicio, to: dFimIncl }, entrada, saida, lucro: entrada - saida });
   });
 
   // ============ CATÁLOGO: SERVIÇOS ============
@@ -17608,6 +17741,19 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const sinalRecebidoOpen = openJobs.reduce(
         (acc: number, j: any) => acc + Math.max(amountPaidByJob.get(j.id) || 0, 0), 0);
 
+      // SAÍDA do período: despesas pagas (fin_despesas status='pago') por
+      // data_pagamento dentro do período. Fim exclusivo (dia seguinte) cobre o
+      // dia inteiro mesmo se a coluna for timestamp.
+      const periodEndNext = addDaysOnly(periodEnd, 1);
+      const { data: despPagas } = await adminClient
+        .from('fin_despesas')
+        .select('valor, data_pagamento, status')
+        .eq('user_id', userId)
+        .eq('status', 'pago')
+        .gte('data_pagamento', periodStart)
+        .lt('data_pagamento', periodEndNext);
+      const expensesThisMonth = (despPagas || []).reduce((s: number, d: any) => s + (Number(d.valor) || 0), 0);
+
       const dailyRevenue: Array<{ date: string; total: number }> = [];
       const chartDays = Math.min(periodDays, 370);
       const chartStart = periodDays > chartDays ? addDaysOnly(periodEnd, -(chartDays - 1)) : periodStart;
@@ -17673,6 +17819,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           toReceiveOpen,
           sinalRecebidoOpen,
           openJobsCount: openJobs.length,
+          expensesThisMonth,
           dailyRevenue,
         },
       });

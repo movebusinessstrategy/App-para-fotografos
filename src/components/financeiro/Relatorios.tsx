@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Download, BarChart3, Users, Tag, Camera, ChevronDown, ChevronRight, Package, Image } from 'lucide-react';
+import { Download, BarChart3, Users, Tag, Camera, ChevronDown, ChevronRight, Package, AlertCircle, ArrowDownCircle, ArrowUpCircle, User } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { authFetch } from '../../utils/authFetch';
@@ -17,28 +17,45 @@ interface RelatorioCfg {
 }
 
 const RELATORIOS: RelatorioCfg[] = [
-  { key: 'vendas_tipo', label: 'Vendas por Tipo de Ensaio', desc: 'Ensaios vendidos por categoria, com pacotes e extras (foto avulsa, álbum, produtos)', icon: Camera, color: 'text-gold-500' },
+  { key: 'vendas_tipo', label: 'Vendas por Tipo de Ensaio', desc: 'Ensaios realizados por categoria, com pacotes, pessoas e produtos vendidos', icon: Camera, color: 'text-gold-500' },
   { key: 'receitas_categoria', label: 'Receitas por Categoria', desc: 'Receitas agrupadas por categoria no período', icon: Tag, color: 'text-emerald-500' },
   { key: 'despesas_categoria', label: 'Despesas por Categoria', desc: 'Despesas agrupadas por categoria no período', icon: Tag, color: 'text-red-500' },
   { key: 'receitas_cliente', label: 'Receitas por Cliente', desc: 'Ranking de clientes por receita gerada', icon: Users, color: 'text-blue-500' },
   { key: 'fluxo_mensal', label: 'Fluxo Mensal', desc: 'Receitas x despesas mês a mês no período', icon: BarChart3, color: 'text-violet-500' },
 ];
 
-interface VendaPacote { nome: string; quantidade: number; valor: number }
-interface VendaExtra { nome: string; tipo: string; quantidade: number; valor: number }
-interface VendaCategoria { tipo: string; numEnsaios: number; valorEnsaios: number; valorExtras: number; valorTotal: number; pacotes: VendaPacote[]; extras: VendaExtra[] }
-interface VendasReport { totais: { numEnsaios: number; valorEnsaios: number; valorExtras: number; valorTotal: number }; categorias: VendaCategoria[] }
+interface VendaProduto { nome: string; tipo: string; qtd?: number; quantidade?: number; valor: number }
+interface VendaCliente { nome: string; data: string; valor: number; produtos: VendaProduto[]; totalProdutos: number }
+interface VendaPacote { nome: string; quantidade: number; valor: number; clientes: VendaCliente[] }
+interface VendaCategoria {
+  tipo: string; numEnsaios: number;
+  valorEnsaios: number; valorExtras: number; valorTotal: number; valorProdutos: number;
+  pacotes: VendaPacote[]; produtos: VendaProduto[];
+}
+interface VendasReport {
+  totais: { numEnsaios: number; valorEnsaios: number; valorExtras: number; valorTotal: number; valorProdutos: number };
+  categorias: VendaCategoria[];
+}
+interface EntradaSaida { entrada: number; saida: number; lucro: number }
 
 interface ResultadoLinha {
   [key: string]: string | number;
 }
+
+const fmtData = (d: string) => {
+  if (!d) return '-';
+  try { return format(fromDateOnly(d), 'dd/MM/yyyy'); } catch { return d; }
+};
+const qtdProd = (p: VendaProduto) => p.quantidade ?? p.qtd ?? 1;
 
 export default function Relatorios() {
   const [range, setRange] = useState<DateRange>(() => buildPresetRange('month'));
   const [tipo, setTipo] = useState<RelatorioTipo>('vendas_tipo');
   const [resultado, setResultado] = useState<ResultadoLinha[] | null>(null);
   const [vendas, setVendas] = useState<VendasReport | null>(null);
+  const [entradaSaida, setEntradaSaida] = useState<EntradaSaida | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expandedPkg, setExpandedPkg] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
 
   const rangeLabel =
@@ -47,6 +64,12 @@ export default function Relatorios() {
   const gerar = async () => {
     setLoading(true);
     try {
+      // Entrada x Saída do período (sempre, junto de qualquer relatório).
+      authFetch(`/api/relatorios/entrada-saida?from=${range.from}&to=${range.to}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => setEntradaSaida(d))
+        .catch(() => setEntradaSaida(null));
+
       if (tipo === 'vendas_tipo') {
         const params = new URLSearchParams({ from: range.from, to: range.to });
         const res = await authFetch(`/api/relatorios/vendas-por-tipo?${params}`);
@@ -66,9 +89,17 @@ export default function Relatorios() {
       if (!vendas?.categorias.length) return;
       const rows: ResultadoLinha[] = [];
       for (const c of vendas.categorias) {
-        rows.push({ Categoria: c.tipo, Item: 'TOTAL DA CATEGORIA', Tipo: '', Qtd: c.numEnsaios, 'Valor Ensaios': c.valorEnsaios, 'Valor Extras': c.valorExtras, 'Valor Total': c.valorTotal });
-        for (const p of c.pacotes) rows.push({ Categoria: c.tipo, Item: p.nome, Tipo: 'pacote', Qtd: p.quantidade, 'Valor Ensaios': p.valor, 'Valor Extras': 0, 'Valor Total': p.valor });
-        for (const e of c.extras) rows.push({ Categoria: c.tipo, Item: e.nome, Tipo: e.tipo, Qtd: e.quantidade, 'Valor Ensaios': 0, 'Valor Extras': e.valor, 'Valor Total': e.valor });
+        rows.push({ Categoria: c.tipo, Linha: 'TOTAL DA CATEGORIA', Pacote: '', Cliente: '', Data: '', Qtd: c.numEnsaios, Faturamento: c.valorTotal, 'Produtos (fora do faturamento)': c.valorProdutos, 'Produtos detalhe': '' });
+        for (const p of c.pacotes) {
+          rows.push({ Categoria: c.tipo, Linha: 'Pacote', Pacote: p.nome, Cliente: '', Data: '', Qtd: p.quantidade, Faturamento: p.valor, 'Produtos (fora do faturamento)': 0, 'Produtos detalhe': '' });
+          for (const cl of p.clientes) {
+            rows.push({
+              Categoria: c.tipo, Linha: 'Pessoa', Pacote: p.nome, Cliente: cl.nome, Data: cl.data, Qtd: 1,
+              Faturamento: cl.valor, 'Produtos (fora do faturamento)': cl.totalProdutos,
+              'Produtos detalhe': cl.produtos.map(x => `${x.nome} ${qtdProd(x)}x (${fmtBRL(x.valor)})`).join('; '),
+            });
+          }
+        }
       }
       exportCSV(rows, `vendas_por_tipo_${range.from}_a_${range.to}.csv`);
       return;
@@ -80,6 +111,8 @@ export default function Relatorios() {
 
   const toggleCat = (tipoCat: string) =>
     setExpanded(prev => { const n = new Set(prev); n.has(tipoCat) ? n.delete(tipoCat) : n.add(tipoCat); return n; });
+  const togglePkg = (key: string) =>
+    setExpandedPkg(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
 
   const cfg = RELATORIOS.find(r => r.key === tipo)!;
   const colunas = resultado?.length ? Object.keys(resultado[0]) : [];
@@ -100,7 +133,7 @@ export default function Relatorios() {
           return (
             <button
               key={r.key}
-              onClick={() => { setTipo(r.key); setResultado(null); setVendas(null); setExpanded(new Set()); }}
+              onClick={() => { setTipo(r.key); setResultado(null); setVendas(null); setExpanded(new Set()); setExpandedPkg(new Set()); }}
               className={`text-left p-4 rounded-xl border transition-all ${
                 selected
                   ? 'border-violet-500 bg-violet-50 dark:bg-violet-900/20 shadow-sm'
@@ -138,6 +171,33 @@ export default function Relatorios() {
       {/* Resultado */}
       {(resultado !== null || vendas !== null) && (
         <div className="space-y-3">
+          {/* Entrada x Saída x Lucro do período */}
+          {entradaSaida && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="bg-white dark:bg-gray-800 border border-emerald-100 dark:border-emerald-900/30 rounded-xl px-4 py-3 flex items-center gap-3">
+                <span className="w-9 h-9 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 flex items-center justify-center"><ArrowUpCircle className="w-5 h-5 text-emerald-500" /></span>
+                <div className="min-w-0">
+                  <p className="text-[11px] uppercase font-semibold text-emerald-500">Entrada (recebido)</p>
+                  <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400 truncate">{fmtBRL(entradaSaida.entrada)}</p>
+                </div>
+              </div>
+              <div className="bg-white dark:bg-gray-800 border border-red-100 dark:border-red-900/30 rounded-xl px-4 py-3 flex items-center gap-3">
+                <span className="w-9 h-9 rounded-lg bg-red-50 dark:bg-red-900/20 flex items-center justify-center"><ArrowDownCircle className="w-5 h-5 text-red-500" /></span>
+                <div className="min-w-0">
+                  <p className="text-[11px] uppercase font-semibold text-red-500">Saída (despesas pagas)</p>
+                  <p className="text-lg font-bold text-red-600 dark:text-red-400 truncate">{fmtBRL(entradaSaida.saida)}</p>
+                </div>
+              </div>
+              <div className="bg-white dark:bg-gray-800 border border-gold-200 dark:border-gold-900/30 rounded-xl px-4 py-3 flex items-center gap-3">
+                <span className="w-9 h-9 rounded-lg bg-gold-50 dark:bg-gold-900/20 flex items-center justify-center"><BarChart3 className="w-5 h-5 text-gold-500" /></span>
+                <div className="min-w-0">
+                  <p className="text-[11px] uppercase font-semibold text-gold-500">Lucro do período</p>
+                  <p className={`text-lg font-bold truncate ${entradaSaida.lucro >= 0 ? 'text-gold-600 dark:text-gold-400' : 'text-red-600 dark:text-red-400'}`}>{fmtBRL(entradaSaida.lucro)}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <cfg.icon className={`w-4 h-4 ${cfg.color}`} />
@@ -157,26 +217,23 @@ export default function Relatorios() {
           {/* ── Vendas por Tipo de Ensaio (hierárquico) ── */}
           {tipo === 'vendas_tipo' && vendas && (
             vendas.categorias.length === 0 ? (
-              <div className="text-center py-10 text-gray-400 dark:text-gray-500 text-sm">Nenhum ensaio vendido no período.</div>
+              <div className="text-center py-10 text-gray-400 dark:text-gray-500 text-sm">Nenhum ensaio realizado no período.</div>
             ) : (
               <div className="space-y-3">
                 {/* Totais */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                   <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3">
-                    <p className="text-[11px] uppercase font-semibold text-gray-400">Ensaios vendidos</p>
+                    <p className="text-[11px] uppercase font-semibold text-gray-400">Ensaios realizados</p>
                     <p className="text-xl font-bold text-gray-900 dark:text-white">{vendas.totais.numEnsaios}</p>
                   </div>
-                  <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3">
-                    <p className="text-[11px] uppercase font-semibold text-gray-400">Valor dos ensaios</p>
-                    <p className="text-xl font-bold text-gray-900 dark:text-white">{fmtBRL(vendas.totais.valorEnsaios)}</p>
-                  </div>
-                  <div className="bg-white dark:bg-gray-800 border border-emerald-100 dark:border-emerald-900/30 rounded-xl px-4 py-3">
-                    <p className="text-[11px] uppercase font-semibold text-emerald-500">Extras (avulsas/álbum/produtos)</p>
-                    <p className="text-xl font-bold text-emerald-600 dark:text-emerald-400">{fmtBRL(vendas.totais.valorExtras)}</p>
-                  </div>
                   <div className="bg-white dark:bg-gray-800 border border-gold-200 dark:border-gold-900/30 rounded-xl px-4 py-3">
-                    <p className="text-[11px] uppercase font-semibold text-gold-500">Total geral</p>
+                    <p className="text-[11px] uppercase font-semibold text-gold-500">Faturamento (ensaios)</p>
                     <p className="text-xl font-bold text-gold-600 dark:text-gold-400">{fmtBRL(vendas.totais.valorTotal)}</p>
+                  </div>
+                  <div className="bg-white dark:bg-gray-800 border border-amber-200 dark:border-amber-900/30 rounded-xl px-4 py-3">
+                    <p className="text-[11px] uppercase font-semibold text-amber-500 flex items-center gap-1"><AlertCircle size={12} /> Produtos vendidos</p>
+                    <p className="text-xl font-bold text-amber-600 dark:text-amber-400">{fmtBRL(vendas.totais.valorProdutos)}</p>
+                    <p className="text-[10px] text-gray-400 mt-0.5">não somado no faturamento</p>
                   </div>
                 </div>
 
@@ -189,41 +246,81 @@ export default function Relatorios() {
                         {open ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
                         <span className="flex-1 font-semibold text-gray-800 dark:text-gray-100">{c.tipo}</span>
                         <span className="text-xs text-gray-400">{c.numEnsaios} ensaio{c.numEnsaios === 1 ? '' : 's'}</span>
-                        <span className="text-sm text-gray-500 dark:text-gray-400 hidden sm:inline">ensaios {fmtBRL(c.valorEnsaios)}</span>
-                        <span className="text-sm text-emerald-600 dark:text-emerald-400 hidden sm:inline">extras {fmtBRL(c.valorExtras)}</span>
+                        {c.valorProdutos > 0 && (
+                          <span className="text-xs text-amber-600 dark:text-amber-400 hidden sm:inline flex items-center gap-1"><AlertCircle size={11} /> produtos {fmtBRL(c.valorProdutos)}</span>
+                        )}
                         <span className="text-sm font-bold text-gold-600 dark:text-gold-400 w-24 text-right">{fmtBRL(c.valorTotal)}</span>
                       </button>
                       {open && (
                         <div className="border-t border-gray-100 dark:border-gray-700 px-4 py-3 space-y-3">
+                          {/* Pacotes → pessoas */}
                           <div>
-                            <p className="text-[11px] uppercase font-semibold text-gray-400 mb-1.5 flex items-center gap-1"><Package size={12} /> Pacotes vendidos</p>
-                            {c.pacotes.length === 0 ? <p className="text-xs text-gray-400 italic">Sem pacotes detalhados (valor do ensaio contado pelo total do trabalho).</p> : (
+                            <p className="text-[11px] uppercase font-semibold text-gray-400 mb-1.5 flex items-center gap-1"><Package size={12} /> Pacotes &amp; pessoas</p>
+                            {c.pacotes.length === 0 ? <p className="text-xs text-gray-400 italic">Sem pacotes detalhados.</p> : (
                               <div className="space-y-1">
-                                {c.pacotes.map((p, i) => (
-                                  <div key={i} className="flex items-center gap-2 text-sm">
-                                    <span className="flex-1 text-gray-700 dark:text-gray-200 truncate">{p.nome}</span>
-                                    <span className="text-xs text-gray-400">{p.quantidade}x</span>
-                                    <span className="font-medium text-gray-700 dark:text-gray-300 w-24 text-right">{fmtBRL(p.valor)}</span>
-                                  </div>
-                                ))}
+                                {c.pacotes.map((p, i) => {
+                                  const pkgKey = `${c.tipo}::${p.nome}`;
+                                  const pOpen = expandedPkg.has(pkgKey);
+                                  return (
+                                    <div key={i} className="rounded-lg border border-gray-100 dark:border-gray-700/60 overflow-hidden">
+                                      <button onClick={() => togglePkg(pkgKey)} className="w-full flex items-center gap-2 px-2.5 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-700/40 text-left">
+                                        {pOpen ? <ChevronDown className="w-3.5 h-3.5 text-gray-400" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-400" />}
+                                        <span className="flex-1 text-gray-700 dark:text-gray-200 truncate font-medium">{p.nome}</span>
+                                        <span className="text-xs text-gray-400">{p.quantidade}x</span>
+                                        <span className="font-semibold text-gray-700 dark:text-gray-300 w-24 text-right">{fmtBRL(p.valor)}</span>
+                                      </button>
+                                      {pOpen && (
+                                        <div className="bg-gray-50/60 dark:bg-gray-900/30 px-2.5 py-2 space-y-1.5">
+                                          {p.clientes.map((cl, j) => (
+                                            <div key={j} className="text-sm">
+                                              <div className="flex items-center gap-2">
+                                                <User size={12} className="text-gray-400 flex-shrink-0" />
+                                                <span className="flex-1 text-gray-700 dark:text-gray-200 truncate">{cl.nome}</span>
+                                                <span className="text-[11px] text-gray-400">{fmtData(cl.data)}</span>
+                                                <span className="font-medium text-gray-600 dark:text-gray-300 w-20 text-right">{fmtBRL(cl.valor)}</span>
+                                              </div>
+                                              {cl.totalProdutos > 0 && (
+                                                <div className="ml-5 mt-1 rounded-md bg-amber-50 dark:bg-amber-900/15 border border-amber-100 dark:border-amber-900/30 px-2 py-1">
+                                                  <p className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                                                    <AlertCircle size={10} /> Comprou a mais (não incluído no faturamento): {fmtBRL(cl.totalProdutos)}
+                                                  </p>
+                                                  <ul className="mt-0.5 space-y-0.5">
+                                                    {cl.produtos.map((pr, k) => (
+                                                      <li key={k} className="text-[11px] text-amber-700/90 dark:text-amber-300/90 flex items-center gap-1">
+                                                        <span className="flex-1 truncate">{pr.nome} · {qtdProd(pr)}x</span>
+                                                        <span>{fmtBRL(pr.valor)}</span>
+                                                      </li>
+                                                    ))}
+                                                  </ul>
+                                                </div>
+                                              )}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
                               </div>
                             )}
                           </div>
-                          <div>
-                            <p className="text-[11px] uppercase font-semibold text-emerald-500 mb-1.5 flex items-center gap-1"><Image size={12} /> Extras vendidos</p>
-                            {c.extras.length === 0 ? <p className="text-xs text-gray-400 italic">Nenhum extra vendido nessa categoria.</p> : (
+
+                          {/* Produtos da categoria (resumo, fora do faturamento) */}
+                          {c.produtos.length > 0 && (
+                            <div>
+                              <p className="text-[11px] uppercase font-semibold text-amber-500 mb-1.5 flex items-center gap-1"><AlertCircle size={12} /> Produtos vendidos nessa categoria <span className="text-gray-400 normal-case font-normal">(fora do faturamento)</span></p>
                               <div className="space-y-1">
-                                {c.extras.map((e, i) => (
+                                {c.produtos.map((e, i) => (
                                   <div key={i} className="flex items-center gap-2 text-sm">
                                     <span className="flex-1 text-gray-700 dark:text-gray-200 truncate">{e.nome}</span>
                                     <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-400">{e.tipo}</span>
-                                    <span className="text-xs text-gray-400">{e.quantidade}x</span>
-                                    <span className="font-medium text-emerald-600 dark:text-emerald-400 w-24 text-right">{fmtBRL(e.valor)}</span>
+                                    <span className="text-xs text-gray-400">{qtdProd(e)}x</span>
+                                    <span className="font-medium text-amber-600 dark:text-amber-400 w-24 text-right">{fmtBRL(e.valor)}</span>
                                   </div>
                                 ))}
                               </div>
-                            )}
-                          </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

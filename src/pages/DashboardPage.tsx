@@ -10,7 +10,7 @@ import {
 } from "recharts";
 import {
   ArrowRight, Calendar as CalendarIcon, Camera, Check, ChevronLeft, ChevronRight,
-  DollarSign, Eye, EyeOff, FileClock, FileText, Sparkles, Target, TrendingUp, X,
+  DollarSign, Eye, EyeOff, FileClock, FileText, Sparkles, Target, TrendingDown, TrendingUp, X,
 } from "lucide-react";
 
 import { LayoutOutletContext } from "../components/layout/AppLayout";
@@ -71,6 +71,7 @@ interface Analytics {
     toReceiveOpen: number;
     sinalRecebidoOpen: number;
     openJobsCount: number;
+    expensesThisMonth: number;
     dailyRevenue: Array<{ date: string; total: number }>;
   };
 }
@@ -270,6 +271,12 @@ export default function DashboardPage() {
               ) : (
                 <CardHint>Recebido no período</CardHint>
               )}
+            </Card>
+
+            <Card>
+              <CardHeader icon={<TrendingDown size={16} />} title="Saída" />
+              <CardValue value={formatBRL(a.finance.expensesThisMonth, hideValues)} />
+              <CardHint>Despesas pagas no período</CardHint>
             </Card>
 
             <Card>

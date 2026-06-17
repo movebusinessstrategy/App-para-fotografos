@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from "react";
-import { ChevronLeft, ChevronRight, Loader2, Package, ShoppingCart } from "lucide-react";
+import { Loader2, Package, ShoppingCart } from "lucide-react";
+import { format } from "date-fns";
+import { ptBR } from "date-fns/locale";
 import { authFetch } from "../../utils/authFetch";
+import { DateRangePicker, buildPresetRange, fromDateOnly, type DateRange } from "../ui/DateRangePicker";
 
 interface RelatorioData {
-  periodo: { ano: number; mes: number };
+  periodo: { from: string; to: string };
   resumo: { totalVendido: number; numTrabalhos: number; ticketMedio: number };
   produtos: { nome: string; tipo: string; quantidade: number; valor: number }[];
   compras: Record<"analise" | "aprovado" | "comprado" | "cancelado", { qtd: number; custo: number }>;
@@ -13,12 +16,6 @@ const TH = "text-left px-5 py-3 text-xs font-semibold text-gray-500 dark:text-gr
 
 const fmt = (v: number) =>
   (v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: 0 });
-
-function shiftMonth(mes: string, delta: number): string {
-  const [y, m] = mes.split("-").map(Number);
-  const d = new Date(y, m - 1 + delta, 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
 
 function StatCard({ label, value, accent }: { label: string; value: string; accent: string }) {
   return (
@@ -36,34 +33,30 @@ const STATUS = [
 ];
 
 export function RelatorioVendas() {
-  const [mes, setMes] = useState(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-  });
+  const [range, setRange] = useState<DateRange>(() => buildPresetRange("month"));
   const [data, setData] = useState<RelatorioData | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancel = false;
     setLoading(true);
-    authFetch(`/api/relatorios/vendas?mes=${mes}`)
+    authFetch(`/api/relatorios/vendas?from=${range.from}&to=${range.to}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { if (!cancel) setData(d); })
       .catch(() => {})
       .finally(() => { if (!cancel) setLoading(false); });
     return () => { cancel = true; };
-  }, [mes]);
+  }, [range.from, range.to]);
 
-  const [ano, mm] = mes.split("-").map(Number);
-  const mesLabel = new Date(ano, mm - 1, 1).toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+  const rangeLabel =
+    `${format(fromDateOnly(range.from), "dd MMM yyyy", { locale: ptBR })} – ${format(fromDateOnly(range.to), "dd MMM yyyy", { locale: ptBR })}`;
 
   return (
     <div className="space-y-5">
-      {/* Seletor de mês */}
-      <div className="flex items-center justify-center gap-3">
-        <button onClick={() => setMes((m) => shiftMonth(m, -1))} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500"><ChevronLeft size={18} /></button>
-        <span className="text-sm font-semibold text-gray-800 dark:text-gray-100 capitalize w-48 text-center">{mesLabel}</span>
-        <button onClick={() => setMes((m) => shiftMonth(m, 1))} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500"><ChevronRight size={18} /></button>
+      {/* Filtro de período (calendário) */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <DateRangePicker range={range} onChange={setRange} />
+        <span className="text-xs text-gray-400 dark:text-gray-500">{rangeLabel}</span>
       </div>
 
       {loading ? (
@@ -74,7 +67,7 @@ export function RelatorioVendas() {
         <>
           {/* Resumo geral de vendas */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <StatCard label="Vendido no mês" value={fmt(data.resumo.totalVendido)} accent="text-gold-600 dark:text-gold-400" />
+            <StatCard label="Vendido no período" value={fmt(data.resumo.totalVendido)} accent="text-gold-600 dark:text-gold-400" />
             <StatCard label="Trabalhos vendidos" value={String(data.resumo.numTrabalhos)} accent="text-gray-900 dark:text-white" />
             <StatCard label="Ticket médio" value={fmt(data.resumo.ticketMedio)} accent="text-gray-900 dark:text-white" />
           </div>
@@ -83,10 +76,10 @@ export function RelatorioVendas() {
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 overflow-hidden">
             <div className="px-5 py-3 border-b border-gray-100 dark:border-gray-800 flex items-center gap-2">
               <Package size={16} className="text-gold-600" />
-              <h4 className="font-semibold text-gray-800 dark:text-gray-100">Produtos vendidos no mês</h4>
+              <h4 className="font-semibold text-gray-800 dark:text-gray-100">Produtos vendidos no período</h4>
             </div>
             {data.produtos.length === 0 ? (
-              <p className="text-center text-sm text-gray-400 py-10">Nenhum produto vendido neste mês.</p>
+              <p className="text-center text-sm text-gray-400 py-10">Nenhum produto vendido neste período.</p>
             ) : (
               <table className="w-full text-sm">
                 <thead><tr className="border-b border-gray-100 dark:border-gray-800">
@@ -116,7 +109,7 @@ export function RelatorioVendas() {
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 overflow-hidden">
             <div className="px-5 py-3 border-b border-gray-100 dark:border-gray-800 flex items-center gap-2">
               <ShoppingCart size={16} className="text-gold-600" />
-              <h4 className="font-semibold text-gray-800 dark:text-gray-100">Pedidos de compra do mês</h4>
+              <h4 className="font-semibold text-gray-800 dark:text-gray-100">Pedidos de compra do período</h4>
             </div>
             <div className="divide-y divide-gray-50 dark:divide-gray-800/50">
               {STATUS.map((st) => {
