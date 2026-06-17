@@ -5486,9 +5486,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Carrega TODOS os membros (ativo ou não) pra resolver nome; mostra na lista
     // só os ativos (mesmo com 0 vendas). assigned_to que não casa com nenhum
     // membro cai num único balde "Sem vendedor" (não vira vários baldes).
+    // select('*') é resiliente: se a migration 042 (meta_venda/comissao_percentual)
+    // ainda não rodou, as colunas só vêm undefined → comissão 0, sem quebrar.
     const { data: membersData } = await supabase
       .from('team_members')
-      .select('id, name, color, meta_venda, comissao_percentual, is_active')
+      .select('*')
       .eq('owner_user_id', userId);
     const members = membersData || [];
     const memberById = new Map<string, any>((members as any[]).map((m) => [m.id, m]));
@@ -6581,15 +6583,20 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const defaultPermissions = { dashboard: true, clients: true, jobs: true, vendas: true, calendar: true, finance: true, oportunidades: true, contratos: true };
 
     // Cria o registro na tabela team_members
-    const { data, error } = await supabase
-      .from('team_members')
-      .insert({
-        owner_user_id: userId, name: name.trim(), email: email?.trim() || null,
-        color: color || '#6366f1', permissions: permissions || defaultPermissions,
-        meta_venda: Math.max(0, Number(meta_venda) || 0),
-        comissao_percentual: Math.min(100, Math.max(0, Number(comissao_percentual) || 0)),
-      })
-      .select().single();
+    const baseRow: any = {
+      owner_user_id: userId, name: name.trim(), email: email?.trim() || null,
+      color: color || '#6366f1', permissions: permissions || defaultPermissions,
+    };
+    const commissionRow = {
+      meta_venda: Math.max(0, Number(meta_venda) || 0),
+      comissao_percentual: Math.min(100, Math.max(0, Number(comissao_percentual) || 0)),
+    };
+    // Resiliente: se a migration 042 ainda não rodou, cria sem comissão.
+    let ins = await supabase.from('team_members').insert({ ...baseRow, ...commissionRow }).select().single();
+    if (ins.error && /meta_venda|comissao_percentual|does not exist|schema cache/i.test(ins.error.message || '')) {
+      ins = await supabase.from('team_members').insert(baseRow).select().single();
+    }
+    const { data, error } = ins;
     if (error) return res.status(500).json({ error: error.message });
 
     // Se veio senha, cria o usuário no Supabase Auth imediatamente
@@ -6634,12 +6641,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (meta_venda !== undefined) upd.meta_venda = Math.max(0, Number(meta_venda) || 0);
     if (comissao_percentual !== undefined) upd.comissao_percentual = Math.min(100, Math.max(0, Number(comissao_percentual) || 0));
     if (Object.keys(upd).length) {
-      const { error } = await supabase
-        .from('team_members')
-        .update(upd)
-        .eq('id', req.params.id)
-        .eq('owner_user_id', userId);
-      if (error) return res.status(500).json({ error: error.message });
+      let r = await supabase.from('team_members').update(upd).eq('id', req.params.id).eq('owner_user_id', userId);
+      // Resiliente: se faltam colunas de comissão (migration 042), salva o resto.
+      if (r.error && /meta_venda|comissao_percentual|does not exist|schema cache/i.test(r.error.message || '')) {
+        const { meta_venda: _m, comissao_percentual: _c, ...rest } = upd;
+        r = Object.keys(rest).length
+          ? await supabase.from('team_members').update(rest).eq('id', req.params.id).eq('owner_user_id', userId)
+          : { error: null } as any;
+      }
+      if (r.error) return res.status(500).json({ error: r.error.message });
     }
 
     // Se veio nova senha, atualiza no Supabase Auth
@@ -6693,7 +6703,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .update({ meta_venda: meta, comissao_percentual: pct })
       .eq('id', req.params.id)
       .eq('owner_user_id', userId);
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) {
+      if (/meta_venda|comissao_percentual|does not exist|schema cache/i.test(error.message || ''))
+        return res.status(400).json({ error: 'Rode a migration 042 no banco pra salvar meta/comissão.' });
+      return res.status(500).json({ error: error.message });
+    }
     res.json({ success: true });
   });
 
