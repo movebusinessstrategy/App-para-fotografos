@@ -952,7 +952,8 @@ function ErrorModal({ message, onClose }: { message: string; onClose: () => void
 // ═══════════════════════════════════════════════════════════
 export default function CatalogoPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { isMember } = useAuth();
+  const { canAccess } = useAuth();
+  const canSeeFinance = canAccess('finance'); // relatório de produtos mostra valores
   const aba = (searchParams.get("aba") as Aba) ?? "produtos";
   const subP = (searchParams.get("sub") as SubProdutos) ?? "produtos";
   const subS = (searchParams.get("subS") as SubServicos) ?? "servicos";
@@ -1149,8 +1150,8 @@ export default function CatalogoPage() {
                 tabs={[
                   { id: "produtos", label: "Produtos" }, { id: "categorias", label: "Categorias" },
                   { id: "fornecedores", label: "Fornecedores" }, { id: "estoque", label: "Estoque" },
-                  // Relatório (mostra valores de venda) — só o DONO vê.
-                  ...(isMember ? [] : [{ id: "relatorio", label: "Relatório" }]),
+                  // Relatório (mostra valores de venda) — só quem tem 'finance'.
+                  ...(canSeeFinance ? [{ id: "relatorio", label: "Relatório" }] : []),
                 ]}
                 active={subP}
                 onChange={(s) => setSubP(s as SubProdutos)}
@@ -1161,8 +1162,8 @@ export default function CatalogoPage() {
                 <EstoqueTab produtos={produtos} onChanged={() => load(true)} />
               )}
 
-              {/* Sub: Relatório (só dono) */}
-              {subP === "relatorio" && !isMember && <RelatorioVendas />}
+              {/* Sub: Relatório (só com permissão 'finance') */}
+              {subP === "relatorio" && canSeeFinance && <RelatorioVendas />}
 
               {/* Sub: Produtos */}
               {subP === "produtos" && (

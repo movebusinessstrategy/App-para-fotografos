@@ -20,7 +20,8 @@ import { cn } from '../utils/cn';
 type Tab = 'aniversariantes' | 'newborn' | 'aniversario' | 'smash' | 'acompanhamentos' | 'todas' | 'filhos';
 
 export default function OportunidadesPage() {
-  const { isMember } = useAuth();
+  const { canAccess } = useAuth();
+  const canSeeFinance = canAccess('finance'); // dono ou funcionário com permissão "Financeiro"
   const [tab, setTab] = useState<Tab>('aniversariantes');
   const [rulesOpen, setRulesOpen] = useState(false);
   const [periodo, setPeriodo] = useState<'hoje' | 'semana' | 'mes'>('hoje');
@@ -150,7 +151,7 @@ export default function OportunidadesPage() {
 
       {/* Totais agregados por produto — só admin/dono vê. Membros não devem
           enxergar potencial de venda (decisão de negócio). */}
-      {!isMember && <TotaisPorProduto />}
+      {canSeeFinance && <TotaisPorProduto />}
 
       {/* Tabs */}
       <div className="flex gap-1 p-1 bg-gray-100 dark:bg-gray-800/60 rounded-xl w-fit flex-wrap">

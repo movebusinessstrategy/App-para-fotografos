@@ -18,7 +18,8 @@ interface Props {
 //
 // Membros não veem valor — alinhado com a decisão de 2026-05-29.
 export function CrmDealStrip({ phone, deals, stages, onUpdate }: Props) {
-  const { isMember } = useAuth();
+  const { canAccess } = useAuth();
+  const canSeeFinance = canAccess('finance'); // dono ou funcionário com permissão "Financeiro"
 
   // Match com várias normalizações (com/sem 55, só dígitos) — mesmo padrão
   // que o FunnelStatusButton existente usa pra evitar inconsistência.
@@ -54,7 +55,7 @@ export function CrmDealStrip({ phone, deals, stages, onUpdate }: Props) {
       />
 
       {/* Valor — só dono/admin vê */}
-      {!isMember && typeof deal.value === "number" && deal.value > 0 && (
+      {canSeeFinance && typeof deal.value === "number" && deal.value > 0 && (
         <span
           className="text-[12px] font-semibold whitespace-nowrap"
           style={{ color: "var(--wa-text-secondary)" }}

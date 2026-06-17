@@ -124,9 +124,6 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
 
   const canAccess = (module: string): boolean => {
     if (!isMember) return true; // dono tem acesso total
-    // Financeiro mostra valores (faturamento, a receber, etc.) → exclusivo do
-    // dono, independente da permissão marcada. Cobrança fica na Produção.
-    if (module === 'finance') return false;
     if (!permissions) return false;
     return permissions[module] !== false;
   };

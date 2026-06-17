@@ -65,7 +65,8 @@ interface OportunidadesListProps {
 }
 
 export function OportunidadesList({ data, loading, onSendToKanban, onDiscard, compact = false }: OportunidadesListProps) {
-  const { isMember } = useAuth();
+  const { canAccess } = useAuth();
+  const canSeeFinance = canAccess('finance'); // dono ou funcionário com permissão "Financeiro"
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState<string | null>(null);
   const [filterTipo, setFilterTipo] = useState('');
@@ -282,7 +283,7 @@ export function OportunidadesList({ data, loading, onSendToKanban, onDiscard, co
                             {op.cliente_telefone}
                           </span>
                         )}
-                        {!isMember && op.valor_proposta ? (
+                        {canSeeFinance && op.valor_proposta ? (
                           <span className="text-emerald-600 dark:text-emerald-400 font-medium">
                             R$ {op.valor_proposta.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                           </span>

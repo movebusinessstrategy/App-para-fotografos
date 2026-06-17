@@ -5124,7 +5124,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // GET /api/relatorios/vendas?from=YYYY-MM-DD&to=YYYY-MM-DD (ou ?mes=YYYY-MM)
   // Relatório de PRODUTOS vendidos: filtra pela data da VENDA (created_at do
   // item), com precisão de dia e "até" inclusivo. Mantém ?mes= por compat.
-  app.get('/api/relatorios/vendas', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
+  app.get('/api/relatorios/vendas', requireAuth, requirePermission('finance'), async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -5229,7 +5229,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // produtos = job_items) e a subdivisão de quais PACOTES (deal_items) foram
   // vendidos em cada categoria. "Vendido" = job criado (created_at) no período.
   // Isolamento por conta: jobs/deals filtrados por user_id; itens via .in(ids).
-  app.get('/api/relatorios/vendas-por-tipo', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
+  app.get('/api/relatorios/vendas-por-tipo', requireAuth, requirePermission('finance'), async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -5429,7 +5429,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // ENTRADA = pagamentos reais recebidos no período (job_payments) — mesma base
   // do "Entrada" do Dashboard. SAÍDA = despesas pagas (fin_despesas status='pago')
   // no período, por data_pagamento. Lucro = entrada - saída. Tudo por conta.
-  app.get('/api/relatorios/entrada-saida', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
+  app.get('/api/relatorios/entrada-saida', requireAuth, requirePermission('finance'), async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -5483,7 +5483,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // período (deals em etapa ganha, por converted_at) + comissão devida
   // (valor vendido × % do vendedor) e progresso da meta. Inclui todos os
   // membros ativos (mesmo com 0) e um balde "Sem vendedor".
-  app.get('/api/relatorios/vendas-por-vendedor', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
+  app.get('/api/relatorios/vendas-por-vendedor', requireAuth, requirePermission('finance'), async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
 
@@ -6639,7 +6639,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       });
     }
 
-    const defaultPermissions = { dashboard: true, clients: true, jobs: true, vendas: true, calendar: true, finance: true, oportunidades: true, contratos: true };
+    // finance começa DESLIGADO: funcionário não vê valores/relatórios por padrão;
+    // o dono liga em Configurações → Equipe pra quem quiser.
+    const defaultPermissions = { dashboard: true, clients: true, jobs: true, vendas: true, calendar: true, finance: false, oportunidades: true, contratos: true };
 
     // Cria o registro na tabela team_members
     const baseRow: any = {
@@ -12386,10 +12388,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // permissão "finance" do membro. Dono e platform admin sempre passam.
   // Isso é defesa-em-profundidade: o frontend já bloqueia a rota, mas
   // sem isso um membro poderia chamar a API direto.
-  // Financeiro inteiro é EXCLUSIVO do dono (mostra valores). Antes era
-  // requirePermission('finance'), mas o padrão dá finance=true aos membros —
-  // então funcionário via tudo. requireOwnerOrPlatformAdmin bloqueia membros.
-  app.use('/api/fin', requireAuth, requireOwnerOrPlatformAdmin);
+  // Financeiro inteiro gateado pela permissão 'finance' (o dono liga/desliga por
+  // funcionário em Configurações → Equipe). Default desligado pra novos membros.
+  app.use('/api/fin', requireAuth, requirePermission('finance'));
 
   // ─── Categorias ────────────────────────────────────────────────────────────
   app.get('/api/fin/categorias', requireAuth, async (req, res) => {
@@ -13128,7 +13129,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // ─── Relatórios ────────────────────────────────────────────────────────────
-  app.get('/api/fin/relatorios', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
+  app.get('/api/fin/relatorios', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
     const { tipo, ano, mes_inicio, mes_fim, from, to } = req.query as Record<string, string>;
 
@@ -13400,7 +13401,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Painel "Vendas recentes" da extensão — vendas (deals convertidos) num
   // período, com cross-reference do status na produção (em qual etapa o job
   // está, ou se ficou fora da produção).
-  app.get('/api/extension/sales-overview', requireAuth, requireOwnerOrPlatformAdmin, async (req, res) => {
+  app.get('/api/extension/sales-overview', requireAuth, requirePermission('finance'), async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const days = Math.max(1, Math.min(365, parseInt(String(req.query.days || '7'), 10)));
@@ -14133,7 +14134,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   //   1. tipo_ensaio_precos.preco_minimo (configurado pelo usuário por tipo)
   //   2. produtos.preco_venda (se a opp tem produto_id vinculado)
   //   3. menor preço do catálogo (combos/servicos/produtos) cujo nome dê match
-  app.get('/api/oportunidades/totais-por-produto', requireAuth, async (req, res) => {
+  // Mostra valores (faturamento por produto) → gateado pela permissão 'finance'.
+  app.get('/api/oportunidades/totais-por-produto', requireAuth, requirePermission('finance'), async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
 
@@ -17695,6 +17697,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
+    // Vê valores no Dashboard? Dono/admin sempre; membro só com permissão 'finance'.
+    const canSeeFinance = !(req as any).isMember || (req as any).isPlatformAdmin
+      || ((req as any).memberPermissions || {}).finance !== false;
 
     const DAY_MS = 24 * 60 * 60 * 1000;
     const toDateOnly = (date: Date) => {
@@ -18075,13 +18080,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         },
         production: { processes: productionByProcess },
         opportunities: opportunitiesData,
-        // Funcionário não vê valores: zera o finance (a UI também esconde os
-        // cards; aqui é a trava de verdade, pra não vazar pela rede).
-        finance: (req as any).isMember ? {
-          revenueThisMonth: 0, revenueLastMonth: 0, futureRevenue: 0,
-          toReceiveOpen: 0, sinalRecebidoOpen: 0, openJobsCount: 0,
-          expensesThisMonth: 0, dailyRevenue: [],
-        } : {
+        // Só quem tem a permissão 'finance' vê valores (dono/admin sempre; membro
+        // só se o dono ligou). Sem ela, zera o finance — a UI também esconde os
+        // cards, mas aqui é a trava de rede.
+        finance: canSeeFinance ? {
           revenueThisMonth,
           revenueLastMonth,
           futureRevenue,
@@ -18090,6 +18092,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           openJobsCount: openJobs.length,
           expensesThisMonth,
           dailyRevenue,
+        } : {
+          revenueThisMonth: 0, revenueLastMonth: 0, futureRevenue: 0,
+          toReceiveOpen: 0, sinalRecebidoOpen: 0, openJobsCount: 0,
+          expensesThisMonth: 0, dailyRevenue: [],
         },
       });
     } catch (err: any) {

@@ -57,7 +57,8 @@ interface OportunidadeDetailDrawerProps {
 export function OportunidadeDetailDrawer({
   op, onClose, onSendToKanban, onDiscard,
 }: OportunidadeDetailDrawerProps) {
-  const { isMember } = useAuth();
+  const { canAccess } = useAuth();
+  const canSeeFinance = canAccess('finance'); // dono ou funcionário com permissão "Financeiro"
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loadingJobs, setLoadingJobs] = useState(true);
   const [actionLoading, setActionLoading] = useState<'kanban' | 'discard' | null>(null);
@@ -137,7 +138,7 @@ export function OportunidadeDetailDrawer({
                     <Calendar size={11} />
                     {dataFormatada}
                   </span>
-                  {!isMember && op.valor_proposta ? (
+                  {canSeeFinance && op.valor_proposta ? (
                     <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
                       <DollarSign size={11} />
                       R$ {op.valor_proposta.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
@@ -206,7 +207,7 @@ export function OportunidadeDetailDrawer({
                     <div className="text-xs text-gold-700 dark:text-gold-300">
                       <span className="font-semibold">{jobs.length} ensaio{jobs.length !== 1 ? 's' : ''}</span> com este cliente
                     </div>
-                    {!isMember && (
+                    {canSeeFinance && (
                       <div className="text-xs font-semibold text-gold-700 dark:text-gold-300">
                         Total: R$ {jobs.reduce((s, j) => s + (j.amount || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                       </div>
@@ -239,7 +240,7 @@ export function OportunidadeDetailDrawer({
                             <Calendar size={10} />
                             {dataJob}
                           </span>
-                          {!isMember && job.amount ? (
+                          {canSeeFinance && job.amount ? (
                             <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
                               <DollarSign size={10} />
                               R$ {job.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}

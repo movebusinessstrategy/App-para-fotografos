@@ -58,7 +58,8 @@ interface OportunidadeModalProps {
 
 export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalProps) {
   const navigate = useNavigate();
-  const { isMember } = useAuth();
+  const { canAccess } = useAuth();
+  const canSeeFinance = canAccess('finance'); // dono ou funcionário com permissão "Financeiro"
   const [status, setStatus] = useState(op.status);
   const [notas, setNotas] = useState(op.notas || '');
   const [valor, setValor] = useState(op.valor_proposta ? String(op.valor_proposta) : '');
@@ -90,7 +91,7 @@ export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalP
 
   const mensagemWpp =
     `Olá ${op.cliente_nome}! 😊\n\nPassando para falar sobre ${op.tipo}.\n` +
-    (!isMember && valor ? `Valor: R$ ${Number(valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` : '') +
+    (canSeeFinance && valor ? `Valor: R$ ${Number(valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` : '') +
     `\nQualquer dúvida, estou à disposição! 📸`;
 
   // ── Save notes/value ────────────────────────────────────────────────────
@@ -287,8 +288,8 @@ export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalP
             <span>Data prevista: <strong className="text-gray-900 dark:text-white">{dataFormatada}</strong></span>
           </div>
 
-          {/* Valor da proposta — só admin/dono. Membro não vê. */}
-          {!isMember && (
+          {/* Valor da proposta — só quem tem permissão "Financeiro". */}
+          {canSeeFinance && (
             <div>
               <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2 block flex items-center gap-1.5">
                 <DollarSign size={12} />
@@ -335,7 +336,7 @@ export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalP
                   <input required type="date" value={jobDate} onChange={e => setJobDate(e.target.value)}
                     className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm" />
                 </div>
-                {!isMember && (
+                {canSeeFinance && (
                   <div>
                     <label className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1 block">Valor (R$)</label>
                     <input type="number" placeholder="0" value={jobAmount} onChange={e => setJobAmount(e.target.value)}
@@ -409,7 +410,7 @@ export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalP
                   className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm"
                 />
               </div>
-              {!isMember && (
+              {canSeeFinance && (
                 <div>
                   <label className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1 block">Valor estimado (R$)</label>
                   <div className="relative">

@@ -11,7 +11,6 @@ import Conciliacao from '../components/financeiro/Conciliacao';
 import DRE from '../components/financeiro/DRE';
 import Relatorios from '../components/financeiro/Relatorios';
 import Configuracoes from '../components/financeiro/Configuracoes';
-import { useAuth } from '../contexts/AuthContext';
 
 type TabKey = 'visao' | 'receber' | 'pagar' | 'conciliacao' | 'dre' | 'relatorios' | 'config';
 
@@ -33,9 +32,9 @@ const TABS: Tab[] = [
 
 export default function FinancePage() {
   const [tab, setTab] = useState<TabKey>('visao');
-  const { isMember } = useAuth();
-  // Relatórios (vendas/produtos) expõem valores agregados — só o DONO vê.
-  const visibleTabs = TABS.filter(t => !isMember || t.key !== 'relatorios');
+  // A página inteira já exige a permissão 'finance' (PermissionRoute). Quem chega
+  // aqui pode ver todas as abas, inclusive Relatórios.
+  const visibleTabs = TABS;
 
   return (
     <div className="flex flex-col h-full">
@@ -70,7 +69,7 @@ export default function FinancePage() {
         {tab === 'pagar'       && <ContasPagar />}
         {tab === 'conciliacao' && <Conciliacao />}
         {tab === 'dre'         && <DRE />}
-        {tab === 'relatorios'  && !isMember && <Relatorios />}
+        {tab === 'relatorios'  && <Relatorios />}
         {tab === 'config'      && <Configuracoes />}
       </div>
     </div>
