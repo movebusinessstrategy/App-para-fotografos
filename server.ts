@@ -17374,7 +17374,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         opportunitiesRes,
         clientsRes,
       ] = await Promise.all([
-        supabase.from('jobs').select('*, clients(name)').eq('user_id', userId),
+        supabase.from('jobs').select('*, clients(name)').eq('user_id', userId).limit(10000),
         supabase.from('deals').select('*').eq('user_id', userId),
         supabase.from('deal_stages').select('*').eq('user_id', userId).not('id', 'like', 'prod-%').order('position'),
         supabase.from('deal_stages').select('*').eq('user_id', userId).like('id', 'prod-%').order('position'),
@@ -17594,6 +17594,20 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           return acc + Math.max(total - paid, 0);
         }, 0);
 
+      // "Ensaios em aberto" = têm saldo a receber (valor - pago > 0) e não foram
+      // cancelados. Inclui TUDO em aberto — futuros E em atraso — sem corte de
+      // data (≠ futureRevenue, que limita aos próximos meses). Separa o sinal já
+      // recebido desses ensaios do que ainda falta receber.
+      const openJobs = jobs.filter((j: any) => {
+        if (j.status === 'cancelled') return false;
+        const saldo = (Number(j.amount) || 0) - (amountPaidByJob.get(j.id) || 0);
+        return saldo > 0.005;
+      });
+      const toReceiveOpen = openJobs.reduce(
+        (acc: number, j: any) => acc + Math.max((Number(j.amount) || 0) - (amountPaidByJob.get(j.id) || 0), 0), 0);
+      const sinalRecebidoOpen = openJobs.reduce(
+        (acc: number, j: any) => acc + Math.max(amountPaidByJob.get(j.id) || 0, 0), 0);
+
       const dailyRevenue: Array<{ date: string; total: number }> = [];
       const chartDays = Math.min(periodDays, 370);
       const chartStart = periodDays > chartDays ? addDaysOnly(periodEnd, -(chartDays - 1)) : periodStart;
@@ -17656,6 +17670,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           revenueThisMonth,
           revenueLastMonth,
           futureRevenue,
+          toReceiveOpen,
+          sinalRecebidoOpen,
+          openJobsCount: openJobs.length,
           dailyRevenue,
         },
       });

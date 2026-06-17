@@ -68,6 +68,9 @@ interface Analytics {
     revenueThisMonth: number;
     revenueLastMonth: number;
     futureRevenue: number;
+    toReceiveOpen: number;
+    sinalRecebidoOpen: number;
+    openJobsCount: number;
     dailyRevenue: Array<{ date: string; total: number }>;
   };
 }
@@ -282,9 +285,17 @@ export default function DashboardPage() {
             </Card>
 
             <Card>
+              <CardHeader icon={<Check size={16} />} title="Sinal recebido" />
+              <CardValue value={formatBRL(a.finance.sinalRecebidoOpen, hideValues)} />
+              <CardHint>Já pago em ensaios em aberto</CardHint>
+            </Card>
+
+            <Card>
               <CardHeader icon={<TrendingUp size={16} />} title="A receber" />
-              <CardValue value={formatBRL(a.finance.futureRevenue, hideValues)} />
-              <CardHint>Próximos 3 meses</CardHint>
+              <CardValue value={formatBRL(a.finance.toReceiveOpen, hideValues)} />
+              <CardHint>
+                Saldo de {a.finance.openJobsCount} ensaio{a.finance.openJobsCount === 1 ? '' : 's'} em aberto
+              </CardHint>
             </Card>
 
             <Card>
