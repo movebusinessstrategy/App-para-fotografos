@@ -644,7 +644,7 @@ export function DealConversionModal({
                       />
                     </div>
                     <div>
-                      <label className={labelClasses}>Email</label>
+                      <label className={labelClasses}>Email <span className="text-gold-600 dark:text-gold-400 font-normal">— recebe o convite da agenda</span></label>
                       <input
                         type="email"
                         value={clientData.email}
@@ -652,6 +652,11 @@ export function DealConversionModal({
                         className={inputClasses}
                         placeholder="email@exemplo.com"
                       />
+                      <p className="mt-1 text-[11px] text-gray-400 dark:text-gray-500">
+                        {clientData.email?.trim()
+                          ? <>O cliente recebe o convite do ensaio em <span className="font-medium text-gray-500 dark:text-gray-300">{clientData.email.trim()}</span>.</>
+                          : 'Sem e-mail, o evento é criado na agenda mas o cliente não recebe o convite.'}
+                      </p>
                     </div>
                   </div>
 
@@ -793,6 +798,11 @@ export function DealConversionModal({
 
               {expandedSections.job && (
                 <div className="p-4 space-y-4 bg-gray-50/50 dark:bg-gray-800/30">
+                  {/* Aviso: a data/hora agendam na Agenda e mandam o convite */}
+                  <div className="flex items-start gap-2 rounded-lg bg-purple-50/70 dark:bg-purple-950/20 border border-purple-100 dark:border-purple-900/30 px-3 py-2 text-[12px] text-purple-700 dark:text-purple-300">
+                    <CalendarDays size={15} className="mt-0.5 flex-shrink-0" />
+                    <span>A <strong>Data</strong> e o <strong>Início</strong> abaixo agendam o ensaio na sua <strong>Agenda (Google)</strong> e enviam o convite pro e-mail do cliente. Sem Google conectado, fica só registrado aqui.</span>
+                  </div>
                   {/* Linha 1: Tipo, Data, Horários */}
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                     <div>

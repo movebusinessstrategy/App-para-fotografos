@@ -740,13 +740,15 @@ const syncJobToGoogleCalendar = async (supabase: SupabaseClient, jobId: number, 
     attendees: client?.email ? [{ email: client.email }] : [],
   };
 
+  // sendUpdates:'all' faz o Google ENVIAR o convite/atualização por e-mail pro
+  // cliente (attendee). Sem isso, o attendee é adicionado mas ninguém recebe nada.
   try {
     if (job.google_event_id) {
       try {
-        await calendar.events.patch({ calendarId: 'primary', eventId: job.google_event_id, requestBody: event });
+        await calendar.events.patch({ calendarId: 'primary', eventId: job.google_event_id, requestBody: event, sendUpdates: 'all' });
       } catch (patchError: any) {
         if (patchError.message?.includes('Event type cannot be changed') || patchError.code === 404) {
-          const res = await calendar.events.insert({ calendarId: 'primary', requestBody: event });
+          const res = await calendar.events.insert({ calendarId: 'primary', requestBody: event, sendUpdates: 'all' });
           if (res.data.id) {
             await supabase.from('jobs').update({ google_event_id: res.data.id }).eq('id', jobId);
           }
@@ -755,7 +757,7 @@ const syncJobToGoogleCalendar = async (supabase: SupabaseClient, jobId: number, 
         }
       }
     } else {
-      const res = await calendar.events.insert({ calendarId: 'primary', requestBody: event });
+      const res = await calendar.events.insert({ calendarId: 'primary', requestBody: event, sendUpdates: 'all' });
       if (res.data.id) {
         await supabase.from('jobs').update({ google_event_id: res.data.id }).eq('id', jobId);
       }
@@ -12105,6 +12107,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           payment_method: job.payment_method || 'Pix',
         }).select();
       }
+
+      // AGENDA: cria o evento no Google Calendar e convida o cliente pelo e-mail
+      // (se a conta tiver Google conectado e o job tiver data). Antes a conversão
+      // NÃO agendava — só agendava quem editava o job depois; por isso "uns sim,
+      // outros não". Fire-and-forget, igual ao POST /api/jobs (não atrasa a resposta).
+      if (jobId) syncJobToGoogleCalendar(supabase, jobId, userId);
     }
 
     const stageId = wonStage?.id || 'won';
