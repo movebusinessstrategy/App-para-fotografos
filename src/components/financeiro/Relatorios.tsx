@@ -70,6 +70,7 @@ export default function Relatorios() {
   const [expandedPkg, setExpandedPkg] = useState<Set<string>>(new Set());
   const [editVend, setEditVend] = useState<{ id: string; meta: string; pct: string } | null>(null);
   const [savingVend, setSavingVend] = useState(false);
+  const [erroVend, setErroVend] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const rangeLabel =
@@ -105,13 +106,21 @@ export default function Relatorios() {
   const salvarComissao = async () => {
     if (!editVend) return;
     setSavingVend(true);
+    setErroVend(null);
     try {
-      await authFetch(`/api/team-members/${editVend.id}/comissao`, {
+      const res = await authFetch(`/api/team-members/${editVend.id}/comissao`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ meta_venda: Number(editVend.meta) || 0, comissao_percentual: Number(editVend.pct) || 0 }),
       });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({} as any));
+        setErroVend(j?.error || 'Não foi possível salvar. Confira se a migration 042 foi aplicada e se você é o dono da conta.');
+        return; // mantém o editor aberto pra não parecer que salvou
+      }
       setEditVend(null);
       await gerar();
+    } catch {
+      setErroVend('Erro de conexão ao salvar a comissão.');
     } finally {
       setSavingVend(false);
     }
@@ -422,7 +431,7 @@ export default function Relatorios() {
                             <p className="text-base font-bold text-indigo-600 dark:text-indigo-400">{fmtBRL(v.comissao)}</p>
                           </div>
                           {v.id && !editing && (
-                            <button onClick={() => setEditVend({ id: v.id!, meta: String(v.meta || ''), pct: String(v.percentual || '') })}
+                            <button onClick={() => { setErroVend(null); setEditVend({ id: v.id!, meta: String(v.meta || ''), pct: String(v.percentual || '') }); }}
                               className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-gray-100 dark:hover:bg-gray-700" title="Editar meta e comissão">
                               <Pencil size={14} />
                             </button>
@@ -459,7 +468,10 @@ export default function Relatorios() {
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm hover:bg-indigo-700 disabled:opacity-50">
                               <Check size={14} /> {savingVend ? 'Salvando...' : 'Salvar'}
                             </button>
-                            <button onClick={() => setEditVend(null)} className="px-3 py-1.5 rounded-lg text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-200">Cancelar</button>
+                            <button onClick={() => { setEditVend(null); setErroVend(null); }} className="px-3 py-1.5 rounded-lg text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-200">Cancelar</button>
+                            {erroVend && (
+                              <p className="w-full text-xs text-red-600 dark:text-red-400 flex items-center gap-1"><AlertCircle size={12} /> {erroVend}</p>
+                            )}
                           </div>
                         )}
                       </div>
