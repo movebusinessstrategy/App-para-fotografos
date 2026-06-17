@@ -4033,6 +4033,40 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
       await supabase.from('opportunities').delete().eq('trigger_job_id', req.params.id);
       await supabase.from('jobs').delete().eq('id', req.params.id);
+
+      // Se este ensaio era a conversão de uma venda, tira o deal do "ganho" pra
+      // NÃO virar venda fantasma (deal ganho apontando pra ensaio que não existe).
+      // Estava ganho → vai pra perdido (igual ao "Cancelar venda"); senão só
+      // desfaz o vínculo. Assim a venda cancelada some de tudo (dashboard, etc.).
+      const jobIdNum = Number(req.params.id);
+      if (!Number.isNaN(jobIdNum)) {
+        const { data: linkedDeals } = await supabase
+          .from('deals')
+          .select('id, stage, stage_history')
+          .eq('user_id', userId)
+          .eq('converted_job_id', jobIdNum);
+        if (linkedDeals && linkedDeals.length) {
+          const stages = await ensurePipelineStages(supabase, userId);
+          const wonIds = new Set(stages.filter((s: any) => s.is_won).map((s: any) => s.id));
+          const lostStage =
+            stages.find((s: any) => s.id === 'lost') ||
+            stages.find((s: any) => s.is_final && !s.is_won) ||
+            DEFAULT_STAGES.find((s: any) => s.id === 'lost');
+          const nowIso = new Date().toISOString();
+          for (const d of linkedDeals) {
+            const upd: any = { converted: false, converted_at: null, converted_job_id: null };
+            if (wonIds.has(d.stage) && lostStage) {
+              upd.stage = lostStage.id;
+              upd.stage_entered_at = nowIso;
+              upd.current_stage_entered_at = nowIso;
+              upd.stage_history = appendStageHistory(d.stage_history, lostStage.id, lostStage.name, nowIso);
+              upd.lost_reason = 'Ensaio apagado';
+            }
+            await supabase.from('deals').update(upd).eq('id', d.id).eq('user_id', userId);
+          }
+        }
+      }
+
       res.json({ success: true });
     } catch (error) {
       console.error('Error deleting job:', error);
@@ -17810,10 +17844,23 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       // ── SALES funnel (deals by stage) ──────────────────────────────────────
       const dealInSelectedPeriod = (d: any) =>
         inDateRange(d.converted_at || d.updated_at || d.created_at, periodStart, periodEnd);
+      // "Venda fantasma" = deal GANHO cujo ensaio (converted_job_id) foi APAGADO
+      // ou cancelado. Ao cancelar a venda apagando o ensaio, o deal às vezes fica
+      // "ganho" — não pode contar como venda no funil. (Quem usa "Cancelar venda"
+      // já cai em perdido.)
+      const jobsById = new Map<number, any>((jobs as any[]).map((j: any) => [j.id, j]));
+      const isPhantomWon = (d: any) => {
+        if (!d.converted_job_id) return false;
+        const j = jobsById.get(d.converted_job_id);
+        return !j || j.status === 'cancelled';
+      };
       const dealsByStage = dealStages.map((stage: any) => {
-        const stageDeals = deals.filter((d: any) =>
-          d.stage === stage.id && (!stage.is_final || dealInSelectedPeriod(d))
-        );
+        const stageDeals = deals.filter((d: any) => {
+          if (d.stage !== stage.id) return false;
+          if (stage.is_final && !dealInSelectedPeriod(d)) return false;
+          if (stage.is_won && isPhantomWon(d)) return false; // venda cancelada/apagada não conta
+          return true;
+        });
         return {
           id: stage.id,
           name: stage.name,
