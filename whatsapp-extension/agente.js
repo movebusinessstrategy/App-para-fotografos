@@ -108,8 +108,37 @@
     return out;
   }
 
-  // Retorna null se não há conversa aberta; [] se aberta mas sem mensagens.
-  function readConversation(limit) {
+  const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Acha o container rolável das mensagens — é nele que o WhatsApp "desmonta"
+  // (virtualiza) as mensagens antigas e carrega mais quando a gente rola pra cima.
+  function getScroller(main) {
+    let el = main.querySelector('[data-pre-plain-text]') || main.querySelector('div[role="row"]');
+    el = el && el.parentElement;
+    while (el && el !== main) {
+      if (el.scrollHeight > el.clientHeight + 40) {
+        const oy = getComputedStyle(el).overflowY;
+        if (oy === 'auto' || oy === 'scroll') return el;
+      }
+      el = el.parentElement;
+    }
+    return null;
+  }
+
+  // "[HH:MM, DD/MM/AAAA] Nome: " → timestamp (pra ordenar em ordem cronológica).
+  function parseTs(node) {
+    const pre = node.getAttribute && node.getAttribute('data-pre-plain-text');
+    if (!pre) return null;
+    const m = pre.match(/\[(\d{1,2}):(\d{2})(?::(\d{2}))?,\s*(\d{1,2})\/(\d{1,2})\/(\d{2,4})\]/);
+    if (!m) return null;
+    const year = m[6].length === 2 ? 2000 + Number(m[6]) : Number(m[6]);
+    return new Date(year, Number(m[5]) - 1, Number(m[4]), Number(m[1]), Number(m[2]), Number(m[3] || 0)).getTime();
+  }
+
+  // Lê a conversa aberta INTEIRA: rola pra cima carregando o histórico que o
+  // WhatsApp mantém fora do DOM, junta tudo sem repetir e devolve em ordem
+  // cronológica (as últimas `limit` mensagens). null = nenhuma conversa aberta.
+  async function readConversation(limit) {
     const main = document.querySelector('#main');
     if (!main) return null;
 
@@ -124,22 +153,63 @@
       return r.left + r.width / 2 > mid ? 'assistant' : 'user';
     }
 
-    let nodes = [...main.querySelectorAll('[data-pre-plain-text]')];
-    if (nodes.length === 0) {
-      nodes = [...main.querySelectorAll('span.selectable-text')];
-    }
-
-    let msgs = [];
-    for (const node of nodes) {
-      const text = extractText(node).trim();
-      if (text) msgs.push({ role: classify(node), content: text });
-    }
-
-    if (msgs.length === 0) {
-      main.querySelectorAll('div[role="row"]').forEach((row) => {
-        const t = (row.innerText || '').trim();
-        if (t && t.length > 1) msgs.push({ role: classify(row), content: t });
+    // chave = pré-texto (hora + remetente) + conteúdo → dedup estável entre passadas.
+    const byKey = new Map();
+    let seq = 0;
+    const snapshot = () => {
+      main.querySelectorAll('[data-pre-plain-text]').forEach((node) => {
+        const text = extractText(node).trim();
+        if (!text) return;
+        const key = (node.getAttribute('data-pre-plain-text') || '') + '|' + text;
+        if (byKey.has(key)) return;
+        byKey.set(key, { role: classify(node), content: text, ts: parseTs(node), seq: seq++ });
       });
+    };
+
+    snapshot(); // o que já está montado (mensagens mais recentes)
+
+    // Rola pro topo várias vezes pra forçar o WhatsApp a montar o histórico.
+    // Para quando já temos contexto suficiente OU duas passadas seguidas sem novidade.
+    const target = limit + 10;
+    const scroller = getScroller(main);
+    if (scroller) {
+      let stable = 0;
+      for (let i = 0; i < 12 && byKey.size < target; i++) {
+        const before = byKey.size;
+        scroller.scrollTop = 0;
+        await sleepMs(320);
+        snapshot();
+        if (byKey.size === before) { if (++stable >= 2) break; } else { stable = 0; }
+      }
+      scroller.scrollTop = scroller.scrollHeight; // volta pro fim (última mensagem)
+      await sleepMs(120);
+      snapshot();
+    }
+
+    let msgs = [...byKey.values()];
+    const haveTs = msgs.some((m) => m.ts != null);
+    if (haveTs) {
+      // Ordem cronológica pelo horário; empate mantém a ordem de aparição.
+      msgs.sort((a, b) => {
+        if (a.ts == null && b.ts == null) return a.seq - b.seq;
+        if (a.ts == null) return 1;
+        if (b.ts == null) return -1;
+        return a.ts - b.ts || a.seq - b.seq;
+      });
+      msgs = msgs.map((m) => ({ role: m.role, content: m.content }));
+    } else {
+      // DOM sem timestamps (layout diferente do WhatsApp): cai pro modo simples.
+      msgs = [];
+      main.querySelectorAll('span.selectable-text').forEach((node) => {
+        const text = extractText(node).trim();
+        if (text) msgs.push({ role: classify(node), content: text });
+      });
+      if (msgs.length === 0) {
+        main.querySelectorAll('div[role="row"]').forEach((row) => {
+          const t = (row.innerText || '').trim();
+          if (t && t.length > 1) msgs.push({ role: classify(row), content: t });
+        });
+      }
     }
 
     if (msgs.length === 0) {
@@ -152,7 +222,7 @@
         '| role=row:', main.querySelectorAll('div[role="row"]').length,
       );
     } else {
-      console.log('[AgenteIA] mensagens lidas:', msgs.length);
+      console.log('[AgenteIA] mensagens lidas:', msgs.length, '(contexto completo)');
     }
 
     return msgs.slice(-limit);
@@ -287,27 +357,37 @@
   async function generate() {
     clearError();
     elOk.style.display = 'none';
-    const msgs = readConversation(25);
-    if (msgs === null) {
-      showError('Abra uma conversa no WhatsApp antes de gerar a sugestão.');
-      return;
+
+    // Encerra cedo mostrando um aviso e devolvendo a UI ao estado normal.
+    const fail = (msg) => {
+      elSpin.style.display = 'none';
+      elGen.disabled = false;
+      showError(msg);
+    };
+
+    // Lê a conversa INTEIRA (rola pra cima carregando o histórico). Como isso
+    // leva 1–3s, já mostra o spinner com o aviso de leitura.
+    elGen.disabled = true;
+    elResult.style.display = 'none';
+    elSpin.textContent = 'Lendo a conversa…';
+    elSpin.style.display = 'block';
+
+    let msgs;
+    try {
+      msgs = await readConversation(60);
+    } catch (e) {
+      return fail('Não consegui ler a conversa. Clique na conversa e tente de novo.');
     }
-    if (msgs.length === 0) {
-      showError('Não encontrei mensagens de texto nessa conversa.');
-      return;
-    }
+    if (msgs === null) return fail('Abra uma conversa no WhatsApp antes de gerar a sugestão.');
+    if (msgs.length === 0) return fail('Não encontrei mensagens de texto nessa conversa.');
     if (!msgs.some((m) => m.role === 'user')) {
-      showError('A conversa não tem nenhuma mensagem do cliente para responder.');
-      return;
+      return fail('A conversa não tem nenhuma mensagem do cliente para responder.');
     }
     if (msgs[msgs.length - 1].role !== 'user') {
-      showError('A última mensagem da conversa é sua — espere o cliente responder.');
-      return;
+      return fail('A última mensagem da conversa é sua — espere o cliente responder.');
     }
 
-    elGen.disabled = true;
-    elSpin.style.display = 'block';
-    elResult.style.display = 'none';
+    elSpin.textContent = 'Gerando sugestão…';
     try {
       const resp = await bg({ type: 'AGENT_SUGGEST', messages: msgs });
       elText.value = (resp && resp.reply) || '';
@@ -318,6 +398,7 @@
     } finally {
       elGen.disabled = false;
       elSpin.style.display = 'none';
+      elSpin.textContent = 'Gerando sugestão…';
     }
   }
   elGen.addEventListener('click', generate);

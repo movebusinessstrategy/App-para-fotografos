@@ -24,9 +24,9 @@ export function LiaSuggestButton({ messages, onSuggested }: Props) {
     setLoading(true);
     setError(null);
     try {
-      // Pega as últimas 25 mensagens (mesmo limite da extensão) e mapeia
-      // pro formato { role, content } que getAgentReply espera.
-      const recent = messages.slice(-25).map(m => ({
+      // Pega as últimas 60 mensagens (mesmo limite da extensão) pra responder
+      // com o contexto da conversa, e mapeia pro formato { role, content }.
+      const recent = messages.slice(-60).map(m => ({
         role: m.from_me ? "assistant" : "user",
         content: m.body || "",
       })).filter(m => m.content.trim());

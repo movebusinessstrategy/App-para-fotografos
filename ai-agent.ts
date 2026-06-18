@@ -129,7 +129,10 @@ export async function getAgentReply(
     .map((m) => ({
       role: m.role === 'assistant' ? ('assistant' as const) : ('user' as const),
       content: m.content.trim(),
-    }));
+    }))
+    // Usa o histórico INTEIRO recebido pra responder com contexto; limita só às
+    // últimas 80 mensagens como teto de segurança (conversas muito longas).
+    .slice(-80);
 
   if (cleaned.length === 0) {
     throw new Error('Envie pelo menos uma mensagem.');
