@@ -16,8 +16,8 @@ interface AuthContextType {
   signOut: () => Promise<void>;
 }
 
-interface PlanFeatures { gallery: boolean; album: boolean; storage_gb: number }
-const DEFAULT_FEATURES: PlanFeatures = { gallery: true, album: true, storage_gb: 0 };
+interface PlanFeatures { gallery: boolean; album: boolean; storage_gb: number; nota_fiscal: boolean }
+const DEFAULT_FEATURES: PlanFeatures = { gallery: true, album: true, storage_gb: 0, nota_fiscal: true };
 
 const AuthContext = createContext<AuthContextType>({
   user: null,

@@ -24,6 +24,7 @@ const sentryReady = initSentry();
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createSupabaseClient, supabaseAdmin } from './supabase.js';
 import { getAgentReply, DEFAULT_PERSONA, DEFAULT_OBJECTIVE, DEFAULT_KNOWLEDGE, DEFAULT_RULES } from './ai-agent.js';
+import * as plugnotas from './plugnotas.js';
 import {
   DEFAULT_STAGES,
   DEFAULT_PRODUCTION_STAGES,
@@ -7509,6 +7510,183 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ success: true });
   });
 
+  // ============ NOTA FISCAL (NFS-e via PlugNotas) ============
+  // Bloco multi-tenant. Cada estúdio tem a sua config fiscal + suas notas.
+  // Regra: a nota só sai DEPOIS do ensaio realizado, pelo valor cheio do serviço
+  // (o sinal de 30% é pagamento, não gera nota). Gateado por permissão 'finance'.
+  const fiscalDb = (req: any) => (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+  const fiscalEnv = (cfg: any): plugnotas.PlugEnv =>
+    cfg?.environment === 'production' ? 'production' : 'sandbox';
+
+  async function getFiscalConfig(req: any) {
+    const userId = (req as any).userId;
+    const { data } = await fiscalDb(req)
+      .from('fiscal_config').select('*').eq('user_id', userId).maybeSingle();
+    return data;
+  }
+
+  // Config fiscal do estúdio (dados do emitente + serviço).
+  app.get('/api/fiscal/config', requireAuth, requirePermission('finance'), async (req, res) => {
+    const cfg = await getFiscalConfig(req);
+    res.json(cfg || null);
+  });
+
+  app.put('/api/fiscal/config', requireAuth, requirePermission('finance'), async (req, res) => {
+    const userId = (req as any).userId;
+    // Nunca aceita certificado/senha aqui (vai por rota própria, vai pro PlugNotas).
+    const { certificado, senha, pfxBase64, user_id, created_at, ...rest } = req.body || {};
+    const row = { ...rest, user_id: userId, updated_at: new Date().toISOString() };
+    const { error } = await fiscalDb(req)
+      .from('fiscal_config').upsert(row, { onConflict: 'user_id' });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(await getFiscalConfig(req));
+  });
+
+  // Cadastra/atualiza o emitente no PlugNotas a partir da config salva.
+  app.post('/api/fiscal/empresa', requireAuth, requirePermission('finance'), async (req, res) => {
+    const userId = (req as any).userId;
+    const cfg = await getFiscalConfig(req);
+    if (!cfg?.cnpj || !cfg?.razao_social) {
+      return res.status(400).json({ error: 'Preencha ao menos CNPJ e razão social antes de cadastrar a empresa.' });
+    }
+    const env = fiscalEnv(cfg);
+    const payload: plugnotas.EmpresaPayload = {
+      cpfCnpj: String(cfg.cnpj).replace(/\D/g, ''),
+      inscricaoMunicipal: cfg.inscricao_municipal || undefined,
+      inscricaoEstadual: cfg.inscricao_estadual || undefined,
+      razaoSocial: cfg.razao_social,
+      nomeFantasia: cfg.nome_fantasia || undefined,
+      simplesNacional: cfg.simples_nacional ?? true,
+      regimeTributario: cfg.regime_tributario ?? undefined,
+      incentivadorCultural: cfg.incentivo_cultural ?? false,
+      email: cfg.email || undefined,
+      endereco: {
+        logradouro: cfg.logradouro || '', numero: cfg.numero || '',
+        complemento: cfg.complemento || undefined, bairro: cfg.bairro || '',
+        codigoCidade: cfg.codigo_cidade || '', descricaoCidade: cfg.cidade || undefined,
+        estado: cfg.estado || '', cep: String(cfg.cep || '').replace(/\D/g, ''),
+      },
+    };
+    try {
+      const exist = await plugnotas.consultarEmpresa(env, payload.cpfCnpj);
+      const r = exist.ok
+        ? await plugnotas.atualizarEmpresa(env, payload.cpfCnpj, payload)
+        : await plugnotas.cadastrarEmpresa(env, payload);
+      if (!r.ok) return res.status(400).json({ error: r.data?.error?.message || r.data?.message || 'Erro ao cadastrar empresa no PlugNotas.', detail: r.data });
+      await fiscalDb(req).from('fiscal_config')
+        .update({ empresa_cadastrada: true, updated_at: new Date().toISOString() })
+        .eq('user_id', userId);
+      res.json({ success: true, data: r.data });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || 'Falha ao falar com o PlugNotas.' });
+    }
+  });
+
+  // Upload do certificado A1 (.pfx em base64) → vai pro PlugNotas, não fica aqui.
+  app.post('/api/fiscal/certificado', requireAuth, requirePermission('finance'), async (req, res) => {
+    const userId = (req as any).userId;
+    const { pfxBase64, senha } = req.body || {};
+    if (!pfxBase64 || !senha) return res.status(400).json({ error: 'Envie o arquivo .pfx e a senha.' });
+    const cfg = await getFiscalConfig(req);
+    if (!cfg?.cnpj) return res.status(400).json({ error: 'Cadastre o CNPJ na config antes do certificado.' });
+    try {
+      const buf = Buffer.from(String(pfxBase64).replace(/^data:.*;base64,/, ''), 'base64');
+      const r = await plugnotas.enviarCertificado(fiscalEnv(cfg), String(cfg.cnpj).replace(/\D/g, ''), buf, String(senha));
+      if (!r.ok) return res.status(400).json({ error: r.data?.error?.message || r.data?.message || 'Certificado recusado pelo PlugNotas.', detail: r.data });
+      const validade = r.data?.vencimento || r.data?.validade || null;
+      await fiscalDb(req).from('fiscal_config')
+        .update({ certificado_enviado: true, certificado_validade: validade, updated_at: new Date().toISOString() })
+        .eq('user_id', userId);
+      res.json({ success: true, validade });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || 'Falha ao enviar o certificado.' });
+    }
+  });
+
+  // Emite a NFS-e de um ensaio JÁ REALIZADO, pelo valor cheio do serviço.
+  app.post('/api/fiscal/nfse', requireAuth, requirePermission('finance'), async (req, res) => {
+    const userId = (req as any).userId;
+    const { job_id, deal_id, client_id, valor, discriminacao, tomador, enviarEmail } = req.body || {};
+    if (!valor || Number(valor) <= 0) return res.status(400).json({ error: 'Informe o valor do serviço.' });
+    if (!tomador?.cpfCnpj || !tomador?.razaoSocial) return res.status(400).json({ error: 'Informe nome e CPF/CNPJ do cliente (tomador).' });
+    const cfg = await getFiscalConfig(req);
+    if (!cfg?.empresa_cadastrada || !cfg?.certificado_enviado) {
+      return res.status(400).json({ error: 'Configure a empresa e o certificado antes de emitir.' });
+    }
+    const db = fiscalDb(req);
+    // Cria a linha primeiro (id idempotente que vai como idIntegracao no PlugNotas).
+    const { data: inv, error: insErr } = await db.from('fiscal_invoices').insert({
+      user_id: userId, job_id: job_id || null, deal_id: deal_id || null, client_id: client_id || null,
+      tipo: 'nfse', status: 'processando', valor: Number(valor),
+      tomador_nome: tomador.razaoSocial, tomador_doc: String(tomador.cpfCnpj).replace(/\D/g, ''),
+      discriminacao: discriminacao || cfg.servico_discriminacao || 'Serviço de fotografia',
+    }).select().single();
+    if (insErr) return res.status(500).json({ error: insErr.message });
+    try {
+      const payload = plugnotas.montarNfse(cfg as any, {
+        idIntegracao: inv.id, valor: Number(valor),
+        discriminacao: inv.discriminacao, tomador, enviarEmail: !!enviarEmail,
+      });
+      const r = await plugnotas.emitirNfse(fiscalEnv(cfg), [payload]);
+      const doc = Array.isArray(r.data) ? r.data[0] : (r.data?.documents?.[0] || r.data);
+      const providerId = doc?.id || doc?.idIntegracao || null;
+      if (!r.ok) {
+        const msg = r.data?.error?.message || doc?.mensagem || r.data?.message || 'Erro ao emitir no PlugNotas.';
+        await db.from('fiscal_invoices').update({ status: 'erro', error_message: msg, provider_id: providerId, updated_at: new Date().toISOString() }).eq('id', inv.id);
+        return res.status(400).json({ error: msg, detail: r.data });
+      }
+      await db.from('fiscal_invoices').update({ provider_id: providerId, emitida_em: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', inv.id);
+      res.json({ success: true, id: inv.id, provider_id: providerId });
+    } catch (e: any) {
+      await db.from('fiscal_invoices').update({ status: 'erro', error_message: e?.message || 'falha', updated_at: new Date().toISOString() }).eq('id', inv.id);
+      res.status(500).json({ error: e?.message || 'Falha ao emitir a nota.' });
+    }
+  });
+
+  app.get('/api/fiscal/nfse', requireAuth, requirePermission('finance'), async (req, res) => {
+    const userId = (req as any).userId;
+    const { data, error } = await fiscalDb(req).from('fiscal_invoices')
+      .select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(500);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  });
+
+  // Atualiza o status da nota consultando o PlugNotas (autorizada/rejeitada).
+  app.post('/api/fiscal/nfse/:id/refresh', requireAuth, requirePermission('finance'), async (req, res) => {
+    const userId = (req as any).userId;
+    const db = fiscalDb(req);
+    const { data: inv } = await db.from('fiscal_invoices').select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!inv) return res.status(404).json({ error: 'Nota não encontrada.' });
+    if (!inv.provider_id) return res.json(inv);
+    const cfg = await getFiscalConfig(req);
+    const r = await plugnotas.consultarNfse(fiscalEnv(cfg), inv.provider_id);
+    const d = Array.isArray(r.data) ? r.data[0] : r.data;
+    const map: Record<string, string> = { CONCLUIDO: 'autorizada', AUTORIZADO: 'autorizada', REJEITADO: 'rejeitada', CANCELADO: 'cancelada', PROCESSANDO: 'processando', NEGADO: 'rejeitada' };
+    const status = map[(d?.situacao || d?.status || '').toUpperCase()] || inv.status;
+    const upd: any = { status, updated_at: new Date().toISOString() };
+    if (d?.numero) upd.numero = String(d.numero);
+    if (d?.codigoVerificacao) upd.codigo_verificacao = String(d.codigoVerificacao);
+    if (d?.pdf || d?.linkPdf) upd.pdf_url = d.pdf || d.linkPdf;
+    if (d?.xml || d?.linkXml) upd.xml_url = d.xml || d.linkXml;
+    if (status === 'rejeitada') upd.error_message = d?.mensagem || d?.motivo || 'Rejeitada pela prefeitura.';
+    await db.from('fiscal_invoices').update(upd).eq('id', inv.id);
+    res.json({ ...inv, ...upd });
+  });
+
+  app.post('/api/fiscal/nfse/:id/cancelar', requireAuth, requirePermission('finance'), async (req, res) => {
+    const userId = (req as any).userId;
+    const justificativa = String(req.body?.justificativa || '').trim();
+    if (justificativa.length < 15) return res.status(400).json({ error: 'A justificativa precisa de pelo menos 15 caracteres.' });
+    const db = fiscalDb(req);
+    const { data: inv } = await db.from('fiscal_invoices').select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!inv?.provider_id) return res.status(400).json({ error: 'Nota sem registro no provedor.' });
+    const cfg = await getFiscalConfig(req);
+    const r = await plugnotas.cancelarNfse(fiscalEnv(cfg), inv.provider_id, justificativa);
+    if (!r.ok) return res.status(400).json({ error: r.data?.error?.message || r.data?.message || 'Erro ao cancelar.', detail: r.data });
+    await db.from('fiscal_invoices').update({ status: 'cancelada', updated_at: new Date().toISOString() }).eq('id', inv.id);
+    res.json({ success: true });
+  });
+
   app.get('/api/me', requireAuth, async (req, res) => {
     const realUserId = (req as any).realUserId || (req as any).userId;
     const ownerId = (req as any).userId;
@@ -7543,6 +7721,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         gallery: planLimits?.gallery !== false,
         album: planLimits?.album !== false,
         storage_gb: Number(planLimits?.storage_gb || 0),
+        // Bloco Nota Fiscal (NFS-e). Default-allow por enquanto (igual galeria/álbum);
+        // na fase de venda, planos que não incluem marcam nota_fiscal=false.
+        nota_fiscal: planLimits?.nota_fiscal !== false,
       },
     });
   });

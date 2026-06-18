@@ -23,6 +23,7 @@ const VendasPage = lazy(() => import("./pages/VendasPage"));
 const CalendarPage = lazy(() => import("./pages/CalendarPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const FinancePage = lazy(() => import("./pages/FinancePage"));
+const FiscalPage = lazy(() => import("./pages/FiscalPage"));
 const PipelineSettings = lazy(() => import("./pages/PipelineSettings"));
 const OportunidadesPage = lazy(() => import("./pages/OportunidadesPage"));
 const ContractsPage = lazy(() => import("./pages/ContractsPage"));
@@ -136,6 +137,7 @@ export default function App() {
                 <Route path="calendar" element={<PermissionRoute module="calendar"><CalendarPage /></PermissionRoute>} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="finance" element={<PermissionRoute module="finance"><FinancePage /></PermissionRoute>} />
+                <Route path="fiscal" element={<PermissionRoute module="finance"><FiscalPage /></PermissionRoute>} />
                 <Route
                   path="pipeline-settings"
                   element={<PermissionRoute module="vendas"><PipelineSettings /></PermissionRoute>}
