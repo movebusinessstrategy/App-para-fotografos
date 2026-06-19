@@ -1,5 +1,5 @@
 import React from 'react';
-import { Mic } from 'lucide-react';
+import { Mic, CheckCheck } from 'lucide-react';
 import { Conversation } from '../types';
 import { extractContact, getInitials } from '../utils/contactHelpers';
 import { useContactProfile } from '../hooks/useContactProfile';
@@ -105,6 +105,9 @@ export function ConversationItem({ conv, selected, onClick }: Props) {
             className="flex items-center gap-1 text-[13px] truncate min-w-0"
             style={{ color: 'var(--wa-text-secondary)' }}
           >
+            {conv.last_from_me && !hasUnread && (
+              <CheckCheck size={15} className="flex-shrink-0" style={{ color: 'var(--wa-text-secondary)' }} />
+            )}
             {preview.mic && <Mic size={12} className="flex-shrink-0" style={{ color: 'var(--wa-text-secondary)' }} />}
             <span className="truncate">{preview.text}</span>
           </span>

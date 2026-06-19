@@ -25,10 +25,11 @@ export function LiaSuggestButton({ messages, onSuggested }: Props) {
     setError(null);
     try {
       // Pega as últimas 60 mensagens (mesmo limite da extensão) pra responder
-      // com o contexto da conversa, e mapeia pro formato { role, content }.
+      // com o contexto da conversa. Pra áudio/imagem usa a TRANSCRIÇÃO/descrição
+      // (a Lia "ouve/vê" o que o cliente mandou) — senão body vazio era ignorado.
       const recent = messages.slice(-60).map(m => ({
         role: m.from_me ? "assistant" : "user",
-        content: m.body || "",
+        content: m.body || m.transcription || "",
       })).filter(m => m.content.trim());
 
       if (recent.length === 0) {

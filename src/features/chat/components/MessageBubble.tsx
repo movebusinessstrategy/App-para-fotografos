@@ -19,14 +19,6 @@ function timeStr(iso: string) {
 function StatusIcon({ msg }: { msg: Message }) {
   if (!msg.from_me) return null;
 
-  // DEBUG temporário - veja no DevTools → Console os valores reais
-  console.log('[MessageBubble] status debug:', {
-    message_id: msg.message_id?.slice(-8),
-    status: msg.status,
-    from_me: msg.from_me,
-    allFields: Object.keys(msg as any),
-  });
-
   const raw = (msg as any).status ?? (msg as any).ack ?? (msg as any).ackStatus ?? '';
   const s = String(raw).toUpperCase();
 

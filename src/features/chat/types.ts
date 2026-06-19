@@ -4,6 +4,7 @@ export interface Conversation {
   last_message: string | null;
   last_message_at: string | null;
   unread_count: number;
+  last_from_me?: boolean; // última mensagem foi nossa → mostra ✓✓ na lista
 }
 
 export interface Message {

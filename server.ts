@@ -18682,6 +18682,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       last_message: lastMsgPreview,
       last_message_at: ts,
       updated_at: now,
+      // Quem mandou a última? Pro ✓✓ na lista ("já respondi"). Baileys dispara
+      // o handler também nas NOSSAS mensagens (fromMe), então isso cobre tudo.
+      ...(!isHistory ? { last_from_me: !!msg.key.fromMe } : {}),
       ...(!isHistory ? { unread_count: msg.key.fromMe ? 0 : 1 } : {}),
       ...(contactName ? { contact_name: contactName } : {}),
     };

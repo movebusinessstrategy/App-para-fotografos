@@ -59,6 +59,11 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
   const { conversations, loading: loadingConvs, refresh } = useConversations();
   const { connected } = useWaStatus();
   const [selectedPhone, setSelectedPhone] = useState<string | null>(initialPhone || null);
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const shownConversations = unreadOnly
+    ? conversations.filter((c) => c.unread_count > 0)
+    : conversations;
+  const unreadTotal = conversations.filter((c) => c.unread_count > 0).length;
   const { messages, loading: loadingMsgs, sendText } = useMessages(selectedPhone);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
@@ -414,14 +419,30 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
           </div>
         </div>
 
-        {/* Contador */}
+        {/* Filtros: Todas / Não lidas (igual WhatsApp) */}
         <div
-          className="px-4 py-2 flex-shrink-0"
+          className="px-3 py-2 flex-shrink-0 flex items-center gap-2"
           style={{ borderBottom: '1px solid var(--wa-border)' }}
         >
-          <p className="text-[12px]" style={{ color: 'var(--wa-text-muted)' }}>
-            {loadingConvs ? 'Carregando...' : `${conversations.length} conversa${conversations.length !== 1 ? 's' : ''}`}
-          </p>
+          {([['all', 'Todas'], ['unread', 'Não lidas']] as const).map(([k, label]) => {
+            const active = (k === 'unread') === unreadOnly;
+            return (
+              <button
+                key={k}
+                onClick={() => setUnreadOnly(k === 'unread')}
+                className="px-3 py-1 rounded-full text-[12.5px] font-medium transition-colors"
+                style={{
+                  background: active ? 'var(--wa-accent-green)' : 'var(--wa-bg-hover)',
+                  color: active ? '#fff' : 'var(--wa-text-secondary)',
+                }}
+              >
+                {label}{k === 'unread' && unreadTotal > 0 ? ` (${unreadTotal})` : ''}
+              </button>
+            );
+          })}
+          <span className="ml-auto text-[12px]" style={{ color: 'var(--wa-text-muted)' }}>
+            {loadingConvs ? 'Carregando...' : `${shownConversations.length}`}
+          </span>
         </div>
 
         {/* Lista de conversas */}
@@ -438,13 +459,15 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
                 </div>
               ))}
             </div>
-          ) : conversations.length === 0 ? (
+          ) : shownConversations.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full gap-3 px-6 text-center py-16">
               <MessageCircle size={32} style={{ color: 'var(--wa-text-muted)' }} strokeWidth={1.5} />
-              <p className="text-sm" style={{ color: 'var(--wa-text-muted)' }}>Nenhuma conversa ainda</p>
+              <p className="text-sm" style={{ color: 'var(--wa-text-muted)' }}>
+                {unreadOnly ? 'Nenhuma conversa não lida' : 'Nenhuma conversa ainda'}
+              </p>
             </div>
           ) : (
-            conversations.map(conv => (
+            shownConversations.map(conv => (
               <ConversationItem
                 key={conv.phone}
                 conv={conv}
