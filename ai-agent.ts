@@ -140,6 +140,17 @@ export function isAgentReady(): boolean {
   return anthropic !== null;
 }
 
+// Tira um horário no começo do texto (metadado que vaza da leitura do WhatsApp).
+// Ex.: "[15:34] oi" / "15:34 - oi" / "[15:34, 19/06/2026] oi" → "oi". Nunca
+// esvazia a mensagem (se sobrar nada, mantém o original).
+function stripLeadingTimestamp(s: string): string {
+  const out = s.replace(
+    /^\s*\[?\s*\d{1,2}:\d{2}(?::\d{2})?\s*(?:,?\s*\d{1,2}\/\d{1,2}\/\d{2,4})?\s*\]?\s*[-–—]?\s*/,
+    '',
+  ).trim();
+  return out || s.trim();
+}
+
 // Gera a resposta do agente para um histórico de conversa.
 // opts.extraInstruction: instrução extra de alta prioridade (ex.: modo autônomo
 // com regra de hand-off). Vai num bloco system separado (sem cache).
@@ -156,8 +167,11 @@ export async function getAgentReply(
     .filter((m) => m && typeof m.content === 'string' && m.content.trim())
     .map((m) => ({
       role: m.role === 'assistant' ? ('assistant' as const) : ('user' as const),
-      content: m.content.trim(),
+      // Remove horário no início (ex.: "[15:34]", "15:34 -", "[15:34, 19/06/2026]")
+      // que vaza da leitura do WhatsApp — senão o modelo imita e prefixa a hora.
+      content: stripLeadingTimestamp(m.content.trim()),
     }))
+    .filter((m) => m.content.trim())
     // Usa o histórico INTEIRO recebido pra responder com contexto; limita só às
     // últimas 80 mensagens como teto de segurança (conversas muito longas).
     .slice(-80);
@@ -205,5 +219,6 @@ export async function getAgentReply(
     .join('')
     .trim();
 
-  return text || '(o agente não retornou texto)';
+  // Defesa final: se mesmo assim a resposta vier com hora na frente, tira.
+  return stripLeadingTimestamp(text) || '(o agente não retornou texto)';
 }
