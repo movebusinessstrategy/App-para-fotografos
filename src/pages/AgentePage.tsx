@@ -72,6 +72,7 @@ export default function AgentePage() {
   const [objective, setObjective] = useState("");
   const [knowledge, setKnowledge] = useState("");
   const [rules, setRules] = useState("");
+  const [salesStrategy, setSalesStrategy] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -105,6 +106,7 @@ export default function AgentePage() {
         setObjective(data.objective || "");
         setKnowledge(data.knowledge || "");
         setRules(data.rules || "");
+        setSalesStrategy(data.sales_strategy || "");
         setTableMissing(!!data.table_missing);
       } else {
         setError(data.error || "Erro ao carregar a configuração.");
@@ -123,7 +125,7 @@ export default function AgentePage() {
     try {
       const res = await authFetch("/api/agent/config", {
         method: "PUT",
-        body: JSON.stringify({ enabled, persona, objective, knowledge, rules }),
+        body: JSON.stringify({ enabled, persona, objective, knowledge, rules, sales_strategy: salesStrategy }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
@@ -157,6 +159,7 @@ export default function AgentePage() {
           objective,
           knowledge,
           rules,
+          sales_strategy: salesStrategy,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -289,6 +292,15 @@ export default function AgentePage() {
             onChange={setKnowledge}
             rows={16}
             mono
+          />
+
+          <ConfigSection
+            icon={Target}
+            title="Estratégia de vendas e objeção"
+            help="As técnicas de venda da Lia: rapport, perguntas certas (SPIN), valor antes de preço, prova social, escassez honesta, micro-compromissos e como contornar 'tá caro' / 'vou pensar'. Tudo sem pressão e sem fugir das regras. Deixe em branco pra usar o padrão pronto."
+            value={salesStrategy}
+            onChange={setSalesStrategy}
+            rows={16}
           />
 
           <AgenteMateriais />

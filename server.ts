@@ -23,7 +23,7 @@ import crypto from 'crypto';
 const sentryReady = initSentry();
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createSupabaseClient, supabaseAdmin } from './supabase.js';
-import { getAgentReply, DEFAULT_PERSONA, DEFAULT_OBJECTIVE, DEFAULT_KNOWLEDGE, DEFAULT_RULES } from './ai-agent.js';
+import { getAgentReply, DEFAULT_PERSONA, DEFAULT_OBJECTIVE, DEFAULT_KNOWLEDGE, DEFAULT_RULES, DEFAULT_SALES_STRATEGY } from './ai-agent.js';
 import * as plugnotas from './plugnotas.js';
 import { understandMedia } from './media-understanding.js';
 import {
@@ -7163,6 +7163,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           objective: DEFAULT_OBJECTIVE,
           knowledge: DEFAULT_KNOWLEDGE,
           rules: DEFAULT_RULES,
+          sales_strategy: DEFAULT_SALES_STRATEGY,
           table_missing: true,
         });
       }
@@ -7174,27 +7175,30 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       objective: data?.objective || DEFAULT_OBJECTIVE,
       knowledge: data?.knowledge || DEFAULT_KNOWLEDGE,
       rules: data?.rules || DEFAULT_RULES,
+      sales_strategy: data?.sales_strategy || DEFAULT_SALES_STRATEGY,
     });
   });
 
   app.put('/api/agent/config', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { enabled, persona, objective, knowledge, rules } = req.body;
-    const { error } = await supabase
-      .from('ai_agent_config')
-      .upsert(
-        {
-          user_id: userId,
-          enabled: !!enabled,
-          persona: typeof persona === 'string' ? persona : null,
-          objective: typeof objective === 'string' ? objective : null,
-          knowledge: typeof knowledge === 'string' ? knowledge : null,
-          rules: typeof rules === 'string' ? rules : null,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'user_id' },
-      );
+    const { enabled, persona, objective, knowledge, rules, sales_strategy } = req.body;
+    const baseRow: any = {
+      user_id: userId,
+      enabled: !!enabled,
+      persona: typeof persona === 'string' ? persona : null,
+      objective: typeof objective === 'string' ? objective : null,
+      knowledge: typeof knowledge === 'string' ? knowledge : null,
+      rules: typeof rules === 'string' ? rules : null,
+      updated_at: new Date().toISOString(),
+    };
+    const row = { ...baseRow, sales_strategy: typeof sales_strategy === 'string' ? sales_strategy : null };
+    let { error } = await supabase.from('ai_agent_config').upsert(row, { onConflict: 'user_id' });
+    // Resiliente: se a coluna sales_strategy ainda não existe (migration 045),
+    // salva o resto pra não travar a tela.
+    if (error && (error.code === '42703' || /sales_strategy/.test(error.message || ''))) {
+      ({ error } = await supabase.from('ai_agent_config').upsert(baseRow, { onConflict: 'user_id' }));
+    }
     if (error) {
       if (error.code === '42P01') {
         return res.status(400).json({
@@ -7214,7 +7218,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Playground de teste: gera uma resposta do agente sem enviar nada a
   // ninguém. Usa a persona/conhecimento do corpo (edição ao vivo na tela).
   app.post('/api/agent/test', requireAuth, async (req, res) => {
-    const { messages, persona, objective, knowledge, rules } = req.body;
+    const { messages, persona, objective, knowledge, rules, sales_strategy } = req.body;
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'Envie ao menos uma mensagem.' });
     }
@@ -7226,6 +7230,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           objective: typeof objective === 'string' ? objective : '',
           knowledge: typeof knowledge === 'string' ? knowledge : '',
           rules: typeof rules === 'string' ? rules : '',
+          salesStrategy: typeof sales_strategy === 'string' ? sales_strategy : '',
         },
         messages,
       );
@@ -7258,6 +7263,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           objective: data?.objective || '',
           knowledge: data?.knowledge || '',
           rules: data?.rules || '',
+          salesStrategy: data?.sales_strategy || '',
         },
         messages,
       );

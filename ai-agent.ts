@@ -13,10 +13,11 @@ const anthropic = apiKey ? new Anthropic({ apiKey }) : null;
 
 export interface AgentConfig {
   enabled: boolean;
-  persona: string;     // tom de voz / personalidade
-  objective: string;   // objetivo e fluxo do atendimento
-  knowledge: string;   // base de conhecimento (pacotes, horários, políticas)
-  rules: string;       // regras e limites — o que NUNCA fazer
+  persona: string;          // tom de voz / personalidade
+  objective: string;        // objetivo e fluxo do atendimento
+  knowledge: string;        // base de conhecimento (pacotes, horários, políticas)
+  rules: string;            // regras e limites — o que NUNCA fazer
+  salesStrategy?: string;   // técnicas de venda / contorno de objeção (opcional)
 }
 
 export interface AgentMessage {
@@ -102,6 +103,21 @@ SEMPRE faça:
 - Ir direto ao ponto, com simpatia, mas sem rodeios.
 - Quando não souber algo, dizer que vai confirmar com a equipe.`;
 
+export const DEFAULT_SALES_STRATEGY = `Você é boa de venda — mas venda CONSULTIVA, dentro das regras (sem pressão, sem listar preço, sem fechar; quem fecha é a equipe). Aplique de forma natural, NUNCA como roteiro decorado nem citando o nome da técnica pro cliente:
+
+- RAPPORT (conexão): espelhe o jeito da pessoa (formal/informal), use o nome, mostre que entendeu o momento dela. Gente compra de quem confia.
+- SPIN (perguntas certas): descubra a Situação e o desejo com 1-2 perguntas ("é seu primeiro ensaio?", "já tem uma data em mente?") ANTES de sugerir qualquer coisa. Pergunta boa vale mais que argumento.
+- VALOR ANTES DE PREÇO (ancoragem): fale da experiência e do resultado (as fotos que ela vai ter pra sempre, como é o atendimento) — nunca jogue preço solto. Quando pedirem valor, conduza pra equipe passar as opções.
+- PROVA SOCIAL (só verdade): se couber, mencione de leve que muitas gestantes/famílias fazem com a gente. Nunca invente número nem depoimento.
+- ESCASSEZ HONESTA: só o que é real — a janela ideal do ensaio (ex.: gestante entre 28 e 32 semanas), datas que enchem rápido. Nunca crie urgência falsa.
+- CONTORNO DE OBJEÇÃO (reframe, sem empurrar):
+  • "Tá caro / fora do orçamento" → reconheça ("entendo"), reposicione no valor/experiência e ofereça ver a opção que cabe. Sem insistir e sem dar desconto (isso é da equipe).
+  • "Vou pensar" → respeite e descubra a objeção real com UMA pergunta ("é mais a data ou o investimento?"). Sem perseguir.
+  • "Depois eu vejo / sumiu" → no máximo uma retomada leve e útil, nunca cobrança.
+  • "Tô só pesquisando" → ajude de verdade, plante o valor, deixe a porta aberta.
+- MICRO-COMPROMISSOS: em vez de "pedir a venda", conduza pra um passo pequeno ("posso te mandar as opções?", "quer que eu veja a agenda dessa semana?"). Cada "sim" pequeno aproxima.
+- PONTE PRO FECHAMENTO: quando a pessoa esquentar (quer fechar/data/pagar), conduza pra equipe finalizar falando como o estúdio ("já te passo as opções e acerto a melhor data com você") — NUNCA como robô anunciando transferência ("vou te encaminhar pra um atendente").`;
+
 // Monta o system prompt: instruções fixas → objetivo → tom → conhecimento → regras.
 // As regras vão por último, de propósito, para o modelo dar peso a elas.
 export function buildSystemPrompt(config: AgentConfig): string {
@@ -109,11 +125,13 @@ export function buildSystemPrompt(config: AgentConfig): string {
   const persona = config.persona?.trim() || DEFAULT_PERSONA;
   const knowledge = config.knowledge?.trim() || DEFAULT_KNOWLEDGE;
   const rules = config.rules?.trim() || DEFAULT_RULES;
+  const salesStrategy = config.salesStrategy?.trim() || DEFAULT_SALES_STRATEGY;
   return [
     BASE_INSTRUCTIONS,
     '## Objetivo e fluxo do atendimento\n' + objective,
     '## Personalidade e tom de voz\n' + persona,
     '## Base de conhecimento (pacotes, horários, políticas)\n' + knowledge,
+    '## Estratégia de vendas e contorno de objeção\n' + salesStrategy,
     '## Regras e limites — siga sem exceção\n' + rules,
   ].join('\n\n');
 }
