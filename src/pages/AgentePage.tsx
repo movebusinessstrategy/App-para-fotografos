@@ -68,6 +68,7 @@ export default function AgentePage() {
 
   // ── Configuração ──────────────────────────────────────────────
   const [enabled, setEnabled] = useState(false);
+  const [autoSend, setAutoSend] = useState(false);
   const [persona, setPersona] = useState("");
   const [objective, setObjective] = useState("");
   const [knowledge, setKnowledge] = useState("");
@@ -102,6 +103,7 @@ export default function AgentePage() {
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setEnabled(!!data.enabled);
+        setAutoSend(!!data.auto_send);
         setPersona(data.persona || "");
         setObjective(data.objective || "");
         setKnowledge(data.knowledge || "");
@@ -125,7 +127,7 @@ export default function AgentePage() {
     try {
       const res = await authFetch("/api/agent/config", {
         method: "PUT",
-        body: JSON.stringify({ enabled, persona, objective, knowledge, rules, sales_strategy: salesStrategy }),
+        body: JSON.stringify({ enabled, auto_send: autoSend, persona, objective, knowledge, rules, sales_strategy: salesStrategy }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
@@ -261,6 +263,36 @@ export default function AgentePage() {
                 className={cn(
                   "absolute top-1 left-1 w-5 h-5 rounded-full bg-white shadow transition-transform",
                   enabled && "translate-x-5",
+                )}
+              />
+            </button>
+          </div>
+
+          {/* Atendimento autônomo (semi-automático) */}
+          <div className="flex items-center justify-between gap-4 p-4 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800">
+            <div>
+              <div className="font-semibold text-gray-900 dark:text-white">
+                Atendimento autônomo (a Lia responde sozinha)
+              </div>
+              <div className="text-sm text-gray-500 dark:text-gray-400">
+                Quando ligado, a Lia responde os clientes no WhatsApp sem você clicar. Em casos de preço, fechamento, objeção forte ou se o cliente pedir uma pessoa, ela <strong>não responde</strong> e marca a conversa pra equipe assumir — sem avisar o cliente. Precisa do agente ligado acima. Teste antes na aba "Testar".
+              </div>
+            </div>
+            <button
+              onClick={() => setAutoSend((v) => !v)}
+              role="switch"
+              aria-checked={autoSend}
+              disabled={!enabled}
+              className={cn(
+                "relative w-12 h-7 rounded-full transition-colors flex-shrink-0",
+                autoSend && enabled ? "bg-gold-500" : "bg-gray-300 dark:bg-gray-700",
+                !enabled && "opacity-50 cursor-not-allowed",
+              )}
+            >
+              <span
+                className={cn(
+                  "absolute top-1 left-1 w-5 h-5 rounded-full bg-white shadow transition-transform",
+                  autoSend && "translate-x-5",
                 )}
               />
             </button>

@@ -141,9 +141,12 @@ export function isAgentReady(): boolean {
 }
 
 // Gera a resposta do agente para um histórico de conversa.
+// opts.extraInstruction: instrução extra de alta prioridade (ex.: modo autônomo
+// com regra de hand-off). Vai num bloco system separado (sem cache).
 export async function getAgentReply(
   config: AgentConfig,
   messages: AgentMessage[],
+  opts?: { extraInstruction?: string },
 ): Promise<string> {
   if (!anthropic) {
     throw new Error('ANTHROPIC_API_KEY não configurada no servidor.');
@@ -189,6 +192,9 @@ export async function getAgentReply(
         text: buildSystemPrompt(config),
         cache_control: { type: 'ephemeral' },
       },
+      ...(opts?.extraInstruction
+        ? [{ type: 'text' as const, text: opts.extraInstruction }]
+        : []),
     ],
     messages: cleaned,
   });

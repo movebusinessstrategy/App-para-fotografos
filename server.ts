@@ -7171,6 +7171,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
     res.json({
       enabled: data?.enabled ?? false,
+      auto_send: data?.auto_send ?? false,
       persona: data?.persona || DEFAULT_PERSONA,
       objective: data?.objective || DEFAULT_OBJECTIVE,
       knowledge: data?.knowledge || DEFAULT_KNOWLEDGE,
@@ -7182,7 +7183,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.put('/api/agent/config', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { enabled, persona, objective, knowledge, rules, sales_strategy } = req.body;
+    const { enabled, auto_send, persona, objective, knowledge, rules, sales_strategy } = req.body;
     const baseRow: any = {
       user_id: userId,
       enabled: !!enabled,
@@ -7192,11 +7193,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       rules: typeof rules === 'string' ? rules : null,
       updated_at: new Date().toISOString(),
     };
-    const row = { ...baseRow, sales_strategy: typeof sales_strategy === 'string' ? sales_strategy : null };
+    const row = {
+      ...baseRow,
+      sales_strategy: typeof sales_strategy === 'string' ? sales_strategy : null,
+      ...(auto_send !== undefined ? { auto_send: !!auto_send } : {}),
+    };
     let { error } = await supabase.from('ai_agent_config').upsert(row, { onConflict: 'user_id' });
-    // Resiliente: se a coluna sales_strategy ainda não existe (migration 045),
-    // salva o resto pra não travar a tela.
-    if (error && (error.code === '42703' || /sales_strategy/.test(error.message || ''))) {
+    // Resiliente: se colunas novas (sales_strategy/auto_send) ainda não existem
+    // (migrations 045/046), salva o resto pra não travar a tela.
+    if (error && (error.code === '42703' || /sales_strategy|auto_send/.test(error.message || ''))) {
       ({ error } = await supabase.from('ai_agent_config').upsert(baseRow, { onConflict: 'user_id' }));
     }
     if (error) {
@@ -18481,6 +18486,82 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Conversas já limpas do "nome do estúdio" neste boot (chave userId:nome)
   const ownerNameHealed = new Set<string>();
 
+  // ── Atendimento autônomo (semi-automático) da Lia ──────────────────────────
+  // Liga por estúdio (ai_agent_config.auto_send, default off). Responde sozinha,
+  // mas em caso de preço/fechamento/objeção forte/cliente pedir humano, NÃO
+  // responde o cliente — marca a conversa (needs_human) pra equipe assumir.
+  const HANDOFF_INSTRUCTION = 'MODO AUTÔNOMO: você está respondendo o cliente SOZINHA, sem revisão humana. Se o caso for de FECHAR a venda, falar PREÇO/valor final, PAGAMENTO/Pix, AGENDAR/confirmar data, OBJEÇÃO forte ou reclamação, ou o cliente PEDIR pra falar com uma pessoa/atendente — NÃO responda o cliente. Responda APENAS com o token ###HUMANO### (e nada mais), pra equipe assumir. Em todo o resto, responda normalmente seguindo as regras, a estratégia de venda e o tom — como uma pessoa do estúdio, nunca avisando que vai transferir.';
+  const autoReplyTimers = new Map<string, NodeJS.Timeout>();
+  const lastAutoReplyAt = new Map<string, number>();
+
+  async function loadAgentConversation(userId: string, phone: string) {
+    if (!supabaseAdmin) return [] as { role: 'user' | 'assistant'; content: string }[];
+    const { data } = await supabaseAdmin.from('wa_messages')
+      .select('body, from_me, type, transcription, timestamp')
+      .eq('user_id', userId).eq('phone', phone)
+      .order('timestamp', { ascending: true }).limit(60);
+    return (data || []).map((m: any) => ({
+      role: (m.from_me ? 'assistant' : 'user') as 'user' | 'assistant',
+      content: (m.body && m.body.trim())
+        || m.transcription
+        || (m.type === 'audio' ? '[áudio]' : m.type === 'image' ? '[imagem]' : ''),
+    })).filter((m: any) => m.content && m.content.trim());
+  }
+
+  async function runAutonomousReply(userId: string, phone: string) {
+    if (!supabaseAdmin) return;
+    const key = `${userId}|${phone}`;
+    try {
+      if (Date.now() - (lastAutoReplyAt.get(key) || 0) < 8000) return; // cooldown anti-duplicidade
+      const { data: cfg } = await supabaseAdmin.from('ai_agent_config').select('*').eq('user_id', userId).maybeSingle();
+      if (!cfg?.enabled || !cfg?.auto_send) return; // só se ligado E autônomo on
+      // Se a última mensagem já é nossa (respondemos / humano entrou), não age.
+      const { data: lastMsgs } = await supabaseAdmin.from('wa_messages')
+        .select('from_me').eq('user_id', userId).eq('phone', phone)
+        .order('timestamp', { ascending: false }).limit(1);
+      if (lastMsgs?.[0]?.from_me) return;
+      // Se já foi passada pra humano, a Lia não responde mais (humano assume).
+      const { data: conv } = await supabaseAdmin.from('wa_conversations')
+        .select('needs_human').eq('user_id', userId).eq('phone', phone).maybeSingle();
+      if (conv?.needs_human) return;
+
+      const messages = await loadAgentConversation(userId, phone);
+      if (!messages.length || messages[messages.length - 1].role !== 'user') return;
+
+      const reply = await getAgentReply({
+        enabled: true,
+        persona: cfg.persona || '', objective: cfg.objective || '',
+        knowledge: cfg.knowledge || '', rules: cfg.rules || '',
+        salesStrategy: cfg.sales_strategy || '',
+      }, messages, { extraInstruction: HANDOFF_INSTRUCTION });
+
+      if (!reply || reply.includes('###HUMANO###')) {
+        await supabaseAdmin.from('wa_conversations')
+          .update({ needs_human: true }).eq('user_id', userId).eq('phone', phone);
+        console.log(`[Lia autônoma] hand-off → equipe | ${phone}`);
+        return;
+      }
+      await BaileysManager.sendText(userId, phone, reply);
+      lastAutoReplyAt.set(key, Date.now());
+      console.log(`[Lia autônoma] respondeu | ${phone}: ${reply.slice(0, 60)}`);
+    } catch (e: any) {
+      console.warn('[Lia autônoma] erro:', e?.message);
+    }
+  }
+
+  // Debounce: espera a pessoa terminar a rajada de mensagens antes de responder.
+  // Mídia espera mais (dá tempo da transcrição/descrição ficar pronta).
+  function scheduleAutonomousReply(userId: string, phone: string, msgType: string) {
+    const key = `${userId}|${phone}`;
+    const old = autoReplyTimers.get(key);
+    if (old) clearTimeout(old);
+    const delay = (msgType === 'audio' || msgType === 'image') ? 12000 : 7000;
+    autoReplyTimers.set(key, setTimeout(() => {
+      autoReplyTimers.delete(key);
+      runAutonomousReply(userId, phone).catch(() => {});
+    }, delay));
+  }
+
   BaileysManager.setMessageHandler(async (userId, msg, sock, isHistory = false) => {
     if (!supabaseAdmin) { console.warn('[Baileys] MessageHandler: supabaseAdmin não disponível'); return; }
     const rawRemoteJid = msg.key.remoteJid || '';
@@ -18665,6 +18746,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
             .eq('user_id', userId).eq('phone', phone).eq('last_message', placeholder);
         } catch (e: any) { console.warn('[media] understand falhou:', e?.message); }
       })();
+    }
+
+    // Fase C: agenda a resposta autônoma da Lia (só age se o estúdio ligou o
+    // auto_send; debounce espera a pessoa terminar de mandar as mensagens).
+    if (!isHistory && !msg.key.fromMe && (msgType === 'text' || msgType === 'audio' || msgType === 'image')) {
+      scheduleAutonomousReply(userId, phone, msgType);
     }
 
     // Auto-cria lead apenas para mensagens novas recebidas
