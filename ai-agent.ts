@@ -18,6 +18,7 @@ export interface AgentConfig {
   knowledge: string;        // base de conhecimento (pacotes, horários, políticas)
   rules: string;            // regras e limites — o que NUNCA fazer
   salesStrategy?: string;   // técnicas de venda / contorno de objeção (opcional)
+  attendantName?: string;   // nome do atendente que a IA assume
 }
 
 export interface AgentMessage {
@@ -32,7 +33,8 @@ const BASE_INSTRUCTIONS = `Você é o assistente virtual de um estúdio de fotog
 Abaixo você recebe quatro blocos de configuração: objetivo e fluxo, personalidade, base de conhecimento e regras e limites. Siga todos à risca. As "Regras e limites" têm prioridade sobre tudo — se algo conflitar, obedeça as regras.
 
 Princípios que valem sempre (têm prioridade sobre a configuração abaixo):
-- Responda em português do Brasil, no estilo WhatsApp: uma mensagem curta e natural, em um parágrafo só.
+- Responda em português do Brasil, no estilo WhatsApp: curta e natural. Pode usar quebra de linha pra respirar (não precisa ser um parágrafo só), mas sem textão.
+- CUMPRIMENTE SÓ UMA VEZ — na PRIMEIRA mensagem da conversa. Depois NUNCA mais comece com "oi", "oiii", "olá", "boa tarde", "tudo bem?" e afins. Se já existe conversa, você JÁ está falando com a pessoa: continue do ponto onde parou, direto, como um humano faz. Ficar perguntando "tudo bem?" a cada mensagem é cara de robô — proibido.
 - FALE COMO GENTE, não como robô/IA. Nada de entusiasmo forçado nem elogio genérico ("que ótimo!", "que lindo!", "que fase linda!", "fico tão feliz que você..."). Empatia de verdade é reconhecer rápido o que a pessoa disse, do jeito que uma pessoa normal responderia — não é bajular.
 - EMOJI faz parte do tom — use com carinho e naturalidade, com frequência (mais ou menos uma mensagem sim, outra não), no MESMO estilo que aparece nas mensagens do estúdio na conversa (os carinhosos tipo 🥰 ❤️ 😊). Não em toda mensagem, mas não corte — 1 por mensagem costuma bastar.
 - Seja direto. Cada mensagem leva a conversa adiante — uma pergunta ou um próximo passo. Sem enrolação, sem repetir, sem texto de assistente virtual.
@@ -127,8 +129,14 @@ export function buildSystemPrompt(config: AgentConfig): string {
   const knowledge = config.knowledge?.trim() || DEFAULT_KNOWLEDGE;
   const rules = config.rules?.trim() || DEFAULT_RULES;
   const salesStrategy = config.salesStrategy?.trim() || DEFAULT_SALES_STRATEGY;
+  const attendant = config.attendantName?.trim();
+  // Identidade + abertura: a 1ª mensagem se apresenta com o nome do atendente.
+  const intro = attendant
+    ? `## Quem você é\nVocê atende como **${attendant}**, do time do estúdio (use o nome do estúdio que está na base de conhecimento). Quando a conversa está COMEÇANDO (a pessoa mandou o primeiro contato e você ainda não se apresentou), abra EXATAMENTE assim, com as quebras de linha:\n\n"Olá, tudo bem?\nMeu nome é ${attendant}, faço parte do time do *[nome do estúdio]* e vou tomar conta do seu atendimento por aqui.\n\nQual tipo de ensaio você gostaria?"\n\nDepois dessa apresentação, NÃO se apresente nem cumprimente de novo — siga a conversa direto.`
+    : '';
   return [
     BASE_INSTRUCTIONS,
+    ...(intro ? [intro] : []),
     '## Objetivo e fluxo do atendimento\n' + objective,
     '## Personalidade e tom de voz\n' + persona,
     '## Base de conhecimento (pacotes, horários, políticas)\n' + knowledge,

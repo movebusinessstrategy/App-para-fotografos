@@ -74,6 +74,7 @@ export default function AgentePage() {
   const [knowledge, setKnowledge] = useState("");
   const [rules, setRules] = useState("");
   const [salesStrategy, setSalesStrategy] = useState("");
+  const [attendantName, setAttendantName] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -109,6 +110,7 @@ export default function AgentePage() {
         setKnowledge(data.knowledge || "");
         setRules(data.rules || "");
         setSalesStrategy(data.sales_strategy || "");
+        setAttendantName(data.attendant_name || "");
         setTableMissing(!!data.table_missing);
       } else {
         setError(data.error || "Erro ao carregar a configuração.");
@@ -127,7 +129,7 @@ export default function AgentePage() {
     try {
       const res = await authFetch("/api/agent/config", {
         method: "PUT",
-        body: JSON.stringify({ enabled, auto_send: autoSend, persona, objective, knowledge, rules, sales_strategy: salesStrategy }),
+        body: JSON.stringify({ enabled, auto_send: autoSend, persona, objective, knowledge, rules, sales_strategy: salesStrategy, attendant_name: attendantName }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
@@ -162,6 +164,7 @@ export default function AgentePage() {
           knowledge,
           rules,
           sales_strategy: salesStrategy,
+          attendant_name: attendantName,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -296,6 +299,23 @@ export default function AgentePage() {
                 )}
               />
             </button>
+          </div>
+
+          {/* Nome do atendente que a Lia assume */}
+          <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800">
+            <div className="font-semibold text-gray-900 dark:text-white mb-1">Nome do atendente</div>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+              É o nome que a Lia usa pra se apresentar na 1ª mensagem ("Meu nome é <strong>{attendantName || "..."}</strong>, faço parte do time do estúdio..."). Deixe em branco pra ela não se apresentar com nome.
+            </p>
+            <input
+              type="text"
+              value={attendantName}
+              onChange={(e) => setAttendantName(e.target.value)}
+              placeholder="Ex.: Giovana"
+              className={cn(
+                "w-full px-3 py-2.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-gold-500/40",
+              )}
+            />
           </div>
 
           <ConfigSection

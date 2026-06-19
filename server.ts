@@ -7205,13 +7205,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       knowledge: data?.knowledge || DEFAULT_KNOWLEDGE,
       rules: data?.rules || DEFAULT_RULES,
       sales_strategy: data?.sales_strategy || DEFAULT_SALES_STRATEGY,
+      attendant_name: data?.attendant_name || '',
     });
   });
 
   app.put('/api/agent/config', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { enabled, auto_send, persona, objective, knowledge, rules, sales_strategy } = req.body;
+    const { enabled, auto_send, persona, objective, knowledge, rules, sales_strategy, attendant_name } = req.body;
     const baseRow: any = {
       user_id: userId,
       enabled: !!enabled,
@@ -7225,11 +7226,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       ...baseRow,
       sales_strategy: typeof sales_strategy === 'string' ? sales_strategy : null,
       ...(auto_send !== undefined ? { auto_send: !!auto_send } : {}),
+      ...(attendant_name !== undefined ? { attendant_name: typeof attendant_name === 'string' ? attendant_name.trim() : null } : {}),
     };
     let { error } = await supabase.from('ai_agent_config').upsert(row, { onConflict: 'user_id' });
-    // Resiliente: se colunas novas (sales_strategy/auto_send) ainda não existem
-    // (migrations 045/046), salva o resto pra não travar a tela.
-    if (error && (error.code === '42703' || /sales_strategy|auto_send/.test(error.message || ''))) {
+    // Resiliente: se colunas novas (sales_strategy/auto_send/attendant_name) ainda
+    // não existem (migrations 045/046/048), salva o resto pra não travar a tela.
+    if (error && (error.code === '42703' || /sales_strategy|auto_send|attendant_name/.test(error.message || ''))) {
       ({ error } = await supabase.from('ai_agent_config').upsert(baseRow, { onConflict: 'user_id' }));
     }
     if (error) {
@@ -7251,7 +7253,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Playground de teste: gera uma resposta do agente sem enviar nada a
   // ninguém. Usa a persona/conhecimento do corpo (edição ao vivo na tela).
   app.post('/api/agent/test', requireAuth, async (req, res) => {
-    const { messages, persona, objective, knowledge, rules, sales_strategy } = req.body;
+    const { messages, persona, objective, knowledge, rules, sales_strategy, attendant_name } = req.body;
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'Envie ao menos uma mensagem.' });
     }
@@ -7264,6 +7266,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           knowledge: typeof knowledge === 'string' ? knowledge : '',
           rules: typeof rules === 'string' ? rules : '',
           salesStrategy: typeof sales_strategy === 'string' ? sales_strategy : '',
+          attendantName: typeof attendant_name === 'string' ? attendant_name : '',
         },
         messages,
       );
@@ -7297,6 +7300,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           knowledge: data?.knowledge || '',
           rules: data?.rules || '',
           salesStrategy: data?.sales_strategy || '',
+          attendantName: data?.attendant_name || '',
         },
         messages,
       );
@@ -18561,6 +18565,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         persona: cfg.persona || '', objective: cfg.objective || '',
         knowledge: cfg.knowledge || '', rules: cfg.rules || '',
         salesStrategy: cfg.sales_strategy || '',
+        attendantName: cfg.attendant_name || '',
       }, messages, { extraInstruction: HANDOFF_INSTRUCTION });
 
       if (!reply || reply.includes('###HUMANO###')) {
@@ -18569,6 +18574,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         console.log(`[Lia autônoma] hand-off → equipe | ${phone}`);
         return;
       }
+      // Mostra "digitando…" e espera um tempo realista (proporcional ao texto)
+      // antes de mandar — pra não parecer robô respondendo instantâneo.
+      await BaileysManager.sendTyping(userId, phone, true);
+      await new Promise((r) => setTimeout(r, Math.min(2500 + reply.length * 45, 9000)));
+      await BaileysManager.sendTyping(userId, phone, false);
       await BaileysManager.sendText(userId, phone, reply);
       lastAutoReplyAt.set(key, Date.now());
       console.log(`[Lia autônoma] respondeu | ${phone}: ${reply.slice(0, 60)}`);
@@ -18577,13 +18587,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
   }
 
-  // Debounce: espera a pessoa terminar a rajada de mensagens antes de responder.
-  // Mídia espera mais (dá tempo da transcrição/descrição ficar pronta).
+  // Debounce: espera a pessoa terminar a RAJADA de mensagens antes de responder
+  // (muita gente manda uma e já manda outra). Mídia espera mais (dá tempo da
+  // transcrição/descrição ficar pronta).
   function scheduleAutonomousReply(userId: string, phone: string, msgType: string) {
     const key = `${userId}|${phone}`;
     const old = autoReplyTimers.get(key);
     if (old) clearTimeout(old);
-    const delay = (msgType === 'audio' || msgType === 'image') ? 12000 : 7000;
+    const delay = (msgType === 'audio' || msgType === 'image') ? 18000 : 14000;
     autoReplyTimers.set(key, setTimeout(() => {
       autoReplyTimers.delete(key);
       runAutonomousReply(userId, phone).catch(() => {});

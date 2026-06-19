@@ -353,6 +353,14 @@ export async function sendText(userId: string, phone: string, text: string): Pro
   return result?.key?.id ?? `baileys-${Date.now()}`;
 }
 
+// Mostra "digitando…" pro contato (presença). Best-effort: nunca lança.
+export async function sendTyping(userId: string, phone: string, on = true): Promise<void> {
+  try {
+    const sock = _requireSocket(userId);
+    await sock.sendPresenceUpdate(on ? 'composing' : 'paused', _jid(phone));
+  } catch { /* presença é best-effort */ }
+}
+
 export async function sendMedia(
   userId: string,
   phone: string,
