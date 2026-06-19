@@ -286,9 +286,18 @@ function DealActions({ deal, stages, onChanged }: { deal: Deal; stages: Pipeline
 
   const apply = async (kind: "won" | "lost", reason?: string) => {
     setModal(null);
-    const targetStage = kind === "won"
-      ? stages.find((s) => s.is_won)
-      : stages.find((s) => s.is_final && !s.is_won);
+    // O funil pode ter mais de uma etapa is_won (ex.: "Entregue" + "Fechado
+    // Ganho"). Escolhe a de VENDA ganha pelo nome; senão, a de maior posição
+    // (a de fechamento costuma vir por último). Perdido: a is_final sem is_won.
+    let targetStage: PipelineStage | undefined;
+    if (kind === "won") {
+      const wons = stages.filter((s) => s.is_won);
+      targetStage = wons.find((s) => /ganh|vendid|fechad/i.test(s.name))
+        || [...wons].sort((a, b) => b.position - a.position)[0];
+    } else {
+      const losts = stages.filter((s) => s.is_final && !s.is_won);
+      targetStage = losts.find((s) => /perd/i.test(s.name)) || losts[0];
+    }
     if (!targetStage) return; // pipeline sem etapa ganha/perdida configurada
     setBusy(kind);
     try {
