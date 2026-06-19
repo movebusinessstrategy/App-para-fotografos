@@ -23,7 +23,8 @@ import {
   Calendar,
   Award,
   SlidersHorizontal,
-  FileDown
+  FileDown,
+  Workflow
 } from "lucide-react";
 
 import ImportProgressModal, { ImportSummary } from "../components/ImportProgressModal";
@@ -1771,8 +1772,24 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                         </div>
                       </div>
                       <div className="flex items-center gap-1">
+                        {job.status !== 'cancelled' && !(job as any).production_stage && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const r = await authFetch(`/api/jobs/${job.id}/to-production`, { method: 'POST' });
+                              const d = await r.json().catch(() => ({}));
+                              if (!r.ok) { alert(d.error || 'Não consegui enviar pra produção.'); return; }
+                              fetchClientDetails();
+                              onSave();
+                            }}
+                            className="p-1.5 text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-500/10 rounded-lg transition-colors"
+                            title="Enviar pra produção (sem registrar venda)"
+                          >
+                            <Workflow size={16} />
+                          </button>
+                        )}
                         {job.status === 'scheduled' && (
-                          <button 
+                          <button
                             type="button"
                             onClick={async () => {
                               await authFetch(`/api/jobs/${job.id}`, {

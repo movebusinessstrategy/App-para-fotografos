@@ -3772,6 +3772,34 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ id: data.id });
   });
 
+  // POST /api/jobs/:id/to-production — manda um trabalho EXISTENTE pra produção,
+  // achando a etapa de entrada (1ª etapa do 1º processo não-especial). Usado pra
+  // "puxar" um cliente já vendido pra produção sem registrar nova venda.
+  app.post('/api/jobs/:id/to-production', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data: procs } = await supabase
+      .from('production_processes').select('id, position, is_special').eq('user_id', userId);
+    const firstProc = (procs || [])
+      .filter((p: any) => !p.is_special)
+      .sort((a: any, b: any) => (a.position || 0) - (b.position || 0))[0];
+    if (!firstProc) {
+      return res.status(400).json({ error: 'Configure ao menos um processo de produção com uma etapa.' });
+    }
+    const { data: stgs } = await supabase
+      .from('deal_stages').select('id, position').eq('user_id', userId)
+      .eq('process_id', firstProc.id).order('position', { ascending: true }).limit(1);
+    const entryStageId = stgs?.[0]?.id;
+    if (!entryStageId) {
+      return res.status(400).json({ error: 'O primeiro processo de produção não tem etapas.' });
+    }
+    const { error } = await supabase.from('jobs')
+      .update({ production_stage: entryStageId, production_stage_entered_at: new Date().toISOString() })
+      .eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, production_stage: entryStageId });
+  });
+
   // POST /api/jobs/pacote-acompanhamento — gera os trabalhos (sessões) de um
   // pacote de acompanhamento de uma vez. O dinheiro entra como UMA receita só.
   app.post('/api/jobs/pacote-acompanhamento', requireAuth, async (req, res) => {
