@@ -98,6 +98,25 @@ export function MessageBubble({ msg, onImageClick, contactInitial }: Props) {
           </video>
         )}
 
+        {/* Transcrição do áudio / descrição da imagem (a Lia "ouviu/viu") */}
+        {msg.transcription && (msg.type === 'audio' || msg.type === 'image') && (
+          <p style={{
+            color: 'var(--wa-text-muted)',
+            fontSize: 12.5,
+            fontStyle: 'italic',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            lineHeight: 1.4,
+            marginTop: 3,
+            marginBottom: 2,
+            paddingTop: 4,
+            borderTop: '1px solid rgba(0,0,0,0.08)',
+          }}>
+            {msg.type === 'audio' ? '🎤 ' : '📷 '}
+            {msg.transcription.replace(/^\[[^\]]+\]\s*/, '')}
+          </p>
+        )}
+
         {/* Texto ou legenda */}
         {msg.body && (
           <p style={{

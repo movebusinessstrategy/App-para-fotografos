@@ -16,4 +16,5 @@ export interface Message {
   media_url: string | null;
   duration?: number | null;
   waveform?: number[] | null;
+  transcription?: string | null; // texto do áudio (Whisper) / descrição da imagem (Vision)
 }
