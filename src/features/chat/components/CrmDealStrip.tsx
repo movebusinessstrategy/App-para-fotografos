@@ -72,7 +72,7 @@ export function CrmDealStrip({ phone, deals, stages, onUpdate }: Props) {
       <div className="flex-1" />
 
       {/* Ações terminais */}
-      <DealActions deal={deal} onChanged={onUpdate} />
+      <DealActions deal={deal} stages={stages} onChanged={onUpdate} />
 
       {/* Link pra abrir no funil */}
       <Link
@@ -228,43 +228,75 @@ function PendingTasksBadge({ clientId }: { clientId: number | string }) {
 
 // ─── Deal actions: Won / Lost ─────────────────────────────────────────────────
 
-function DealActions({ deal, onChanged }: { deal: Deal; onChanged: () => void }) {
+// Modal estilizado (segue o sistema) — substitui o confirm()/prompt() nativo.
+function MarkDealModal({ kind, dealTitle, onConfirm, onCancel }: {
+  kind: "won" | "lost"; dealTitle: string;
+  onConfirm: (reason?: string) => void; onCancel: () => void;
+}) {
+  const [reason, setReason] = useState("");
+  const won = kind === "won";
+  return (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40" onClick={onCancel} />
+      <div className="relative bg-white dark:bg-gray-900 rounded-xl shadow-xl w-full max-w-sm border border-gray-200 dark:border-gray-800 animate-in fade-in zoom-in-95 duration-200">
+        <div className="p-6">
+          <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4 ${won ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400" : "bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400"}`}>
+            {won ? <Trophy size={24} /> : <X size={24} />}
+          </div>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white text-center mb-2">
+            {won ? "Marcar como Ganho?" : "Marcar como Perdido?"}
+          </h3>
+          <p className="text-sm text-gray-600 dark:text-gray-300 text-center">
+            <span className="font-medium">"{dealTitle}"</span> {won ? "vai pra etapa de venda ganha." : "vai pra etapa de perdido."}
+          </p>
+          {!won && (
+            <textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              rows={2}
+              placeholder="Motivo da perda (opcional)"
+              className="mt-3 w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white outline-none focus:border-gold-400 resize-none"
+            />
+          )}
+        </div>
+        <div className="flex gap-3 p-4 border-t border-gray-100 dark:border-gray-800">
+          <button onClick={onCancel} className="flex-1 py-2.5 px-4 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+            Cancelar
+          </button>
+          <button
+            onClick={() => onConfirm(won ? undefined : (reason.trim() || undefined))}
+            className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-medium text-white transition-colors ${won ? "bg-emerald-600 hover:bg-emerald-700" : "bg-rose-600 hover:bg-rose-700"}`}
+          >
+            {won ? "Marcar Ganho" : "Marcar Perdido"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DealActions({ deal, stages, onChanged }: { deal: Deal; stages: PipelineStage[]; onChanged: () => void }) {
   const [busy, setBusy] = useState<"won" | "lost" | null>(null);
+  const [modal, setModal] = useState<"won" | "lost" | null>(null);
 
-  // Já tá ganho/perdido? Esconde os botões (evita ações duplicadas).
-  const status = (deal as any).status;
-  if (status === "won" || status === "lost") return null;
+  // Ganho/perdido no app é pela ETAPA (is_won / is_final). Se já está numa etapa
+  // final, esconde os botões.
+  const dealStage = stages.find((s) => s.id === (deal as any).stage);
+  if (dealStage?.is_final) return null;
 
-  const markWon = async () => {
-    if (busy) return;
-    if (!confirm(`Marcar "${deal.title}" como Ganho?`)) return;
-    setBusy("won");
+  const apply = async (kind: "won" | "lost", reason?: string) => {
+    setModal(null);
+    const targetStage = kind === "won"
+      ? stages.find((s) => s.is_won)
+      : stages.find((s) => s.is_final && !s.is_won);
+    if (!targetStage) return; // pipeline sem etapa ganha/perdida configurada
+    setBusy(kind);
     try {
+      // Move pra etapa certa — o backend grava converted_at sozinho no is_won.
       await authFetch(`/api/deals/${deal.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "won", closed_at: new Date().toISOString() }),
-      });
-      onChanged();
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const markLost = async () => {
-    if (busy) return;
-    const reason = prompt(`Marcar "${deal.title}" como Perdido. Motivo (opcional):`);
-    if (reason === null) return; // cancelou
-    setBusy("lost");
-    try {
-      await authFetch(`/api/deals/${deal.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          status: "lost",
-          closed_at: new Date().toISOString(),
-          lost_reason: reason || null,
-        }),
+        body: JSON.stringify({ stage: targetStage.id, ...(kind === "lost" ? { lost_reason: reason || null } : {}) }),
       });
       onChanged();
     } finally {
@@ -275,31 +307,33 @@ function DealActions({ deal, onChanged }: { deal: Deal; onChanged: () => void })
   return (
     <div className="flex items-center gap-1">
       <button
-        onClick={markWon}
+        onClick={() => setModal("won")}
         disabled={!!busy}
         className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium disabled:opacity-60"
-        style={{
-          background: "rgba(16, 185, 129, 0.15)",
-          color: "#10b981",
-        }}
+        style={{ background: "rgba(16, 185, 129, 0.15)", color: "#10b981" }}
         title="Marcar como Ganho"
       >
         {busy === "won" ? <Loader2 size={11} className="animate-spin" /> : <Trophy size={11} />}
         Ganho
       </button>
       <button
-        onClick={markLost}
+        onClick={() => setModal("lost")}
         disabled={!!busy}
         className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium disabled:opacity-60"
-        style={{
-          background: "rgba(239, 68, 68, 0.12)",
-          color: "#ef4444",
-        }}
+        style={{ background: "rgba(239, 68, 68, 0.12)", color: "#ef4444" }}
         title="Marcar como Perdido"
       >
         {busy === "lost" ? <Loader2 size={11} className="animate-spin" /> : <X size={11} />}
         Perdido
       </button>
+      {modal && (
+        <MarkDealModal
+          kind={modal}
+          dealTitle={deal.title || "este lead"}
+          onConfirm={(reason) => apply(modal, reason)}
+          onCancel={() => setModal(null)}
+        />
+      )}
     </div>
   );
 }
