@@ -25,6 +25,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createSupabaseClient, supabaseAdmin } from './supabase.js';
 import { getAgentReply, DEFAULT_PERSONA, DEFAULT_OBJECTIVE, DEFAULT_KNOWLEDGE, DEFAULT_RULES } from './ai-agent.js';
 import * as plugnotas from './plugnotas.js';
+import { understandMedia } from './media-understanding.js';
 import {
   DEFAULT_STAGES,
   DEFAULT_PRODUCTION_STAGES,
@@ -18501,6 +18502,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     let msgType = 'text';
     let msgBody = '';
     let mediaDataUrl: string | null = null;
+    // Buffer da mídia recebida — pra Lia "entender" áudio/imagem (Fase B).
+    let mediaBuffer: Buffer | null = null;
+    let mediaMime = '';
 
     if (firstKey === 'conversation' || firstKey === 'extendedTextMessage') {
       msgType = 'text';
@@ -18510,13 +18514,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       msgBody = (msgContent as any).imageMessage?.caption || '';
       if (!isHistory) {
         const media = await BaileysManager.downloadIncomingMedia(msg, sock);
-        if (media) mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype);
+        if (media) { mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype); mediaBuffer = media.buffer; mediaMime = media.mimetype; }
       }
     } else if (firstKey === 'audioMessage' || firstKey === 'pttMessage') {
       msgType = 'audio';
       if (!isHistory) {
         const media = await BaileysManager.downloadIncomingMedia(msg, sock);
-        if (media) mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype);
+        if (media) { mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype); mediaBuffer = media.buffer; mediaMime = media.mimetype; }
       }
     } else if (firstKey === 'videoMessage') {
       msgType = 'video';
@@ -18635,6 +18639,26 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
     } catch (convEx: any) {
       console.error('[Baileys] Exceção ao salvar conversa:', convEx?.message);
+    }
+
+    // Fase B: a Lia "entende" áudio/imagem do CLIENTE em segundo plano (não
+    // bloqueia o fluxo, não pode quebrar o recebimento). Guarda a transcrição/
+    // descrição na mensagem e atualiza o preview do inbox.
+    if (!isHistory && !msg.key.fromMe && (msgType === 'audio' || msgType === 'image') && mediaBuffer) {
+      const buf = mediaBuffer; const mime = mediaMime; const placeholder = lastMsgPreview;
+      const kind = msgType as 'audio' | 'image';
+      void (async () => {
+        try {
+          const text = await understandMedia(kind, buf, mime);
+          if (!text) return;
+          await supabaseAdmin.from('wa_messages')
+            .update({ transcription: text }).eq('user_id', userId).eq('message_id', msgId);
+          const clean = text.replace(/^\[[^\]]+\]\s*/, '').slice(0, 60);
+          await supabaseAdmin.from('wa_conversations')
+            .update({ last_message: `${kind === 'audio' ? '🎤' : '📷'} ${clean}` })
+            .eq('user_id', userId).eq('phone', phone).eq('last_message', placeholder);
+        } catch (e: any) { console.warn('[media] understand falhou:', e?.message); }
+      })();
     }
 
     // Auto-cria lead apenas para mensagens novas recebidas
