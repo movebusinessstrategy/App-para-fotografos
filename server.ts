@@ -18522,7 +18522,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Liga por estúdio (ai_agent_config.auto_send, default off). Responde sozinha,
   // mas em caso de preço/fechamento/objeção forte/cliente pedir humano, NÃO
   // responde o cliente — marca a conversa (needs_human) pra equipe assumir.
-  const HANDOFF_INSTRUCTION = 'MODO AUTÔNOMO: você está respondendo o cliente SOZINHA, sem revisão humana. Se o caso for de FECHAR a venda, falar PREÇO/valor final, PAGAMENTO/Pix, AGENDAR/confirmar data, OBJEÇÃO forte ou reclamação, ou o cliente PEDIR pra falar com uma pessoa/atendente — NÃO responda o cliente. Responda APENAS com o token ###HUMANO### (e nada mais), pra equipe assumir. Em todo o resto, responda normalmente seguindo as regras, a estratégia de venda e o tom — como uma pessoa do estúdio, nunca avisando que vai transferir.';
+  const HANDOFF_INSTRUCTION = [
+    'MODO AUTÔNOMO: você responde o cliente SOZINHA, sem revisão humana, COMO UMA PESSOA do time do estúdio — o cliente NUNCA pode perceber que é uma IA.',
+    'HAND-OFF: se for FECHAR a venda, falar PREÇO/valor final, PAGAMENTO/Pix, AGENDAR/confirmar data, OBJEÇÃO forte/reclamação, ou o cliente PEDIR uma pessoa — responda APENAS com ###HUMANO### (e nada mais), pra equipe assumir. Nunca avise que vai transferir.',
+    'ENVIAR PACOTE (PDF): quando for apresentar o pacote/orçamento do nicho que a pessoa quer, NÃO descreva em texto — comece a resposta com o token ###PDF:<nicho>### (nicho em minúsculo e sem acento: gestante, newborn, smash_the_cake, familia, casal, feminino, marca_pessoal, revelacao) e DEPOIS uma frase curta e natural de acompanhamento (ex.: "te mandei aqui as opções, dá uma olhada 🥰 qualquer dúvida me chama"). O sistema envia o PDF certo sozinho. Só use isso quando já souber o nicho.',
+    'No resto, responda normal seguindo as regras, a estratégia de venda e o tom.',
+  ].join('\n');
   const autoReplyTimers = new Map<string, NodeJS.Timeout>();
   const lastAutoReplyAt = new Map<string, number>();
 
@@ -18538,6 +18543,40 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         || m.transcription
         || (m.type === 'audio' ? '[áudio]' : m.type === 'image' ? '[imagem]' : ''),
     })).filter((m: any) => m.content && m.content.trim());
+  }
+
+  // ── Ações agênticas da Lia (mover funil + mandar PDF) ──────────────────────
+  const lerDigitos = (s: string) => (s || '').replace(/\D/g, '');
+  async function findDealForPhone(userId: string, phone: string) {
+    if (!supabaseAdmin) return null;
+    const d = lerDigitos(phone);
+    const short = d.startsWith('55') ? d.slice(2) : d;
+    const variants = new Set([d, short, '55' + short]);
+    const { data } = await supabaseAdmin.from('deals')
+      .select('id, stage, contact_phone').eq('user_id', userId);
+    return (data || []).find((x: any) => variants.has(lerDigitos(x.contact_phone))) || null;
+  }
+  async function moveDealToStageNamed(userId: string, dealId: any, nameRegex: RegExp) {
+    if (!supabaseAdmin || !dealId) return;
+    const { data: stages } = await supabaseAdmin.from('deal_stages')
+      .select('id, name, position').eq('user_id', userId).is('process_id', null)
+      .order('position', { ascending: true });
+    const target = (stages || []).find((s: any) => nameRegex.test(s.name || ''));
+    if (!target) return;
+    await supabaseAdmin.from('deals')
+      .update({ stage: target.id, current_stage_entered_at: new Date().toISOString() })
+      .eq('id', dealId).eq('user_id', userId);
+  }
+  async function sendMaterialPdf(userId: string, phone: string, nicho: string): Promise<boolean> {
+    if (!supabaseAdmin) return false;
+    const { data: mat } = await supabaseAdmin.from('agente_materiais')
+      .select('path, nome_arquivo').eq('user_id', userId).eq('nicho', nicho).eq('tipo', 'pacote').maybeSingle();
+    if (!mat?.path) return false;
+    const { data: blob, error } = await supabaseAdmin.storage.from('agente-materiais').download(mat.path);
+    if (error || !blob) return false;
+    const buf = Buffer.from(await blob.arrayBuffer());
+    await BaileysManager.sendMedia(userId, phone, buf.toString('base64'), 'application/pdf', mat.nome_arquivo || 'pacote.pdf', '');
+    return true;
   }
 
   async function runAutonomousReply(userId: string, phone: string) {
@@ -18574,14 +18613,31 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         console.log(`[Lia autônoma] hand-off → equipe | ${phone}`);
         return;
       }
-      // Mostra "digitando…" e espera um tempo realista (proporcional ao texto)
-      // antes de mandar — pra não parecer robô respondendo instantâneo.
+      const deal = await findDealForPhone(userId, phone);
+      const isFirstReply = !messages.some((m) => m.role === 'assistant');
+      const pdfMatch = reply.match(/###PDF:([a-z_]+)###/i);
+
+      // "digitando…" + atraso realista antes de mandar.
       await BaileysManager.sendTyping(userId, phone, true);
       await new Promise((r) => setTimeout(r, Math.min(2500 + reply.length * 45, 9000)));
       await BaileysManager.sendTyping(userId, phone, false);
-      await BaileysManager.sendText(userId, phone, reply);
+
+      if (pdfMatch) {
+        // Manda o PDF do pacote do nicho + a frase de acompanhamento e move o
+        // funil pra "Orçamento Enviado".
+        const nicho = pdfMatch[1].toLowerCase();
+        const followText = reply.replace(/###PDF:[a-z_]+###/i, '').trim();
+        const sent = await sendMaterialPdf(userId, phone, nicho);
+        if (followText) await BaileysManager.sendText(userId, phone, followText);
+        if (sent && deal) await moveDealToStageNamed(userId, deal.id, /or[çc]amento.*enviad|enviad.*or[çc]amento/i);
+        console.log(`[Lia autônoma] PDF ${nicho} ${sent ? 'enviado' : 'NÃO cadastrado'} | ${phone}`);
+      } else {
+        await BaileysManager.sendText(userId, phone, reply);
+        // Primeira resposta nossa → coloca o lead em "Conversa Iniciada".
+        if (isFirstReply && deal) await moveDealToStageNamed(userId, deal.id, /conversa\s*iniciada/i);
+        console.log(`[Lia autônoma] respondeu | ${phone}: ${reply.slice(0, 60)}`);
+      }
       lastAutoReplyAt.set(key, Date.now());
-      console.log(`[Lia autônoma] respondeu | ${phone}: ${reply.slice(0, 60)}`);
     } catch (e: any) {
       console.warn('[Lia autônoma] erro:', e?.message);
     }
