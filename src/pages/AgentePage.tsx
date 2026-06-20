@@ -1,12 +1,16 @@
 import React, { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
   Bot,
   BookOpen,
   Check,
   FileText,
+  Inbox,
   Loader2,
   MessageCircle,
+  RefreshCw,
+  RotateCcw,
   Save,
   Send,
   Settings2,
@@ -21,7 +25,19 @@ import { cn } from "../utils/cn";
 import AgenteMateriais from "../components/agente/AgenteMateriais";
 import AgenteAudios from "../components/agente/AgenteAudios";
 
-type Tab = "config" | "test";
+type Tab = "config" | "test" | "atendimentos";
+// Item do painel "Atendimentos da Lia".
+interface Atendimento {
+  phone: string;
+  contact_name: string | null;
+  last_message: string;
+  last_message_at: string | null;
+  unread_count: number;
+  stage_name: string | null;
+  followup_status: "pending" | "sent" | null;
+  followup_at: string | null;
+  bucket: "precisa_humano" | "orcamento" | "conversando";
+}
 // O que a Lia FARIA naquele turno (reproduz o fluxo autônomo no teste).
 interface ChatAction {
   type: "handoff" | "orcamento";
@@ -116,9 +132,53 @@ export default function AgentePage() {
   const [testError, setTestError] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // ── Atendimentos da Lia ───────────────────────────────────────
+  const navigate = useNavigate();
+  const [atend, setAtend] = useState<Atendimento[]>([]);
+  const [atendCounts, setAtendCounts] = useState({ precisa_humano: 0, orcamento: 0, conversando: 0, total: 0 });
+  const [loadingAtend, setLoadingAtend] = useState(false);
+  const [devolvendo, setDevolvendo] = useState<string | null>(null);
+
   useEffect(() => {
     loadConfig();
+    loadAtendimentos(); // popula o badge "precisa de você" já na entrada
   }, []);
+
+  // Carrega os atendimentos ao abrir a aba + atualiza a cada 30s enquanto nela.
+  useEffect(() => {
+    if (tab !== "atendimentos") return;
+    loadAtendimentos();
+    const id = setInterval(loadAtendimentos, 30000);
+    return () => clearInterval(id);
+  }, [tab]);
+
+  async function loadAtendimentos() {
+    setLoadingAtend(true);
+    try {
+      const res = await authFetch("/api/agent/atendimentos");
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setAtend(Array.isArray(data.items) ? data.items : []);
+        setAtendCounts(data.counts || { precisa_humano: 0, orcamento: 0, conversando: 0, total: 0 });
+      }
+    } catch { /* silencioso */ } finally {
+      setLoadingAtend(false);
+    }
+  }
+
+  async function devolverParaLia(phone: string) {
+    setDevolvendo(phone);
+    try {
+      const res = await authFetch(`/api/agent/atendimentos/${encodeURIComponent(phone.replace(/\D/g, ""))}/devolver`, { method: "POST" });
+      if (res.ok) await loadAtendimentos();
+    } catch { /* silencioso */ } finally {
+      setDevolvendo(null);
+    }
+  }
+
+  function abrirConversa(phone: string) {
+    navigate(`/whatsapp?phone=${encodeURIComponent(phone)}`);
+  }
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -258,6 +318,23 @@ export default function AgentePage() {
         >
           <MessageCircle size={16} />
           Testar
+        </button>
+        <button
+          onClick={() => setTab("atendimentos")}
+          className={cn(
+            "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all",
+            tab === "atendimentos"
+              ? "bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-sm"
+              : "text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200",
+          )}
+        >
+          <Inbox size={16} />
+          Atendimentos
+          {atendCounts.precisa_humano > 0 && (
+            <span className="ml-0.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-amber-500 text-white text-[11px] font-bold">
+              {atendCounts.precisa_humano}
+            </span>
+          )}
         </button>
       </div>
 
@@ -459,7 +536,7 @@ export default function AgentePage() {
             )}
           </div>
         </div>
-      ) : (
+      ) : tab === "test" ? (
         <div className="space-y-4">
           {/* Aviso de modo teste */}
           <div className="flex gap-3 p-4 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
@@ -624,6 +701,102 @@ export default function AgentePage() {
               <Trash2 size={15} />
               Limpar conversa
             </button>
+          )}
+        </div>
+      ) : (
+        /* ── Atendimentos da Lia ── */
+        <div className="space-y-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex gap-3 p-4 rounded-xl bg-violet-50 dark:bg-violet-900/20 border border-violet-200 dark:border-violet-800 flex-1">
+              <Bot size={20} className="text-violet-500 flex-shrink-0 mt-0.5" />
+              <div className="text-sm text-violet-800 dark:text-violet-300">
+                <strong>Atendimentos da Lia.</strong> Quem ela está atendendo sozinha, quem já recebeu o orçamento e quem ela passou pra você assumir. Atualiza sozinho a cada 30s — clique numa pessoa pra abrir a conversa.
+              </div>
+            </div>
+            <button
+              onClick={loadAtendimentos}
+              disabled={loadingAtend}
+              className="flex items-center justify-center w-10 h-10 rounded-xl border border-gray-200 dark:border-gray-700 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 flex-shrink-0 disabled:opacity-50"
+              title="Atualizar"
+            >
+              <RefreshCw size={16} className={cn(loadingAtend && "animate-spin")} />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {[
+              { key: "precisa_humano", label: "Precisa de você", n: atendCounts.precisa_humano, cls: "text-amber-600 dark:text-amber-400" },
+              { key: "orcamento", label: "Orçamento enviado", n: atendCounts.orcamento, cls: "text-gold-600 dark:text-gold-400" },
+              { key: "conversando", label: "Lia conversando", n: atendCounts.conversando, cls: "text-emerald-600 dark:text-emerald-400" },
+            ].map((s) => (
+              <div key={s.key} className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800">
+                <div className={cn("text-2xl font-extrabold", s.cls)}>{s.n}</div>
+                <div className="text-sm text-gray-500 dark:text-gray-400">{s.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {atendCounts.total === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-center text-gray-400 dark:text-gray-500">
+              <Inbox size={40} className="mb-3 opacity-40" />
+              <p className="text-sm">A Lia ainda não atendeu ninguém por aqui.</p>
+              <p className="text-xs mt-1">Com o atendimento autônomo ligado, os contatos vão aparecer aqui.</p>
+            </div>
+          ) : (
+            [
+              { key: "precisa_humano", title: "🙋 Precisa de você", desc: "A Lia passou pra você assumir (preço, fechamento, objeção ou pedido de pessoa).", border: "border-amber-300 dark:border-amber-800" },
+              { key: "orcamento", title: "📄 Orçamento enviado", desc: "A Lia mandou o orçamento e está aguardando a resposta.", border: "border-gray-200 dark:border-gray-800" },
+              { key: "conversando", title: "💬 Lia conversando", desc: "Atendimento em andamento com a Lia.", border: "border-gray-200 dark:border-gray-800" },
+            ].map((grp) => {
+              const list = atend.filter((a) => a.bucket === grp.key);
+              if (list.length === 0) return null;
+              return (
+                <div key={grp.key} className="space-y-2">
+                  <div>
+                    <h3 className="text-sm font-bold text-gray-900 dark:text-white">
+                      {grp.title} <span className="text-gray-400 font-normal">({list.length})</span>
+                    </h3>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">{grp.desc}</p>
+                  </div>
+                  {list.map((a) => (
+                    <div
+                      key={a.phone}
+                      className={cn("flex items-center gap-3 p-3 rounded-xl bg-white dark:bg-gray-900 border", grp.border)}
+                    >
+                      <button onClick={() => abrirConversa(a.phone)} className="flex-1 min-w-0 text-left">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-gray-900 dark:text-white truncate">{a.contact_name || a.phone}</span>
+                          {a.unread_count > 0 && (
+                            <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-emerald-500 text-white text-[11px] font-bold">{a.unread_count}</span>
+                          )}
+                          {a.stage_name && (
+                            <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">{a.stage_name}</span>
+                          )}
+                          {a.followup_status === "pending" && (
+                            <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300">follow-up agendado</span>
+                          )}
+                          {a.followup_status === "sent" && (
+                            <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300">follow-up enviado</span>
+                          )}
+                        </div>
+                        <div className="text-sm text-gray-500 dark:text-gray-400 truncate">{a.last_message || "—"}</div>
+                      </button>
+                      {grp.key === "precisa_humano" && (
+                        <button
+                          onClick={() => devolverParaLia(a.phone)}
+                          disabled={devolvendo === a.phone}
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-violet-600 dark:text-violet-300 border border-violet-200 dark:border-violet-800 hover:bg-violet-50 dark:hover:bg-violet-900/20 flex-shrink-0 disabled:opacity-50"
+                          title="A Lia volta a responder essa conversa sozinha"
+                        >
+                          {devolvendo === a.phone ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+                          Devolver pra Lia
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              );
+            })
           )}
         </div>
       )}

@@ -7369,6 +7369,109 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
   });
 
+  // ── Painel "Atendimentos da Lia" (Fase 3 agêntica) ─────────────────
+  // Lista as conversas que a Lia tocou, em 3 baldes: precisa de humano (hand-off),
+  // orçamento enviado (aguardando), e Lia conversando. Só leitura, escopo do user.
+  app.get('/api/agent/atendimentos', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const db = supabaseAdmin || ((req as any).supabase as SupabaseClient);
+    const emptyResp = { items: [] as any[], counts: { precisa_humano: 0, orcamento: 0, conversando: 0, total: 0 } };
+    try {
+      let { data: convData, error: convErr } = await db.from('wa_conversations')
+        .select('phone, contact_name, last_message, last_message_at, needs_human, unread_count, last_agent_reply_at')
+        .eq('user_id', userId)
+        .order('last_message_at', { ascending: false })
+        .limit(300);
+      // Resiliente: se a coluna last_agent_reply_at ainda não existe (migration 051),
+      // cai pra só as conversas marcadas como needs_human.
+      if (convErr && (convErr.code === '42703' || /last_agent_reply_at/.test(convErr.message || ''))) {
+        const r = await db.from('wa_conversations')
+          .select('phone, contact_name, last_message, last_message_at, needs_human, unread_count')
+          .eq('user_id', userId).eq('needs_human', true)
+          .order('last_message_at', { ascending: false }).limit(300);
+        convData = r.data as any; convErr = r.error as any;
+      } else if (convErr) {
+        throw convErr;
+      }
+      const convs = (convData || []).filter((c: any) => c.needs_human || c.last_agent_reply_at);
+      if (convs.length === 0) return res.json(emptyResp);
+
+      const [{ data: deals }, { data: stages }, { data: fups }] = await Promise.all([
+        db.from('deals').select('id, stage, contact_phone').eq('user_id', userId),
+        db.from('deal_stages').select('id, name').eq('user_id', userId),
+        db.from('scheduled_followups').select('deal_id, status, scheduled_at')
+          .eq('user_id', userId).eq('message', AGENT_FOLLOWUP_SENTINEL).in('status', ['pending', 'sent']),
+      ]);
+      const stageName = new Map((stages || []).map((s: any) => [s.id, s.name]));
+      const fupByDeal = new Map<any, any>();
+      for (const f of (fups || [])) {
+        const prev = fupByDeal.get(f.deal_id);
+        if (!prev || (f.scheduled_at || '') > (prev.scheduled_at || '')) fupByDeal.set(f.deal_id, f);
+      }
+      // Indexa os deals por dígitos UMA vez (em vez de varrer todos os deals por
+      // conversa) — o painel faz poll de 30s, então evita O(conversas × deals).
+      const dealByDigits = new Map<string, any>();
+      for (const dl of (deals || [])) {
+        const dd = lerDigitos(dl.contact_phone || '');
+        if (!dd) continue;
+        const sh = dd.startsWith('55') ? dd.slice(2) : dd;
+        for (const k of [dd, sh, '55' + sh]) if (k && !dealByDigits.has(k)) dealByDigits.set(k, dl);
+      }
+      const dealForPhone = (phone: string) => {
+        const d = lerDigitos(phone);
+        const short = d.startsWith('55') ? d.slice(2) : d;
+        for (const k of [d, short, '55' + short]) { const hit = dealByDigits.get(k); if (hit) return hit; }
+        return undefined;
+      };
+      const orcRe = /or[çc]amento.*enviad|enviad.*or[çc]amento/i;
+      const items = convs.map((c: any) => {
+        const deal = dealForPhone(c.phone);
+        const sName = deal ? (stageName.get(deal.stage) || '') : '';
+        const fup = deal ? fupByDeal.get(deal.id) : null;
+        let bucket: 'precisa_humano' | 'orcamento' | 'conversando';
+        if (c.needs_human) bucket = 'precisa_humano';
+        else if (orcRe.test(sName)) bucket = 'orcamento';
+        else bucket = 'conversando';
+        return {
+          phone: c.phone,
+          contact_name: c.contact_name || null,
+          last_message: c.last_message || '',
+          last_message_at: c.last_message_at || c.last_agent_reply_at || null,
+          unread_count: c.unread_count || 0,
+          stage_name: sName || null,
+          followup_status: fup?.status || null,
+          followup_at: fup?.scheduled_at || null,
+          bucket,
+        };
+      });
+      const counts = {
+        precisa_humano: items.filter((i) => i.bucket === 'precisa_humano').length,
+        orcamento: items.filter((i) => i.bucket === 'orcamento').length,
+        conversando: items.filter((i) => i.bucket === 'conversando').length,
+        total: items.length,
+      };
+      res.json({ items, counts });
+    } catch (e: any) {
+      console.error('[Agent atendimentos] erro:', e?.message || e);
+      res.status(500).json({ error: e?.message || 'Erro ao listar atendimentos.' });
+    }
+  });
+
+  // Devolve uma conversa pra Lia (limpa needs_human → o autônomo volta a responder).
+  app.post('/api/agent/atendimentos/:phone/devolver', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const db = supabaseAdmin || ((req as any).supabase as SupabaseClient);
+    const phone = String(req.params.phone || '').replace(/\D/g, '');
+    if (!phone) return res.status(400).json({ error: 'phone inválido' });
+    try {
+      await db.from('wa_conversations').update({ needs_human: false })
+        .eq('user_id', userId).eq('phone', phone);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || 'Erro ao devolver pra Lia.' });
+    }
+  });
+
   // ── Materiais (PDFs) do agente — bucket privado no Storage ──────────
   let agenteMateriaisBucketReady = false;
   async function ensureAgenteMateriaisBucket() {
@@ -18781,6 +18884,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         console.log(`[Lia autônoma] respondeu | ${phone}: ${reply.slice(0, 60)}`);
       }
       lastAutoReplyAt.set(key, Date.now());
+      // Marca que a Lia atendeu (pro painel "Atendimentos da Lia"). Best-effort.
+      try {
+        await supabaseAdmin.from('wa_conversations')
+          .update({ last_agent_reply_at: new Date().toISOString() })
+          .eq('user_id', userId).eq('phone', phone);
+      } catch {}
     } catch (e: any) {
       console.warn('[Lia autônoma] erro:', e?.message);
     }
@@ -19177,6 +19286,11 @@ async function runAgentFollowUp(task: any): Promise<'sent' | 'cancelled' | 'fail
       }
       await BaileysManager.sendText(task.user_id, task.phone, parts[i]);
     }
+    try {
+      await supabaseAdmin.from('wa_conversations')
+        .update({ last_agent_reply_at: new Date().toISOString() })
+        .eq('user_id', task.user_id).eq('phone', task.phone);
+    } catch {}
     console.log(`[Lia follow-up] enviado | ${task.phone}: ${clean.slice(0, 60)}`);
     return 'sent';
   } catch (e: any) {
