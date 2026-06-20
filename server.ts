@@ -48,6 +48,17 @@ dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Instrução do MODO AUTÔNOMO (e do teste de fluxo na aba "Testar"). Fonte única
+// usada tanto pelo atendimento autônomo quanto pelo /api/agent/test, pra o teste
+// reproduzir EXATAMENTE o comportamento real (hand-off silencioso + envio do PDF).
+const HANDOFF_INSTRUCTION = [
+  'MODO AUTÔNOMO: você responde o cliente SOZINHA, sem revisão humana, COMO UMA PESSOA do time do estúdio — o cliente NUNCA pode perceber que é uma IA.',
+  'HAND-OFF: se for FECHAR a venda, falar PREÇO/valor final, PAGAMENTO/Pix, CONFIRMAR a DATA do ensaio, OBJEÇÃO forte/reclamação, ou o cliente PEDIR uma pessoa — responda APENAS com ###HUMANO### (e nada mais), pra equipe assumir. Nunca avise que vai transferir. (Combinar um RETORNO de conversa — "te chamo amanhã/segunda" — NÃO é hand-off: faça você mesma.)',
+  'ENVIAR PACOTE (PDF): quando for apresentar o pacote/orçamento do nicho que a pessoa quer, NÃO descreva em texto — comece a resposta com o token ###PDF:<nicho>### (nicho em minúsculo e sem acento: gestante, newborn, smash_the_cake, familia, casal, feminino, marca_pessoal, revelacao) e DEPOIS uma frase curta e natural de acompanhamento (ex.: "te mandei aqui as opções, dá uma olhada 🥰 qualquer dúvida me chama"). O sistema envia o PDF certo sozinho. Só use isso quando já souber o nicho.',
+  'VÁRIOS BALÕES: escreva como no WhatsApp. Pra mandar em mensagens SEPARADAS, ponha uma LINHA EM BRANCO entre elas (ex.: a apresentação "…vou tomar conta do seu atendimento por aqui." vai numa mensagem e "Qual tipo de ensaio você gostaria?" vem na mensagem SEGUINTE). Quebra de linha simples fica no MESMO balão. Não exagere: 1 a 3 balões por vez.',
+  'No resto, responda normal seguindo as regras, a estratégia de venda e o tom.',
+].join('\n');
+
 // Transcodifica áudio webm → ogg/opus com flags de voice note para WhatsApp
 function transcodeWebmToOgg(inputBase64: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -2686,20 +2697,24 @@ async function startServer() {
         console.error('[Inbox] Erro fallback Meta:', err?.message || err);
       }
     }
-    if (!waNumber) {
-      return res.json([]);
-    }
+    // Desconectado (sem número ativo): NÃO esconda o histórico. O WhatsApp pode
+    // cair (sem querer ou de propósito) e as conversas continuam salvas no banco —
+    // mostra as conversas do usuário mesmo sem número conectado, em vez de [].
+    const disconnected = !waNumber;
     if (!db) {
       const userDb = (req as any).supabase as SupabaseClient;
-      const { data } = await userDb.from('wa_conversations').select('*').eq('user_id', userId).eq('wa_number', waNumber).order('last_message_at', { ascending: false }).limit(200);
+      let q = userDb.from('wa_conversations').select('*').eq('user_id', userId);
+      if (!disconnected) q = q.eq('wa_number', waNumber);
+      const { data } = await q.order('last_message_at', { ascending: false }).limit(200);
       return res.json(data || []);
     }
     try {
-      const { data, error } = await db
+      let q = db
         .from('wa_conversations')
         .select('*')
-        .eq('user_id', userId)
-        .eq('wa_number', waNumber)
+        .eq('user_id', userId);
+      if (!disconnected) q = q.eq('wa_number', waNumber);
+      const { data, error } = await q
         .order('last_message_at', { ascending: false })
         .limit(200);
 
@@ -2771,21 +2786,22 @@ async function startServer() {
         }
       } catch {}
     }
-    if (!waNumber) {
-      return res.json([]);
-    }
+    // Desconectado: NÃO esconda as mensagens (paridade com /conversations). O
+    // histórico fica salvo no banco; mostra mesmo sem número conectado.
+    const disconnected = !waNumber;
     const dbMsg = supabaseAdmin || supabase;
     try {
-      // Busca em ambos os formatos: JID exato (12 dig) e normalizado (13 dig)
-      // E só do WhatsApp atualmente conectado (filtrar por wa_number).
+      // Busca em ambos os formatos: JID exato (12 dig) e normalizado (13 dig).
+      // Quando conectado, restringe ao WhatsApp atual (wa_number).
       const phoneCondition = phone12 !== phone13
         ? `phone.eq.${phone12},phone.eq.${phone13}`
         : `phone.eq.${phone12}`;
-      const msgQuery = dbMsg
+      let msgQuery = dbMsg
         .from('wa_messages')
         .select('*')
-        .eq('user_id', userId)
-        .eq('wa_number', waNumber)
+        .eq('user_id', userId);
+      if (!disconnected) msgQuery = msgQuery.eq('wa_number', waNumber);
+      msgQuery = msgQuery
         .or(phoneCondition)
         .order('timestamp', { ascending: true })
         .limit(limit);
@@ -7200,6 +7216,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({
       enabled: data?.enabled ?? false,
       auto_send: data?.auto_send ?? false,
+      use_client_history: data?.use_client_history ?? false,
       persona: data?.persona || DEFAULT_PERSONA,
       objective: data?.objective || DEFAULT_OBJECTIVE,
       knowledge: data?.knowledge || DEFAULT_KNOWLEDGE,
@@ -7212,7 +7229,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.put('/api/agent/config', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { enabled, auto_send, persona, objective, knowledge, rules, sales_strategy, attendant_name } = req.body;
+    const { enabled, auto_send, use_client_history, persona, objective, knowledge, rules, sales_strategy, attendant_name } = req.body;
     const baseRow: any = {
       user_id: userId,
       enabled: !!enabled,
@@ -7226,12 +7243,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       ...baseRow,
       sales_strategy: typeof sales_strategy === 'string' ? sales_strategy : null,
       ...(auto_send !== undefined ? { auto_send: !!auto_send } : {}),
+      ...(use_client_history !== undefined ? { use_client_history: !!use_client_history } : {}),
       ...(attendant_name !== undefined ? { attendant_name: typeof attendant_name === 'string' ? attendant_name.trim() : null } : {}),
     };
     let { error } = await supabase.from('ai_agent_config').upsert(row, { onConflict: 'user_id' });
-    // Resiliente: se colunas novas (sales_strategy/auto_send/attendant_name) ainda
-    // não existem (migrations 045/046/048), salva o resto pra não travar a tela.
-    if (error && (error.code === '42703' || /sales_strategy|auto_send|attendant_name/.test(error.message || ''))) {
+    // Resiliente: se colunas novas (sales_strategy/auto_send/use_client_history/attendant_name)
+    // ainda não existem (migrations 045/046/048/049), salva o resto pra não travar a tela.
+    if (error && (error.code === '42703' || /sales_strategy|auto_send|use_client_history|attendant_name/.test(error.message || ''))) {
       ({ error } = await supabase.from('ai_agent_config').upsert(baseRow, { onConflict: 'user_id' }));
     }
     if (error) {
@@ -7253,11 +7271,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Playground de teste: gera uma resposta do agente sem enviar nada a
   // ninguém. Usa a persona/conhecimento do corpo (edição ao vivo na tela).
   app.post('/api/agent/test', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
     const { messages, persona, objective, knowledge, rules, sales_strategy, attendant_name } = req.body;
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'Envie ao menos uma mensagem.' });
     }
     try {
+      // Mesmo cérebro do atendimento autônomo (HANDOFF_INSTRUCTION) pra o teste
+      // descer o fluxo REAL — até o envio do orçamento (token ###PDF###) e o
+      // hand-off (###HUMANO###). Aqui NADA é enviado: a gente só relata.
       const reply = await getAgentReply(
         {
           enabled: true,
@@ -7269,8 +7292,43 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           attendantName: typeof attendant_name === 'string' ? attendant_name : '',
         },
         messages,
+        { extraInstruction: HANDOFF_INSTRUCTION },
       );
-      res.json({ reply });
+
+      // Hand-off → a Lia passaria pro humano (no real ela não responde nada).
+      if (!reply || reply.includes('###HUMANO###')) {
+        return res.json({ reply: '', action: { type: 'handoff' } });
+      }
+      // Envio do orçamento → checa se o PDF de 'pacote' do nicho está cadastrado.
+      const pdfMatch = reply.match(/###PDF:([a-z_]+)###/i);
+      if (pdfMatch) {
+        const nicho = pdfMatch[1].toLowerCase();
+        const followText = reply.replace(/###PDF:[a-z_]+###/i, '').trim();
+        // Espelha EXATAMENTE o sendMaterialPdf: só conta como "cadastrado" se a
+        // linha tem path E o arquivo baixa do storage (senão o envio real falha).
+        let pdfFound = false;
+        let fileName: string | null = null;
+        try {
+          const matClient = supabaseAdmin || supabase;
+          const { data: mat } = await matClient
+            .from('agente_materiais')
+            .select('path, nome_arquivo')
+            .eq('user_id', userId).eq('nicho', nicho).eq('tipo', 'pacote')
+            .maybeSingle();
+          fileName = mat?.nome_arquivo || null;
+          if (mat?.path) {
+            if (supabaseAdmin) {
+              const { data: blob, error: dlErr } = await supabaseAdmin
+                .storage.from('agente-materiais').download(mat.path);
+              pdfFound = !dlErr && !!blob;
+            } else {
+              pdfFound = true; // sem service role não dá pra checar o storage; a linha existe
+            }
+          }
+        } catch { /* sem materiais / falha de storage → trata como não cadastrado */ }
+        return res.json({ reply: followText, action: { type: 'orcamento', nicho, pdfFound, fileName } });
+      }
+      res.json({ reply, action: null });
     } catch (e: any) {
       console.error('[Agent test] erro:', e?.message || e);
       res.status(500).json({ error: e?.message || 'Erro ao gerar resposta do agente.' });
@@ -18522,12 +18580,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Liga por estúdio (ai_agent_config.auto_send, default off). Responde sozinha,
   // mas em caso de preço/fechamento/objeção forte/cliente pedir humano, NÃO
   // responde o cliente — marca a conversa (needs_human) pra equipe assumir.
-  const HANDOFF_INSTRUCTION = [
-    'MODO AUTÔNOMO: você responde o cliente SOZINHA, sem revisão humana, COMO UMA PESSOA do time do estúdio — o cliente NUNCA pode perceber que é uma IA.',
-    'HAND-OFF: se for FECHAR a venda, falar PREÇO/valor final, PAGAMENTO/Pix, AGENDAR/confirmar data, OBJEÇÃO forte/reclamação, ou o cliente PEDIR uma pessoa — responda APENAS com ###HUMANO### (e nada mais), pra equipe assumir. Nunca avise que vai transferir.',
-    'ENVIAR PACOTE (PDF): quando for apresentar o pacote/orçamento do nicho que a pessoa quer, NÃO descreva em texto — comece a resposta com o token ###PDF:<nicho>### (nicho em minúsculo e sem acento: gestante, newborn, smash_the_cake, familia, casal, feminino, marca_pessoal, revelacao) e DEPOIS uma frase curta e natural de acompanhamento (ex.: "te mandei aqui as opções, dá uma olhada 🥰 qualquer dúvida me chama"). O sistema envia o PDF certo sozinho. Só use isso quando já souber o nicho.',
-    'No resto, responda normal seguindo as regras, a estratégia de venda e o tom.',
-  ].join('\n');
+  // HANDOFF_INSTRUCTION agora é const de módulo (lá em cima) — compartilhada com
+  // o /api/agent/test pra o teste reproduzir o fluxo real.
   const autoReplyTimers = new Map<string, NodeJS.Timeout>();
   const lastAutoReplyAt = new Map<string, number>();
 
@@ -18579,6 +18633,68 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return true;
   }
 
+  // Linha em branco (\n\n) = mensagem SEPARADA no WhatsApp (gente manda em vários
+  // balões, ex.: a apresentação manda "…vou tomar conta do seu atendimento por
+  // aqui." e SÓ DEPOIS "Qual tipo de ensaio…"). Quebra simples (\n) fica no mesmo
+  // balão. Entre balões, "digitando…" + uma pausa curta, pra parecer humano.
+  function splitIntoMessages(text: string): string[] {
+    return (text || '').split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
+  }
+  async function sendAgentMessages(userId: string, phone: string, text: string) {
+    const parts = splitIntoMessages(text);
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) {
+        await BaileysManager.sendTyping(userId, phone, true);
+        await new Promise((r) => setTimeout(r, Math.min(1200 + parts[i].length * 35, 6000)));
+        await BaileysManager.sendTyping(userId, phone, false);
+      }
+      await BaileysManager.sendText(userId, phone, parts[i]);
+    }
+  }
+
+  // Cruza o telefone com clients/jobs pra a Lia reconhecer quem JÁ é cliente e
+  // atender com proximidade (opt-in por estúdio: ai_agent_config.use_client_history).
+  // Retorna '' se não achar (aí atende normal). Só leitura, escopo do user.
+  async function buildClientContext(userId: string, phone: string): Promise<string> {
+    if (!supabaseAdmin) return '';
+    // Match rígido por número completo (mesma lógica do findDealForPhone). NÃO
+    // casar por "últimos 8 dígitos" — daria falso positivo entre clientes do
+    // mesmo estúdio (DDDs diferentes / com e sem o 9) e vazaria PII pra conversa
+    // errada. Melhor não reconhecer do que reconhecer o cliente errado.
+    const d = lerDigitos(phone);
+    const short = d.startsWith('55') ? d.slice(2) : d;
+    const variants = new Set([d, short, '55' + short]);
+    const matchPhone = (p: any) => {
+      const cd = lerDigitos(p || '');
+      return !!cd && variants.has(cd);
+    };
+    const { data: clients } = await supabaseAdmin.from('clients')
+      .select('id, name, child_name, phone').eq('user_id', userId);
+    const cli = (clients || []).find((c: any) => matchPhone(c.phone));
+    if (!cli) return '';
+    let past = '';
+    try {
+      const { data: jobs } = await supabaseAdmin.from('jobs')
+        .select('job_type, job_date').eq('user_id', userId).eq('client_id', cli.id)
+        .order('job_date', { ascending: false }).limit(5);
+      const items = (jobs || [])
+        .filter((j: any) => j.job_type || j.job_date)
+        .map((j: any) => {
+          const dt = j.job_date ? new Date(j.job_date).toLocaleDateString('pt-BR') : '';
+          return `${j.job_type || 'ensaio'}${dt ? ' (' + dt + ')' : ''}`;
+        });
+      if (items.length) past = items.join('; ');
+    } catch { /* sem jobs cadastrados */ }
+    const lines = [
+      'CLIENTE QUE JÁ É DA CASA — atenda com a proximidade e o carinho de quem já se conhece, com naturalidade (sem parecer que leu uma ficha, sem despejar os dados de uma vez):',
+      `- Nome: ${cli.name}`,
+    ];
+    if (cli.child_name) lines.push(`- Filho(a)/bebê: ${cli.child_name} — pode perguntar como ele(a) está, com carinho.`);
+    if (past) lines.push(`- Já fez ensaio com a gente: ${past}.`);
+    lines.push('Reconheça que já se conhecem e puxe assunto com afeto. NÃO invente nada além do que está aqui; se a pessoa não lembrar ou for outro assunto, siga normal.');
+    return lines.join('\n');
+  }
+
   async function runAutonomousReply(userId: string, phone: string) {
     if (!supabaseAdmin) return;
     const key = `${userId}|${phone}`;
@@ -18599,13 +18715,22 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const messages = await loadAgentConversation(userId, phone);
       if (!messages.length || messages[messages.length - 1].role !== 'user') return;
 
+      // Reconhecer cliente antigo (opt-in): injeta um contexto de proximidade.
+      let extraInstruction = HANDOFF_INSTRUCTION;
+      if (cfg.use_client_history) {
+        try {
+          const ctx = await buildClientContext(userId, phone);
+          if (ctx) extraInstruction = HANDOFF_INSTRUCTION + '\n\n' + ctx;
+        } catch (e: any) { console.warn('[Lia autônoma] contexto de cliente falhou:', e?.message); }
+      }
+
       const reply = await getAgentReply({
         enabled: true,
         persona: cfg.persona || '', objective: cfg.objective || '',
         knowledge: cfg.knowledge || '', rules: cfg.rules || '',
         salesStrategy: cfg.sales_strategy || '',
         attendantName: cfg.attendant_name || '',
-      }, messages, { extraInstruction: HANDOFF_INSTRUCTION });
+      }, messages, { extraInstruction });
 
       if (!reply || reply.includes('###HUMANO###')) {
         await supabaseAdmin.from('wa_conversations')
@@ -18628,11 +18753,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         const nicho = pdfMatch[1].toLowerCase();
         const followText = reply.replace(/###PDF:[a-z_]+###/i, '').trim();
         const sent = await sendMaterialPdf(userId, phone, nicho);
-        if (followText) await BaileysManager.sendText(userId, phone, followText);
+        if (followText) await sendAgentMessages(userId, phone, followText);
         if (sent && deal) await moveDealToStageNamed(userId, deal.id, /or[çc]amento.*enviad|enviad.*or[çc]amento/i);
         console.log(`[Lia autônoma] PDF ${nicho} ${sent ? 'enviado' : 'NÃO cadastrado'} | ${phone}`);
       } else {
-        await BaileysManager.sendText(userId, phone, reply);
+        await sendAgentMessages(userId, phone, reply);
         // Primeira resposta nossa → coloca o lead em "Conversa Iniciada".
         if (isFirstReply && deal) await moveDealToStageNamed(userId, deal.id, /conversa\s*iniciada/i);
         console.log(`[Lia autônoma] respondeu | ${phone}: ${reply.slice(0, 60)}`);

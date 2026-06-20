@@ -4,6 +4,7 @@ import {
   Bot,
   BookOpen,
   Check,
+  FileText,
   Loader2,
   MessageCircle,
   Save,
@@ -13,6 +14,7 @@ import {
   Sparkles,
   Target,
   Trash2,
+  UserRound,
 } from "lucide-react";
 import { authFetch } from "../utils/authFetch";
 import { cn } from "../utils/cn";
@@ -20,10 +22,35 @@ import AgenteMateriais from "../components/agente/AgenteMateriais";
 import AgenteAudios from "../components/agente/AgenteAudios";
 
 type Tab = "config" | "test";
+// O que a Lia FARIA naquele turno (reproduz o fluxo autônomo no teste).
+interface ChatAction {
+  type: "handoff" | "orcamento";
+  nicho?: string;
+  pdfFound?: boolean;
+  fileName?: string | null;
+}
 interface ChatMsg {
   role: "user" | "assistant";
   content: string;
+  action?: ChatAction | null;
 }
+
+// Atalhos pra começar o teste já num nicho (a Lia ainda identifica pela conversa).
+const NICHOS_TESTE: { label: string; abre: string }[] = [
+  { label: "Gestante", abre: "Oi! Queria saber sobre o ensaio gestante 🥰" },
+  { label: "Newborn", abre: "Olá! Tenho interesse no ensaio newborn" },
+  { label: "Smash the Cake", abre: "Oi, queria saber do Smash the Cake, meu bebê vai fazer 1 aninho" },
+  { label: "Família", abre: "Oi! Vocês fazem ensaio de família?" },
+  { label: "Casal", abre: "Olá! Queria um ensaio de casal" },
+  { label: "Feminino", abre: "Oi, tenho interesse num ensaio feminino" },
+  { label: "Marca Pessoal", abre: "Olá! Preciso de fotos pra minha marca pessoal" },
+  { label: "Revelação", abre: "Oi! Queria saber do ensaio de revelação" },
+];
+const NICHO_LABEL: Record<string, string> = {
+  gestante: "Gestante", newborn: "Newborn", smash_the_cake: "Smash the Cake",
+  familia: "Família", casal: "Casal", feminino: "Feminino",
+  marca_pessoal: "Marca Pessoal", revelacao: "Revelação",
+};
 
 // Bloco de configuração reutilizável (ícone + título + ajuda + textarea).
 function ConfigSection({
@@ -69,6 +96,7 @@ export default function AgentePage() {
   // ── Configuração ──────────────────────────────────────────────
   const [enabled, setEnabled] = useState(false);
   const [autoSend, setAutoSend] = useState(false);
+  const [useClientHistory, setUseClientHistory] = useState(false);
   const [persona, setPersona] = useState("");
   const [objective, setObjective] = useState("");
   const [knowledge, setKnowledge] = useState("");
@@ -105,6 +133,7 @@ export default function AgentePage() {
       if (res.ok) {
         setEnabled(!!data.enabled);
         setAutoSend(!!data.auto_send);
+        setUseClientHistory(!!data.use_client_history);
         setPersona(data.persona || "");
         setObjective(data.objective || "");
         setKnowledge(data.knowledge || "");
@@ -129,7 +158,7 @@ export default function AgentePage() {
     try {
       const res = await authFetch("/api/agent/config", {
         method: "PUT",
-        body: JSON.stringify({ enabled, auto_send: autoSend, persona, objective, knowledge, rules, sales_strategy: salesStrategy, attendant_name: attendantName }),
+        body: JSON.stringify({ enabled, auto_send: autoSend, use_client_history: useClientHistory, persona, objective, knowledge, rules, sales_strategy: salesStrategy, attendant_name: attendantName }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
@@ -146,9 +175,10 @@ export default function AgentePage() {
     }
   }
 
-  async function sendTest() {
-    const text = input.trim();
+  async function sendMessage(raw: string) {
+    const text = raw.trim();
     if (!text || sending) return;
+    // A API só manda pro modelo o body limpo (role/content), sem a action.
     const next: ChatMsg[] = [...chat, { role: "user", content: text }];
     setChat(next);
     setInput("");
@@ -158,7 +188,7 @@ export default function AgentePage() {
       const res = await authFetch("/api/agent/test", {
         method: "POST",
         body: JSON.stringify({
-          messages: next,
+          messages: next.map((m) => ({ role: m.role, content: m.content })),
           persona,
           objective,
           knowledge,
@@ -168,8 +198,11 @@ export default function AgentePage() {
         }),
       });
       const data = await res.json().catch(() => ({}));
-      if (res.ok && data.reply) {
-        setChat((c) => [...c, { role: "assistant", content: data.reply }]);
+      if (res.ok && (data.reply || data.action)) {
+        setChat((c) => [
+          ...c,
+          { role: "assistant", content: data.reply || "", action: data.action || null },
+        ]);
       } else {
         setTestError(data.error || "Erro ao gerar a resposta.");
       }
@@ -178,6 +211,9 @@ export default function AgentePage() {
     } finally {
       setSending(false);
     }
+  }
+  function sendTest() {
+    sendMessage(input);
   }
 
   return (
@@ -301,6 +337,36 @@ export default function AgentePage() {
             </button>
           </div>
 
+          {/* Reconhecer clientes antigos (cria contexto na conversa) */}
+          <div className="flex items-center justify-between gap-4 p-4 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800">
+            <div>
+              <div className="font-semibold text-gray-900 dark:text-white">
+                Reconhecer clientes antigos
+              </div>
+              <div className="text-sm text-gray-500 dark:text-gray-400">
+                Quando ligado, ao chegar mensagem a Lia cruza o telefone com a sua base de clientes e, se a pessoa já fez ensaio com você, atende com proximidade (puxa o nome, o filho/bebê e os ensaios anteriores) pra criar empatia. Só leitura, nada é alterado. Vale pro atendimento autônomo.
+              </div>
+            </div>
+            <button
+              onClick={() => setUseClientHistory((v) => !v)}
+              role="switch"
+              aria-checked={useClientHistory}
+              disabled={!enabled}
+              className={cn(
+                "relative w-12 h-7 rounded-full transition-colors flex-shrink-0",
+                useClientHistory && enabled ? "bg-gold-500" : "bg-gray-300 dark:bg-gray-700",
+                !enabled && "opacity-50 cursor-not-allowed",
+              )}
+            >
+              <span
+                className={cn(
+                  "absolute top-1 left-1 w-5 h-5 rounded-full bg-white shadow transition-transform",
+                  useClientHistory && "translate-x-5",
+                )}
+              />
+            </button>
+          </div>
+
           {/* Nome do atendente que a Lia assume */}
           <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800">
             <div className="font-semibold text-gray-900 dark:text-white mb-1">Nome do atendente</div>
@@ -399,8 +465,11 @@ export default function AgentePage() {
           <div className="flex gap-3 p-4 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
             <Sparkles size={20} className="text-blue-500 flex-shrink-0 mt-0.5" />
             <div className="text-sm text-blue-800 dark:text-blue-300">
-              <strong>Modo teste.</strong> Converse como se fosse um cliente - nada é
-              enviado para ninguém. Usa a configuração da aba ao lado (mesmo sem salvar).
+              <strong>Modo teste — fluxo completo.</strong> Converse como um cliente: o
+              teste roda igualzinho ao atendimento autônomo, indo <strong>até o envio do
+              orçamento</strong> (mostra qual PDF a Lia mandaria e se está cadastrado) e
+              mostrando quando ela passaria pra um humano. Nada é enviado pra ninguém. Usa
+              a configuração da aba ao lado (mesmo sem salvar).
             </div>
           </div>
 
@@ -408,34 +477,100 @@ export default function AgentePage() {
           <div className="rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 overflow-hidden">
             <div className="h-[420px] overflow-y-auto p-4 space-y-3">
               {chat.length === 0 && !sending && (
-                <div className="h-full flex flex-col items-center justify-center text-center text-gray-400 dark:text-gray-500">
+                <div className="h-full flex flex-col items-center justify-center text-center text-gray-400 dark:text-gray-500 px-2">
                   <Bot size={40} className="mb-3 opacity-40" />
                   <p className="text-sm">
-                    Mande a primeira mensagem como se fosse o cliente.
+                    Escolha um tipo de ensaio pra começar o teste
                   </p>
-                  <p className="text-xs mt-1">
-                    Ex.: "Oi, queria saber sobre ensaio gestante"
+                  <p className="text-xs mt-1 mb-4">
+                    (ou escreva você mesmo lá embaixo e deixe a Lia identificar)
                   </p>
+                  <div className="flex flex-wrap gap-2 justify-center max-w-md">
+                    {NICHOS_TESTE.map((n) => (
+                      <button
+                        key={n.label}
+                        onClick={() => sendMessage(n.abre)}
+                        className="px-3 py-1.5 rounded-full text-xs font-semibold bg-gold-500/10 text-gold-700 dark:text-gold-300 border border-gold-500/30 hover:bg-gold-500/20 transition-colors"
+                      >
+                        {n.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
               {chat.map((m, i) => (
-                <div
-                  key={i}
-                  className={cn(
-                    "flex",
-                    m.role === "user" ? "justify-end" : "justify-start",
+                <div key={i} className="space-y-2">
+                  {/* Balão de texto (cliente ou Lia). No hand-off não há texto. */}
+                  {m.content && (
+                    <div
+                      className={cn(
+                        "flex",
+                        m.role === "user" ? "justify-end" : "justify-start",
+                      )}
+                    >
+                      <div
+                        className={cn(
+                          "max-w-[80%] px-3.5 py-2.5 rounded-2xl text-sm whitespace-pre-wrap",
+                          m.role === "user"
+                            ? "bg-gold-500 text-white rounded-br-sm"
+                            : "bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-bl-sm",
+                        )}
+                      >
+                        {m.content}
+                      </div>
+                    </div>
                   )}
-                >
-                  <div
-                    className={cn(
-                      "max-w-[80%] px-3.5 py-2.5 rounded-2xl text-sm whitespace-pre-wrap",
-                      m.role === "user"
-                        ? "bg-gold-500 text-white rounded-br-sm"
-                        : "bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-bl-sm",
-                    )}
-                  >
-                    {m.content}
-                  </div>
+
+                  {/* Cartão: enviaria o orçamento (PDF do nicho) */}
+                  {m.action?.type === "orcamento" && (
+                    <div className="flex justify-start">
+                      <div
+                        className={cn(
+                          "max-w-[85%] flex gap-2.5 px-3.5 py-2.5 rounded-2xl rounded-bl-sm text-sm border",
+                          m.action.pdfFound
+                            ? "bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300"
+                            : "bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300",
+                        )}
+                      >
+                        <FileText size={18} className="flex-shrink-0 mt-0.5" />
+                        <div>
+                          <div className="font-semibold">
+                            Enviaria o orçamento — pacote{" "}
+                            {NICHO_LABEL[m.action.nicho || ""] || m.action.nicho}
+                          </div>
+                          {m.action.pdfFound ? (
+                            <div className="text-xs mt-0.5 flex items-center gap-1">
+                              <Check size={13} /> PDF cadastrado
+                              {m.action.fileName ? `: ${m.action.fileName}` : ""} · move
+                              pra "Orçamento Enviado"
+                            </div>
+                          ) : (
+                            <div className="text-xs mt-0.5 flex items-center gap-1">
+                              <AlertTriangle size={13} /> Nenhum PDF de "pacote" desse
+                              nicho em Materiais — suba o arquivo pra a Lia enviar.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Cartão: passaria pra um humano */}
+                  {m.action?.type === "handoff" && (
+                    <div className="flex justify-start">
+                      <div className="max-w-[85%] flex gap-2.5 px-3.5 py-2.5 rounded-2xl rounded-bl-sm text-sm border bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800 text-purple-800 dark:text-purple-300">
+                        <UserRound size={18} className="flex-shrink-0 mt-0.5" />
+                        <div>
+                          <div className="font-semibold">Passaria pra um atendente</div>
+                          <div className="text-xs mt-0.5">
+                            Preço final, fechamento, pagamento, data do ensaio ou objeção
+                            forte. No atendimento real a Lia <strong>não responde</strong>{" "}
+                            e te sinaliza, sem o cliente perceber.
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
               {sending && (

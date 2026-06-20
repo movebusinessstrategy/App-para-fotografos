@@ -86,6 +86,15 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
   const bottomRef = useRef<HTMLDivElement>(null);
   const prevCountRef = useRef(0);
 
+  // O campo de digitar CRESCE com o texto (até 120px, aí rola), pra dar pra ler a
+  // mensagem inteira enquanto escreve — antes ficava travado em 1 linha.
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
+  }, [text]);
+
   function handleMessagesScroll() {
     const el = messagesContainerRef.current;
     if (!el) return;
@@ -656,7 +665,6 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
                       <EmojiPicker
                         theme={EmojiTheme.DARK}
                         onEmojiClick={data => {
-                          console.log('[EMOJI DEBUG]', { emoji: data.emoji, currentText: text });
                           const textarea = textareaRef.current;
                           if (!textarea) {
                             setText(prev => prev + data.emoji);
