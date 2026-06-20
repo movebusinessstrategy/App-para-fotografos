@@ -18587,11 +18587,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   async function loadAgentConversation(userId: string, phone: string) {
     if (!supabaseAdmin) return [] as { role: 'user' | 'assistant'; content: string }[];
+    // Pega as ÚLTIMAS 60 (desc + reverte) — em conversa longa o que importa é o
+    // contexto RECENTE, não as primeiras mensagens.
     const { data } = await supabaseAdmin.from('wa_messages')
       .select('body, from_me, type, transcription, timestamp')
       .eq('user_id', userId).eq('phone', phone)
-      .order('timestamp', { ascending: true }).limit(60);
-    return (data || []).map((m: any) => ({
+      .order('timestamp', { ascending: false }).limit(60);
+    return (data || []).reverse().map((m: any) => ({
       role: (m.from_me ? 'assistant' : 'user') as 'user' | 'assistant',
       content: (m.body && m.body.trim())
         || m.transcription
@@ -18754,7 +18756,23 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         const followText = reply.replace(/###PDF:[a-z_]+###/i, '').trim();
         const sent = await sendMaterialPdf(userId, phone, nicho);
         if (followText) await sendAgentMessages(userId, phone, followText);
-        if (sent && deal) await moveDealToStageNamed(userId, deal.id, /or[çc]amento.*enviad|enviad.*or[çc]amento/i);
+        if (sent && deal) {
+          await moveDealToStageNamed(userId, deal.id, /or[çc]amento.*enviad|enviad.*or[çc]amento/i);
+          // Agenda o follow-up contextual da Lia pra ~24h (dispara só se a pessoa
+          // não responder; o worker cancela sozinho se ela responder ou virar humano).
+          try {
+            // Cancela QUALQUER follow-up pendente do deal (inclusive os estáticos de
+            // etapa) — quando a Lia assume o orçamento, ela é a única fonte de retorno.
+            await supabaseAdmin.from('scheduled_followups').update({ status: 'cancelled' })
+              .eq('user_id', userId).eq('deal_id', deal.id).eq('status', 'pending');
+            await supabaseAdmin.from('scheduled_followups').insert({
+              user_id: userId, deal_id: deal.id, phone,
+              message: AGENT_FOLLOWUP_SENTINEL, stage_id: deal.stage || null, contact_name: null,
+              scheduled_at: new Date(Date.now() + AGENT_FOLLOWUP_DELAY_HOURS * 3600 * 1000).toISOString(),
+            });
+            console.log(`[Lia autônoma] follow-up ${AGENT_FOLLOWUP_DELAY_HOURS}h agendado | ${phone}`);
+          } catch (e: any) { console.warn('[Lia autônoma] agendar follow-up falhou:', e?.message); }
+        }
         console.log(`[Lia autônoma] PDF ${nicho} ${sent ? 'enviado' : 'NÃO cadastrado'} | ${phone}`);
       } else {
         await sendAgentMessages(userId, phone, reply);
@@ -19092,6 +19110,82 @@ function buildTemplateMessagePayload(tpl: any, params: string[]): any {
   };
 }
 
+// ─── Follow-up CONTEXTUAL da Lia (Fase 2 agêntica) ───────────────────────────
+// ~24h após mandar o orçamento, SE o cliente não respondeu, a Lia LÊ a conversa
+// e escreve um retorno caloroso (combinado com dia concreto), enviado via Baileys
+// (mesmo canal do autônomo). Agendado em scheduled_followups com este sentinel na
+// coluna `message`; o worker abaixo reconhece e gera/envia em vez do texto fixo.
+const AGENT_FOLLOWUP_SENTINEL = '###AGENT_FOLLOWUP###';
+const AGENT_FOLLOWUP_DELAY_HOURS = 24;
+const AGENT_FOLLOWUP_DIRECTIVE =
+  '[NOTA DO SISTEMA — NÃO é mensagem do cliente: já se passaram cerca de 24h desde que você enviou o orçamento e o cliente ainda não respondeu. Escreva AGORA uma única mensagem de follow-up pra retomar a conversa: calorosa, leve e na 1ª pessoa, sem cobrança e sem pressão. Relembre de leve o valor/a experiência, pergunte se ficou alguma dúvida, e proponha um combinado com DIA concreto (use a data de hoje: "posso te chamar amanhã?", "te chamo segunda?"). NÃO diga que é mensagem automática, NÃO mencione "24h" nem "sistema", NÃO mande pacote/PDF de novo. Se NÃO fizer sentido um follow-up (já fechou, já recusou, ou pediu pra não insistir), responda só ###SKIP###.]';
+
+// Gera e envia o follow-up. Retorna o status final pra gravar em
+// scheduled_followups. 'retry' = erro transitório (IA/WhatsApp fora) → reagenda.
+async function runAgentFollowUp(task: any): Promise<'sent' | 'cancelled' | 'failed' | 'retry'> {
+  if (!supabaseAdmin) return 'retry';
+  try {
+    const { data: cfg } = await supabaseAdmin.from('ai_agent_config')
+      .select('*').eq('user_id', task.user_id).maybeSingle();
+    if (!cfg?.enabled || !cfg?.auto_send) return 'cancelled'; // autônomo desligou
+    // Cliente respondeu QUALQUER coisa desde que mandamos o orçamento? Então a
+    // conversa está viva (mesmo que a Lia tenha respondido depois) — não manda
+    // "follow-up de quem sumiu". Usa o instante do agendamento como corte
+    // (scheduled_at - delay ≈ quando o orçamento foi enviado).
+    const cutMs = Date.parse(task.scheduled_at) - AGENT_FOLLOWUP_DELAY_HOURS * 3600 * 1000;
+    if (!Number.isNaN(cutMs)) {
+      const since = new Date(cutMs).toISOString();
+      const { data: clientMsgs } = await supabaseAdmin.from('wa_messages')
+        .select('id').eq('user_id', task.user_id).eq('phone', task.phone)
+        .eq('from_me', false).gt('timestamp', since).limit(1);
+      if (clientMsgs && clientMsgs.length) return 'cancelled';
+    }
+    // Já passou pra humano? Não insiste.
+    const { data: conv } = await supabaseAdmin.from('wa_conversations')
+      .select('needs_human').eq('user_id', task.user_id).eq('phone', task.phone).maybeSingle();
+    if (conv?.needs_human) return 'cancelled';
+    // Carrega a conversa (últimas 60, desc + reverte — precisa do contexto recente,
+    // inclusive o orçamento que acabou de ir). Mesmo mapeamento do autônomo.
+    const { data: rows } = await supabaseAdmin.from('wa_messages')
+      .select('body, from_me, type, transcription, timestamp')
+      .eq('user_id', task.user_id).eq('phone', task.phone)
+      .order('timestamp', { ascending: false }).limit(60);
+    const messages = (rows || []).reverse().map((m: any) => ({
+      role: (m.from_me ? 'assistant' : 'user') as 'user' | 'assistant',
+      content: (m.body && m.body.trim()) || m.transcription
+        || (m.type === 'audio' ? '[áudio]' : m.type === 'image' ? '[imagem]' : ''),
+    })).filter((m: any) => m.content && m.content.trim());
+    if (!messages.length) return 'cancelled';
+    // A API exige terminar com o cliente: anexa a diretiva como turno "user".
+    messages.push({ role: 'user', content: AGENT_FOLLOWUP_DIRECTIVE });
+    const reply = await getAgentReply({
+      enabled: true,
+      persona: cfg.persona || '', objective: cfg.objective || '',
+      knowledge: cfg.knowledge || '', rules: cfg.rules || '',
+      salesStrategy: cfg.sales_strategy || '', attendantName: cfg.attendant_name || '',
+    }, messages);
+    if (!reply || /###SKIP###/i.test(reply) || /###HUMANO###/.test(reply)) return 'cancelled';
+    const clean = reply.replace(/###[A-Za-z:_]+###/g, '').trim();
+    if (!clean) return 'cancelled';
+    // Envia em balões (linha em branco = mensagem separada), via Baileys.
+    const parts = clean.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) {
+        try { await BaileysManager.sendTyping(task.user_id, task.phone, true); } catch {}
+        await new Promise((r) => setTimeout(r, Math.min(1200 + parts[i].length * 35, 6000)));
+        try { await BaileysManager.sendTyping(task.user_id, task.phone, false); } catch {}
+      }
+      await BaileysManager.sendText(task.user_id, task.phone, parts[i]);
+    }
+    console.log(`[Lia follow-up] enviado | ${task.phone}: ${clean.slice(0, 60)}`);
+    return 'sent';
+  } catch (e: any) {
+    // Erro transitório (IA/rede/WhatsApp desconectado) → reagenda em vez de perder.
+    console.warn('[Lia follow-up] erro (vai reagendar):', e?.message);
+    return 'retry';
+  }
+}
+
 // ─── Worker de follow-ups automáticos ────────────────────────────────────────
 function startFollowUpWorker() {
   if (!supabaseAdmin) {
@@ -19124,6 +19218,33 @@ function startFollowUpWorker() {
           .select('id');
 
         if (!claimed || claimed.length === 0) continue; // outro worker pegou
+
+        // Follow-up CONTEXTUAL da Lia: gera com IA (lê a conversa) e envia via
+        // Baileys, em vez do texto fixo. Cancela sozinho se o cliente já respondeu.
+        if (task.message === AGENT_FOLLOWUP_SENTINEL) {
+          const fStatus = await runAgentFollowUp(task);
+          if (fStatus === 'retry') {
+            // Erro transitório (IA/WhatsApp fora do ar): reagenda +30min, teto 5.
+            // Só re-tenta se a coluna attempts existir (migration 050); senão falha.
+            const nextAttempts = (typeof task.attempts === 'number' ? task.attempts : 0) + 1;
+            if (typeof task.attempts === 'number' && nextAttempts <= 5) {
+              await supabaseAdmin!.from('scheduled_followups').update({
+                status: 'pending', attempts: nextAttempts,
+                scheduled_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+              }).eq('id', task.id);
+              console.log(`[FollowUp Worker] Lia follow-up ${task.phone} → retry ${nextAttempts}/5 (+30min)`);
+            } else {
+              await supabaseAdmin!.from('scheduled_followups').update({ status: 'failed' }).eq('id', task.id);
+              console.log(`[FollowUp Worker] Lia follow-up ${task.phone} → failed (sem retry)`);
+            }
+            continue;
+          }
+          await supabaseAdmin!.from('scheduled_followups')
+            .update({ status: fStatus, sent_at: fStatus === 'sent' ? new Date().toISOString() : null })
+            .eq('id', task.id);
+          console.log(`[FollowUp Worker] Lia follow-up ${task.phone} → ${fStatus}`);
+          continue;
+        }
 
         let sent = false;
         const instanceName = `user_${task.user_id.replace(/-/g, '_')}`;
