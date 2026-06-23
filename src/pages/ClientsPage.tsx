@@ -24,7 +24,8 @@ import {
   Award,
   SlidersHorizontal,
   FileDown,
-  Workflow
+  Workflow,
+  Target
 } from "lucide-react";
 
 import ImportProgressModal, { ImportSummary } from "../components/ImportProgressModal";
@@ -37,6 +38,7 @@ import { useApi } from "../utils/useApi";
 import { cn } from "../utils/cn";
 import { parseDate } from "../utils/date";
 import { cleanPhone, parseCSV, parseDateBR, parseValueBR } from "../utils/csvParser";
+import { buildMetaCustomerListCSV, buildMetaOfflineEventsCSV, countMatchable, downloadCSV, MetaContact } from "../utils/metaExport";
 import { supabase } from "../integrations/supabase/client";
 import { Client, Job, Opportunity } from "../types";
 import UsageBar from "../components/UsageBar";
@@ -217,6 +219,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
   const [importError, setImportError] = useState<string | null>(null);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [showFilters, setShowFilters] = useState(true);
+  const [metaModalOpen, setMetaModalOpen] = useState(false);
 
   const handleCloseImportModal = () => {
     setImportModalOpen(false);
@@ -896,6 +899,14 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
             >
               <FileDown size={18} />
             </button>
+            <button
+              type="button"
+              onClick={() => setMetaModalOpen(true)}
+              className="p-2 text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-white dark:hover:bg-gray-700 rounded-lg transition-all"
+              title="Exportar para Meta Ads (Público / Semelhante / Eventos offline)"
+            >
+              <Target size={18} />
+            </button>
             <label className="p-2 text-gray-500 dark:text-gray-400 hover:text-gold-600 dark:hover:text-gold-400 hover:bg-white dark:hover:bg-gray-700 rounded-lg transition-all cursor-pointer" title="Importar CSV">
               <Upload size={18} />
               <input type="file" accept=".csv" onChange={handleImportCSV} className="hidden" />
@@ -1316,6 +1327,198 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
         onCancel={() => setConfirmDeleteOpen(false)}
         onConfirm={confirmBulkDelete}
       />
+
+      {metaModalOpen && (
+        <MetaExportModal
+          filteredClients={filteredClients}
+          selectedClients={clients.filter((c) => selectedClientIds.includes(c.id))}
+          onClose={() => setMetaModalOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// EXPORTAR PARA META ADS (Clientes)
+// ============================================
+function clientToMetaContact(c: Client): MetaContact {
+  return { name: c.name, phone: c.phone, email: c.email, city: c.city, state: c.state, zip: c.cep };
+}
+
+// Melhor data pra atribuir um "evento de compra": fechamento → último ensaio → cadastro.
+function bestPurchaseDate(c: Client): string {
+  if (c.closing_date) return c.closing_date;
+  const jobDates = (c.jobs || []).map((j) => j.job_date).filter(Boolean).sort();
+  if (jobDates.length) return jobDates[jobDates.length - 1];
+  return c.created_at || "";
+}
+
+function MetaExportModal({
+  filteredClients,
+  selectedClients,
+  onClose,
+}: {
+  filteredClients: Client[];
+  selectedClients: Client[];
+  onClose: () => void;
+}) {
+  const hasSelection = selectedClients.length > 0;
+  const [scope, setScope] = useState<"selected" | "filtered">(hasSelection ? "selected" : "filtered");
+  const [formato, setFormato] = useState<"customer" | "offline">("customer");
+
+  const baseList = scope === "selected" ? selectedClients : filteredClients;
+  const contacts = baseList.map(clientToMetaContact);
+  const matchable = countMatchable(contacts);
+  const comprasCount = baseList.filter((c) => (c.total_invested ?? 0) > 0).length;
+
+  const handleExport = () => {
+    if (formato === "customer") {
+      downloadCSV("meta_publico_clientes.csv", buildMetaCustomerListCSV(contacts));
+    } else {
+      const compras = baseList.filter((c) => (c.total_invested ?? 0) > 0);
+      const csv = buildMetaOfflineEventsCSV(
+        compras.map((c) => ({
+          ...clientToMetaContact(c),
+          value: c.total_invested ?? 0,
+          eventTime: bestPurchaseDate(c),
+          eventName: "Purchase",
+        }))
+      );
+      downloadCSV("meta_eventos_offline.csv", csv);
+    }
+    onClose();
+  };
+
+  const formatos: { id: "customer" | "offline"; titulo: string; desc: string; uso: string }[] = [
+    {
+      id: "customer",
+      titulo: "Lista de clientes",
+      desc: "Telefone, e-mail, nome, cidade/UF e CEP.",
+      uso: "Crie um Público Personalizado e gere um Semelhante (Lookalike) a partir dele.",
+    },
+    {
+      id: "offline",
+      titulo: "Eventos offline (Conversões)",
+      desc: "Compras (Purchase) com valor e data do fechamento.",
+      uso: "Suba como Conjunto de eventos offline pra medir/otimizar conversões.",
+    },
+  ];
+
+  const exportCount = formato === "customer" ? matchable : comprasCount;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-lg bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-800 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800">
+          <div className="flex items-center gap-2">
+            <div className="w-9 h-9 rounded-xl bg-blue-50 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 flex items-center justify-center">
+              <Target size={18} />
+            </div>
+            <div>
+              <h3 className="font-bold text-gray-800 dark:text-white">Exportar para Meta Ads</h3>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Arquivo pronto pro Gerenciador de Anúncios</p>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="px-6 py-4 space-y-4">
+          {hasSelection && (
+            <div>
+              <p className="text-xs font-semibold uppercase text-gray-400 dark:text-gray-500 mb-2">Quem exportar</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setScope("selected")}
+                  className={cn(
+                    "flex-1 px-3 py-2 rounded-xl text-sm font-medium border transition-all",
+                    scope === "selected"
+                      ? "bg-blue-50 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-500/30"
+                      : "bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-700"
+                  )}
+                >
+                  Selecionados ({selectedClients.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScope("filtered")}
+                  className={cn(
+                    "flex-1 px-3 py-2 rounded-xl text-sm font-medium border transition-all",
+                    scope === "filtered"
+                      ? "bg-blue-50 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-500/30"
+                      : "bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-700"
+                  )}
+                >
+                  Todos os filtrados ({filteredClients.length})
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <p className="text-xs font-semibold uppercase text-gray-400 dark:text-gray-500 mb-2">Formato</p>
+            <div className="space-y-2">
+              {formatos.map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setFormato(f.id)}
+                  className={cn(
+                    "w-full text-left p-3 rounded-xl border transition-all",
+                    formato === f.id
+                      ? "bg-blue-50/60 dark:bg-blue-500/10 border-blue-300 dark:border-blue-500/40 ring-1 ring-blue-200 dark:ring-blue-500/30"
+                      : "bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600"
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className={cn(
+                      "w-4 h-4 rounded-full border-2 flex-shrink-0",
+                      formato === f.id ? "border-blue-500 bg-blue-500" : "border-gray-300 dark:border-gray-600"
+                    )} />
+                    <span className="font-semibold text-sm text-gray-800 dark:text-white">{f.titulo}</span>
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-6">{f.desc}</p>
+                  <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-0.5 ml-6 italic">{f.uso}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 rounded-xl px-3 py-2">
+            {formato === "customer" ? (
+              <>Serão exportados <span className="font-bold text-gray-700 dark:text-gray-200">{matchable}</span> contatos com telefone ou e-mail válido.</>
+            ) : (
+              <>Serão exportados <span className="font-bold text-gray-700 dark:text-gray-200">{comprasCount}</span> clientes com compra registrada (valor &gt; 0).</>
+            )}
+            <span className="block mt-1">O Meta criptografa os dados no upload — o arquivo vai em texto puro, sem hash.</span>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-gray-100 dark:border-gray-800">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-xl transition-all"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={exportCount === 0}
+            className="flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-all shadow-lg shadow-blue-200 dark:shadow-blue-500/20"
+          >
+            <Download size={16} />
+            Baixar CSV
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

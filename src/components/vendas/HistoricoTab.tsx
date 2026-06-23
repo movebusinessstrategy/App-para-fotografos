@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { CheckCircle2, XCircle, Clock, Search, X, ExternalLink, Briefcase } from "lucide-react";
+import { CheckCircle2, XCircle, Clock, Search, X, ExternalLink, Briefcase, Target } from "lucide-react";
 import { Deal, PipelineStage, Client } from "../../types";
 import { cn } from "../../utils/cn";
 import { normalizeText } from "../../utils/normalizeText";
+import { buildMetaCustomerListCSV, downloadCSV, MetaContact } from "../../utils/metaExport";
 import { authFetch } from "../../utils/authFetch";
 import { ConfirmModal } from "../ui/ConfirmModal";
 import { useAuth } from "../../contexts/AuthContext";
@@ -133,6 +134,31 @@ export function HistoricoTab({ deals, stages, clients, initialFilter = "todos", 
     }
   };
 
+  // Exporta os negócios do filtro atual no formato "Lista de clientes" do Meta.
+  // Usado principalmente em "Perdidos" → criar público de leads não qualificados
+  // (pra excluir nas campanhas ou retargetear). Usa o telefone/e-mail do cliente
+  // vinculado quando existe; senão, os dados de contato do próprio negócio.
+  const handleExportMeta = () => {
+    const contacts: MetaContact[] = filtered.map((d) => {
+      const cli = d.client_id ? clientMap.get(d.client_id) : null;
+      return {
+        name: cli?.name || d.contact_name || d.title,
+        phone: cli?.phone || d.contact_phone,
+        email: cli?.email || d.contact_email,
+        city: cli?.city,
+        state: cli?.state,
+        zip: cli?.cep,
+      };
+    });
+    const fileName =
+      filter === "perdidos"
+        ? "meta_leads_perdidos.csv"
+        : filter === "convertidos"
+        ? "meta_clientes_convertidos.csv"
+        : "meta_leads.csv";
+    downloadCSV(fileName, buildMetaCustomerListCSV(contacts));
+  };
+
   return (
     <div className="h-full flex flex-col p-6 gap-4">
       {/* Filtros + busca */}
@@ -178,6 +204,17 @@ export function HistoricoTab({ deals, stages, clients, initialFilter = "todos", 
             </button>
           )}
         </div>
+
+        <button
+          type="button"
+          onClick={handleExportMeta}
+          disabled={filtered.length === 0}
+          title="Exportar esta lista para Meta Ads (Público Personalizado / Exclusão)"
+          className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-xl border border-blue-200 dark:border-blue-500/30 bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+        >
+          <Target size={14} />
+          Exportar p/ Meta
+        </button>
       </div>
 
       {/* Tabela */}
