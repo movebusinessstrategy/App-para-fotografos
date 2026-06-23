@@ -28,11 +28,26 @@ const MODE_OPTIONS: ModeOption[] = [
   { value: "sell_all",      title: "Tudo à venda",           desc: "Cada foto tem preço; cliente paga as que escolher." },
 ];
 
+type DiscountMode = "none" | "flat" | "single_pct" | "progressive";
+
+const DISCOUNT_MODES: { value: DiscountMode; title: string; desc: string }[] = [
+  { value: "none",        title: "Sem desconto",   desc: "Cliente paga o valor cheio." },
+  { value: "flat",        title: "Abatimento R$",  desc: "Tira um valor fixo do total." },
+  { value: "single_pct",  title: "Desconto único", desc: "Um % sobre o total." },
+  { value: "progressive", title: "Progressivo",    desc: "% maior conforme escolhe mais fotos." },
+];
+
+// Quantas regras de desconto progressivo o estúdio pode cadastrar.
+const MAX_DISCOUNT_RULES = 6;
+
 export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps) {
   const [mode, setMode] = useState<PricingMode>((gallery.pricing_mode as PricingMode) || "extra_avulso");
   const [included, setIncluded] = useState(String(gallery.included_count || 0));
   const [extraPrice, setExtraPrice] = useState(String(gallery.extra_price || 0));
   const [discount, setDiscount] = useState("0");
+  const [discountMode, setDiscountMode] = useState<DiscountMode>("flat");
+  const [singlePct, setSinglePct] = useState("0");
+  const [rules, setRules] = useState<{ percent: string; min_photos: string }[]>([]);
   const [packs, setPacks] = useState<{ id?: string; name: string; photo_count: string; price: string; sort_order: number }[]>([]);
   const [packsLoading, setPacksLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -51,6 +66,11 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
             id: p.id, name: p.name, photo_count: String(p.photo_count), price: String(p.price), sort_order: p.sort_order || 0,
           })));
           setDiscount(String(j.cart_discount || 0));
+          setDiscountMode((j.discount_mode as DiscountMode) || "flat");
+          setSinglePct(String(j.discount_single_pct || 0));
+          setRules((j.discount_rules || []).map((r: any) => ({
+            percent: String(r.percent ?? ""), min_photos: String(r.min_photos ?? ""),
+          })));
         }
       } catch { /* sem packs ou rota nova ainda — segue mostrando vazio */ }
     })();
@@ -59,9 +79,21 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
   const saveBasics = async () => {
     setSaving(true);
     try {
+      // Normaliza igual ao backend (% 0..100, min_photos ≥ 1) pra UI não
+      // "derivar" do que foi salvo de fato.
+      const normSinglePct = Math.min(100, Math.max(0, Number(singlePct) || 0));
+      const normRules = rules
+        .map((r) => ({
+          percent: Math.min(100, Math.max(0, Number(r.percent) || 0)),
+          min_photos: Math.max(1, Math.floor(Number(r.min_photos) || 0)),
+        }))
+        .filter((r) => r.percent > 0 && r.min_photos >= 1);
       const payload: any = {
         pricing_mode: mode,
         cart_discount: Number(discount) || 0,
+        discount_mode: discountMode,
+        discount_single_pct: normSinglePct,
+        discount_rules: normRules,
       };
       if (mode === "extra_avulso") {
         payload.included_count = Number(included) || 0;
@@ -72,6 +104,8 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
         body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error();
+      setSinglePct(String(normSinglePct));
+      setRules(normRules.map((r) => ({ percent: String(r.percent), min_photos: String(r.min_photos) })));
       onNotify("success", "Configuração salva.");
       onChanged();
     } catch {
@@ -93,6 +127,14 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
   };
   const updatePack = (idx: number, k: "name" | "photo_count" | "price", v: string) =>
     setPacks((arr) => arr.map((p, i) => (i === idx ? { ...p, [k]: v } : p)));
+
+  // ── Regras de desconto progressivo ─────────────────────────────────────────
+
+  const addRule = () =>
+    setRules((arr) => (arr.length >= MAX_DISCOUNT_RULES ? arr : [...arr, { percent: "10", min_photos: "10" }]));
+  const removeRule = (idx: number) => setRules((arr) => arr.filter((_, i) => i !== idx));
+  const updateRule = (idx: number, k: "percent" | "min_photos", v: string) =>
+    setRules((arr) => arr.map((r, i) => (i === idx ? { ...r, [k]: v } : r)));
 
   const savePacks = async () => {
     setPacksLoading(true);
@@ -210,12 +252,72 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
 
       {mode !== "no_charge" && (
         <Bloco titulo="Desconto no carrinho (opcional)">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Campo label="Abatimento (R$)" type="number" value={discount} onChange={setDiscount} />
-            <div className="text-xs text-gray-500 self-end pb-2">
-              Se preencher, esse valor é subtraído do total no final.
-            </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {DISCOUNT_MODES.map((opt) => {
+              const active = discountMode === opt.value;
+              return (
+                <button
+                  key={opt.value} type="button" onClick={() => setDiscountMode(opt.value)}
+                  className={
+                    "text-left p-3 rounded-lg border transition-colors " +
+                    (active
+                      ? "border-violet-600 bg-violet-50 dark:bg-violet-900/20 ring-2 ring-violet-600/40"
+                      : "border-gray-200 dark:border-gray-700 hover:border-gray-400")
+                  }
+                >
+                  <div className="text-sm font-medium">{opt.title}</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{opt.desc}</div>
+                </button>
+              );
+            })}
           </div>
+
+          {discountMode === "flat" && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+              <Campo label="Abatimento (R$)" type="number" value={discount} onChange={setDiscount} />
+              <div className="text-xs text-gray-500 self-end pb-2">
+                Esse valor em reais é subtraído do total no final.
+              </div>
+            </div>
+          )}
+
+          {discountMode === "single_pct" && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+              <Campo label="Desconto (%)" type="number" value={singlePct} onChange={setSinglePct} />
+              <div className="text-xs text-gray-500 self-end pb-2">
+                Aplica esse percentual sobre o total do carrinho.
+              </div>
+            </div>
+          )}
+
+          {discountMode === "progressive" && (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-gray-500">
+                Quanto mais fotos a cliente escolher, maior o desconto. Vale a regra com o maior
+                "a partir de" que ela atingir.
+              </p>
+              {rules.length === 0 && (
+                <p className="text-sm text-gray-500">Nenhuma regra ainda. Adicione abaixo (ex.: 13% a partir de 11 fotos).</p>
+              )}
+              {rules.map((r, idx) => (
+                <DiscountRuleRow
+                  key={idx}
+                  rule={r}
+                  onChange={(k, v) => updateRule(idx, k, v)}
+                  onRemove={() => removeRule(idx)}
+                />
+              ))}
+              <button
+                type="button" onClick={addRule} disabled={rules.length >= MAX_DISCOUNT_RULES}
+                className="w-full py-2 text-sm font-medium text-violet-700 dark:text-violet-300 bg-violet-50 dark:bg-violet-900/20 hover:bg-violet-100 dark:hover:bg-violet-900/30 rounded-lg disabled:opacity-50"
+              >
+                Adicionar regra de desconto
+              </button>
+              <p className="text-xs text-gray-500">
+                Você adicionou {rules.length} de {MAX_DISCOUNT_RULES} regras de desconto progressivo.
+              </p>
+            </div>
+          )}
         </Bloco>
       )}
 
@@ -254,6 +356,28 @@ function PackRow({ pack, onChange, onRemove }: {
           <Trash2 size={14} />
         </button>
       </div>
+    </div>
+  );
+}
+
+function DiscountRuleRow({ rule, onChange, onRemove }: {
+  rule: { percent: string; min_photos: string };
+  onChange: (k: "percent" | "min_photos", v: string) => void;
+  onRemove: () => void;
+  key?: React.Key | null;
+}) {
+  return (
+    <div className="flex items-end gap-2">
+      <div className="w-24">
+        <Campo label="Desconto %" type="number" value={rule.percent} onChange={(v) => onChange("percent", v)} />
+      </div>
+      <span className="pb-2.5 text-xs text-gray-500 whitespace-nowrap">a partir de</span>
+      <div className="w-24">
+        <Campo label="Qtd fotos" type="number" value={rule.min_photos} onChange={(v) => onChange("min_photos", v)} />
+      </div>
+      <button onClick={onRemove} className="p-2 mb-1 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20">
+        <Trash2 size={14} />
+      </button>
     </div>
   );
 }

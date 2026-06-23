@@ -37,6 +37,17 @@ export function ModalFinalizar({ totais, precoExtra, finalizando, erro, onConfir
             rotulo="Fotos extras"
             valor={`${totais.extras} × ${formatarBRL(precoExtra)}`}
           />
+          {totais.desconto > 0 && (
+            <>
+              <Linha rotulo="Subtotal" valor={formatarBRL(totais.subtotal)} />
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-emerald-600">
+                  {totais.descontoPct > 0 ? `Desconto (${totais.descontoPct}%)` : "Desconto"}
+                </span>
+                <span className="font-medium text-emerald-600">− {formatarBRL(totais.desconto)}</span>
+              </div>
+            </>
+          )}
           <div className="border-t border-neutral-200 pt-2">
             <div className="flex items-center justify-between">
               <span className="text-sm font-semibold text-neutral-900">Total a pagar</span>

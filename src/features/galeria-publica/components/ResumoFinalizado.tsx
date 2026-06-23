@@ -26,6 +26,9 @@ export function ResumoFinalizado({ token, totais }: Props) {
           {totais.selecionadas} {totais.selecionadas === 1 ? "foto escolhida" : "fotos escolhidas"}{" "}
           · {totais.extras} {totais.extras === 1 ? "extra" : "extras"} ·{" "}
           {formatarBRL(totais.valor)}
+          {totais.descontoPct > 0 && (
+            <span className="text-emerald-600"> (−{totais.descontoPct}% aplicado)</span>
+          )}
         </p>
         {temExtras && <SituacaoPagamento pago={pago} url={url} valor={totais.valor} />}
       </div>

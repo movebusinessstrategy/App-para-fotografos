@@ -101,8 +101,8 @@ export default function GaleriaPublicaPage() {
   }, [galeria]);
 
   const totais = useMemo(
-    () => calcularTotais(selecoes, galeria?.included_count ?? 0, galeria?.extra_price ?? 0),
-    [selecoes, galeria?.included_count, galeria?.extra_price]
+    () => calcularTotais(selecoes, galeria?.included_count ?? 0, galeria?.extra_price ?? 0, galeria ?? undefined),
+    [selecoes, galeria]
   );
 
   const aplicarSelecao = (fotoId: string, selected: boolean, comment: string | null) =>

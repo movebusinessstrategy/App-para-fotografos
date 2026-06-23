@@ -7,11 +7,25 @@ export type ProtecaoGaleria =
   | { enabled?: boolean; notice?: boolean; show_notice?: boolean }
   | null;
 
+export type ModoDesconto = "none" | "flat" | "single_pct" | "progressive";
+
+export type ModoCobranca = "no_charge" | "extra_avulso" | "upgrade_packs" | "sell_all";
+
+export interface RegraDesconto {
+  percent: number;
+  min_photos: number;
+}
+
 export interface GaleriaPublica {
   title: string;
   status: string;
   included_count: number;
   extra_price: number;
+  pricing_mode?: ModoCobranca;
+  discount_mode?: ModoDesconto;
+  cart_discount?: number;
+  discount_single_pct?: number;
+  discount_rules?: RegraDesconto[];
   category?: string | null;
   studio_name?: string | null;
   protection?: ProtecaoGaleria;
@@ -62,5 +76,8 @@ export interface TotaisSelecao {
   selecionadas: number;
   incluidas: number;
   extras: number;
+  subtotal: number;
+  desconto: number;
+  descontoPct: number;
   valor: number;
 }

@@ -8876,6 +8876,24 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       patch.pricing_mode = body.pricing_mode;
     }
     if (body.cart_discount !== undefined) patch.cart_discount = Math.max(0, Number(body.cart_discount) || 0);
+    if (body.discount_mode !== undefined &&
+        ['none', 'flat', 'single_pct', 'progressive'].includes(body.discount_mode)) {
+      patch.discount_mode = body.discount_mode;
+    }
+    if (body.discount_single_pct !== undefined) {
+      patch.discount_single_pct = Math.min(100, Math.max(0, Number(body.discount_single_pct) || 0));
+    }
+    if (body.discount_rules !== undefined) {
+      const rules = Array.isArray(body.discount_rules) ? body.discount_rules : [];
+      patch.discount_rules = rules
+        .map((r: any) => ({
+          percent: Math.min(100, Math.max(0, Number(r?.percent) || 0)),
+          min_photos: Math.max(1, Math.floor(Number(r?.min_photos) || 0)),
+        }))
+        .filter((r: any) => r.percent > 0 && r.min_photos >= 1)
+        .sort((a: any, b: any) => a.min_photos - b.min_photos)
+        .slice(0, 12);
+    }
     if (body.lock_after_deadline !== undefined) patch.lock_after_deadline = !!body.lock_after_deadline;
     if (body.cover_layout !== undefined) patch.cover_layout = String(body.cover_layout || 'classic').slice(0, 32);
     if (body.font_family !== undefined) patch.font_family = String(body.font_family || 'sans').slice(0, 32);
@@ -8890,8 +8908,17 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const userId = (req as any).userId;
     const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
     const patch = buildGalleryPatch(req.body || {});
-    const { error } = await supabase
+    let { error } = await supabase
       .from('galleries').update(patch).eq('id', req.params.id).eq('user_id', userId);
+    // Migration 033 (colunas de desconto) ainda não rodou? Repete sem esses
+    // campos pra não travar o resto do save de "Seleção e venda".
+    if (error && (error as any).code === '42703') {
+      delete patch.discount_mode;
+      delete patch.discount_single_pct;
+      delete patch.discount_rules;
+      ({ error } = await supabase
+        .from('galleries').update(patch).eq('id', req.params.id).eq('user_id', userId));
+    }
     if (error) {
       return galleryTableMissing(error) ? galleryMigrationError(res) : res.status(500).json({ error: error.message });
     }
@@ -9149,15 +9176,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const userId = (req as any).userId;
     const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
     const { data: gallery } = await supabase
-      .from('galleries').select('id, cart_discount').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+      .from('galleries').select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
     if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+    const discountCfg = {
+      cart_discount: Number(gallery.cart_discount || 0),
+      discount_mode: gallery.discount_mode || 'flat',
+      discount_single_pct: Number(gallery.discount_single_pct || 0),
+      discount_rules: Array.isArray(gallery.discount_rules) ? gallery.discount_rules : [],
+    };
     const { data, error } = await supabase
       .from('gallery_packs').select('*').eq('gallery_id', gallery.id).order('sort_order');
     if (error) {
-      return galleryTableMissing(error) ? res.json({ packs: [], cart_discount: 0, table_missing: true })
+      return galleryTableMissing(error) ? res.json({ packs: [], ...discountCfg, table_missing: true })
         : res.status(500).json({ error: error.message });
     }
-    res.json({ packs: data || [], cart_discount: Number(gallery.cart_discount || 0) });
+    res.json({ packs: data || [], ...discountCfg });
   });
 
   app.post('/api/galleries/:id/packs', requireAuth, async (req, res) => {
@@ -9374,17 +9407,64 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return data || null;
   }
 
+  // Normaliza as regras de desconto progressivo vindas do banco (JSONB) ou do
+  // body do PUT. Devolve { percent (0..100), min_photos (>=1) } ordenadas por
+  // min_photos crescente. Ignora lixo silenciosamente (nunca quebra o cálculo).
+  function sanitizeDiscountRules(raw: any): { percent: number; min_photos: number }[] {
+    let arr = raw;
+    if (typeof arr === 'string') { try { arr = JSON.parse(arr); } catch { arr = []; } }
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .map((r: any) => ({
+        percent: Math.min(100, Math.max(0, Number(r?.percent) || 0)),
+        min_photos: Math.max(1, Math.floor(Number(r?.min_photos) || 0)),
+      }))
+      .filter((r) => r.percent > 0 && r.min_photos >= 1)
+      .sort((a, b) => a.min_photos - b.min_photos)
+      .slice(0, 12);
+  }
+
+  // Calcula o desconto (em R$) sobre um subtotal, conforme o modo da galeria.
+  // Retorna { discount, pct } — pct só pra exibir (0 quando é abatimento fixo).
+  //   none        → 0
+  //   flat        → cart_discount em R$  (comportamento antigo)
+  //   single_pct  → subtotal × pct/100
+  //   progressive → maior regra cujo min_photos ≤ fotos escolhidas
+  function computeGalleryDiscount(
+    subtotal: number,
+    selectedCount: number,
+    opts: { mode?: string; flat?: number; singlePct?: number; rules?: any },
+  ): { discount: number; pct: number } {
+    const mode = opts.mode || 'flat';
+    if (mode === 'none' || subtotal <= 0) return { discount: 0, pct: 0 };
+    if (mode === 'single_pct') {
+      const pct = Math.min(100, Math.max(0, Number(opts.singlePct) || 0));
+      return { discount: (subtotal * pct) / 100, pct };
+    }
+    if (mode === 'progressive') {
+      const rules = sanitizeDiscountRules(opts.rules);
+      let pct = 0;
+      for (const r of rules) if (selectedCount >= r.min_photos) pct = r.percent;
+      return { discount: (subtotal * pct) / 100, pct };
+    }
+    // flat (default) — abatimento fixo em reais.
+    return { discount: Math.max(0, Number(opts.flat) || 0), pct: 0 };
+  }
+
   // Totais da seleção respeitando o pricing_mode da galeria:
   //   no_charge      → cliente só seleciona; valor 0.
   //   extra_avulso   → N incluídas grátis + cada extra a extra_price.
   //   upgrade_packs  → cliente compra um pacote (pack_id) ao finalizar.
   //   sell_all       → cada foto tem preço (gallery_photo_prices); senão extra_price.
-  // Aplica cart_discount como abatimento em reais sobre o subtotal.
+  // Aplica o desconto (fixo/único/progressivo) sobre o subtotal.
   async function galleryTotals(
     galleryId: string,
     includedCount: number,
     extraPrice: number,
-    opts: { pricingMode?: string; cartDiscount?: number; packId?: string | null } = {},
+    opts: {
+      pricingMode?: string; cartDiscount?: number; packId?: string | null;
+      discountMode?: string; discountSinglePct?: number; discountRules?: any;
+    } = {},
   ) {
     const sb = supabaseAdmin!;
     const mode = opts.pricingMode || 'extra_avulso';
@@ -9420,9 +9500,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       subtotal = extra_count * Number(extraPrice || 0);
     }
 
-    const discount = Math.max(0, Number(opts.cartDiscount || 0));
-    const amount = Math.max(0, subtotal - discount);
-    return { selected_count, extra_count, amount, subtotal, discount, pack_name };
+    const { discount: rawDiscount, pct: discount_pct } = computeGalleryDiscount(subtotal, selected_count, {
+      mode: opts.discountMode,
+      flat: opts.cartDiscount,
+      singlePct: opts.discountSinglePct,
+      rules: opts.discountRules,
+    });
+    // Nunca abate mais que o subtotal (mantém amount ≥ 0 e display coerente).
+    const discount = Math.min(Math.max(0, rawDiscount), subtotal);
+    const amount = subtotal - discount;
+    return { selected_count, extra_count, amount, subtotal, discount, discount_pct, pack_name };
   }
 
   // ── Acesso & auditoria (Fase 1) ────────────────────────────────────────────
@@ -9777,6 +9864,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         status: gallery.status,
         included_count: gallery.included_count || 0,
         extra_price: Number(gallery.extra_price || 0),
+        pricing_mode: gallery.pricing_mode || 'extra_avulso',
+        discount_mode: gallery.discount_mode || 'flat',
+        cart_discount: Number(gallery.cart_discount || 0),
+        discount_single_pct: Number(gallery.discount_single_pct || 0),
+        discount_rules: Array.isArray(gallery.discount_rules) ? gallery.discount_rules : [],
         category: gallery.category,
         studio_name: studioName,
         require_login: !!gallery.require_login,
@@ -9871,6 +9963,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price, {
       pricingMode: gallery.pricing_mode, cartDiscount: gallery.cart_discount,
+      discountMode: gallery.discount_mode, discountSinglePct: gallery.discount_single_pct,
+      discountRules: gallery.discount_rules,
     });
     res.json({ ok: true, ...totals });
   });
@@ -10013,6 +10107,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price, {
       pricingMode: gallery.pricing_mode, cartDiscount: gallery.cart_discount,
+      discountMode: gallery.discount_mode, discountSinglePct: gallery.discount_single_pct,
+      discountRules: gallery.discount_rules,
     });
 
     // SEM valor a pagar → finaliza na hora.
@@ -10107,6 +10203,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         });
         const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price, {
           pricingMode: gallery.pricing_mode, cartDiscount: gallery.cart_discount,
+          discountMode: gallery.discount_mode, discountSinglePct: gallery.discount_single_pct,
+          discountRules: gallery.discount_rules,
         });
         await finalizeGallery(gallery, totals, 'pagamento-confirmado');
       }

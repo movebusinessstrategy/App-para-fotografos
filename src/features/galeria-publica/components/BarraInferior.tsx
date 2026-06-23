@@ -19,7 +19,16 @@ export function BarraInferior({ totais, finalizando, onFinalizar }: Props) {
           <p className="font-semibold text-neutral-900">{rotuloEscolhidas}</p>
           <p className="truncate text-xs text-neutral-500">
             {totais.extras} {totais.extras === 1 ? "extra" : "extras"} ·{" "}
-            {formatarBRL(totais.valor)} a pagar
+            {totais.desconto > 0 && (
+              <span className="text-neutral-400 line-through">{formatarBRL(totais.subtotal)} </span>
+            )}
+            <span className={totais.desconto > 0 ? "font-medium text-emerald-600" : ""}>
+              {formatarBRL(totais.valor)}
+            </span>{" "}
+            a pagar
+            {totais.descontoPct > 0 && (
+              <span className="text-emerald-600"> (−{totais.descontoPct}%)</span>
+            )}
           </p>
         </div>
         <button
