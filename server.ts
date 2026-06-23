@@ -8877,7 +8877,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
     if (body.cart_discount !== undefined) patch.cart_discount = Math.max(0, Number(body.cart_discount) || 0);
     if (body.discount_mode !== undefined &&
-        ['none', 'flat', 'single_pct', 'progressive'].includes(body.discount_mode)) {
+        ['none', 'flat', 'single_pct', 'progressive',
+         'progressive_value', 'deadline', 'buy_n_get_m', 'coupon'].includes(body.discount_mode)) {
       patch.discount_mode = body.discount_mode;
     }
     if (body.discount_single_pct !== undefined) {
@@ -8892,7 +8893,27 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         }))
         .filter((r: any) => r.percent > 0 && r.min_photos >= 1)
         .sort((a: any, b: any) => a.min_photos - b.min_photos)
-        .slice(0, 12);
+        .slice(0, 20);
+    }
+    // ── novos tipos de desconto (migration 052) ──
+    if (body.discount_value_rules !== undefined) {
+      patch.discount_value_rules = sanitizeValueRules(body.discount_value_rules);
+    }
+    if (body.deadline_discount_pct !== undefined) {
+      patch.deadline_discount_pct = Math.min(100, Math.max(0, Number(body.deadline_discount_pct) || 0));
+    }
+    if (body.deadline_discount_until !== undefined) {
+      const v = String(body.deadline_discount_until || '').slice(0, 10);
+      patch.deadline_discount_until = /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
+    }
+    if (body.buy_n_group !== undefined) {
+      patch.buy_n_group = Math.max(0, Math.floor(Number(body.buy_n_group) || 0));
+    }
+    if (body.buy_n_free !== undefined) {
+      patch.buy_n_free = Math.max(0, Math.floor(Number(body.buy_n_free) || 0));
+    }
+    if (body.coupons !== undefined) {
+      patch.coupons = sanitizeCoupons(body.coupons);
     }
     if (body.lock_after_deadline !== undefined) patch.lock_after_deadline = !!body.lock_after_deadline;
     if (body.cover_layout !== undefined) patch.cover_layout = String(body.cover_layout || 'classic').slice(0, 32);
@@ -8908,16 +8929,25 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const userId = (req as any).userId;
     const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
     const patch = buildGalleryPatch(req.body || {});
-    let { error } = await supabase
+    const doUpdate = () => supabase
       .from('galleries').update(patch).eq('id', req.params.id).eq('user_id', userId);
-    // Migration 033 (colunas de desconto) ainda não rodou? Repete sem esses
-    // campos pra não travar o resto do save de "Seleção e venda".
+    let { error } = await doUpdate();
+    // Colunas de desconto ainda não migradas? Repete tirando as ausentes pra não
+    // travar o resto do save. Estágio 1: colunas da 052; estágio 2: as da 033.
+    if (error && (error as any).code === '42703') {
+      delete patch.discount_value_rules;
+      delete patch.deadline_discount_pct;
+      delete patch.deadline_discount_until;
+      delete patch.buy_n_group;
+      delete patch.buy_n_free;
+      delete patch.coupons;
+      ({ error } = await doUpdate());
+    }
     if (error && (error as any).code === '42703') {
       delete patch.discount_mode;
       delete patch.discount_single_pct;
       delete patch.discount_rules;
-      ({ error } = await supabase
-        .from('galleries').update(patch).eq('id', req.params.id).eq('user_id', userId));
+      ({ error } = await doUpdate());
     }
     if (error) {
       return galleryTableMissing(error) ? galleryMigrationError(res) : res.status(500).json({ error: error.message });
@@ -9183,6 +9213,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       discount_mode: gallery.discount_mode || 'flat',
       discount_single_pct: Number(gallery.discount_single_pct || 0),
       discount_rules: Array.isArray(gallery.discount_rules) ? gallery.discount_rules : [],
+      discount_value_rules: Array.isArray(gallery.discount_value_rules) ? gallery.discount_value_rules : [],
+      deadline_discount_pct: Number(gallery.deadline_discount_pct || 0),
+      deadline_discount_until: gallery.deadline_discount_until || null,
+      buy_n_group: Number(gallery.buy_n_group || 0),
+      buy_n_free: Number(gallery.buy_n_free || 0),
+      coupons: Array.isArray(gallery.coupons) ? gallery.coupons : [],
     };
     const { data, error } = await supabase
       .from('gallery_packs').select('*').eq('gallery_id', gallery.id).order('sort_order');
@@ -9421,34 +9457,129 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }))
       .filter((r) => r.percent > 0 && r.min_photos >= 1)
       .sort((a, b) => a.min_photos - b.min_photos)
-      .slice(0, 12);
+      .slice(0, 20);
+  }
+
+  // Regras do progressivo por VALOR: [{ percent (0..100), min_value (R$ ≥ 0) }],
+  // ordenadas por min_value crescente. Mesma robustez do sanitizeDiscountRules.
+  function sanitizeValueRules(raw: any): { percent: number; min_value: number }[] {
+    let arr = raw;
+    if (typeof arr === 'string') { try { arr = JSON.parse(arr); } catch { arr = []; } }
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .map((r: any) => ({
+        percent: Math.min(100, Math.max(0, Number(r?.percent) || 0)),
+        min_value: Math.max(0, Number(r?.min_value) || 0),
+      }))
+      .filter((r) => r.percent > 0 && r.min_value > 0)
+      .sort((a, b) => a.min_value - b.min_value)
+      .slice(0, 20);
+  }
+
+  // Cupons: [{ code (UPPER), type 'pct'|'flat', value }]. Código normalizado em
+  // maiúsculas pra comparar sem case-sensitivity. Ignora lixo silenciosamente.
+  function sanitizeCoupons(raw: any): { code: string; type: 'pct' | 'flat'; value: number }[] {
+    let arr = raw;
+    if (typeof arr === 'string') { try { arr = JSON.parse(arr); } catch { arr = []; } }
+    if (!Array.isArray(arr)) return [];
+    const seen = new Set<string>();
+    const out: { code: string; type: 'pct' | 'flat'; value: number }[] = [];
+    for (const c of arr) {
+      const code = String(c?.code || '').trim().toUpperCase().slice(0, 40);
+      const type: 'pct' | 'flat' = c?.type === 'flat' ? 'flat' : 'pct';
+      const value = Math.max(0, Number(c?.value) || 0);
+      if (!code || value <= 0 || seen.has(code)) continue;
+      seen.add(code);
+      out.push({ code, type, value });
+      if (out.length >= 50) break;
+    }
+    return out;
   }
 
   // Calcula o desconto (em R$) sobre um subtotal, conforme o modo da galeria.
-  // Retorna { discount, pct } — pct só pra exibir (0 quando é abatimento fixo).
-  //   none        → 0
-  //   flat        → cart_discount em R$  (comportamento antigo)
-  //   single_pct  → subtotal × pct/100
-  //   progressive → maior regra cujo min_photos ≤ fotos escolhidas
-  function computeGalleryDiscount(
-    subtotal: number,
-    selectedCount: number,
-    opts: { mode?: string; flat?: number; singlePct?: number; rules?: any },
-  ): { discount: number; pct: number } {
-    const mode = opts.mode || 'flat';
-    if (mode === 'none' || subtotal <= 0) return { discount: 0, pct: 0 };
+  // Retorna { discount, pct, couponApplied } — pct só pra exibir; couponApplied
+  // = código do cupom que pegou (ou null). Modos:
+  //   none              → 0
+  //   flat              → cart_discount em R$ (comportamento antigo)
+  //   single_pct        → subtotal × pct/100
+  //   progressive       → maior regra cujo min_photos ≤ fotos escolhidas
+  //   progressive_value → maior regra cujo min_value ≤ subtotal
+  //   deadline          → pct se hoje ≤ data limite (early bird)
+  //   buy_n_get_m       → a cada N fotos, M de graça (abate as M mais baratas)
+  //   coupon            → código digitado bate em coupons[] (pct ou flat)
+  function computeGalleryDiscount(ctx: {
+    subtotal: number;
+    selectedCount: number;
+    billablePrices?: number[];
+    mode?: string;
+    flat?: number;
+    singlePct?: number;
+    rules?: any;
+    valueRules?: any;
+    deadlinePct?: number;
+    deadlineUntil?: string | null;
+    buyNGroup?: number;
+    buyNFree?: number;
+    coupons?: any;
+    couponCode?: string | null;
+    now?: Date;
+  }): { discount: number; pct: number; couponApplied: string | null } {
+    const subtotal = Number(ctx.subtotal) || 0;
+    const selectedCount = Number(ctx.selectedCount) || 0;
+    const mode = ctx.mode || 'flat';
+    const none = { discount: 0, pct: 0, couponApplied: null };
+    if (mode === 'none' || subtotal <= 0) return none;
+
     if (mode === 'single_pct') {
-      const pct = Math.min(100, Math.max(0, Number(opts.singlePct) || 0));
-      return { discount: (subtotal * pct) / 100, pct };
+      const pct = Math.min(100, Math.max(0, Number(ctx.singlePct) || 0));
+      return { discount: (subtotal * pct) / 100, pct, couponApplied: null };
     }
     if (mode === 'progressive') {
-      const rules = sanitizeDiscountRules(opts.rules);
+      const rules = sanitizeDiscountRules(ctx.rules);
       let pct = 0;
       for (const r of rules) if (selectedCount >= r.min_photos) pct = r.percent;
-      return { discount: (subtotal * pct) / 100, pct };
+      return { discount: (subtotal * pct) / 100, pct, couponApplied: null };
+    }
+    if (mode === 'progressive_value') {
+      const rules = sanitizeValueRules(ctx.valueRules);
+      let pct = 0;
+      for (const r of rules) if (subtotal >= r.min_value) pct = r.percent;
+      return { discount: (subtotal * pct) / 100, pct, couponApplied: null };
+    }
+    if (mode === 'deadline') {
+      const pct = Math.min(100, Math.max(0, Number(ctx.deadlinePct) || 0));
+      if (pct <= 0) return none;
+      const until = ctx.deadlineUntil;
+      if (until) {
+        const limit = new Date(`${until}T23:59:59`);
+        const now = ctx.now || new Date();
+        if (isNaN(limit.getTime()) || now > limit) return none; // prazo passou
+      }
+      return { discount: (subtotal * pct) / 100, pct, couponApplied: null };
+    }
+    if (mode === 'buy_n_get_m') {
+      const group = Math.max(0, Math.floor(Number(ctx.buyNGroup) || 0));
+      const free = Math.max(0, Math.floor(Number(ctx.buyNFree) || 0));
+      const prices = [...(ctx.billablePrices || [])].sort((a, b) => a - b);
+      if (group <= 0 || free <= 0 || prices.length === 0) return none;
+      const freeCount = Math.min(Math.floor(selectedCount / group) * free, prices.length);
+      if (freeCount <= 0) return none;
+      let discount = 0;
+      for (let i = 0; i < freeCount; i++) discount += prices[i]; // as mais baratas
+      const pct = subtotal > 0 ? Math.round((discount / subtotal) * 100) : 0;
+      return { discount, pct, couponApplied: null };
+    }
+    if (mode === 'coupon') {
+      const code = String(ctx.couponCode || '').trim().toUpperCase();
+      if (!code) return none;
+      const found = sanitizeCoupons(ctx.coupons).find((c) => c.code === code);
+      if (!found) return none;
+      if (found.type === 'flat') return { discount: Math.max(0, found.value), pct: 0, couponApplied: found.code };
+      const pct = Math.min(100, Math.max(0, found.value));
+      return { discount: (subtotal * pct) / 100, pct, couponApplied: found.code };
     }
     // flat (default) — abatimento fixo em reais.
-    return { discount: Math.max(0, Number(opts.flat) || 0), pct: 0 };
+    return { discount: Math.max(0, Number(ctx.flat) || 0), pct: 0, couponApplied: null };
   }
 
   // Totais da seleção respeitando o pricing_mode da galeria:
@@ -9464,6 +9595,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     opts: {
       pricingMode?: string; cartDiscount?: number; packId?: string | null;
       discountMode?: string; discountSinglePct?: number; discountRules?: any;
+      discountValueRules?: any; deadlinePct?: number; deadlineUntil?: string | null;
+      buyNGroup?: number; buyNFree?: number; coupons?: any; couponCode?: string | null;
     } = {},
   ) {
     const sb = supabaseAdmin!;
@@ -9480,6 +9613,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     let subtotal = 0;
     let pack_name: string | null = null;
+    // Preço de cada foto cobrável (pro "leve N pague M" abater as mais baratas).
+    let billablePrices: number[] = [];
     if (mode === 'no_charge') {
       subtotal = 0;
     } else if (mode === 'upgrade_packs' && opts.packId) {
@@ -9494,22 +9629,47 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const byId = new Map<string, number>();
       for (const p of prices || []) byId.set(p.photo_id, Number(p.price || 0));
       // Foto sem preço cadastrado usa extra_price como fallback.
-      subtotal = selectedIds.reduce((sum, id) => sum + (byId.has(id) ? byId.get(id)! : Number(extraPrice || 0)), 0);
+      billablePrices = selectedIds.map((id) => (byId.has(id) ? byId.get(id)! : Number(extraPrice || 0)));
+      subtotal = billablePrices.reduce((sum, v) => sum + v, 0);
     } else {
       // extra_avulso (default) — N inclusas + cobra os extras.
+      billablePrices = Array.from({ length: extra_count }, () => Number(extraPrice || 0));
       subtotal = extra_count * Number(extraPrice || 0);
     }
 
-    const { discount: rawDiscount, pct: discount_pct } = computeGalleryDiscount(subtotal, selected_count, {
+    const { discount: rawDiscount, pct: discount_pct, couponApplied } = computeGalleryDiscount({
+      subtotal,
+      selectedCount: selected_count,
+      billablePrices,
       mode: opts.discountMode,
       flat: opts.cartDiscount,
       singlePct: opts.discountSinglePct,
       rules: opts.discountRules,
+      valueRules: opts.discountValueRules,
+      deadlinePct: opts.deadlinePct,
+      deadlineUntil: opts.deadlineUntil,
+      buyNGroup: opts.buyNGroup,
+      buyNFree: opts.buyNFree,
+      coupons: opts.coupons,
+      couponCode: opts.couponCode,
     });
     // Nunca abate mais que o subtotal (mantém amount ≥ 0 e display coerente).
     const discount = Math.min(Math.max(0, rawDiscount), subtotal);
     const amount = subtotal - discount;
-    return { selected_count, extra_count, amount, subtotal, discount, discount_pct, pack_name };
+    return { selected_count, extra_count, amount, subtotal, discount, discount_pct, pack_name, coupon_applied: couponApplied };
+  }
+
+  // Monta os opts de desconto a partir da linha da galeria (evita repetir nos
+  // 3 callers do galleryTotals). couponCode vem do cliente (ou do pagamento).
+  function galleryDiscountOpts(gallery: any, couponCode?: string | null) {
+    return {
+      pricingMode: gallery.pricing_mode, cartDiscount: gallery.cart_discount,
+      discountMode: gallery.discount_mode, discountSinglePct: gallery.discount_single_pct,
+      discountRules: gallery.discount_rules, discountValueRules: gallery.discount_value_rules,
+      deadlinePct: gallery.deadline_discount_pct, deadlineUntil: gallery.deadline_discount_until,
+      buyNGroup: gallery.buy_n_group, buyNFree: gallery.buy_n_free,
+      coupons: gallery.coupons, couponCode: couponCode || null,
+    };
   }
 
   // ── Acesso & auditoria (Fase 1) ────────────────────────────────────────────
@@ -9869,6 +10029,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         cart_discount: Number(gallery.cart_discount || 0),
         discount_single_pct: Number(gallery.discount_single_pct || 0),
         discount_rules: Array.isArray(gallery.discount_rules) ? gallery.discount_rules : [],
+        // Config dos novos tipos pra prévia no cliente. NÃO expõe os códigos de
+        // cupom — só sinaliza que a galeria usa cupom (validação é server-side).
+        discount_value_rules: Array.isArray(gallery.discount_value_rules) ? gallery.discount_value_rules : [],
+        deadline_discount_pct: Number(gallery.deadline_discount_pct || 0),
+        deadline_discount_until: gallery.deadline_discount_until || null,
+        buy_n_group: Number(gallery.buy_n_group || 0),
+        buy_n_free: Number(gallery.buy_n_free || 0),
+        has_coupons: gallery.discount_mode === 'coupon',
         category: gallery.category,
         studio_name: studioName,
         require_login: !!gallery.require_login,
@@ -9961,11 +10129,25 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       });
     }
 
-    const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price, {
-      pricingMode: gallery.pricing_mode, cartDiscount: gallery.cart_discount,
-      discountMode: gallery.discount_mode, discountSinglePct: gallery.discount_single_pct,
-      discountRules: gallery.discount_rules,
-    });
+    const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price,
+      galleryDiscountOpts(gallery, (req.body || {}).coupon));
+    res.json({ ok: true, ...totals });
+  });
+
+  // Prévia de totais (sem mexer na seleção). Usado pra validar/aplicar um cupom:
+  // o cliente manda { coupon } e recebe os totais já com o desconto — ou sem, se
+  // o código não existir (coupon_applied = null sinaliza cupom inválido).
+  app.post('/api/public/gallery/:token/totals', async (req, res) => {
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
+    if (!publicRateLimit(req, 'totals', 120, 60 * 1000)) {
+      return res.status(429).json({ error: 'Muitas tentativas. Aguarde um instante.' });
+    }
+    const gallery = await findGalleryByToken(req.params.token);
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+    const access = await ensureGalleryAccess(req, res, gallery);
+    if (access === undefined) return;
+    const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price,
+      galleryDiscountOpts(gallery, (req.body || {}).coupon));
     res.json({ ok: true, ...totals });
   });
 
@@ -10004,7 +10186,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   async function createGalleryPayment(
     gallery: any,
-    totals: { selected_count: number; extra_count: number; amount: number },
+    totals: { selected_count: number; extra_count: number; amount: number; coupon_applied?: string | null },
   ): Promise<{ payment_url: string | null; order_code: string | null; connected: boolean }> {
     // connected = o estúdio tem MP vinculado. Distingue "não conectou"
     // (cobra por fora, ok finalizar) de "conectou mas a cobrança falhou"
@@ -10013,19 +10195,24 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const connected = !!(settings.mp_user_id && settings.mp_access_token);
 
     const order_code = `G${Date.now().toString(36).toUpperCase()}${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
-    const { data: row, error } = await supabaseAdmin!
-      .from('gallery_payments')
-      .insert({
-        gallery_id: gallery.id,
-        user_id: gallery.user_id,
-        order_code,
-        extra_count: totals.extra_count,
-        amount: totals.amount,
-        provider: 'mercadopago',
-        status: 'pending',
-      })
-      .select()
-      .single();
+    const insertRow: any = {
+      gallery_id: gallery.id,
+      user_id: gallery.user_id,
+      order_code,
+      extra_count: totals.extra_count,
+      amount: totals.amount,
+      provider: 'mercadopago',
+      status: 'pending',
+      coupon_code: totals.coupon_applied || null,
+    };
+    let { data: row, error } = await supabaseAdmin!
+      .from('gallery_payments').insert(insertRow).select().single();
+    // Coluna coupon_code ainda não migrada (052)? Repete sem ela.
+    if (error && (error as any).code === '42703') {
+      delete insertRow.coupon_code;
+      ({ data: row, error } = await supabaseAdmin!
+        .from('gallery_payments').insert(insertRow).select().single());
+    }
     if (error || !row) {
       console.warn('[galeria] criar pagamento falhou:', error?.message);
       return { payment_url: null, order_code: null, connected };
@@ -10105,11 +10292,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const access = await ensureGalleryAccess(req, res, gallery);
     if (access === undefined) return;
 
-    const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price, {
-      pricingMode: gallery.pricing_mode, cartDiscount: gallery.cart_discount,
-      discountMode: gallery.discount_mode, discountSinglePct: gallery.discount_single_pct,
-      discountRules: gallery.discount_rules,
-    });
+    const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price,
+      galleryDiscountOpts(gallery, (req.body || {}).coupon));
 
     // SEM valor a pagar → finaliza na hora.
     if (totals.amount <= 0) {
@@ -10201,11 +10385,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           ip: 'mercadopago',
           user_agent: null,
         });
-        const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price, {
-          pricingMode: gallery.pricing_mode, cartDiscount: gallery.cart_discount,
-          discountMode: gallery.discount_mode, discountSinglePct: gallery.discount_single_pct,
-          discountRules: gallery.discount_rules,
-        });
+        const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price,
+          galleryDiscountOpts(gallery, payment.coupon_code));
         await finalizeGallery(gallery, totals, 'pagamento-confirmado');
       }
     } catch (e: any) {

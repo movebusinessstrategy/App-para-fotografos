@@ -7,13 +7,20 @@ export type ProtecaoGaleria =
   | { enabled?: boolean; notice?: boolean; show_notice?: boolean }
   | null;
 
-export type ModoDesconto = "none" | "flat" | "single_pct" | "progressive";
+export type ModoDesconto =
+  | "none" | "flat" | "single_pct" | "progressive"
+  | "progressive_value" | "deadline" | "buy_n_get_m" | "coupon";
 
 export type ModoCobranca = "no_charge" | "extra_avulso" | "upgrade_packs" | "sell_all";
 
 export interface RegraDesconto {
   percent: number;
   min_photos: number;
+}
+
+export interface RegraValor {
+  percent: number;
+  min_value: number;
 }
 
 export interface GaleriaPublica {
@@ -26,6 +33,14 @@ export interface GaleriaPublica {
   cart_discount?: number;
   discount_single_pct?: number;
   discount_rules?: RegraDesconto[];
+  // Novos tipos de desconto (migration 052). Códigos de cupom NÃO vêm pro
+  // cliente — só o flag has_coupons; a validação é no servidor.
+  discount_value_rules?: RegraValor[];
+  deadline_discount_pct?: number;
+  deadline_discount_until?: string | null;
+  buy_n_group?: number;
+  buy_n_free?: number;
+  has_coupons?: boolean;
   category?: string | null;
   studio_name?: string | null;
   protection?: ProtecaoGaleria;
@@ -80,4 +95,5 @@ export interface TotaisSelecao {
   desconto: number;
   descontoPct: number;
   valor: number;
+  cupomAplicado?: string | null;
 }

@@ -24,7 +24,9 @@ import type {
   RespostaGaleriaPublica,
   TotaisSelecao,
 } from "./types";
-import { calcularTotais, lerProtecao } from "./utils";
+import { calcularTotais, lerProtecao, totaisDoServidor } from "./utils";
+
+export type CupomStatus = "idle" | "loading" | "ok" | "invalid";
 
 type Fase = "galeria" | "pagamento" | "sucesso";
 
@@ -53,6 +55,11 @@ export default function GaleriaPublicaPage() {
   const [modalAberto, setModalAberto] = useState(false);
   const [finalizando, setFinalizando] = useState(false);
   const [erroFinalizar, setErroFinalizar] = useState<string | null>(null);
+
+  // Cupom (modo discount_mode === 'coupon'): validação é server-side via /totals.
+  const [cupom, setCupom] = useState("");
+  const [cupomStatus, setCupomStatus] = useState<CupomStatus>("idle");
+  const [totaisServidor, setTotaisServidor] = useState<TotaisSelecao | null>(null);
 
   useEffect(() => {
     if (!token) {
@@ -105,6 +112,34 @@ export default function GaleriaPublicaPage() {
     [selecoes, galeria]
   );
 
+  // Modo cupom: o desconto vem do servidor (não dá pra validar código no cliente).
+  const mostrarCupom = galeria?.discount_mode === "coupon" || !!galeria?.has_coupons;
+  const usarServidor = mostrarCupom && cupomStatus === "ok" && !!totaisServidor;
+  const totaisModal = usarServidor ? (totaisServidor as TotaisSelecao) : totais;
+
+  const aplicarCupom = async () => {
+    const code = cupom.trim();
+    if (!code) { setCupomStatus("idle"); setTotaisServidor(null); return; }
+    setCupomStatus("loading");
+    try {
+      const resp = await publicPost<any>(`/api/public/gallery/${token}/totals`, { coupon: code }, token);
+      const t = totaisDoServidor(resp, galeria?.included_count ?? 0);
+      if (t.cupomAplicado) { setTotaisServidor(t); setCupomStatus("ok"); }
+      else { setTotaisServidor(null); setCupomStatus("invalid"); }
+    } catch {
+      setTotaisServidor(null);
+      setCupomStatus("invalid");
+    }
+  };
+
+  const abrirModal = () => {
+    // Cupom vale por sessão do modal — zera ao abrir (a seleção pode ter mudado).
+    setCupom("");
+    setCupomStatus("idle");
+    setTotaisServidor(null);
+    setModalAberto(true);
+  };
+
   const aplicarSelecao = (fotoId: string, selected: boolean, comment: string | null) =>
     setSelecoes((prev) => ({ ...prev, [fotoId]: { selected, comment } }));
 
@@ -140,7 +175,7 @@ export default function GaleriaPublicaPage() {
     try {
       const resp = await publicPost<RespostaFinalize>(
         `/api/public/gallery/${token}/finalize`,
-        undefined,
+        cupomStatus === "ok" && cupom.trim() ? { coupon: cupom.trim() } : undefined,
         token,
       );
       setModalAberto(false);
@@ -196,12 +231,18 @@ export default function GaleriaPublicaPage() {
       fotos={fotos}
       selecoes={selecoes}
       totais={totais}
+      totaisModal={totaisModal}
       modalAberto={modalAberto}
       finalizando={finalizando}
       erroFinalizar={erroFinalizar}
+      mostrarCupom={mostrarCupom}
+      cupom={cupom}
+      cupomStatus={cupomStatus}
+      onCupomChange={setCupom}
+      onAplicarCupom={aplicarCupom}
       onToggle={alternarSelecao}
       onComentario={salvarComentario}
-      onAbrirModal={() => setModalAberto(true)}
+      onAbrirModal={abrirModal}
       onFecharModal={() => setModalAberto(false)}
       onConfirmarFinalizacao={confirmarFinalizacao}
     />
@@ -214,9 +255,15 @@ type PropsConteudo = {
   fotos: FotoPublica[];
   selecoes: MapaSelecoes;
   totais: TotaisSelecao;
+  totaisModal: TotaisSelecao;
   modalAberto: boolean;
   finalizando: boolean;
   erroFinalizar: string | null;
+  mostrarCupom: boolean;
+  cupom: string;
+  cupomStatus: CupomStatus;
+  onCupomChange: (v: string) => void;
+  onAplicarCupom: () => void;
   onToggle: (fotoId: string) => void;
   onComentario: (fotoId: string, texto: string) => void;
   onAbrirModal: () => void;
@@ -276,10 +323,15 @@ function ConteudoGaleria(p: PropsConteudo) {
 
       {p.modalAberto && (
         <ModalFinalizar
-          totais={p.totais}
+          totais={p.totaisModal}
           precoExtra={p.galeria.extra_price}
           finalizando={p.finalizando}
           erro={p.erroFinalizar}
+          mostrarCupom={p.mostrarCupom}
+          cupom={p.cupom}
+          cupomStatus={p.cupomStatus}
+          onCupomChange={p.onCupomChange}
+          onAplicarCupom={p.onAplicarCupom}
           onConfirmar={p.onConfirmarFinalizacao}
           onFechar={p.onFecharModal}
         />

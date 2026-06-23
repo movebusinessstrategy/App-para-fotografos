@@ -28,17 +28,24 @@ const MODE_OPTIONS: ModeOption[] = [
   { value: "sell_all",      title: "Tudo à venda",           desc: "Cada foto tem preço; cliente paga as que escolher." },
 ];
 
-type DiscountMode = "none" | "flat" | "single_pct" | "progressive";
+type DiscountMode =
+  | "none" | "flat" | "single_pct" | "progressive"
+  | "progressive_value" | "deadline" | "buy_n_get_m" | "coupon";
 
 const DISCOUNT_MODES: { value: DiscountMode; title: string; desc: string }[] = [
-  { value: "none",        title: "Sem desconto",   desc: "Cliente paga o valor cheio." },
-  { value: "flat",        title: "Abatimento R$",  desc: "Tira um valor fixo do total." },
-  { value: "single_pct",  title: "Desconto único", desc: "Um % sobre o total." },
-  { value: "progressive", title: "Progressivo",    desc: "% maior conforme escolhe mais fotos." },
+  { value: "none",              title: "Sem desconto",    desc: "Cliente paga o valor cheio." },
+  { value: "flat",              title: "Abatimento R$",   desc: "Tira um valor fixo do total." },
+  { value: "single_pct",        title: "Desconto único",  desc: "Um % sobre o total." },
+  { value: "progressive",       title: "Progressivo",     desc: "% maior conforme escolhe mais fotos." },
+  { value: "progressive_value", title: "Progressivo R$",  desc: "% maior conforme o valor do carrinho." },
+  { value: "deadline",          title: "Por prazo",       desc: "% se finalizar até uma data (early bird)." },
+  { value: "buy_n_get_m",       title: "Leve N, pague M", desc: "A cada N fotos, M saem de graça." },
+  { value: "coupon",            title: "Cupom",           desc: "Cliente digita um código no checkout." },
 ];
 
 // Quantas regras de desconto progressivo o estúdio pode cadastrar.
-const MAX_DISCOUNT_RULES = 6;
+// Mantém em sincronia com o teto do backend (sanitizeDiscountRules / buildGalleryPatch).
+const MAX_DISCOUNT_RULES = 20;
 
 export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps) {
   const [mode, setMode] = useState<PricingMode>((gallery.pricing_mode as PricingMode) || "extra_avulso");
@@ -48,6 +55,12 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
   const [discountMode, setDiscountMode] = useState<DiscountMode>("flat");
   const [singlePct, setSinglePct] = useState("0");
   const [rules, setRules] = useState<{ percent: string; min_photos: string }[]>([]);
+  const [valueRules, setValueRules] = useState<{ percent: string; min_value: string }[]>([]);
+  const [deadlinePct, setDeadlinePct] = useState("0");
+  const [deadlineUntil, setDeadlineUntil] = useState("");
+  const [buyNGroup, setBuyNGroup] = useState("10");
+  const [buyNFree, setBuyNFree] = useState("1");
+  const [coupons, setCoupons] = useState<{ code: string; type: "pct" | "flat"; value: string }[]>([]);
   const [packs, setPacks] = useState<{ id?: string; name: string; photo_count: string; price: string; sort_order: number }[]>([]);
   const [packsLoading, setPacksLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -71,6 +84,16 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
           setRules((j.discount_rules || []).map((r: any) => ({
             percent: String(r.percent ?? ""), min_photos: String(r.min_photos ?? ""),
           })));
+          setValueRules((j.discount_value_rules || []).map((r: any) => ({
+            percent: String(r.percent ?? ""), min_value: String(r.min_value ?? ""),
+          })));
+          setDeadlinePct(String(j.deadline_discount_pct || 0));
+          setDeadlineUntil(j.deadline_discount_until || "");
+          setBuyNGroup(String(j.buy_n_group || 0));
+          setBuyNFree(String(j.buy_n_free || 0));
+          setCoupons((j.coupons || []).map((c: any) => ({
+            code: String(c.code ?? ""), type: c.type === "flat" ? "flat" : "pct", value: String(c.value ?? ""),
+          })));
         }
       } catch { /* sem packs ou rota nova ainda — segue mostrando vazio */ }
     })();
@@ -88,12 +111,27 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
           min_photos: Math.max(1, Math.floor(Number(r.min_photos) || 0)),
         }))
         .filter((r) => r.percent > 0 && r.min_photos >= 1);
+      const normValueRules = valueRules
+        .map((r) => ({
+          percent: Math.min(100, Math.max(0, Number(r.percent) || 0)),
+          min_value: Math.max(0, Number(r.min_value) || 0),
+        }))
+        .filter((r) => r.percent > 0 && r.min_value > 0);
+      const normCoupons = coupons
+        .map((c) => ({ code: c.code.trim().toUpperCase(), type: c.type, value: Number(c.value) || 0 }))
+        .filter((c) => c.code && c.value > 0);
       const payload: any = {
         pricing_mode: mode,
         cart_discount: Number(discount) || 0,
         discount_mode: discountMode,
         discount_single_pct: normSinglePct,
         discount_rules: normRules,
+        discount_value_rules: normValueRules,
+        deadline_discount_pct: Math.min(100, Math.max(0, Number(deadlinePct) || 0)),
+        deadline_discount_until: deadlineUntil || null,
+        buy_n_group: Math.max(0, Math.floor(Number(buyNGroup) || 0)),
+        buy_n_free: Math.max(0, Math.floor(Number(buyNFree) || 0)),
+        coupons: normCoupons,
       };
       if (mode === "extra_avulso") {
         payload.included_count = Number(included) || 0;
@@ -106,6 +144,8 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
       if (!res.ok) throw new Error();
       setSinglePct(String(normSinglePct));
       setRules(normRules.map((r) => ({ percent: String(r.percent), min_photos: String(r.min_photos) })));
+      setValueRules(normValueRules.map((r) => ({ percent: String(r.percent), min_value: String(r.min_value) })));
+      setCoupons(normCoupons.map((c) => ({ code: c.code, type: c.type, value: String(c.value) })));
       onNotify("success", "Configuração salva.");
       onChanged();
     } catch {
@@ -135,6 +175,22 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
   const removeRule = (idx: number) => setRules((arr) => arr.filter((_, i) => i !== idx));
   const updateRule = (idx: number, k: "percent" | "min_photos", v: string) =>
     setRules((arr) => arr.map((r, i) => (i === idx ? { ...r, [k]: v } : r)));
+
+  // ── Regras do progressivo por VALOR ────────────────────────────────────────
+  const addValueRule = () =>
+    setValueRules((arr) => (arr.length >= MAX_DISCOUNT_RULES ? arr : [...arr, { percent: "10", min_value: "500" }]));
+  const removeValueRule = (idx: number) => setValueRules((arr) => arr.filter((_, i) => i !== idx));
+  const updateValueRule = (idx: number, k: "percent" | "min_value", v: string) =>
+    setValueRules((arr) => arr.map((r, i) => (i === idx ? { ...r, [k]: v } : r)));
+
+  // ── Cupons ─────────────────────────────────────────────────────────────────
+  const addCoupon = () =>
+    setCoupons((arr) => (arr.length >= 50 ? arr : [...arr, { code: "", type: "pct", value: "10" }]));
+  const removeCoupon = (idx: number) => setCoupons((arr) => arr.filter((_, i) => i !== idx));
+  const updateCoupon = (idx: number, k: "code" | "type" | "value", v: string) =>
+    setCoupons((arr) => arr.map((c, i) => (
+      i === idx ? { ...c, [k]: k === "type" ? (v === "flat" ? "flat" : "pct") : v } : c
+    )));
 
   const savePacks = async () => {
     setPacksLoading(true);
@@ -316,6 +372,100 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
               <p className="text-xs text-gray-500">
                 Você adicionou {rules.length} de {MAX_DISCOUNT_RULES} regras de desconto progressivo.
               </p>
+            </div>
+          )}
+
+          {discountMode === "progressive_value" && (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-gray-500">
+                Quanto mais a cliente gasta, maior o desconto. Vale a regra com o maior
+                "a partir de R$" que ela atingir.
+              </p>
+              {valueRules.length === 0 && (
+                <p className="text-sm text-gray-500">Nenhuma regra ainda (ex.: 10% a partir de R$500).</p>
+              )}
+              {valueRules.map((r, idx) => (
+                <div key={idx} className="flex items-end gap-2">
+                  <div className="flex-1">
+                    <Campo label="Desconto (%)" type="number" value={r.percent} onChange={(v) => updateValueRule(idx, "percent", v)} />
+                  </div>
+                  <div className="flex-1">
+                    <Campo label="A partir de (R$)" type="number" value={r.min_value} onChange={(v) => updateValueRule(idx, "min_value", v)} />
+                  </div>
+                  <button onClick={() => removeValueRule(idx)} className="p-2 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button" onClick={addValueRule} disabled={valueRules.length >= MAX_DISCOUNT_RULES}
+                className="w-full py-2 text-sm font-medium text-violet-700 dark:text-violet-300 bg-violet-50 dark:bg-violet-900/20 hover:bg-violet-100 dark:hover:bg-violet-900/30 rounded-lg disabled:opacity-50"
+              >
+                Adicionar regra por valor
+              </button>
+            </div>
+          )}
+
+          {discountMode === "deadline" && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+              <Campo label="Desconto (%)" type="number" value={deadlinePct} onChange={setDeadlinePct} />
+              <Campo label="Válido até" type="date" value={deadlineUntil} onChange={setDeadlineUntil} />
+              <div className="text-xs text-gray-500 sm:col-span-2">
+                A cliente ganha esse % se finalizar até a data escolhida. Depois disso, paga o valor cheio.
+                {deadlineUntil ? "" : " (Sem data = o desconto vale sempre.)"}
+              </div>
+            </div>
+          )}
+
+          {discountMode === "buy_n_get_m" && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+              <Campo label="A cada (N fotos)" type="number" value={buyNGroup} onChange={setBuyNGroup} />
+              <Campo label="Saem de graça (M)" type="number" value={buyNFree} onChange={setBuyNFree} />
+              <div className="text-xs text-gray-500 sm:col-span-2">
+                A cada {buyNGroup || "N"} fotos escolhidas, {buyNFree || "M"} sai(em) de graça — abate as mais baratas.
+              </div>
+            </div>
+          )}
+
+          {discountMode === "coupon" && (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-gray-500">
+                A cliente digita um código no checkout. Crie quantos quiser (ex.: AMIGO10 = 10%).
+              </p>
+              {coupons.length === 0 && (
+                <p className="text-sm text-gray-500">Nenhum cupom ainda.</p>
+              )}
+              {coupons.map((c, idx) => (
+                <div key={idx} className="flex items-end gap-2">
+                  <div className="flex-1">
+                    <Campo label="Código" value={c.code} onChange={(v) => updateCoupon(idx, "code", v.toUpperCase())} placeholder="AMIGO10" />
+                  </div>
+                  <div className="w-24">
+                    <label className="block">
+                      <span className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Tipo</span>
+                      <select
+                        value={c.type} onChange={(e) => updateCoupon(idx, "type", e.target.value)}
+                        className="w-full px-2 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500"
+                      >
+                        <option value="pct">%</option>
+                        <option value="flat">R$</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div className="w-24">
+                    <Campo label="Valor" type="number" value={c.value} onChange={(v) => updateCoupon(idx, "value", v)} />
+                  </div>
+                  <button onClick={() => removeCoupon(idx)} className="p-2 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button" onClick={addCoupon} disabled={coupons.length >= 50}
+                className="w-full py-2 text-sm font-medium text-violet-700 dark:text-violet-300 bg-violet-50 dark:bg-violet-900/20 hover:bg-violet-100 dark:hover:bg-violet-900/30 rounded-lg disabled:opacity-50"
+              >
+                Adicionar cupom
+              </button>
             </div>
           )}
         </Bloco>

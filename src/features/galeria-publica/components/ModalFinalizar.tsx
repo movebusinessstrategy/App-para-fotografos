@@ -7,6 +7,11 @@ type Props = {
   precoExtra: number;
   finalizando: boolean;
   erro: string | null;
+  mostrarCupom: boolean;
+  cupom: string;
+  cupomStatus: "idle" | "loading" | "ok" | "invalid";
+  onCupomChange: (v: string) => void;
+  onAplicarCupom: () => void;
   onConfirmar: () => void;
   onFechar: () => void;
 };
@@ -20,7 +25,11 @@ function Linha({ rotulo, valor }: { rotulo: string; valor: string }) {
   );
 }
 
-export function ModalFinalizar({ totais, precoExtra, finalizando, erro, onConfirmar, onFechar }: Props) {
+export function ModalFinalizar({
+  totais, precoExtra, finalizando, erro,
+  mostrarCupom, cupom, cupomStatus, onCupomChange, onAplicarCupom,
+  onConfirmar, onFechar,
+}: Props) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={onFechar} />
@@ -57,6 +66,36 @@ export function ModalFinalizar({ totais, precoExtra, finalizando, erro, onConfir
             </div>
           </div>
         </div>
+
+        {mostrarCupom && (
+          <div className="mt-3">
+            <label className="text-xs font-medium text-neutral-600">Tem um cupom de desconto?</label>
+            <div className="mt-1 flex gap-2">
+              <input
+                type="text"
+                value={cupom}
+                onChange={(e) => onCupomChange(e.target.value.toUpperCase())}
+                placeholder="Código"
+                disabled={finalizando}
+                className="flex-1 rounded-lg border border-neutral-200 px-3 py-2 text-sm uppercase outline-none focus:border-[#D4537E]"
+              />
+              <button
+                type="button"
+                onClick={onAplicarCupom}
+                disabled={finalizando || cupomStatus === "loading" || !cupom.trim()}
+                className="flex items-center justify-center rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+              >
+                {cupomStatus === "loading" ? <Loader2 size={14} className="animate-spin" /> : "Aplicar"}
+              </button>
+            </div>
+            {cupomStatus === "ok" && totais.cupomAplicado && (
+              <p className="mt-1 text-xs font-medium text-emerald-600">Cupom {totais.cupomAplicado} aplicado ✓</p>
+            )}
+            {cupomStatus === "invalid" && (
+              <p className="mt-1 text-xs font-medium text-red-600">Cupom inválido.</p>
+            )}
+          </div>
+        )}
 
         <p className="mt-3 text-[11px] text-neutral-400">
           {totais.valor > 0

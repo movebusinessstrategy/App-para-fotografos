@@ -37,13 +37,20 @@ export const estiloImagemProtegida: React.CSSProperties = {
 
 // Espelha o computeGalleryDiscount do backend — pra prévia bater com a cobrança.
 // Conta de gatilho do progressivo = nº de fotos escolhidas (carrinho).
-function calcularDesconto(
-  subtotal: number,
-  selecionadas: number,
-  galeria?: Pick<GaleriaPublica, "discount_mode" | "cart_discount" | "discount_single_pct" | "discount_rules">
-): { desconto: number; pct: number } {
+// O cupom é validado no servidor (/totals); na prévia local ele não desconta.
+// buy_n_get_m usa preço unitário uniforme (= preço por extra) como aproximação;
+// o valor exato (abatendo as fotos mais baratas) vem do servidor na finalização.
+function calcularDesconto(ctx: {
+  subtotal: number;
+  selecionadas: number;
+  billableCount: number;
+  precoUnit: number;
+  galeria?: GaleriaPublica;
+}): { desconto: number; pct: number } {
+  const { subtotal, selecionadas, billableCount, precoUnit, galeria } = ctx;
   const mode = galeria?.discount_mode || "flat";
-  if (mode === "none" || subtotal <= 0) return { desconto: 0, pct: 0 };
+  if (mode === "none" || mode === "coupon" || subtotal <= 0) return { desconto: 0, pct: 0 };
+
   if (mode === "single_pct") {
     const pct = Math.min(100, Math.max(0, galeria?.discount_single_pct || 0));
     return { desconto: (subtotal * pct) / 100, pct };
@@ -55,6 +62,34 @@ function calcularDesconto(
     let pct = 0;
     for (const r of regras) if (selecionadas >= r.min_photos) pct = r.percent;
     return { desconto: (subtotal * pct) / 100, pct };
+  }
+  if (mode === "progressive_value") {
+    const regras = [...(galeria?.discount_value_rules || [])]
+      .filter((r) => (r?.percent || 0) > 0 && (r?.min_value || 0) > 0)
+      .sort((a, b) => a.min_value - b.min_value);
+    let pct = 0;
+    for (const r of regras) if (subtotal >= r.min_value) pct = r.percent;
+    return { desconto: (subtotal * pct) / 100, pct };
+  }
+  if (mode === "deadline") {
+    const pct = Math.min(100, Math.max(0, galeria?.deadline_discount_pct || 0));
+    if (pct <= 0) return { desconto: 0, pct: 0 };
+    const until = galeria?.deadline_discount_until;
+    if (until) {
+      const limite = new Date(`${until}T23:59:59`);
+      if (isNaN(limite.getTime()) || new Date() > limite) return { desconto: 0, pct: 0 };
+    }
+    return { desconto: (subtotal * pct) / 100, pct };
+  }
+  if (mode === "buy_n_get_m") {
+    const group = Math.max(0, Math.floor(galeria?.buy_n_group || 0));
+    const free = Math.max(0, Math.floor(galeria?.buy_n_free || 0));
+    if (group <= 0 || free <= 0 || billableCount <= 0) return { desconto: 0, pct: 0 };
+    const freeCount = Math.min(Math.floor(selecionadas / group) * free, billableCount);
+    if (freeCount <= 0) return { desconto: 0, pct: 0 };
+    const desconto = freeCount * (precoUnit || 0);
+    const pct = subtotal > 0 ? Math.round((desconto / subtotal) * 100) : 0;
+    return { desconto, pct };
   }
   // flat — abatimento fixo em reais.
   return { desconto: Math.max(0, galeria?.cart_discount || 0), pct: 0 };
@@ -81,14 +116,35 @@ export function calcularTotais(
   selecoes: MapaSelecoes,
   incluidas: number,
   precoExtra: number,
-  galeria?: Pick<GaleriaPublica, "pricing_mode" | "discount_mode" | "cart_discount" | "discount_single_pct" | "discount_rules">
+  galeria?: GaleriaPublica
 ): TotaisSelecao {
   const selecionadas = Object.values(selecoes).filter((s) => s.selected).length;
   const extras = Math.max(0, selecionadas - (incluidas || 0));
   const subtotal = calcularSubtotal(galeria?.pricing_mode, selecionadas, extras, precoExtra);
-  const { desconto: descontoBruto, pct } = calcularDesconto(subtotal, selecionadas, galeria);
+  // Fotos cobráveis (pro leve-N-pague-M): sell_all = todas; senão = extras.
+  const billableCount = galeria?.pricing_mode === "sell_all" ? selecionadas : extras;
+  const { desconto: descontoBruto, pct } = calcularDesconto({
+    subtotal, selecionadas, billableCount, precoUnit: precoExtra || 0, galeria,
+  });
   // Nunca abate mais que o subtotal (espelha o backend).
   const desconto = Math.min(Math.max(0, descontoBruto), subtotal);
   const valor = Math.max(0, subtotal - desconto);
-  return { selecionadas, incluidas: incluidas || 0, extras, subtotal, desconto, descontoPct: pct, valor };
+  return { selecionadas, incluidas: incluidas || 0, extras, subtotal, desconto, descontoPct: pct, valor, cupomAplicado: null };
+}
+
+// Converte a resposta crua do servidor (/totals, /finalize — snake_case) em
+// TotaisSelecao. Usado quando o cliente aplica um cupom (cálculo autoritativo).
+export function totaisDoServidor(raw: any, incluidas: number): TotaisSelecao {
+  const subtotal = Number(raw?.subtotal || 0);
+  const desconto = Number(raw?.discount || 0);
+  return {
+    selecionadas: Number(raw?.selected_count || 0),
+    incluidas: incluidas || 0,
+    extras: Number(raw?.extra_count || 0),
+    subtotal,
+    desconto,
+    descontoPct: Number(raw?.discount_pct || 0),
+    valor: Number(raw?.amount ?? Math.max(0, subtotal - desconto)),
+    cupomAplicado: raw?.coupon_applied ?? null,
+  };
 }
