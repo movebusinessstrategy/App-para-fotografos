@@ -4,10 +4,10 @@ import { useSearchParams } from "react-router-dom";
 import { format } from "date-fns";
 import {
   X, Trash2, CheckCircle, XCircle, User, Phone, Mail, Instagram,
-  Edit3, Link2, MessageCircle, Trophy, Pencil, Search, Check, Package, Layers, Briefcase, ChevronDown, Plus, Tag
+  Edit3, Link2, MessageCircle, Trophy, Pencil, Search, Check, Package, Layers, Briefcase, ChevronDown, Plus, Tag, Sparkles
 } from "lucide-react";
 import { ConfirmModal } from "../ui/ConfirmModal";
-import { Deal, Client, PipelineStage, DealActivity, StageHistoryEntry, Produto, Servico, Combo, DealItem, PipelineLabel } from "../../types";
+import { Deal, Client, PipelineStage, DealActivity, StageHistoryEntry, Produto, Servico, Combo, DealItem, PipelineLabel, SaleCampaign } from "../../types";
 import { authFetch } from "../../utils/authFetch";
 import { useApi } from "../../utils/useApi";
 import { parseDate } from "../../utils/date";
@@ -241,6 +241,12 @@ export function DealDetailDrawer({
   const labelPickerRef = useRef<HTMLDivElement>(null);
   const headerLabelRef = useRef<HTMLDivElement>(null);
 
+  // Venda Especial / Campanha
+  const [campaigns, setCampaigns] = useState<SaleCampaign[]>([]);
+  const [dealCampaignId, setDealCampaignId] = useState<string | null>(null);
+  const [showCampaignPicker, setShowCampaignPicker] = useState(false);
+  const campaignPickerRef = useRef<HTMLDivElement>(null);
+
   // WhatsApp profile photo
   const [contactPhotoUrl, setContactPhotoUrl] = useState<string | null>(null);
   // Inline title editing
@@ -272,6 +278,7 @@ export function DealDetailDrawer({
 
   useEffect(() => {
     authFetch('/api/pipeline/labels').then(r => r.json()).then(d => setAvailableLabels(Array.isArray(d) ? d : [])).catch(() => {});
+    authFetch('/api/sale-campaigns').then(r => r.ok ? r.json() : []).then(d => setCampaigns(Array.isArray(d) ? d : [])).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -404,6 +411,8 @@ export function DealDetailDrawer({
       setDealLabels(Array.isArray(deal.labels) ? deal.labels : []);
       setShowLabelPicker(false);
       setShowHeaderLabelDropdown(false);
+      setDealCampaignId(deal.campaign_id || null);
+      setShowCampaignPicker(false);
       loadActivities();
       loadHistory();
     }
@@ -508,10 +517,19 @@ export function DealDetailDrawer({
       if (headerLabelRef.current && !headerLabelRef.current.contains(target)) {
         setShowHeaderLabelDropdown(false);
       }
+      if (campaignPickerRef.current && !campaignPickerRef.current.contains(target)) {
+        setShowCampaignPicker(false);
+      }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  const setCampaign = async (campaignId: string | null) => {
+    setDealCampaignId(campaignId);
+    setShowCampaignPicker(false);
+    await updateDeal({ campaign_id: campaignId });
+  };
 
   const toggleLabel = async (labelId: string) => {
     if (!deal) return;
@@ -1317,6 +1335,79 @@ export function DealDetailDrawer({
                         {creatingLabel ? '...' : 'Criar'}
                       </button>
                     </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ── Venda Especial / Campanha ── */}
+            <div ref={campaignPickerRef} className="relative">
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase flex items-center gap-1">
+                  <Sparkles size={12} /> Venda Especial / Campanha
+                </label>
+                <button
+                  onClick={() => setShowCampaignPicker(v => !v)}
+                  className="flex items-center gap-1 text-xs text-gold-600 dark:text-gold-400 hover:text-gold-700 dark:hover:text-gold-300 transition-colors font-medium"
+                >
+                  <Pencil size={12} /> Alterar
+                </button>
+              </div>
+
+              {/* Pílula da campanha atual */}
+              <div className="flex flex-wrap gap-1.5 min-h-[28px]">
+                {(() => {
+                  const current = dealCampaignId ? campaigns.find(c => c.id === dealCampaignId) : null;
+                  if (!current) {
+                    return <p className="text-[11px] text-gray-400 dark:text-gray-500 py-1">Sem campanha. Clique em "Alterar" para vincular.</p>;
+                  }
+                  return (
+                    <span
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium text-white cursor-pointer hover:opacity-80 transition-opacity"
+                      style={{ backgroundColor: current.color }}
+                      onClick={() => setCampaign(null)}
+                      title="Clique para remover"
+                    >
+                      {current.name}
+                      <X size={10} className="opacity-70" />
+                    </span>
+                  );
+                })()}
+              </div>
+
+              {/* Dropdown de seleção */}
+              {showCampaignPicker && (
+                <div className="mt-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl p-3 space-y-3 z-20 relative">
+                  <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase mb-2">Selecionar campanha</p>
+                  {campaigns.length === 0 ? (
+                    <p className="text-xs text-gray-400 dark:text-gray-500 text-center py-1">Nenhuma campanha disponível.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {campaigns.map(c => {
+                        const active = dealCampaignId === c.id;
+                        return (
+                          <span
+                            key={c.id}
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium cursor-pointer transition-all ${
+                              active ? 'text-white ring-2 ring-offset-1 ring-gray-400 dark:ring-offset-gray-800' : 'opacity-60 hover:opacity-100'
+                            }`}
+                            style={{ backgroundColor: c.color, color: active ? 'white' : undefined }}
+                            onClick={() => setCampaign(active ? null : c.id)}
+                          >
+                            {active && <Check size={10} />}
+                            {c.name}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div className="border-t border-gray-100 dark:border-gray-700 pt-2">
+                    <button
+                      onClick={() => setCampaign(null)}
+                      className="w-full text-left px-2 py-1.5 rounded-lg text-xs font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-1.5"
+                    >
+                      <XCircle size={12} /> Sem campanha
+                    </button>
                   </div>
                 </div>
               )}

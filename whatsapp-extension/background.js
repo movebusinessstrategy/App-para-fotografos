@@ -166,6 +166,10 @@ async function handleMessage(message) {
       ]);
       return { produtos, servicos, combos };
     }
+    case 'GET_CAMPAIGNS': {
+      // Campanhas / vendas especiais (seeds os 6 defaults na 1ª chamada do usuário)
+      return apiFetch('/api/sale-campaigns');
+    }
     case 'ADD_DEAL_ITEM': {
       return apiFetch(`/api/deals/${message.dealId}/items`, {
         method: 'POST',

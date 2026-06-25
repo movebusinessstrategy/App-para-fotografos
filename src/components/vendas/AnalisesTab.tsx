@@ -1,6 +1,7 @@
-import React, { useMemo } from "react";
-import { Deal, PipelineStage } from "../../types";
-import { TrendingUp, TrendingDown, Clock, DollarSign, Target, BarChart3, XCircle, ExternalLink } from "lucide-react";
+import React, { useMemo, useEffect, useState } from "react";
+import { Deal, PipelineStage, SaleCampaign } from "../../types";
+import { authFetch } from "../../utils/authFetch";
+import { TrendingUp, TrendingDown, Clock, DollarSign, Target, BarChart3, XCircle, ExternalLink, Sparkles } from "lucide-react";
 
 interface AnalisesTabProps {
   deals: Deal[];
@@ -11,6 +12,12 @@ interface AnalisesTabProps {
 }
 
 export function AnalisesTab({ deals, stages, onOpenHistory, canSeeMoney = true }: AnalisesTabProps) {
+  const [campaigns, setCampaigns] = useState<SaleCampaign[]>([]);
+
+  useEffect(() => {
+    authFetch('/api/sale-campaigns').then(r => r.ok ? r.json() : []).then(d => setCampaigns(Array.isArray(d) ? d : [])).catch(() => {});
+  }, []);
+
   const stats = useMemo(() => {
     const activeStages = stages.filter((s) => !s.is_final);
     const wonStage = stages.find((s) => s.is_final && s.is_won);
@@ -42,6 +49,24 @@ export function AnalisesTab({ deals, stages, onOpenHistory, canSeeMoney = true }
         value: total,
       };
     });
+
+    // Por campanha (venda especial) — agrupa os GANHOS por campaign_id.
+    const campaignById = new Map<string, SaleCampaign>();
+    campaigns.forEach(c => campaignById.set(c.id, c));
+    const campaignAgg = new Map<string, { name: string; color: string; count: number; value: number }>();
+    const NO_CAMPAIGN_KEY = "__none__";
+    wonDeals.forEach((deal) => {
+      const cid = deal.campaign_id || null;
+      const key = cid || NO_CAMPAIGN_KEY;
+      const meta = cid ? campaignById.get(cid) : null;
+      const name = meta?.name || (cid ? "Campanha removida" : "Sem campanha");
+      const color = meta?.color || "#9CA3AF";
+      const current = campaignAgg.get(key) || { name, color, count: 0, value: 0 };
+      current.count += 1;
+      current.value += deal.value || 0;
+      campaignAgg.set(key, current);
+    });
+    const byCampaign = Array.from(campaignAgg.values()).sort((a, b) => b.value - a.value || b.count - a.count);
 
     const lostReasonMap = new Map<string, { count: number; value: number; notes: number }>();
     lostDeals.forEach((deal) => {
@@ -78,12 +103,13 @@ export function AnalisesTab({ deals, stages, onOpenHistory, canSeeMoney = true }
       winRate,
       avgDealValue,
       byStage,
+      byCampaign,
       lostReasons,
       byMonth: Object.entries(byMonth)
         .sort(([a], [b]) => a.localeCompare(b))
         .slice(0, 6),
     };
-  }, [deals, stages]);
+  }, [deals, stages, campaigns]);
 
   const formatCurrency = (value: number) =>
     canSeeMoney ? `R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 0 })}` : "•••";
@@ -255,6 +281,45 @@ export function AnalisesTab({ deals, stages, onOpenHistory, canSeeMoney = true }
             )}
           </div>
         </div>
+      </div>
+
+      {/* Vendas por Campanha */}
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+        <div className="flex items-center gap-2 mb-4">
+          <Sparkles size={18} className="text-gray-500 dark:text-gray-400" />
+          <h3 className="font-semibold text-gray-900 dark:text-white">Vendas por Campanha</h3>
+        </div>
+        {stats.byCampaign.length > 0 ? (
+          <div className="space-y-3">
+            {stats.byCampaign.map((item) => {
+              const maxValue = Math.max(...stats.byCampaign.map((c) => c.value), 1);
+              const width = Math.max(8, (item.value / maxValue) * 100);
+              return (
+                <div key={item.name}>
+                  <div className="flex items-center justify-between gap-3 mb-1">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: item.color }} />
+                      <span className="text-sm text-gray-700 dark:text-gray-300 truncate">{item.name}</span>
+                      <span className="text-xs text-gray-400 dark:text-gray-500 flex-shrink-0">
+                        {item.count} venda{item.count === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    <span className="text-sm font-semibold text-gray-900 dark:text-white whitespace-nowrap">
+                      {formatCurrency(item.value)}
+                    </span>
+                  </div>
+                  <div className="h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                    <div className="h-full rounded-full" style={{ width: `${width}%`, backgroundColor: item.color }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-6">
+            Nenhuma venda ganha vinculada a campanha ainda.
+          </p>
+        )}
       </div>
 
       {/* Ticket médio */}

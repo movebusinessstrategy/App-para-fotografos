@@ -10,11 +10,13 @@ import {
   useDroppable,
 } from "@dnd-kit/core";
 import { SortableContext } from "@dnd-kit/sortable";
+import { Settings2 } from "lucide-react";
 
-import { Deal, PipelineStage, Client, PipelineLabel, TeamMember } from "../../types";
+import { Deal, PipelineStage, Client, PipelineLabel, TeamMember, SaleCampaign } from "../../types";
 import { authFetch } from "../../utils/authFetch";
 import { DealCard } from "./DealCard";
 import { DealDetailDrawer } from "./DealDetailDrawer";
+import { CampaignManagerModal } from "./CampaignManagerModal";
 import { useSellers } from "../../hooks/useSellers";
 import { SellerAvatar } from "./SellerPicker";
 import { useAuth } from "../../contexts/AuthContext";
@@ -44,7 +46,10 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
   const [activeDeal, setActiveDeal] = useState<Deal | null>(null);
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
   const [pipelineLabels, setPipelineLabels] = useState<PipelineLabel[]>([]);
+  const [campaigns, setCampaigns] = useState<SaleCampaign[]>([]);
   const [sellerFilter, setSellerFilter] = useState<string | 'all' | 'none'>('all');
+  const [campaignFilter, setCampaignFilter] = useState<string | 'all'>('all');
+  const [showCampaignManager, setShowCampaignManager] = useState(false);
   const boardRef = useRef<HTMLDivElement>(null);
   // Polling de 5s do parent: enquanto o usuário arrasta (ou nos ~2s seguintes
   // a um movimento local), não deixamos o board ser resetado por um poll com
@@ -71,8 +76,13 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
     setLocalDeals(deals);
   }, [deals]);
 
+  const loadCampaigns = () => {
+    authFetch('/api/sale-campaigns').then(r => r.ok ? r.json() : []).then(d => setCampaigns(Array.isArray(d) ? d : [])).catch(() => {});
+  };
+
   useEffect(() => {
     authFetch('/api/pipeline/labels').then(r => r.json()).then(d => setPipelineLabels(Array.isArray(d) ? d : [])).catch(() => {});
+    loadCampaigns();
   }, []);
 
   const labelMap = useMemo(() => {
@@ -80,6 +90,12 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
     pipelineLabels.forEach(l => map.set(l.id, l));
     return map;
   }, [pipelineLabels]);
+
+  const campaignMap = useMemo(() => {
+    const map = new Map<string, SaleCampaign>();
+    campaigns.forEach(c => map.set(c.id, c));
+    return map;
+  }, [campaigns]);
 
   const clientMap = useMemo(() => {
     const map = new Map<number, Client>();
@@ -90,10 +106,12 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
   const activeStages = stages.filter((s) => !s.is_final);
 
   const filteredDeals = useMemo(() => {
-    if (sellerFilter === 'all') return localDeals;
-    if (sellerFilter === 'none') return localDeals.filter(d => !d.assigned_to);
-    return localDeals.filter(d => d.assigned_to === sellerFilter);
-  }, [localDeals, sellerFilter]);
+    let result = localDeals;
+    if (sellerFilter === 'none') result = result.filter(d => !d.assigned_to);
+    else if (sellerFilter !== 'all') result = result.filter(d => d.assigned_to === sellerFilter);
+    if (campaignFilter !== 'all') result = result.filter(d => d.campaign_id === campaignFilter);
+    return result;
+  }, [localDeals, sellerFilter, campaignFilter]);
 
   const dealsByStage = useMemo(() => {
     const map: Record<string, Deal[]> = {};
@@ -205,6 +223,47 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
               </button>
             </div>
           )}
+          <div className={`flex items-center gap-2 px-3 sm:px-2 pb-2 sm:pb-3 overflow-x-auto ${sellers.length > 0 ? '' : 'pt-2'}`}>
+            <span className="hidden sm:inline text-xs font-medium text-gray-500 dark:text-gray-400 flex-shrink-0 pl-1">Campanha:</span>
+            {campaigns.length > 0 && (
+              <>
+                <button
+                  onClick={() => setCampaignFilter('all')}
+                  className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                    campaignFilter === 'all'
+                      ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900'
+                      : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-300'
+                  }`}
+                >
+                  Todas
+                </button>
+                {campaigns.map((c) => {
+                  const active = campaignFilter === c.id;
+                  return (
+                    <button
+                      key={c.id}
+                      onClick={() => setCampaignFilter(c.id)}
+                      className={`flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                        active
+                          ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900'
+                          : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-300'
+                      }`}
+                    >
+                      <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: c.color }} />
+                      {c.name}
+                    </button>
+                  );
+                })}
+              </>
+            )}
+            <button
+              onClick={() => setShowCampaignManager(true)}
+              className="flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border border-dashed border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:border-pink-400 hover:text-pink-600 transition-colors"
+              title="Criar / editar campanhas (vendas especiais)"
+            >
+              <Settings2 size={13} /> Gerenciar campanhas
+            </button>
+          </div>
           <div ref={boardRef} className="flex-1 overflow-x-auto overflow-y-hidden pb-4 snap-x snap-mandatory sm:snap-none">
             <div className="flex gap-2 sm:gap-4 h-full px-2 sm:px-1" style={{ minWidth: "max-content" }}>
               {activeStages.map((stage) => (
@@ -215,6 +274,7 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
                     clientMap={clientMap}
                     onDealClick={setSelectedDeal}
                     labelMap={labelMap}
+                    campaignMap={campaignMap}
                     sellerById={sellerById}
                     canSeeFinance={canSeeFinance}
                   />
@@ -246,6 +306,12 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
         onClose={() => setSelectedDeal(null)}
         onUpdate={onUpdate}
       />
+
+      <CampaignManagerModal
+        open={showCampaignManager}
+        onClose={() => setShowCampaignManager(false)}
+        onUpdated={loadCampaigns}
+      />
     </>
   );
 }
@@ -258,11 +324,12 @@ interface StageColumnProps {
   clientMap: Map<number, Client>;
   onDealClick: (deal: Deal) => void;
   labelMap: Map<string, PipelineLabel>;
+  campaignMap: Map<string, SaleCampaign>;
   sellerById: Map<string, TeamMember>;
   canSeeFinance: boolean;
 }
 
-function StageColumn({ stage, deals, clientMap, onDealClick, labelMap, sellerById, canSeeFinance }: StageColumnProps) {
+function StageColumn({ stage, deals, clientMap, onDealClick, labelMap, campaignMap, sellerById, canSeeFinance }: StageColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const totalValue = deals.reduce((sum, d) => sum + (d.value || 0), 0);
 
@@ -302,6 +369,7 @@ function StageColumn({ stage, deals, clientMap, onDealClick, labelMap, sellerByI
                 client={deal.client_id ? clientMap.get(deal.client_id) : undefined}
                 onClick={() => onDealClick(deal)}
                 labelMap={labelMap}
+                campaignMap={campaignMap}
                 seller={deal.assigned_to ? sellerById.get(deal.assigned_to) : undefined}
                 canSeeFinance={canSeeFinance}
               />

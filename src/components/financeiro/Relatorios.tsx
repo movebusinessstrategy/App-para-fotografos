@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import { Download, BarChart3, Users, Tag, Camera, ChevronDown, ChevronRight, Package, AlertCircle, ArrowDownCircle, ArrowUpCircle, User, Award, Pencil, Check, Target } from 'lucide-react';
+import { Download, BarChart3, Users, Tag, Camera, ChevronDown, ChevronRight, Package, AlertCircle, ArrowDownCircle, ArrowUpCircle, User, Award, Pencil, Check, Target, Megaphone } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { authFetch } from '../../utils/authFetch';
 import { fmtBRL, exportCSV } from './finUtils';
 import { DateRangePicker, buildPresetRange, fromDateOnly, type DateRange } from '../ui/DateRangePicker';
 
-type RelatorioTipo = 'vendas_tipo' | 'vendas_vendedor' | 'receitas_categoria' | 'despesas_categoria' | 'receitas_cliente' | 'fluxo_mensal';
+type RelatorioTipo = 'vendas_tipo' | 'vendas_vendedor' | 'vendas_campanha' | 'receitas_categoria' | 'despesas_categoria' | 'receitas_cliente' | 'fluxo_mensal';
 
 interface RelatorioCfg {
   key: RelatorioTipo;
@@ -19,6 +19,7 @@ interface RelatorioCfg {
 const RELATORIOS: RelatorioCfg[] = [
   { key: 'vendas_tipo', label: 'Vendas por Tipo de Ensaio', desc: 'Ensaios realizados por categoria, com pacotes, pessoas e produtos vendidos', icon: Camera, color: 'text-gold-500' },
   { key: 'vendas_vendedor', label: 'Vendas por Vendedor', desc: 'Quanto cada vendedor converteu no período + meta e comissão a pagar', icon: Award, color: 'text-indigo-500' },
+  { key: 'vendas_campanha', label: 'Vendas por Campanha', desc: 'Quanto cada campanha (Natal, Dia das Mães...) vendeu no período', icon: Megaphone, color: 'text-pink-500' },
   { key: 'receitas_categoria', label: 'Receitas por Categoria', desc: 'Receitas agrupadas por categoria no período', icon: Tag, color: 'text-emerald-500' },
   { key: 'despesas_categoria', label: 'Despesas por Categoria', desc: 'Despesas agrupadas por categoria no período', icon: Tag, color: 'text-red-500' },
   { key: 'receitas_cliente', label: 'Receitas por Cliente', desc: 'Ranking de clientes por receita gerada', icon: Users, color: 'text-blue-500' },
@@ -49,6 +50,15 @@ interface VendedoresReport {
   vendedores: VendedorRow[];
 }
 
+interface CampanhaRow {
+  id: string | null; nome: string; cor: string; numVendas: number; valorVendido: number;
+}
+interface CampanhasReport {
+  periodo: { from: string; to: string };
+  totais: { numVendas: number; valorVendido: number };
+  campanhas: CampanhaRow[];
+}
+
 interface ResultadoLinha {
   [key: string]: string | number;
 }
@@ -65,6 +75,7 @@ export default function Relatorios() {
   const [resultado, setResultado] = useState<ResultadoLinha[] | null>(null);
   const [vendas, setVendas] = useState<VendasReport | null>(null);
   const [vendedores, setVendedores] = useState<VendedoresReport | null>(null);
+  const [campanhas, setCampanhas] = useState<CampanhasReport | null>(null);
   const [entradaSaida, setEntradaSaida] = useState<EntradaSaida | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [expandedPkg, setExpandedPkg] = useState<Set<string>>(new Set());
@@ -88,15 +99,19 @@ export default function Relatorios() {
       if (tipo === 'vendas_tipo') {
         const params = new URLSearchParams({ from: range.from, to: range.to });
         const res = await authFetch(`/api/relatorios/vendas-por-tipo?${params}`);
-        if (res.ok) { setVendas(await res.json()); setResultado(null); setVendedores(null); }
+        if (res.ok) { setVendas(await res.json()); setResultado(null); setVendedores(null); setCampanhas(null); }
       } else if (tipo === 'vendas_vendedor') {
         const params = new URLSearchParams({ from: range.from, to: range.to });
         const res = await authFetch(`/api/relatorios/vendas-por-vendedor?${params}`);
-        if (res.ok) { setVendedores(await res.json()); setVendas(null); setResultado(null); }
+        if (res.ok) { setVendedores(await res.json()); setVendas(null); setResultado(null); setCampanhas(null); }
+      } else if (tipo === 'vendas_campanha') {
+        const params = new URLSearchParams({ from: range.from, to: range.to });
+        const res = await authFetch(`/api/relatorios/vendas-por-campanha?${params}`);
+        if (res.ok) { setCampanhas(await res.json()); setVendas(null); setResultado(null); setVendedores(null); }
       } else {
         const params = new URLSearchParams({ tipo, from: range.from, to: range.to });
         const res = await authFetch(`/api/fin/relatorios?${params}`);
-        if (res.ok) { setResultado(await res.json()); setVendas(null); setVendedores(null); }
+        if (res.ok) { setResultado(await res.json()); setVendas(null); setVendedores(null); setCampanhas(null); }
       }
     } finally {
       setLoading(false);
@@ -159,6 +174,14 @@ export default function Relatorios() {
       exportCSV(rows, `vendas_por_vendedor_${range.from}_a_${range.to}.csv`);
       return;
     }
+    if (tipo === 'vendas_campanha') {
+      if (!campanhas?.campanhas.length) return;
+      const rows = campanhas.campanhas.map(c => ({
+        Campanha: c.nome, 'Nº de vendas': c.numVendas, 'Valor vendido': c.valorVendido,
+      }));
+      exportCSV(rows, `vendas_por_campanha_${range.from}_a_${range.to}.csv`);
+      return;
+    }
     if (!resultado?.length) return;
     const cfg = RELATORIOS.find(r => r.key === tipo)!;
     exportCSV(resultado, `${cfg.key}_${range.from}_a_${range.to}.csv`);
@@ -188,7 +211,7 @@ export default function Relatorios() {
           return (
             <button
               key={r.key}
-              onClick={() => { setTipo(r.key); setResultado(null); setVendas(null); setVendedores(null); setEditVend(null); setExpanded(new Set()); setExpandedPkg(new Set()); }}
+              onClick={() => { setTipo(r.key); setResultado(null); setVendas(null); setVendedores(null); setCampanhas(null); setEditVend(null); setExpanded(new Set()); setExpandedPkg(new Set()); }}
               className={`text-left p-4 rounded-xl border transition-all ${
                 selected
                   ? 'border-violet-500 bg-violet-50 dark:bg-violet-900/20 shadow-sm'
@@ -213,6 +236,9 @@ export default function Relatorios() {
           {tipo === 'vendas_vendedor' && (
             <p className="text-xs text-gray-400 dark:text-gray-500">Conta pelas vendas <span className="font-medium">convertidas</span> no período (data da venda)</p>
           )}
+          {tipo === 'vendas_campanha' && (
+            <p className="text-xs text-gray-400 dark:text-gray-500">Conta pelas vendas <span className="font-medium">convertidas</span> no período, agrupadas por campanha</p>
+          )}
         </div>
         <div className="flex flex-wrap gap-3 items-center justify-between">
           <DateRangePicker range={range} onChange={setRange} />
@@ -227,7 +253,7 @@ export default function Relatorios() {
       </div>
 
       {/* Resultado */}
-      {(resultado !== null || vendas !== null || vendedores !== null) && (
+      {(resultado !== null || vendas !== null || vendedores !== null || campanhas !== null) && (
         <div className="space-y-3">
           {/* Entrada x Saída x Lucro do período */}
           {entradaSaida && (
@@ -264,6 +290,7 @@ export default function Relatorios() {
             </div>
             {((tipo === 'vendas_tipo' ? (vendas?.categorias.length || 0)
               : tipo === 'vendas_vendedor' ? (vendedores?.vendedores.length || 0)
+              : tipo === 'vendas_campanha' ? (campanhas?.campanhas.length || 0)
               : (resultado?.length || 0)) > 0) && (
               <button
                 onClick={baixarCSV}
@@ -483,8 +510,49 @@ export default function Relatorios() {
             )
           )}
 
+          {/* ── Vendas por Campanha ── */}
+          {tipo === 'vendas_campanha' && campanhas && (
+            campanhas.campanhas.length === 0 ? (
+              <div className="text-center py-10 text-gray-400 dark:text-gray-500 text-sm">Nenhuma venda no período.</div>
+            ) : (
+              <div className="space-y-3">
+                {/* Totais */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3">
+                    <p className="text-[11px] uppercase font-semibold text-gray-400">Vendas no período</p>
+                    <p className="text-xl font-bold text-gray-900 dark:text-white">{campanhas.totais.numVendas}</p>
+                  </div>
+                  <div className="bg-white dark:bg-gray-800 border border-gold-200 dark:border-gold-900/30 rounded-xl px-4 py-3">
+                    <p className="text-[11px] uppercase font-semibold text-gold-500">Valor vendido</p>
+                    <p className="text-xl font-bold text-gold-600 dark:text-gold-400">{fmtBRL(campanhas.totais.valorVendido)}</p>
+                  </div>
+                </div>
+
+                {/* Lista de campanhas */}
+                <div className="space-y-2">
+                  {campanhas.campanhas.map((c, i) => (
+                    <div key={c.id || `none-${i}`} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold text-white flex-shrink-0 truncate max-w-[12rem]" style={{ background: c.cor || '#9ca3af' }}>
+                          {c.nome}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs text-gray-400">{c.numVendas} venda{c.numVendas === 1 ? '' : 's'}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-[11px] uppercase font-semibold text-gold-500">Valor vendido</p>
+                          <p className="text-base font-bold text-gold-600 dark:text-gold-400">{fmtBRL(c.valorVendido)}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          )}
+
           {/* ── Demais relatórios (tabela plana) ── */}
-          {tipo !== 'vendas_tipo' && tipo !== 'vendas_vendedor' && resultado && (resultado.length === 0 ? (
+          {tipo !== 'vendas_tipo' && tipo !== 'vendas_vendedor' && tipo !== 'vendas_campanha' && resultado && (resultado.length === 0 ? (
             <div className="text-center py-10 text-gray-400 dark:text-gray-500 text-sm">
               Sem dados para o período selecionado.
             </div>

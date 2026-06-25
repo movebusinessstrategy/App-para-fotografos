@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Plus, Search, X, Trash2, Package, Tag, Layers } from "lucide-react";
-import { PipelineStage, Client, DealPriority } from "../../types";
+import { PipelineStage, Client, DealPriority, SaleCampaign } from "../../types";
 import { authFetch } from "../../utils/authFetch";
 import { useApi } from "../../utils/useApi";
 import { SearchableSelect } from "../ui/SearchableSelect";
@@ -66,9 +66,20 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
     stage: stages[0]?.id || "",
     notes: "",
     assigned_to: null as string | null,
+    campaign_id: "",
   });
   const [items, setItems] = useState<PendingItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [campaigns, setCampaigns] = useState<SaleCampaign[]>([]);
+
+  // Carrega as campanhas (venda especial) quando o modal abre
+  useEffect(() => {
+    if (!open) return;
+    authFetch("/api/sale-campaigns")
+      .then(r => (r.ok ? r.json() : []))
+      .then(d => setCampaigns(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  }, [open]);
 
   // Quando o modal abre e ainda não tem responsável, usa o usuário logado como default
   useEffect(() => {
@@ -152,6 +163,7 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
           contact_phone: form.phone.replace(/\D/g, "") || null,
           lead_source: form.lead_source || null,
           client_id: form.client_id ? Number(form.client_id) : null,
+          campaign_id: form.campaign_id || null,
           value: valueToUse,
         }),
       });
@@ -178,6 +190,7 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
         stage: stages[0]?.id || "",
         notes: "",
         assigned_to: currentMemberId || null,
+        campaign_id: "",
       });
       setItems([]);
       onCreated();
@@ -258,6 +271,22 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
               <option value="">Selecione (opcional)...</option>
               {tiposEnsaio.map((t) => (
                 <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Venda especial / Campanha
+            </label>
+            <select
+              value={form.campaign_id}
+              onChange={(e) => setForm({ ...form, campaign_id: e.target.value })}
+              className="w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white outline-none focus:border-gray-400 dark:focus:border-gray-600 focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-600"
+            >
+              <option value="">Nenhuma</option>
+              {campaigns.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
               ))}
             </select>
           </div>

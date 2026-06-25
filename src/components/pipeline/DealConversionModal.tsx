@@ -1,9 +1,9 @@
 // src/components/vendas/DealConversionModal.tsx
 import React, { useEffect, useState, useMemo } from "react";
 import { motion } from "motion/react";
-import { Plus, User, Briefcase, ChevronDown, ChevronUp, Link2, DollarSign, Search, Trash2, Package, Tag, Layers, CalendarDays } from "lucide-react";
+import { Plus, User, Briefcase, ChevronDown, ChevronUp, Link2, DollarSign, Search, Trash2, Package, Tag, Layers, CalendarDays, Megaphone } from "lucide-react";
 
-import { Deal, Client } from "../../types";
+import { Deal, Client, SaleCampaign } from "../../types";
 import { authFetch } from "../../utils/authFetch";
 import { useApi } from "../../utils/useApi";
 import { normalizeText } from "../../utils/normalizeText";
@@ -50,6 +50,9 @@ export function DealConversionModal({
   const [createJob, setCreateJob] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [sinalAmount, setSinalAmount] = useState(0);
+  // Venda especial / Campanha (opcional). "" => sem campanha.
+  const [campaignId, setCampaignId] = useState<string>("");
+  const [campaigns, setCampaigns] = useState<SaleCampaign[]>([]);
   // Data da venda: default hoje; permite registrar vendas antigas (retroativas)
   const [soldDate, setSoldDate] = useState(new Date().toISOString().slice(0, 10));
   const [expandedSections, setExpandedSections] = useState({
@@ -145,7 +148,25 @@ export function DealConversionModal({
       setSinalAmount(0);
       setNewItems([]);
       setSoldDate(new Date().toISOString().slice(0, 10));
+      setCampaignId(deal.campaign_id || "");
     }
+  }, [deal]);
+
+  // Carrega campanhas/vendas especiais (seeds os 6 defaults na 1ª chamada do usuário)
+  useEffect(() => {
+    if (!deal) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authFetch("/api/sale-campaigns");
+        const data = await res.json();
+        if (!cancelled) setCampaigns(Array.isArray(data) ? data : []);
+      } catch {
+        // Campanha é opcional: se falhar, deixa só "Sem campanha"
+        if (!cancelled) setCampaigns([]);
+      }
+    })();
+    return () => { cancelled = true; };
   }, [deal]);
 
   // Itens adicionados aqui atualizam o valor total da venda automaticamente
@@ -213,6 +234,7 @@ export function DealConversionModal({
           createJob,
           client: conversionMode === "new" && createClient ? clientData : undefined,
           job: jobPayload,
+          campaign_id: campaignId || undefined,
           sinalAmount: sinalAmount > 0 ? sinalAmount : undefined,
           converted_at: soldDate || undefined,
         }),
@@ -345,6 +367,29 @@ export function DealConversionModal({
             />
             <p className="text-[11px] text-gray-400 dark:text-gray-500">
               Venda fechada antes e não lançada? Escolha o dia real — os relatórios usam esta data.
+            </p>
+          </div>
+
+          {/* ====== VENDA ESPECIAL / CAMPANHA (opcional) ====== */}
+          <div className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Megaphone size={16} className="text-emerald-600 dark:text-emerald-400" />
+              <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">Venda especial / Campanha</label>
+            </div>
+            <select
+              value={campaignId}
+              onChange={(e) => setCampaignId(e.target.value)}
+              className={`${selectClasses} !w-auto min-w-[14rem]`}
+            >
+              <option value="" className="bg-white dark:bg-gray-800">Sem campanha</option>
+              {campaigns.map((c) => (
+                <option key={c.id} value={c.id} className="bg-white dark:bg-gray-800">
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-gray-400 dark:text-gray-500">
+              Vincule esta venda a uma campanha (Natal, Black Friday…) para acompanhar nos relatórios.
             </p>
           </div>
 

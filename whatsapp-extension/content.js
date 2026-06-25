@@ -5602,6 +5602,37 @@
     }
   }
 
+  async function loadCampaignsForConversion(modal) {
+    const slot = modal.querySelector('#fp-win-campaign-slot');
+    if (!slot) return;
+
+    const placeholder = (label) => {
+      const sel = fpSelect({ items: [{ value: '', label }], value: '', placeholder: label });
+      slot.innerHTML = '';
+      slot.appendChild(sel.element);
+      slot._fpSel = sel;
+    };
+    placeholder('Sem campanha');
+
+    try {
+      const campaigns = await bg({ type: 'GET_CAMPAIGNS' });
+      const list = Array.isArray(campaigns) ? campaigns : [];
+      const items = [{ value: '', label: 'Sem campanha' }]
+        .concat(list.map((c) => ({ value: String(c.id), label: c.name })));
+      const sel = fpSelect({
+        items,
+        value: '',
+        placeholder: 'Sem campanha',
+      });
+      slot.innerHTML = '';
+      slot.appendChild(sel.element);
+      slot._fpSel = sel;
+    } catch (err) {
+      // Campanha é opcional: se falhar, mantém "Sem campanha" sem travar a conversão
+      placeholder('Sem campanha');
+    }
+  }
+
   function seedWonCatalogItems(modal, deal) {
     const items = Array.isArray(deal.items) ? deal.items : [];
     modal.__fpSelectedCatalogItems = items
@@ -5735,6 +5766,12 @@
             </div>
           </div>
 
+          <div class="fp-won-grid">
+            <div class="fp-mf"><label class="fp-ml">Venda especial / Campanha</label>
+              <div id="fp-win-campaign-slot"></div>
+            </div>
+          </div>
+
           <label class="fp-won-check"><input type="checkbox" id="fp-win-create-job" checked /> Criar trabalho/ensaio junto</label>
 
           <div class="fp-won-section fp-won-job-section">
@@ -5847,6 +5884,7 @@
     applyConversationCadastroToWonModal(modal);
     loadClientsForConversion(modal);
     loadCatalogForConversion(modal);
+    loadCampaignsForConversion(modal);
 
     const close = () => modal.remove();
     const updateMode = () => {
@@ -5968,10 +6006,11 @@
 
       if (btn) btn.textContent = 'Convertendo...';
       const soldDate = val(modal, '#fp-win-sold-date');
+      const campaignId = val(modal, '#fp-win-campaign-slot') || undefined;
       await bg({
         type: 'CONVERT_DEAL',
         dealId: deal.id,
-        data: { existingClientId, createClient, createJob, client, job, sinalAmount: sinalAmount > 0 ? sinalAmount : undefined, converted_at: soldDate || undefined },
+        data: { existingClientId, createClient, createJob, client, job, campaign_id: campaignId, sinalAmount: sinalAmount > 0 ? sinalAmount : undefined, converted_at: soldDate || undefined },
       });
       deal.stage = (stages.find(isWonStage) || stages.find(s => s.id === 'won'))?.id || deal.stage;
       deal.converted = true;

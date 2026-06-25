@@ -2,7 +2,7 @@ import React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Package, Layers, Briefcase, AlertCircle } from "lucide-react";
-import { Deal, Client, PipelineLabel, TeamMember } from "../../types";
+import { Deal, Client, PipelineLabel, TeamMember, SaleCampaign } from "../../types";
 import { useDealAvatar, getInitials, getAvatarBg } from "./dealAvatar";
 import { SellerAvatar } from "./SellerPicker";
 
@@ -11,6 +11,8 @@ interface DealCardProps {
   client?: Client;
   onClick: () => void;
   labelMap?: Map<string, PipelineLabel>;
+  // Mapa opcional de campanhas (venda especial) para resolver nome/cor pelo campaign_id.
+  campaignMap?: Map<string, SaleCampaign>;
   seller?: TeamMember;
   // Funcionário sem permissão "Financeiro" não vê o valor do negócio.
   canSeeFinance?: boolean;
@@ -55,7 +57,7 @@ const ITEM_ICON = {
   servico: { Icon: Briefcase, color: 'text-purple-500' },
 } as const;
 
-export function DealCard({ deal, client, onClick, labelMap, seller, canSeeFinance = true }: DealCardProps) {
+export function DealCard({ deal, client, onClick, labelMap, campaignMap, seller, canSeeFinance = true }: DealCardProps) {
   const {
     attributes,
     listeners,
@@ -88,6 +90,8 @@ export function DealCard({ deal, client, onClick, labelMap, seller, canSeeFinanc
 
   const items = (deal.items || []).slice(0, 2);
   const extraItems = (deal.items?.length || 0) - items.length;
+
+  const campaign = deal.campaign_id && campaignMap ? campaignMap.get(deal.campaign_id) : undefined;
 
   return (
     <div
@@ -174,10 +178,18 @@ export function DealCard({ deal, client, onClick, labelMap, seller, canSeeFinanc
         </div>
       )}
 
-      {/* Labels */}
-      {labelMap && Array.isArray(deal.labels) && deal.labels.length > 0 && (
+      {/* Campanha (venda especial) + Labels */}
+      {(campaign || (labelMap && Array.isArray(deal.labels) && deal.labels.length > 0)) && (
         <div className="flex flex-wrap gap-1 mt-3">
-          {deal.labels.slice(0, 3).map(lId => {
+          {campaign && (
+            <span
+              className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium text-white leading-none"
+              style={{ backgroundColor: campaign.color }}
+            >
+              {campaign.name}
+            </span>
+          )}
+          {labelMap && Array.isArray(deal.labels) && deal.labels.slice(0, 3).map(lId => {
             const label = labelMap.get(lId);
             if (!label) return null;
             return (
@@ -190,7 +202,7 @@ export function DealCard({ deal, client, onClick, labelMap, seller, canSeeFinanc
               </span>
             );
           })}
-          {deal.labels.length > 3 && (
+          {Array.isArray(deal.labels) && deal.labels.length > 3 && (
             <span className="text-[10px] text-gray-400 dark:text-gray-500">+{deal.labels.length - 3}</span>
           )}
         </div>

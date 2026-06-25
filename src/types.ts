@@ -157,6 +157,17 @@ export interface PipelineLabel {
   created_at: string;
 }
 
+export interface SaleCampaign {
+  id: string;
+  user_id?: string;
+  name: string;
+  color: string;
+  starts_at?: string | null;
+  ends_at?: string | null;
+  active?: boolean;
+  created_at?: string;
+}
+
 export interface Deal {
   id: string;
   user_id: string;
@@ -165,6 +176,7 @@ export interface Deal {
   value: number;
   stage: DealStage;
   labels?: string[];
+  campaign_id?: string | null;
   stage_entered_at?: string | null;
   current_stage_entered_at?: string | null;
   stage_history?: StageHistoryEntry[];
