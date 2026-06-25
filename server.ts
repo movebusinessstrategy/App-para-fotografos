@@ -9719,32 +9719,45 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return out.replace(/\n{3,}/g, '\n\n').trim();
   }
 
-  // Garante a senha do acesso principal SEM trocá-la em reenvios: só gera uma
-  // senha na primeira vez (quando o acesso ainda não tem senha). Se já existe,
-  // preserva — o cliente continua com a mesma senha. Devolve { email, senha }
-  // (senha = null quando preservada, pois o hash não é reversível).
-  // Sem acesso cadastrado → null.
+  // Devolve a senha do acesso principal pra incluir na mensagem. A senha é
+  // GUARDADA em texto (password_plain) e ESTÁVEL: reenviar manda a MESMA senha.
+  // Só gera uma nova se o acesso ainda não tem senha nenhuma. Legado (hash sem
+  // texto) é preservado (password = null). Sem acesso cadastrado → null.
   async function ensureGalleryAccessPassword(gallery: any): Promise<{ email: string; password: string | null } | null> {
     if (!supabaseAdmin) return null;
-    const { data: users } = await supabaseAdmin
+    let { data: users, error: selErr } = (await supabaseAdmin
       .from('gallery_access_users')
-      .select('id, email, role, password_hash')
+      .select('id, email, role, password_hash, password_plain')
       .eq('gallery_id', gallery.id)
-      .order('created_at');
+      .order('created_at')) as any;
+    // Coluna password_plain ainda não migrada (056)? Repete sem ela.
+    if (selErr && (selErr as any).code === '42703') {
+      ({ data: users } = (await supabaseAdmin
+        .from('gallery_access_users')
+        .select('id, email, role, password_hash')
+        .eq('gallery_id', gallery.id)
+        .order('created_at')) as any);
+    }
     const owner = (users || []).find((u: any) => u.role === 'owner') || (users || [])[0];
     if (!owner) return null;
-    // Já tem senha definida → NÃO troca (reenvio mantém a mesma senha).
+    // Já tem a senha guardada em texto → reenvia a MESMA (estável e visível).
+    if ((owner as any).password_plain) return { email: owner.email, password: (owner as any).password_plain };
+    // Tem hash mas sem texto (legado) → preserva, não troca.
     if (owner.password_hash) return { email: owner.email, password: null };
-    // Primeira vez: gera a senha e grava o hash.
+    // Sem senha ainda → gera e guarda hash + texto.
     const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
     let password = '';
     for (let i = 0; i < 8; i++) password += chars[crypto.randomInt(chars.length)];
     const password_hash = await bcrypt.hash(password, 10);
-    const { error } = await supabaseAdmin
-      .from('gallery_access_users')
-      .update({ password_hash, updated_at: new Date().toISOString() })
-      .eq('id', owner.id);
-    if (error) return null;
+    const patch: any = { password_hash, password_plain: password, updated_at: new Date().toISOString() };
+    let { error: updErr } = await supabaseAdmin
+      .from('gallery_access_users').update(patch).eq('id', owner.id);
+    if (updErr && (updErr as any).code === '42703') {
+      delete patch.password_plain;
+      ({ error: updErr } = await supabaseAdmin
+        .from('gallery_access_users').update(patch).eq('id', owner.id));
+    }
+    if (updErr) return null;
     return { email: owner.email, password };
   }
 
@@ -10211,15 +10224,26 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const { data: gallery } = await supabase
       .from('galleries').select('id, require_login').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
     if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
-    const { data, error } = await supabase
+    const baseCols = 'id, email, name, role, last_login_at, login_count, created_at';
+    let { data, error } = (await supabase
       .from('gallery_access_users')
-      .select('id, email, name, role, last_login_at, login_count, created_at')
+      .select(`${baseCols}, password_plain`)
       .eq('gallery_id', gallery.id)
-      .order('created_at');
+      .order('created_at')) as any;
+    // Coluna password_plain ainda não migrada (056)? Repete sem ela.
+    if (error && (error as any).code === '42703') {
+      ({ data, error } = (await supabase
+        .from('gallery_access_users').select(baseCols).eq('gallery_id', gallery.id).order('created_at')) as any);
+    }
     if (error) {
       return galleryTableMissing(error) ? galleryMigrationError(res) : res.status(500).json({ error: error.message });
     }
-    res.json({ users: data || [], require_login: !!gallery.require_login });
+    // Expõe a senha (texto) pro próprio estúdio ver/copiar — rota autenticada.
+    const users = (data || []).map((u: any) => {
+      const { password_plain, ...rest } = u;
+      return { ...rest, password: password_plain ?? null };
+    });
+    res.json({ users, require_login: !!gallery.require_login });
   });
 
   app.post('/api/galleries/:id/access', requireAuth, async (req, res) => {
@@ -10237,11 +10261,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (password.length < 6) return res.status(400).json({ error: 'Senha curta demais (mínimo 6 caracteres).' });
 
     const password_hash = await bcrypt.hash(password, 10);
-    const { data, error } = await supabase
-      .from('gallery_access_users')
-      .insert({ gallery_id: gallery.id, email, password_hash, name, role, invited_by: userId })
-      .select('id, email, name, role, created_at')
-      .single();
+    const insertRow: any = { gallery_id: gallery.id, email, password_hash, password_plain: password, name, role, invited_by: userId };
+    let { data, error } = await supabase
+      .from('gallery_access_users').insert(insertRow).select('id, email, name, role, created_at').single();
+    // Coluna password_plain ainda não migrada (056)? Repete sem ela.
+    if (error && (error as any).code === '42703') {
+      delete insertRow.password_plain;
+      ({ data, error } = await supabase
+        .from('gallery_access_users').insert(insertRow).select('id, email, name, role, created_at').single());
+    }
     if (error) {
       if (error.code === '23505') return res.status(409).json({ error: 'Esse e-mail já tem acesso à galeria.' });
       return res.status(500).json({ error: error.message });
@@ -10261,9 +10289,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (req.body?.role === 'owner' || req.body?.role === 'guest') patch.role = req.body.role;
     if (typeof req.body?.password === 'string' && req.body.password.length >= 6) {
       patch.password_hash = await bcrypt.hash(req.body.password, 10);
+      patch.password_plain = req.body.password; // guarda em texto pra ver/reenviar
     }
-    const { error } = await supabase
+    let { error } = await supabase
       .from('gallery_access_users').update(patch).eq('id', req.params.userId).eq('gallery_id', gallery.id);
+    // Coluna password_plain ainda não migrada (056)? Repete sem ela.
+    if (error && (error as any).code === '42703') {
+      delete patch.password_plain;
+      ({ error } = await supabase
+        .from('gallery_access_users').update(patch).eq('id', req.params.userId).eq('gallery_id', gallery.id));
+    }
     if (error) return res.status(500).json({ error: error.message });
     res.json({ ok: true });
   });

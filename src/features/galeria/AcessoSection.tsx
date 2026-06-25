@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Eye, EyeOff, Loader2, Lock, Plus, ShieldCheck, Trash2, UserPlus } from "lucide-react";
+import { Copy, Eye, EyeOff, KeyRound, Loader2, Lock, Plus, ShieldCheck, Trash2, UserPlus } from "lucide-react";
 
 import { authFetch } from "../../utils/authFetch";
 import { ConfirmModal } from "../../components/ui/ConfirmModal";
@@ -12,6 +12,7 @@ interface AccessUser {
   role: "owner" | "guest";
   last_login_at: string | null;
   login_count: number | null;
+  password: string | null; // senha em texto (visível pro estúdio)
 }
 
 interface AccessResponse {
@@ -59,6 +60,25 @@ export function AcessoSection({
   const [savingDownload, setSavingDownload] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<AccessUser | null>(null);
+  const [revealed, setRevealed] = useState<Set<string>>(new Set());
+  const [editPwdUser, setEditPwdUser] = useState<AccessUser | null>(null);
+
+  const toggleReveal = (id: string) =>
+    setRevealed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const copyText = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      onNotify("success", `${label} copiado!`);
+    } catch {
+      onNotify("error", "Não foi possível copiar.");
+    }
+  };
 
   const reload = async () => {
     setLoading(true);
@@ -204,10 +224,34 @@ export function AcessoSection({
                   <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
                     {u.email} · {u.login_count || 0} acesso{(u.login_count || 0) === 1 ? "" : "s"} · último {formatBR(u.last_login_at)}
                   </div>
+                  {/* Senha visível pro estúdio — ver, copiar e trocar */}
+                  <div className="flex items-center gap-1.5 mt-1 text-xs">
+                    <span className="text-gray-500 dark:text-gray-400">Senha:</span>
+                    {u.password ? (
+                      <>
+                        <span className="font-mono tracking-wider text-gray-800 dark:text-gray-100">
+                          {revealed.has(u.id) ? u.password : "••••••••"}
+                        </span>
+                        <button onClick={() => toggleReveal(u.id)} className="p-0.5 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200" aria-label="Mostrar/ocultar senha">
+                          {revealed.has(u.id) ? <EyeOff size={12} /> : <Eye size={12} />}
+                        </button>
+                        <button onClick={() => copyText(u.password!, "Senha")} className="p-0.5 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200" aria-label="Copiar senha">
+                          <Copy size={12} />
+                        </button>
+                        <button onClick={() => setEditPwdUser(u)} className="text-brand-700 dark:text-brand-300 hover:underline font-medium ml-0.5">
+                          trocar
+                        </button>
+                      </>
+                    ) : (
+                      <button onClick={() => setEditPwdUser(u)} className="inline-flex items-center gap-1 text-brand-700 dark:text-brand-300 hover:underline font-medium">
+                        <KeyRound size={11} /> definir senha
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <button
                   onClick={() => setConfirmRemove(u)}
-                  className="p-1.5 text-gray-400 hover:text-red-600 transition-colors"
+                  className="p-1.5 text-gray-400 hover:text-red-600 transition-colors self-start"
                   aria-label="Remover"
                 >
                   <Trash2 size={14} />
@@ -267,7 +311,87 @@ export function AcessoSection({
         }}
         onCancel={() => setConfirmRemove(null)}
       />
+
+      {editPwdUser && (
+        <ChangePasswordModal
+          galleryId={galleryId}
+          user={editPwdUser}
+          onClose={() => setEditPwdUser(null)}
+          onSaved={() => { setEditPwdUser(null); reload(); }}
+          onNotify={onNotify}
+        />
+      )}
     </section>
+  );
+}
+
+// Trocar/definir a senha de um acesso. A nova senha vale na hora e fica visível.
+function ChangePasswordModal({ galleryId, user, onClose, onSaved, onNotify }: {
+  galleryId: string;
+  user: AccessUser;
+  onClose: () => void;
+  onSaved: () => void;
+  onNotify: (kind: ToastKind, msg: string) => void;
+}) {
+  const [password, setPassword] = useState(user.password || "");
+  const [showPwd, setShowPwd] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const salvar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (password.trim().length < 6) { onNotify("error", "A senha precisa ter ao menos 6 caracteres."); return; }
+    setSaving(true);
+    try {
+      const res = await authFetch(`/api/galleries/${galleryId}/access/${user.id}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: password.trim() }),
+      });
+      if (!res.ok) throw new Error("falha");
+      onNotify("success", "Senha atualizada. A cliente já entra com a nova.");
+      onSaved();
+    } catch {
+      onNotify("error", "Não foi possível trocar a senha.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+      <form onSubmit={salvar} className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-sm p-5 space-y-3">
+        <div className="flex items-center gap-2">
+          <KeyRound size={18} className="text-brand-600 dark:text-brand-400" />
+          <h3 className="text-base font-semibold">Trocar senha</h3>
+        </div>
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          Acesso de <strong>{user.name || user.email}</strong>. A senha fica salva e visível aqui.
+        </p>
+        <div className="relative">
+          <input
+            type={showPwd ? "text" : "password"}
+            value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6}
+            placeholder="Nova senha (mín. 6)"
+            className="w-full pl-3 pr-10 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm font-mono tracking-wider"
+          />
+          <button
+            type="button" onClick={() => setShowPwd(!showPwd)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-gray-400 hover:text-gray-700"
+            aria-label={showPwd ? "Ocultar" : "Mostrar"}
+          >
+            {showPwd ? <EyeOff size={14} /> : <Eye size={14} />}
+          </button>
+        </div>
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg">
+            Cancelar
+          </button>
+          <button type="submit" disabled={saving} className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold rounded-lg disabled:opacity-60">
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} />}
+            Salvar senha
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 
