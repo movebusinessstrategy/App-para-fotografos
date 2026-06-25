@@ -1,4 +1,5 @@
-import { Loader2 } from "lucide-react";
+import { useState } from "react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 import type { TotaisSelecao } from "../types";
 import { formatarBRL } from "../utils";
 
@@ -30,6 +31,8 @@ export function ModalFinalizar({
   mostrarCupom, cupom, cupomStatus, onCupomChange, onAplicarCupom,
   onConfirmar, onFechar,
 }: Props) {
+  // Double-check: a cliente precisa confirmar que entende que não dá pra trocar depois.
+  const [confirmado, setConfirmado] = useState(false);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={onFechar} />
@@ -97,11 +100,33 @@ export function ModalFinalizar({
           </div>
         )}
 
-        <p className="mt-3 text-[11px] text-neutral-400">
-          {totais.valor > 0
-            ? "Você vai para o pagamento agora — a seleção só é confirmada depois que o pagamento for aprovado."
-            : "Após finalizar, a seleção não poderá mais ser alterada."}
-        </p>
+        {totais.valor > 0 && (
+          <p className="mt-3 text-[11px] text-neutral-400">
+            Você vai para o pagamento agora — a seleção só é confirmada depois que o pagamento for aprovado.
+          </p>
+        )}
+
+        {/* Aviso forte + double-check de conscientização: não dá pra trocar depois */}
+        <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" />
+            <p className="text-xs font-semibold text-amber-800">
+              Só finalize depois de revisar! Depois de finalizar, <span className="underline">não tem como trocar</span> as fotos escolhidas.
+            </p>
+          </div>
+          <label className="mt-2 flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={confirmado}
+              onChange={(e) => setConfirmado(e.target.checked)}
+              disabled={finalizando}
+              className="mt-0.5 h-4 w-4 accent-[#6F4E37]"
+            />
+            <span className="text-xs text-amber-800">
+              Revisei minha seleção e entendo que não poderei trocar as fotos depois de finalizar.
+            </span>
+          </label>
+        </div>
 
         {erro && <p className="mt-2 text-xs font-medium text-red-600">{erro}</p>}
 
@@ -117,8 +142,9 @@ export function ModalFinalizar({
           <button
             type="button"
             onClick={onConfirmar}
-            disabled={finalizando}
-            className="flex flex-1 items-center justify-center gap-2 rounded-full bg-[#6F4E37] py-2.5 text-sm font-semibold text-white hover:bg-[#553A29] disabled:opacity-50"
+            disabled={finalizando || !confirmado}
+            title={!confirmado ? "Marque a confirmação acima para finalizar" : undefined}
+            className="flex flex-1 items-center justify-center gap-2 rounded-full bg-[#6F4E37] py-2.5 text-sm font-semibold text-white hover:bg-[#553A29] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {finalizando && <Loader2 size={14} className="animate-spin" />}
             Finalizar

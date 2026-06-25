@@ -90,17 +90,31 @@ async function buildVariant(
     .toBuffer();
 }
 
-// Logo única, grande e centralizada (sem rotação nem repetição). ~42% da
-// largura da imagem, limitada pra nunca passar das dimensões da foto.
+// Logo única, grande e centralizada (sem rotação nem repetição). Ocupa quase a
+// imagem inteira (~95%), mantendo a proporção — fit:inside cabe pela menor folga.
 async function centeredLogo(
   logo: Buffer,
   imageWidth: number,
   imageHeight: number,
   opacity: number
 ): Promise<Buffer> {
-  const logoW = Math.max(64, Math.round(Math.min(imageWidth, imageHeight) * 0.42));
-  const faded = await fadeLogo(logo, logoW, opacity);
-  return fitTile(faded, imageWidth, imageHeight);
+  const boxW = Math.max(64, Math.round(imageWidth * 0.95));
+  const boxH = Math.max(64, Math.round(imageHeight * 0.95));
+  const alpha = Math.round(opacity * 255);
+  return sharp(logo)
+    // withoutEnlargement:false deixa AMPLIAR uma logo pequena até preencher a foto.
+    .resize(boxW, boxH, { fit: 'inside', withoutEnlargement: false })
+    .ensureAlpha()
+    .composite([
+      {
+        input: Buffer.from([255, 255, 255, alpha]),
+        raw: { width: 1, height: 1, channels: 4 },
+        tile: true,
+        blend: 'dest-in',
+      },
+    ])
+    .png()
+    .toBuffer();
 }
 
 async function buildTile(

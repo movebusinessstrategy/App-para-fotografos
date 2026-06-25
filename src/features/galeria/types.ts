@@ -133,7 +133,8 @@ export interface SendResult {
   message?: string;
   email: SendChannelResult;
   whatsapp: SendChannelResult;
-  access?: { email: string; password: string } | null;
+  // password = null quando o reenvio preservou a senha existente (não trocou).
+  access?: { email: string; password: string | null } | null;
   // Legado
   email_sent: boolean;
   whatsapp_sent: boolean;

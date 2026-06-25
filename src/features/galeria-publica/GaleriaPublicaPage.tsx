@@ -191,8 +191,11 @@ export default function GaleriaPublicaPage() {
         setGaleria((g) => (g ? { ...g, status: "selected" } : g));
         setFase("sucesso");
       }
-    } catch {
-      setErroFinalizar("Não foi possível finalizar agora. Tente novamente.");
+    } catch (e) {
+      // Mostra o motivo real vindo do servidor (ex.: "Seleção já finalizada")
+      // em vez de uma mensagem genérica que esconde o problema.
+      const msg = e instanceof ErroApiPublica && e.message ? e.message : "Não foi possível finalizar agora. Tente novamente.";
+      setErroFinalizar(msg);
     } finally {
       setFinalizando(false);
     }

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { ShieldCheck } from "lucide-react";
 import type { GaleriaPublica } from "../types";
 import { formatarBRL, nomeEstudio } from "../utils";
@@ -17,13 +17,16 @@ function Chip({ children }: { children: ReactNode }) {
 }
 
 export function CabecalhoGaleria({ galeria, mostrarAvisoProtecao }: Props) {
+  const [logoErro, setLogoErro] = useState(false);
   const estudio = nomeEstudio(galeria.studio_name);
+  const mostrarLogo = !!galeria.studio_logo_url && !logoErro;
   return (
     <header className="mx-auto max-w-3xl px-4 pt-8 pb-5 text-center">
-      {galeria.studio_logo_url ? (
+      {mostrarLogo ? (
         <img
-          src={galeria.studio_logo_url}
+          src={galeria.studio_logo_url!}
           alt={estudio}
+          onError={() => setLogoErro(true)}
           className="mx-auto h-12 max-w-[160px] object-contain mb-2"
         />
       ) : (

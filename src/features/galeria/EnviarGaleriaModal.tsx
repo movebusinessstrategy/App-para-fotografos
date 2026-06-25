@@ -159,7 +159,7 @@ export function EnviarGaleriaModal({ gallery, onClose, onSent, onNotify }: Envia
               <span className="text-sm">
                 Incluir dados de acesso (e-mail + senha)
                 <span className="block text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                  Gera uma senha nova pro acesso principal e coloca na mensagem — a anterior deixa de valer.
+                  A senha é gerada só na primeira vez. Em reenvios a cliente continua com a mesma senha.
                 </span>
               </span>
             </label>
@@ -253,7 +253,9 @@ function ResultadoEnvio({ result, onCopy, onClose }: {
       {result.access && (
         <div className="rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-3 space-y-1.5">
           <div className="text-xs font-semibold text-amber-800 dark:text-amber-300">
-            Dados de acesso enviados (anote, a senha antiga deixou de valer):
+            {result.access.password
+              ? "Dados de acesso (anote pra mandar pra cliente):"
+              : "Acesso da cliente (a senha continua a mesma de antes):"}
           </div>
           <div className="flex items-center justify-between gap-2 text-sm">
             <span className="font-mono">{result.access.email}</span>
@@ -261,12 +263,18 @@ function ResultadoEnvio({ result, onCopy, onClose }: {
               <Copy size={12} />
             </button>
           </div>
-          <div className="flex items-center justify-between gap-2 text-sm">
-            <span className="font-mono font-bold tracking-wider">{result.access.password}</span>
-            <button onClick={() => onCopy(result.access!.password, "Senha")} className="p-1 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 rounded">
-              <Copy size={12} />
-            </button>
-          </div>
+          {result.access.password ? (
+            <div className="flex items-center justify-between gap-2 text-sm">
+              <span className="font-mono font-bold tracking-wider">{result.access.password}</span>
+              <button onClick={() => onCopy(result.access!.password || "", "Senha")} className="p-1 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 rounded">
+                <Copy size={12} />
+              </button>
+            </div>
+          ) : (
+            <div className="text-xs text-amber-700 dark:text-amber-300">
+              A senha não mudou — a cliente continua com a mesma de antes.
+            </div>
+          )}
         </div>
       )}
 

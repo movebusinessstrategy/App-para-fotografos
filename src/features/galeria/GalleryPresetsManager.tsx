@@ -320,10 +320,13 @@ function PresetEditorModal({ editor, setEditor, categories, onSave, saving, onCl
 
           {editor.discount_mode === "progressive" && (
             <div className="space-y-2">
-              <label className={LABEL_CLS}>Faixas (a partir de X fotos extras → Y% off)</label>
+              <label className={LABEL_CLS}>Faixas (a partir de X fotos no total → Y% de desconto)</label>
+              <p className="text-[11px] text-gray-500 dark:text-gray-400 -mt-1">
+                Conta o <strong>total</strong> de fotos que a cliente escolher (incluídas + extras), igual à venda da galeria. Vale a maior faixa atingida.
+              </p>
               {editor.discount_rules.map((r, i) => (
                 <div key={i} className="flex items-center gap-2">
-                  <input type="number" min={1} value={r.min_photos} onChange={(e) => setRule(i, { min_photos: e.target.value })} className={INPUT_CLS + " w-24"} placeholder="fotos" />
+                  <input type="number" min={1} value={r.min_photos} onChange={(e) => setRule(i, { min_photos: e.target.value })} className={INPUT_CLS + " w-24"} placeholder="total" />
                   <span className="text-xs text-gray-400">→</span>
                   <input type="number" min={0} max={100} value={r.percent} onChange={(e) => setRule(i, { percent: e.target.value })} className={INPUT_CLS + " w-20"} placeholder="%" />
                   <button

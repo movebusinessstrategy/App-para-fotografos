@@ -55,16 +55,19 @@ export function TelaLogin({ shareToken, info, onSucesso }: TelaLoginProps) {
   };
 
   const estudio = nomeEstudio(info.studio_name);
+  const [logoErro, setLogoErro] = useState(false);
+  const mostrarLogo = !!info.studio_logo_url && !logoErro;
 
   return (
     <div className="h-full overflow-y-auto bg-brand-50 text-neutral-900">
       <div className="min-h-full flex items-center justify-center px-5 py-10">
         <div className="w-full max-w-sm">
           <div className="flex flex-col items-center text-center mb-6">
-            {info.studio_logo_url ? (
+            {mostrarLogo ? (
               <img
-                src={info.studio_logo_url}
+                src={info.studio_logo_url!}
                 alt={estudio}
+                onError={() => setLogoErro(true)}
                 className="h-16 max-w-[180px] object-contain mb-4"
               />
             ) : (

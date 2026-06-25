@@ -9719,17 +9719,23 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return out.replace(/\n{3,}/g, '\n\n').trim();
   }
 
-  // Reseta a senha do acesso principal e devolve { email, senha } em texto
-  // plano pra incluir na mensagem. Sem acesso cadastrado → null.
-  async function regenerateGalleryAccessPassword(gallery: any): Promise<{ email: string; password: string } | null> {
+  // Garante a senha do acesso principal SEM trocá-la em reenvios: só gera uma
+  // senha na primeira vez (quando o acesso ainda não tem senha). Se já existe,
+  // preserva — o cliente continua com a mesma senha. Devolve { email, senha }
+  // (senha = null quando preservada, pois o hash não é reversível).
+  // Sem acesso cadastrado → null.
+  async function ensureGalleryAccessPassword(gallery: any): Promise<{ email: string; password: string | null } | null> {
     if (!supabaseAdmin) return null;
     const { data: users } = await supabaseAdmin
       .from('gallery_access_users')
-      .select('id, email, role')
+      .select('id, email, role, password_hash')
       .eq('gallery_id', gallery.id)
       .order('created_at');
     const owner = (users || []).find((u: any) => u.role === 'owner') || (users || [])[0];
     if (!owner) return null;
+    // Já tem senha definida → NÃO troca (reenvio mantém a mesma senha).
+    if (owner.password_hash) return { email: owner.email, password: null };
+    // Primeira vez: gera a senha e grava o hash.
     const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
     let password = '';
     for (let i = 0; i < 8; i++) password += chars[crypto.randomInt(chars.length)];
@@ -9768,9 +9774,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         .upsert({ user_id: userId, send_message_template: body.message.trim(), updated_at: new Date().toISOString() }, { onConflict: 'user_id' });
     }
 
-    // Credenciais: regenera a senha do acesso principal e injeta na mensagem.
-    let access: { email: string; password: string } | null = null;
-    if (includeAccess) access = await regenerateGalleryAccessPassword(gallery);
+    // Credenciais: garante a senha do acesso (gera só na 1ª vez; reenvio mantém
+    // a mesma). password = null quando preservada — a mensagem omite a linha.
+    let access: { email: string; password: string | null } | null = null;
+    if (includeAccess) access = await ensureGalleryAccessPassword(gallery);
 
     const prazo = gallery.selection_deadline
       ? new Date(gallery.selection_deadline + 'T12:00:00').toLocaleDateString('pt-BR')
@@ -10700,56 +10707,68 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   app.post('/api/public/gallery/:token/finalize', async (req, res) => {
     if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
-    const gallery = await findGalleryByToken(req.params.token);
-    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
-    if (gallery.status === 'delivered' || gallery.status === 'selected') {
-      return res.status(409).json({ error: 'Seleção já finalizada' });
-    }
-
-    const access = await ensureGalleryAccess(req, res, gallery);
-    if (access === undefined) return;
-
-    const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price,
-      galleryDiscountOpts(gallery, (req.body || {}).coupon));
-
-    // SEM valor a pagar → finaliza na hora.
-    if (totals.amount <= 0) {
-      await logGalleryEvent(gallery.id, access.accessUserId, 'finalize', req, {
-        detail: `selecionadas=${totals.selected_count} extras=${totals.extra_count} valor=0`,
-      });
-      await finalizeGallery(gallery, totals, 'cliente');
-      return res.json({ ok: true, finalized: true, ...totals, payment_url: null, order_code: null });
-    }
-
-    // COM valor a pagar → a seleção SÓ finaliza após o pagamento confirmar.
-    // Expira pendências antigas pra preference nova bater com a seleção atual.
-    await supabaseAdmin
-      .from('gallery_payments')
-      .update({ status: 'expired' })
-      .eq('gallery_id', gallery.id)
-      .eq('status', 'pending');
-
-    const payment = await createGalleryPayment(gallery, totals);
-    await logGalleryEvent(gallery.id, access.accessUserId, 'pay_attempt', req, {
-      detail: `valor=${totals.amount} pedido=${payment.order_code || '-'} conectado=${payment.connected}`,
-    });
-
-    if (!payment.payment_url) {
-      if (payment.connected) {
-        // Estúdio TEM MP, mas a cobrança falhou agora (rede/MP fora/token).
-        // NÃO finaliza de graça — devolve erro pra cliente tentar de novo.
-        console.warn(`[galeria] cobrança MP falhou com estúdio conectado — galeria ${gallery.id} NÃO finalizada`);
-        return res.status(502).json({
-          ok: false,
-          error: 'Não conseguimos gerar o pagamento agora. Tente novamente em instantes.',
-        });
+    try {
+      const gallery = await findGalleryByToken(req.params.token);
+      if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+      if (gallery.status === 'delivered' || gallery.status === 'selected') {
+        return res.status(409).json({ error: 'Seleção já finalizada' });
       }
-      // Estúdio nunca conectou MP: finaliza e o estúdio cobra por fora.
-      await finalizeGallery(gallery, totals, 'cliente-sem-gateway');
-      return res.json({ ok: true, finalized: true, ...totals, payment_url: null, order_code: payment.order_code });
-    }
 
-    res.json({ ok: true, finalized: false, payment_required: true, ...totals, ...payment });
+      const access = await ensureGalleryAccess(req, res, gallery);
+      if (access === undefined) return;
+
+      const totals = await galleryTotals(gallery.id, gallery.included_count, gallery.extra_price,
+        galleryDiscountOpts(gallery, (req.body || {}).coupon));
+
+      // SEM valor a pagar → finaliza na hora.
+      if (totals.amount <= 0) {
+        await logGalleryEvent(gallery.id, access.accessUserId, 'finalize', req, {
+          detail: `selecionadas=${totals.selected_count} extras=${totals.extra_count} valor=0`,
+        });
+        await finalizeGallery(gallery, totals, 'cliente');
+        return res.json({ ok: true, finalized: true, ...totals, payment_url: null, order_code: null });
+      }
+
+      // COM valor a pagar → a seleção SÓ finaliza após o pagamento confirmar.
+      // Expira pendências antigas pra preference nova bater com a seleção atual.
+      try {
+        await supabaseAdmin
+          .from('gallery_payments')
+          .update({ status: 'expired' })
+          .eq('gallery_id', gallery.id)
+          .eq('status', 'pending');
+      } catch (e: any) {
+        console.warn('[galeria] expirar pendências falhou:', e?.message);
+      }
+
+      const payment = await createGalleryPayment(gallery, totals);
+      await logGalleryEvent(gallery.id, access.accessUserId, 'pay_attempt', req, {
+        detail: `valor=${totals.amount} pedido=${payment.order_code || '-'} conectado=${payment.connected}`,
+      });
+
+      if (!payment.payment_url) {
+        if (payment.connected) {
+          // Estúdio TEM MP, mas a cobrança falhou agora (rede/MP fora/token).
+          // NÃO finaliza de graça — devolve erro pra cliente tentar de novo.
+          console.warn(`[galeria] cobrança MP falhou com estúdio conectado — galeria ${gallery.id} NÃO finalizada`);
+          return res.status(502).json({
+            ok: false,
+            error: 'Não conseguimos gerar o pagamento agora. Tente novamente em instantes.',
+          });
+        }
+        // Estúdio nunca conectou MP: finaliza e o estúdio cobra por fora.
+        await finalizeGallery(gallery, totals, 'cliente-sem-gateway');
+        return res.json({ ok: true, finalized: true, ...totals, payment_url: null, order_code: payment.order_code });
+      }
+
+      res.json({ ok: true, finalized: false, payment_required: true, ...totals, ...payment });
+    } catch (e: any) {
+      // Sem o try o erro virava 500 sem corpo JSON → o cliente só via "tente de novo".
+      console.error('[galeria] finalize falhou:', e?.message, e?.stack);
+      if (!res.headersSent) {
+        res.status(500).json({ ok: false, error: 'Erro ao finalizar a seleção. Tente novamente.' });
+      }
+    }
   });
 
   // Confirma o pagamento direto na API do MP (usado no polling e no webhook).
