@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Check, Copy, Heart, Loader2, Trash2, Upload } from "lucide-react";
 
 import { authFetch } from "../../../utils/authFetch";
@@ -75,27 +75,56 @@ export function FotosSection({
     [photos, selectedByPhoto],
   );
 
-  const uploadOne = async (
+  // Refresh automático enquanto houver foto processando (marca d'água roda em
+  // segundo plano): a miniatura aparece sozinha, sem precisar recarregar a página.
+  // Cap de ~4min (48 × 5s) pra não ficar atualizando pra sempre.
+  const pollRef = useRef(0);
+  useEffect(() => {
+    const processando = photos.some((p) => p.process_status === "pending" || p.process_status === "processing");
+    if (!processando) { pollRef.current = 0; return; }
+    if (pollRef.current >= 48) return;
+    const t = setTimeout(() => { pollRef.current += 1; mutate(); }, 5000);
+    return () => clearTimeout(t);
+  }, [photos, mutate]);
+
+  // Sobe só o ORIGINAL pro storage — isso é o "envio" (rápido). Conta o progresso
+  // aqui. Timeout pra nunca ficar carregando infinito se a rede travar.
+  const uploadOriginal = async (
     upload: { photo_id: string; signed_url: string },
     file: File,
     errors: string[],
+    okIds: string[],
   ) => {
     try {
       const put = await fetch(upload.signed_url, {
         method: "PUT",
         headers: { "Content-Type": file.type || "application/octet-stream" },
         body: file,
+        signal: AbortSignal.timeout(120_000),
       });
       if (!put.ok) throw new Error("upload");
-      const proc = await authFetch(`/api/galleries/${galleryId}/photos/${upload.photo_id}/process`, {
-        method: "POST",
-      });
-      if (!proc.ok) throw new Error("process");
+      okIds.push(upload.photo_id);
     } catch {
       errors.push(file.name);
     } finally {
       setProgress((p) => (p ? { ...p, done: p.done + 1 } : p));
     }
+  };
+
+  // Processa a marca d'água em SEGUNDO PLANO (depois que tudo já foi enviado).
+  // Não trava a UI: as miniaturas aparecem sozinhas pelo refresh automático.
+  const processInBackground = async (photoIds: string[]) => {
+    if (photoIds.length === 0) return;
+    await runPool(2, photoIds.map((id) => async () => {
+      try {
+        await authFetch(`/api/galleries/${galleryId}/photos/${id}/process`, {
+          method: "POST",
+          signal: AbortSignal.timeout(180_000),
+        });
+      } catch { /* lento/falhou — resolve no poll ou em "Limpar com erro" */ }
+    }));
+    mutate();
+    onChanged();
   };
 
   const handleFiles = async (fileList: FileList | null) => {
@@ -105,7 +134,9 @@ export function FotosSection({
     if (raw.length === 0) return;
     setUploadingLocal(true);
     setUploading(true);
+    pollRef.current = 0; // libera o refresh automático das miniaturas
     const errors: string[] = [];
+    const okIds: string[] = []; // fotos que subiram OK → processa depois
     setProgress({ done: 0, total: raw.length });
 
     try {
@@ -124,6 +155,7 @@ export function FotosSection({
         const res = await authFetch(`/api/galleries/${galleryId}/photos/sign-upload`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ files: batch.map((f) => ({ name: f.name, size: f.size, type: f.type })) }),
+          signal: AbortSignal.timeout(60_000),
         });
         if (!res.ok) {
           batch.forEach((f) => errors.push(f.name));
@@ -131,7 +163,7 @@ export function FotosSection({
           continue;
         }
         const { uploads } = await res.json();
-        await runPool(2, batch.map((file, i) => () => uploadOne(uploads[i], file, errors)));
+        await runPool(3, batch.map((file, i) => () => uploadOriginal(uploads[i], file, errors, okIds)));
       }
     } finally {
       setUploadingLocal(false);
@@ -141,7 +173,10 @@ export function FotosSection({
       onChanged();
     }
     if (errors.length > 0) onNotify("error", `${errors.length} foto(s) falharam no envio.`);
-    else onNotify("success", `${raw.length} foto(s) enviada(s).`);
+    else onNotify("success", `${raw.length} foto(s) enviada(s). Aplicando marca d'água…`);
+
+    // Marca d'água em segundo plano — NÃO bloqueia a tela (miniaturas aparecem sozinhas).
+    void processInBackground(okIds);
   };
 
   const handleClearErrors = async () => {
@@ -335,7 +370,7 @@ export function FotosSection({
           {progress && (uploadingLocal || progress.done < progress.total) && (
             <div>
               <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
-                <span>Enviando e aplicando marca d'água…</span>
+                <span>Enviando fotos…</span>
                 <span>{progress.done}/{progress.total}</span>
               </div>
               <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
