@@ -6,6 +6,7 @@ import { authFetch } from "../../utils/authFetch";
 import { useApi } from "../../utils/useApi";
 import { Client } from "../../types";
 import { Gallery, GalleryPreset, GallerySettings } from "./types";
+import { formatBRL } from "./utils";
 import { ToastKind } from "./Toast";
 
 const INPUT_CLS =
@@ -48,6 +49,16 @@ function gerarSenha(): string {
     for (let i = 0; i < 8; i++) s += chars[Math.floor(Math.random() * chars.length)];
   }
   return s;
+}
+
+// Resumo curto do preset escolhido (mostrado no lugar dos campos manuais).
+function resumoPreset(p: GalleryPreset): string {
+  const partes = [`${p.included_count} fotos incluídas`, `extra ${formatBRL(p.extra_price)}`];
+  if (p.deadline_days) partes.push(`prazo ${p.deadline_days} dia(s)`);
+  const dm = p.config?.discount_mode;
+  if (dm === "single_pct") partes.push(`${p.config?.discount_single_pct || 0}% off`);
+  else if (dm === "progressive") partes.push("desconto progressivo");
+  return partes.join(" · ");
 }
 
 function buildClientFields(form: FormState, clients: Client[]) {
@@ -97,6 +108,8 @@ export function NovaGaleriaModal({ onClose, onCreated, onNotify }: NovaGaleriaMo
 
   const set = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }));
 
+  const selectedPreset = presets.find((p) => p.id === form.presetId) || null;
+
   // Escolher um preset preenche os campos visíveis (categoria, nº de fotos,
   // valor extra). Prazo e descontos são aplicados no backend via preset_id.
   const applyPreset = (presetId: string) => {
@@ -113,7 +126,7 @@ export function NovaGaleriaModal({ onClose, onCreated, onNotify }: NovaGaleriaMo
   // Settings chegam async: semeia os defaults uma única vez quando carregarem.
   const seededRef = useRef(false);
   useEffect(() => {
-    if (!settings || seededRef.current) return;
+    if (!settings || seededRef.current || form.presetId) return;
     seededRef.current = true;
     setForm((f) => ({
       ...f,
@@ -228,9 +241,9 @@ export function NovaGaleriaModal({ onClose, onCreated, onNotify }: NovaGaleriaMo
                   </option>
                 ))}
               </select>
-              {form.presetId && (
+              {selectedPreset && (
                 <p className="mt-1.5 text-[11px] text-brand-700 dark:text-brand-300">
-                  Fotos, valores, prazo e descontos preenchidos pelo preset — você ainda pode ajustar abaixo.
+                  {resumoPreset(selectedPreset)}. Não precisa preencher fotos, valores nem prazo — o preset cuida disso.
                 </p>
               )}
             </div>
@@ -247,15 +260,17 @@ export function NovaGaleriaModal({ onClose, onCreated, onNotify }: NovaGaleriaMo
             />
           </div>
 
-          <div>
-            <label className={LABEL_CLS}>Categoria</label>
-            <select value={form.category} onChange={(e) => set({ category: e.target.value })} className={INPUT_CLS}>
-              <option value="">Sem categoria</option>
-              {categories.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </div>
+          {!form.presetId && (
+            <div>
+              <label className={LABEL_CLS}>Categoria</label>
+              <select value={form.category} onChange={(e) => set({ category: e.target.value })} className={INPUT_CLS}>
+                <option value="">Sem categoria</option>
+                {categories.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div>
             <label className={LABEL_CLS}>Cliente</label>
@@ -326,27 +341,45 @@ export function NovaGaleriaModal({ onClose, onCreated, onNotify }: NovaGaleriaMo
             )}
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className={LABEL_CLS}>Fotos incluídas</label>
-              <input
-                type="number"
-                min={0}
-                value={form.includedCount}
-                onChange={(e) => set({ includedCount: e.target.value })}
-                className={INPUT_CLS}
-              />
+          {/* Com preset: campos preenchidos automaticamente (não precisa digitar).
+              Sem preset: o usuário informa fotos incluídas e preço da foto extra. */}
+          {form.presetId ? (
+            <div className="rounded-lg bg-gray-50 dark:bg-gray-800/50 px-3 py-2.5">
+              <div className="text-xs text-gray-500 dark:text-gray-400">Fotos, valor e prazo (do preset)</div>
+              <div className="text-sm font-medium text-gray-900 dark:text-white mt-0.5">
+                {selectedPreset ? resumoPreset(selectedPreset) : "—"}
+              </div>
+              <button
+                type="button"
+                onClick={() => applyPreset("")}
+                className="mt-1 text-[11px] font-medium text-brand-700 dark:text-brand-300 hover:underline"
+              >
+                Preencher manualmente
+              </button>
             </div>
-            <div>
-              <label className={LABEL_CLS}>Preço da foto extra (R$)</label>
-              <input
-                value={form.extraPrice}
-                onChange={(e) => set({ extraPrice: e.target.value })}
-                placeholder="35"
-                className={INPUT_CLS}
-              />
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={LABEL_CLS}>Fotos incluídas</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={form.includedCount}
+                  onChange={(e) => set({ includedCount: e.target.value })}
+                  className={INPUT_CLS}
+                />
+              </div>
+              <div>
+                <label className={LABEL_CLS}>Preço da foto extra (R$)</label>
+                <input
+                  value={form.extraPrice}
+                  onChange={(e) => set({ extraPrice: e.target.value })}
+                  placeholder="35"
+                  className={INPUT_CLS}
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Acesso da cliente — login + senha já saem prontos */}
           <div className="rounded-lg border border-brand-200 dark:border-brand-800/40 bg-brand-50/40 dark:bg-brand-900/10 p-3 space-y-2">
