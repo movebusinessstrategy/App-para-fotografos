@@ -11,6 +11,9 @@ export interface GalleryWatermarkOpts {
   logo?: Buffer | null;
   opacity: number;             // 0..1
   clientLabel?: string | null; // se vier, vira sufixo " · {cliente}" no texto
+  // 'tiled' = logo diagonal repetida (padrão) · 'centered' = uma logo grande
+  // centralizada. Só vale quando watermarkType === 'logo'.
+  watermarkMode?: 'tiled' | 'centered';
 }
 
 export interface ProcessedGalleryPhoto {
@@ -69,6 +72,15 @@ async function buildVariant(
     .png()
     .toBuffer({ resolveWithObject: true });
 
+  // Modo "logo grande centralizada": uma única cópia no centro, sem tile.
+  if (opts.watermarkMode === 'centered' && opts.watermarkType === 'logo' && opts.logo) {
+    const single = await centeredLogo(opts.logo, info.width, info.height, opacity);
+    return sharp(data)
+      .composite([{ input: single, gravity: 'center', blend: 'over' }])
+      .jpeg({ quality })
+      .toBuffer();
+  }
+
   const tile = await buildTile(info.width, info.height, opts, opacity);
   const safeTile = await fitTile(tile, info.width, info.height);
 
@@ -76,6 +88,19 @@ async function buildVariant(
     .composite([{ input: safeTile, tile: true, blend: 'over' }])
     .jpeg({ quality })
     .toBuffer();
+}
+
+// Logo única, grande e centralizada (sem rotação nem repetição). ~42% da
+// largura da imagem, limitada pra nunca passar das dimensões da foto.
+async function centeredLogo(
+  logo: Buffer,
+  imageWidth: number,
+  imageHeight: number,
+  opacity: number
+): Promise<Buffer> {
+  const logoW = Math.max(64, Math.round(Math.min(imageWidth, imageHeight) * 0.42));
+  const faded = await fadeLogo(logo, logoW, opacity);
+  return fitTile(faded, imageWidth, imageHeight);
 }
 
 async function buildTile(

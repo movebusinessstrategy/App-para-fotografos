@@ -123,7 +123,7 @@ export default function GaleriaDetailPage() {
   if (!gallery || !data) {
     return (
       <div className="flex items-center justify-center py-16">
-        <Loader2 className="animate-spin text-violet-600" />
+        <Loader2 className="animate-spin text-brand-600" />
       </div>
     );
   }
@@ -165,7 +165,7 @@ export default function GaleriaDetailPage() {
             )}
             <button
               onClick={() => setEnviarOpen(true)} disabled={data.photos.length === 0}
-              className="inline-flex items-center gap-2 px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-semibold rounded-lg disabled:opacity-50"
+              className="inline-flex items-center gap-2 px-3 py-1.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-lg disabled:opacity-50"
             >
               <Send size={13} />
               {gallery.status === "draft" ? "Enviar pra cliente" : "Reenviar"}
@@ -283,7 +283,7 @@ function Grupo({ titulo, items, atual, onSelect }: {
                 className={cn(
                   "w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-sm transition-colors",
                   ativo
-                    ? "bg-violet-50 dark:bg-violet-900/20 text-violet-700 dark:text-violet-300 font-medium"
+                    ? "bg-brand-50 dark:bg-brand-900/20 text-brand-700 dark:text-brand-300 font-medium"
                     : "text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800",
                 )}
               >

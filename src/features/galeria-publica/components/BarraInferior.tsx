@@ -35,7 +35,7 @@ export function BarraInferior({ totais, finalizando, onFinalizar }: Props) {
           type="button"
           disabled={totais.selecionadas === 0 || finalizando}
           onClick={onFinalizar}
-          className="flex shrink-0 items-center gap-2 rounded-full bg-[#D4537E] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[#D4537E]/30 transition-colors hover:bg-[#c24470] disabled:opacity-50"
+          className="flex shrink-0 items-center gap-2 rounded-full bg-[#6F4E37] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[#6F4E37]/30 transition-colors hover:bg-[#553A29] disabled:opacity-50"
         >
           {finalizando && <Loader2 size={14} className="animate-spin" />}
           Finalizar seleção

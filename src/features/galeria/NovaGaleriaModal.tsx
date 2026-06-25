@@ -5,7 +5,7 @@ import { SearchableSelect } from "../../components/ui/SearchableSelect";
 import { authFetch } from "../../utils/authFetch";
 import { useApi } from "../../utils/useApi";
 import { Client } from "../../types";
-import { Gallery, GallerySettings } from "./types";
+import { Gallery, GalleryPreset, GallerySettings } from "./types";
 import { ToastKind } from "./Toast";
 
 const INPUT_CLS =
@@ -20,6 +20,7 @@ interface NovaGaleriaModalProps {
 
 interface FormState {
   title: string;
+  presetId: string;
   category: string;
   clientMode: "existing" | "manual";
   clientId: string;
@@ -70,12 +71,15 @@ function buildClientFields(form: FormState, clients: Client[]) {
 export function NovaGaleriaModal({ onClose, onCreated, onNotify }: NovaGaleriaModalProps) {
   const { data: clientsData } = useApi<Client[]>("/api/clients");
   const { data: settingsData } = useApi<{ settings: GallerySettings }>("/api/gallery-settings");
+  const { data: presetsData } = useApi<{ presets: GalleryPreset[] }>("/api/gallery-presets");
   const clients = useMemo(() => (Array.isArray(clientsData) ? clientsData : []), [clientsData]);
   const settings = settingsData?.settings;
   const categories = settings?.categories || [];
+  const presets = useMemo(() => (Array.isArray(presetsData?.presets) ? presetsData!.presets : []), [presetsData]);
 
   const [form, setForm] = useState<FormState>({
     title: "",
+    presetId: "",
     category: "",
     clientMode: "existing",
     clientId: "",
@@ -92,6 +96,19 @@ export function NovaGaleriaModal({ onClose, onCreated, onNotify }: NovaGaleriaMo
   const [loading, setLoading] = useState(false);
 
   const set = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }));
+
+  // Escolher um preset preenche os campos visíveis (categoria, nº de fotos,
+  // valor extra). Prazo e descontos são aplicados no backend via preset_id.
+  const applyPreset = (presetId: string) => {
+    const p = presets.find((x) => x.id === presetId);
+    if (!p) { set({ presetId: "" }); return; }
+    set({
+      presetId,
+      category: p.category || "",
+      includedCount: String(p.included_count ?? 0),
+      extraPrice: String(p.extra_price ?? 0),
+    });
+  };
 
   // Settings chegam async: semeia os defaults uma única vez quando carregarem.
   const seededRef = useRef(false);
@@ -131,6 +148,7 @@ export function NovaGaleriaModal({ onClose, onCreated, onNotify }: NovaGaleriaMo
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: form.title.trim(),
+          preset_id: form.presetId || undefined,
           category: form.category || undefined,
           ...buildClientFields(form, clients),
           included_count: Math.max(0, parseInt(form.includedCount, 10) || 0),
@@ -195,6 +213,29 @@ export function NovaGaleriaModal({ onClose, onCreated, onNotify }: NovaGaleriaMo
         </div>
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4 overflow-y-auto">
+          {presets.length > 0 && (
+            <div className="rounded-lg border border-brand-200 dark:border-brand-800/40 bg-brand-50/60 dark:bg-brand-900/10 p-3">
+              <label className={LABEL_CLS}>Preset (categoria pronta)</label>
+              <select
+                value={form.presetId}
+                onChange={(e) => applyPreset(e.target.value)}
+                className={INPUT_CLS}
+              >
+                <option value="">Começar do zero</option>
+                {presets.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}{p.category ? ` · ${p.category}` : ""}
+                  </option>
+                ))}
+              </select>
+              {form.presetId && (
+                <p className="mt-1.5 text-[11px] text-brand-700 dark:text-brand-300">
+                  Fotos, valores, prazo e descontos preenchidos pelo preset — você ainda pode ajustar abaixo.
+                </p>
+              )}
+            </div>
+          )}
+
           <div>
             <label className={LABEL_CLS}>Título *</label>
             <input
@@ -236,14 +277,30 @@ export function NovaGaleriaModal({ onClose, onCreated, onNotify }: NovaGaleriaMo
             </div>
 
             {form.clientMode === "existing" ? (
-              <SearchableSelect
-                value={form.clientId}
-                onChange={(v) => set({ clientId: v })}
-                options={clientOptions}
-                placeholder="Buscar cliente..."
-                searchPlaceholder="Nome, e-mail ou telefone"
-                emptyMessage="Nenhum cliente encontrado"
-              />
+              <>
+                <SearchableSelect
+                  value={form.clientId}
+                  onChange={(v) => set({ clientId: v })}
+                  options={clientOptions}
+                  placeholder="Buscar cliente..."
+                  searchPlaceholder="Nome, e-mail ou telefone"
+                  emptyMessage="Nenhum cliente encontrado"
+                />
+                {/* E-mail puxado automaticamente do cadastro do cliente */}
+                {selectedClient && (
+                  selectedClient.email ? (
+                    <div className="mt-2 flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
+                      <span className="font-medium">E-mail:</span>
+                      <span className="font-mono text-gray-800 dark:text-gray-100">{selectedClient.email}</span>
+                      <span className="text-[11px] text-gray-400 dark:text-gray-500">(puxado do cadastro)</span>
+                    </div>
+                  ) : (
+                    <div className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                      Esse cliente não tem e-mail cadastrado — preencha o e-mail de acesso abaixo.
+                    </div>
+                  )
+                )}
+              </>
             ) : (
               <div className="space-y-2">
                 <input
@@ -292,16 +349,16 @@ export function NovaGaleriaModal({ onClose, onCreated, onNotify }: NovaGaleriaMo
           </div>
 
           {/* Acesso da cliente — login + senha já saem prontos */}
-          <div className="rounded-lg border border-violet-200 dark:border-violet-800/40 bg-violet-50/40 dark:bg-violet-900/10 p-3 space-y-2">
+          <div className="rounded-lg border border-brand-200 dark:border-brand-800/40 bg-brand-50/40 dark:bg-brand-900/10 p-3 space-y-2">
             <label className="flex items-start gap-2 cursor-pointer">
               <input
                 type="checkbox"
                 checked={form.createAccess}
                 onChange={(e) => set({ createAccess: e.target.checked })}
-                className="mt-0.5 w-4 h-4 accent-violet-600"
+                className="mt-0.5 w-4 h-4 accent-brand-600"
               />
               <span className="text-sm font-medium flex items-center gap-1.5">
-                <ShieldCheck size={14} className="text-violet-600 dark:text-violet-400" />
+                <ShieldCheck size={14} className="text-brand-600 dark:text-brand-400" />
                 Criar acesso pra cliente já
               </span>
             </label>
@@ -341,7 +398,7 @@ export function NovaGaleriaModal({ onClose, onCreated, onNotify }: NovaGaleriaMo
                     type="checkbox"
                     checked={form.requireLogin}
                     onChange={(e) => set({ requireLogin: e.target.checked })}
-                    className="w-3.5 h-3.5 accent-violet-600"
+                    className="w-3.5 h-3.5 accent-brand-600"
                   />
                   Exigir login pra acessar (recomendado)
                 </label>

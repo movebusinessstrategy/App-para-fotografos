@@ -19,7 +19,7 @@ export function ResumoFinalizado({ token, totais }: Props) {
     <div className="mx-auto mb-5 max-w-xl px-4">
       <div className="rounded-2xl border border-neutral-200 bg-white p-4 text-center shadow-sm">
         <p className="inline-flex items-center gap-1.5 text-sm font-semibold text-neutral-900">
-          <CheckCircle2 size={16} className="text-[#D4537E]" />
+          <CheckCircle2 size={16} className="text-[#6F4E37]" />
           Seleção enviada!
         </p>
         <p className="mt-1 text-xs text-neutral-500">
@@ -52,7 +52,7 @@ function SituacaoPagamento({ pago, url, valor }: { pago: boolean; url: string | 
           href={url}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-2 rounded-full bg-[#D4537E] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[#D4537E]/30 hover:bg-[#c24470]"
+          className="inline-flex items-center gap-2 rounded-full bg-[#6F4E37] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[#6F4E37]/30 hover:bg-[#553A29]"
         >
           <CreditCard size={15} />
           Pagar {formatarBRL(valor)} com Mercado Pago

@@ -4,6 +4,7 @@ import { Check, CheckCircle2, ExternalLink, Image as ImageIcon, Link2, Link2Off,
 import { authFetch } from "../../utils/authFetch";
 import { useApi, refreshApi } from "../../utils/useApi";
 import { GallerySettings } from "./types";
+import { GalleryPresetsManager } from "./GalleryPresetsManager";
 import { ToastKind } from "./Toast";
 
 const INPUT_CLS =
@@ -153,7 +154,7 @@ export default function ConfiguracoesTab({ onNotify }: ConfiguracoesTabProps) {
   if (isLoading && !data) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" />
       </div>
     );
   }
@@ -225,7 +226,7 @@ export default function ConfiguracoesTab({ onNotify }: ConfiguracoesTabProps) {
             max={60}
             value={form.watermark_opacity_pct}
             onChange={(e) => set("watermark_opacity_pct", clampPct(Number(e.target.value)))}
-            className="w-full accent-gold-600"
+            className="w-full accent-brand-600"
           />
         </div>
 
@@ -242,6 +243,10 @@ export default function ConfiguracoesTab({ onNotify }: ConfiguracoesTabProps) {
 
       <Section title="Categorias de ensaio">
         <CategoriasEditor categories={form.categories} onChange={(c) => set("categories", c)} />
+      </Section>
+
+      <Section title="Presets de galeria">
+        <GalleryPresetsManager categories={form.categories} onNotify={onNotify} />
       </Section>
 
       <Section title="Armazenamento">
@@ -261,6 +266,11 @@ export default function ConfiguracoesTab({ onNotify }: ConfiguracoesTabProps) {
           onNotify={onNotify}
           onReload={() => refreshApi("/api/gallery-settings")}
         />
+        <p className="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 leading-relaxed">
+          O cliente paga as fotos extras só por <strong>cartão</strong> ou <strong>Pix</strong> — o boleto fica desativado.
+          No cartão parcelado, <strong>quem paga os juros é o cliente</strong> (padrão do Mercado Pago). Para oferecer
+          parcelas sem juros (você assume o custo), ative em <em>Seu negócio → Custos</em> na sua conta do Mercado Pago.
+        </p>
       </Section>
 
       <Section title="Proteção das fotos">
@@ -295,7 +305,7 @@ export default function ConfiguracoesTab({ onNotify }: ConfiguracoesTabProps) {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="inline-flex items-center gap-2 px-5 py-2 bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm disabled:opacity-50"
+          className="inline-flex items-center gap-2 px-5 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm disabled:opacity-50"
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
           {saving ? "Salvando..." : "Salvar"}
@@ -331,7 +341,7 @@ function CheckboxRow({ checked, onChange, label }: CheckboxRowProps) {
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 h-4 w-4 rounded border-gray-300 dark:border-gray-600 accent-gold-600"
+        className="mt-0.5 h-4 w-4 rounded border-gray-300 dark:border-gray-600 accent-brand-600"
       />
       <span className="text-sm text-gray-700 dark:text-gray-300">{label}</span>
     </label>
@@ -341,7 +351,7 @@ function CheckboxRow({ checked, onChange, label }: CheckboxRowProps) {
 function RadioRow({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) {
   return (
     <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-700 dark:text-gray-300">
-      <input type="radio" checked={checked} onChange={onChange} className="h-4 w-4 accent-gold-600" />
+      <input type="radio" checked={checked} onChange={onChange} className="h-4 w-4 accent-brand-600" />
       {label}
     </label>
   );
@@ -497,7 +507,7 @@ function ArmazenamentoCard() {
                     <span className="text-xs text-gray-500 flex-shrink-0">{formatBytes(g.bytes)} ({g.photo_count})</span>
                   </div>
                   <div className="h-1.5 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden mt-0.5">
-                    <div className="h-full bg-violet-500" style={{ width: `${Math.max(2, pct)}%` }} />
+                    <div className="h-full bg-brand-500" style={{ width: `${Math.max(2, pct)}%` }} />
                   </div>
                 </li>
               );
@@ -538,7 +548,7 @@ function PresetsEditor({ presets, onChange }: { presets: number[]; onChange: (p:
         {presets.map((n) => (
           <span
             key={n}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-50 dark:bg-violet-900/20 text-violet-700 dark:text-violet-300 text-xs font-semibold"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-brand-50 dark:bg-brand-900/20 text-brand-700 dark:text-brand-300 text-xs font-semibold"
           >
             +{n} dias
             <button onClick={() => remove(n)} className="hover:text-red-600">
@@ -557,7 +567,7 @@ function PresetsEditor({ presets, onChange }: { presets: number[]; onChange: (p:
           onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), add())}
           placeholder="Dias (ex.: 7)"
           disabled={presets.length >= 6}
-          className="w-32 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg px-2.5 py-1.5 text-sm outline-none focus:border-violet-500"
+          className="w-32 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg px-2.5 py-1.5 text-sm outline-none focus:border-brand-500"
         />
         <button
           type="button"

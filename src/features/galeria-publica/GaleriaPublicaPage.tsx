@@ -47,7 +47,7 @@ export default function GaleriaPublicaPage() {
   const [galeria, setGaleria] = useState<GaleriaPublica | null>(null);
   const [fotos, setFotos] = useState<FotoPublica[]>([]);
   const [selecoes, setSelecoes] = useState<MapaSelecoes>({});
-  const [loginInfo, setLoginInfo] = useState<{ title: string; studio_name: string } | null>(null);
+  const [loginInfo, setLoginInfo] = useState<{ title: string; studio_name: string; studio_logo_url?: string | null } | null>(null);
   const [tentativaLogin, setTentativaLogin] = useState(0);
 
   const [fase, setFase] = useState<Fase>("galeria");
@@ -83,7 +83,7 @@ export default function GaleriaPublicaPage() {
         if (e instanceof ErroApiPublica && e.status === 401) {
           limparSessao(token);
           try {
-            const info = await publicGet<{ title: string; studio_name: string }>(
+            const info = await publicGet<{ title: string; studio_name: string; studio_logo_url?: string | null }>(
               `/api/public/gallery/${token}/login-info`,
             );
             if (ativo) setLoginInfo(info);
@@ -277,7 +277,7 @@ function ConteudoGaleria(p: PropsConteudo) {
   const [indiceAberto, setIndiceAberto] = useState<number | null>(null);
 
   return (
-    <div className="h-full overflow-y-auto overscroll-contain bg-[#FAF8F6] text-neutral-900">
+    <div className="h-full overflow-y-auto overscroll-contain bg-brand-50 text-neutral-900">
       <CabecalhoGaleria galeria={p.galeria} mostrarAvisoProtecao={protecao.aviso} />
 
       {finalizado && <ResumoFinalizado token={p.token} totais={p.totais} />}

@@ -43,6 +43,7 @@ export interface GaleriaPublica {
   has_coupons?: boolean;
   category?: string | null;
   studio_name?: string | null;
+  studio_logo_url?: string | null;
   protection?: ProtecaoGaleria;
 }
 

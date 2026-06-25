@@ -61,7 +61,7 @@ export function GaleriaCard({ gallery, onClick }: GaleriaCardProps) {
           )}
           <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
             {gallery.category && (
-              <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gold-50 dark:bg-gold-500/15 text-gold-700 dark:text-gold-300">
+              <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold bg-brand-50 dark:bg-brand-500/15 text-brand-700 dark:text-brand-300">
                 {gallery.category}
               </span>
             )}

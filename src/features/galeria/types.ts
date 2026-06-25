@@ -83,6 +83,7 @@ export interface GallerySettings {
   watermark_logo_url?: string | null;
   watermark_opacity?: number;
   watermark_include_client_name?: boolean;
+  watermark_mode?: "tiled" | "centered";
   categories?: string[];
   mp_access_token?: string | null;
   mp_access_token_set?: boolean;
@@ -98,6 +99,27 @@ export interface GallerySettings {
   default_extra_price?: number;
   deadline_presets?: number[];
   send_message_template?: string;
+}
+
+export interface GalleryPresetConfig {
+  pricing_mode?: "no_charge" | "extra_avulso" | "upgrade_packs" | "sell_all";
+  cart_discount?: number;
+  discount_mode?: "none" | "single_pct" | "progressive";
+  discount_single_pct?: number;
+  discount_rules?: { percent: number; min_photos: number }[];
+}
+
+export interface GalleryPreset {
+  id: string;
+  name: string;
+  category: string | null;
+  included_count: number;
+  extra_price: number;
+  deadline_days: number | null;
+  config: GalleryPresetConfig;
+  sort_order: number;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface SendChannelResult {

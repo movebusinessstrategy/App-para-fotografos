@@ -60,7 +60,7 @@ export function ModalFinalizar({
           <div className="border-t border-neutral-200 pt-2">
             <div className="flex items-center justify-between">
               <span className="text-sm font-semibold text-neutral-900">Total a pagar</span>
-              <span className="text-base font-bold text-[#D4537E]">
+              <span className="text-base font-bold text-[#6F4E37]">
                 {formatarBRL(totais.valor)}
               </span>
             </div>
@@ -77,7 +77,7 @@ export function ModalFinalizar({
                 onChange={(e) => onCupomChange(e.target.value.toUpperCase())}
                 placeholder="Código"
                 disabled={finalizando}
-                className="flex-1 rounded-lg border border-neutral-200 px-3 py-2 text-sm uppercase outline-none focus:border-[#D4537E]"
+                className="flex-1 rounded-lg border border-neutral-200 px-3 py-2 text-sm uppercase outline-none focus:border-[#6F4E37]"
               />
               <button
                 type="button"
@@ -118,7 +118,7 @@ export function ModalFinalizar({
             type="button"
             onClick={onConfirmar}
             disabled={finalizando}
-            className="flex flex-1 items-center justify-center gap-2 rounded-full bg-[#D4537E] py-2.5 text-sm font-semibold text-white hover:bg-[#c24470] disabled:opacity-50"
+            className="flex flex-1 items-center justify-center gap-2 rounded-full bg-[#6F4E37] py-2.5 text-sm font-semibold text-white hover:bg-[#553A29] disabled:opacity-50"
           >
             {finalizando && <Loader2 size={14} className="animate-spin" />}
             Finalizar

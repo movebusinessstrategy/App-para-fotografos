@@ -101,7 +101,7 @@ export default function ProjetosTab({ onNotify }: ProjetosTabProps) {
   if (isLoading && !data) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" />
       </div>
     );
   }
@@ -111,7 +111,7 @@ export default function ProjetosTab({ onNotify }: ProjetosTabProps) {
       <div className="flex items-center justify-end">
         <button
           onClick={() => setNovaOpen(true)}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
         >
           <Plus size={14} />
           Nova galeria

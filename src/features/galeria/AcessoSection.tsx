@@ -131,7 +131,7 @@ export function AcessoSection({
     <section className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-2">
-          <ShieldCheck size={18} className="text-violet-600 dark:text-violet-400 mt-0.5" />
+          <ShieldCheck size={18} className="text-brand-600 dark:text-brand-400 mt-0.5" />
           <div>
             <h3 className="text-sm font-semibold">Acesso e privacidade</h3>
             <p className="text-xs text-gray-500 dark:text-gray-400">
@@ -143,7 +143,7 @@ export function AcessoSection({
 
       <div className="rounded-lg bg-gray-50 dark:bg-gray-800/50 p-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <Lock size={15} className={requireLogin ? "text-violet-600 dark:text-violet-400" : "text-gray-400"} />
+          <Lock size={15} className={requireLogin ? "text-brand-600 dark:text-brand-400" : "text-gray-400"} />
           <div>
             <div className="text-sm font-medium">Exigir login pra acessar</div>
             <div className="text-xs text-gray-500 dark:text-gray-400">
@@ -160,7 +160,7 @@ export function AcessoSection({
             disabled={savingGate}
             onChange={(e) => toggleGate(e.target.checked)}
           />
-          <div className="w-10 h-5 bg-gray-200 dark:bg-gray-700 peer-checked:bg-violet-600 rounded-full peer transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-transform peer-checked:after:translate-x-5" />
+          <div className="w-10 h-5 bg-gray-200 dark:bg-gray-700 peer-checked:bg-brand-600 rounded-full peer transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-transform peer-checked:after:translate-x-5" />
         </label>
       </div>
 
@@ -174,7 +174,7 @@ export function AcessoSection({
           </div>
           <button
             onClick={() => setShowForm(true)}
-            className="inline-flex items-center gap-2 px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-semibold rounded-lg transition-colors"
+            className="inline-flex items-center gap-2 px-3 py-1.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-lg transition-colors"
           >
             <UserPlus size={13} /> Adicionar
           </button>
@@ -195,7 +195,7 @@ export function AcessoSection({
                     <span className={
                       "text-[10px] px-1.5 py-0.5 rounded-full font-medium " +
                       (u.role === "owner"
-                        ? "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300"
+                        ? "bg-brand-100 text-brand-700 dark:bg-brand-900/40 dark:text-brand-300"
                         : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300")
                     }>
                       {ROLE_LABEL[u.role]}
@@ -234,7 +234,7 @@ export function AcessoSection({
                 className={
                   "text-left p-3 rounded-lg border transition-colors " +
                   (active
-                    ? "border-violet-600 bg-violet-50 dark:bg-violet-900/20 ring-2 ring-violet-600/40"
+                    ? "border-brand-600 bg-brand-50 dark:bg-brand-900/20 ring-2 ring-brand-600/40"
                     : "border-gray-200 dark:border-gray-700 hover:border-gray-400")
                 }
               >
@@ -321,7 +321,7 @@ function AddAccessModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <form onSubmit={submit} className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-md p-5 space-y-3">
         <div className="flex items-center gap-2">
-          <UserPlus size={18} className="text-violet-600 dark:text-violet-400" />
+          <UserPlus size={18} className="text-brand-600 dark:text-brand-400" />
           <h3 className="text-base font-semibold">Adicionar acesso</h3>
         </div>
 
@@ -334,7 +334,7 @@ function AddAccessModal({
                 className={
                   "p-2.5 rounded-lg border text-sm font-medium transition-colors " +
                   (role === r
-                    ? "border-violet-600 bg-violet-50 dark:bg-violet-900/20 ring-2 ring-violet-600/40"
+                    ? "border-brand-600 bg-brand-50 dark:bg-brand-900/20 ring-2 ring-brand-600/40"
                     : "border-gray-200 dark:border-gray-700 hover:border-gray-400")
                 }
               >
@@ -391,7 +391,7 @@ function AddAccessModal({
           </button>
           <button
             type="submit" disabled={saving}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold rounded-lg disabled:opacity-60"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold rounded-lg disabled:opacity-60"
           >
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
             Criar acesso

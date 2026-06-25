@@ -87,7 +87,7 @@ export default function ClientesTab({ onNotify }: ClientesTabProps) {
   if (isLoading && !clientsData) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" />
       </div>
     );
   }
@@ -102,7 +102,7 @@ export default function ClientesTab({ onNotify }: ClientesTabProps) {
             placeholder="Buscar por nome, e-mail ou telefone..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-8 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 placeholder-gray-400 focus:border-gold-400 outline-none transition-colors"
+            className="w-full pl-9 pr-8 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 placeholder-gray-400 focus:border-brand-400 outline-none transition-colors"
           />
           {search && (
             <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
@@ -112,7 +112,7 @@ export default function ClientesTab({ onNotify }: ClientesTabProps) {
         </div>
         <button
           onClick={() => setNovoOpen(true)}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
         >
           <Plus size={14} />
           Novo cliente

@@ -99,7 +99,7 @@ export function DadosSection({ gallery, onChanged, onNotify }: DadosSectionProps
       <div className="flex justify-end">
         <button
           onClick={save} disabled={saving}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold rounded-lg disabled:opacity-60"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold rounded-lg disabled:opacity-60"
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
           Salvar alterações
@@ -141,7 +141,7 @@ export function Campo({
       <input
         type={type} value={value} onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500"
+        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
       />
     </label>
   );

@@ -74,7 +74,7 @@ export function DesignSection({ gallery, onChanged, onNotify }: DesignSectionPro
                 className={
                   "text-left p-3 rounded-lg border transition-colors " +
                   (active
-                    ? "border-violet-600 bg-violet-50 dark:bg-violet-900/20 ring-2 ring-violet-600/40"
+                    ? "border-brand-600 bg-brand-50 dark:bg-brand-900/20 ring-2 ring-brand-600/40"
                     : "border-gray-200 dark:border-gray-700 hover:border-gray-400")
                 }
               >
@@ -102,7 +102,7 @@ export function DesignSection({ gallery, onChanged, onNotify }: DesignSectionPro
                 className={
                   "p-3 rounded-lg border transition-colors text-center " +
                   (active
-                    ? "border-violet-600 bg-violet-50 dark:bg-violet-900/20 ring-2 ring-violet-600/40"
+                    ? "border-brand-600 bg-brand-50 dark:bg-brand-900/20 ring-2 ring-brand-600/40"
                     : "border-gray-200 dark:border-gray-700 hover:border-gray-400")
                 }
               >
@@ -121,7 +121,7 @@ export function DesignSection({ gallery, onChanged, onNotify }: DesignSectionPro
               key={c} onClick={() => setColor(c)}
               className={
                 "w-9 h-9 rounded-full transition-transform " +
-                (color === c ? "ring-2 ring-offset-2 ring-violet-600 scale-110" : "hover:scale-105")
+                (color === c ? "ring-2 ring-offset-2 ring-brand-600 scale-110" : "hover:scale-105")
               }
               style={{ background: c }}
               aria-label={c}
@@ -153,7 +153,7 @@ export function DesignSection({ gallery, onChanged, onNotify }: DesignSectionPro
       <div className="flex justify-end">
         <button
           onClick={save} disabled={saving}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold rounded-lg disabled:opacity-60"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold rounded-lg disabled:opacity-60"
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
           Salvar design

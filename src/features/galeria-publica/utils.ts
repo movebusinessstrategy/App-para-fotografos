@@ -9,6 +9,14 @@ export function formatarBRL(valor: number): string {
   });
 }
 
+// Nome do estúdio exibido pro cliente. Cai em "Estúdio Pitori" quando não há
+// nome configurado (ou está com o genérico "Estúdio").
+export const ESTUDIO_FALLBACK = "Estúdio Pitori";
+export function nomeEstudio(studioName?: string | null): string {
+  const n = (studioName || "").trim();
+  return !n || n === "Estúdio" ? ESTUDIO_FALLBACK : n;
+}
+
 // Normaliza gallery.protection (flag/string/objeto) em algo que a UI entende.
 export function lerProtecao(p: ProtecaoGaleria | undefined): { bloquear: boolean; aviso: boolean } {
   if (p == null || p === false) return { bloquear: false, aviso: false };

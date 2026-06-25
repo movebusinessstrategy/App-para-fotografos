@@ -5651,6 +5651,109 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ periodo: { from: dInicio, to: dFimIncl }, totais, vendedores });
   });
 
+  // GET /api/relatorios/vendas-por-campanha?from=YYYY-MM-DD&to=YYYY-MM-DD
+  // Quanto cada CAMPANHA de venda especial (deals.campaign_id) vendeu no
+  // período (deals em etapa ganha, por converted_at). Clona vendas-por-vendedor:
+  // mesmo período, mesmos wonStageIds e mesmo descarte de venda cancelada.
+  // Deals sem campanha caem num balde "Sem campanha".
+  app.get('/api/relatorios/vendas-por-campanha', requireAuth, requirePermission('finance'), async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+
+    const now = new Date();
+    const fromQ = String(req.query.from || '').trim();
+    const toQ = String(req.query.to || '').trim();
+    let dInicio: string, dFimIncl: string;
+    if (okYMD(fromQ) && okYMD(toQ)) {
+      dInicio = fromQ <= toQ ? fromQ : toQ;
+      dFimIncl = fromQ <= toQ ? toQ : fromQ;
+    } else {
+      dInicio = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1)).toISOString().slice(0, 10);
+      dFimIncl = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 0)).toISOString().slice(0, 10);
+    }
+    const nd = new Date(`${dFimIncl}T12:00:00Z`);
+    nd.setUTCDate(nd.getUTCDate() + 1);
+    const nextDay = nd.toISOString().slice(0, 10);
+
+    const stages = await ensurePipelineStages(supabase, userId);
+    const wonStageIds = stages.filter((s: any) => s.is_won).map((s: any) => s.id);
+
+    // Vendas ganhas no período (por converted_at)
+    let deals: any[] = [];
+    if (wonStageIds.length) {
+      const { data } = await supabase
+        .from('deals')
+        .select('id, campaign_id, value, converted_at, converted_job_id')
+        .eq('user_id', userId)
+        .in('stage', wonStageIds)
+        .gte('converted_at', dInicio)
+        .lt('converted_at', nextDay)
+        .limit(10000);
+      deals = data || [];
+    }
+
+    // VENDA CANCELADA: deal "ganho" cujo ensaio (job) foi APAGADO ou cancelado
+    // não conta como venda. (Mesma regra de vendas-por-vendedor.)
+    if (deals.length) {
+      const jobIds = deals.map((d) => d.converted_job_id).filter(Boolean);
+      const jobStatusById = new Map<number, string>();
+      if (jobIds.length) {
+        const { data: jobsRows } = await supabase
+          .from('jobs')
+          .select('id, status')
+          .eq('user_id', userId)
+          .in('id', jobIds);
+        for (const j of jobsRows || []) jobStatusById.set(j.id, String((j as any).status || ''));
+      }
+      const isCancelled = (s: string) => /cancel/i.test(s); // 'cancelled' / 'cancelado'
+      deals = deals.filter((d) => {
+        if (!d.converted_job_id) return true; // venda sem job (ganho por arrasto) conta
+        const st = jobStatusById.get(d.converted_job_id);
+        if (st === undefined) return false;     // job apagado → cancelada
+        return !isCancelled(st);                // job cancelado → fora
+      });
+    }
+
+    // Resolve nome+cor das campanhas do user. Se a tabela ainda não existe
+    // (42P01), segue só com o balde "Sem campanha".
+    const campaignById = new Map<string, { name: string; color: string }>();
+    {
+      const { data: campRows, error: campErr } = await supabase
+        .from('sale_campaigns')
+        .select('id, name, color')
+        .eq('user_id', userId);
+      if (campErr && campErr.code !== '42P01') return res.status(500).json({ error: campErr.message });
+      for (const c of campRows || []) campaignById.set(c.id, { name: c.name, color: c.color });
+    }
+
+    type Row = { id: string | null; nome: string; cor: string; numVendas: number; valorVendido: number };
+    const rows = new Map<string, Row>();
+    for (const d of deals) {
+      const k = d.campaign_id || '__none__';
+      let r = rows.get(k);
+      if (!r) {
+        if (k === '__none__') {
+          r = { id: null, nome: 'Sem campanha', cor: '#9CA3AF', numVendas: 0, valorVendido: 0 };
+        } else {
+          const meta = campaignById.get(k);
+          r = { id: k, nome: meta?.name || 'Sem campanha', cor: meta?.color || '#9CA3AF', numVendas: 0, valorVendido: 0 };
+        }
+        rows.set(k, r);
+      }
+      r.numVendas += 1;
+      r.valorVendido += Number(d.value) || 0;
+    }
+
+    const campanhas = [...rows.values()].sort((a, b) => b.valorVendido - a.valorVendido);
+
+    const totais = campanhas.reduce((t, c) => ({
+      numVendas: t.numVendas + c.numVendas,
+      valorVendido: t.valorVendido + c.valorVendido,
+    }), { numVendas: 0, valorVendido: 0 });
+
+    res.json({ periodo: { from: dInicio, to: dFimIncl }, totais, campanhas });
+  });
+
   // ============ CATÁLOGO: SERVIÇOS ============
 
   app.get('/api/servicos', requireAuth, async (req, res) => {
@@ -6309,6 +6412,102 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     await supabase.from('pipeline_labels').delete().eq('id', req.params.id).eq('user_id', userId);
+    res.json({ success: true });
+  });
+
+  // ============ CAMPANHAS DE VENDA ESPECIAL ============
+  // "Venda especial / campanha" é só uma MARCAÇÃO + RELATÓRIO (NÃO aplica
+  // desconto). Cada deal pertence a UMA campanha (deals.campaign_id). CRUD
+  // gerenciável pelo usuário com defaults semeados na primeira leitura.
+  const DEFAULT_SALE_CAMPAIGNS: { name: string; color: string }[] = [
+    { name: 'Natal', color: '#16A34A' },
+    { name: 'Dia das Mães', color: '#DB2777' },
+    { name: 'Dia dos Pais', color: '#2563EB' },
+    { name: 'Black Friday', color: '#111827' },
+    { name: 'Dia das Crianças', color: '#F59E0B' },
+    { name: 'Páscoa', color: '#A855F7' },
+  ];
+
+  app.get('/api/sale-campaigns', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data, error } = await supabase
+      .from('sale_campaigns')
+      .select('*')
+      .eq('user_id', userId)
+      .order('name', { ascending: true });
+    if (error) {
+      if (error.code === '42P01') return res.json([]); // tabela ainda não migrada
+      return res.status(500).json({ error: error.message });
+    }
+    // Vazio → semeia defaults para esse user (estilo ensurePipelineStages)
+    if (!data || data.length === 0) {
+      const payload = DEFAULT_SALE_CAMPAIGNS.map((c) => ({ user_id: userId, name: c.name, color: c.color }));
+      const { data: seeded, error: seedErr } = await supabase
+        .from('sale_campaigns')
+        .insert(payload)
+        .select()
+        .order('name', { ascending: true });
+      if (seedErr) {
+        console.warn('Não foi possível semear campanhas padrão:', seedErr.message);
+        return res.json([]);
+      }
+      return res.json(seeded || []);
+    }
+    res.json(data);
+  });
+
+  app.post('/api/sale-campaigns', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { name, color, starts_at, ends_at } = req.body;
+    if (!name?.trim()) return res.status(400).json({ error: 'name é obrigatório' });
+    const { data, error } = await supabase
+      .from('sale_campaigns')
+      .insert({
+        user_id: userId,
+        name: name.trim(),
+        color: color || '#6B7280',
+        starts_at: starts_at || null,
+        ends_at: ends_at || null,
+      })
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.put('/api/sale-campaigns/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { name, color, starts_at, ends_at, active } = req.body;
+    const updates: any = {};
+    if (name !== undefined) updates.name = name;
+    if (color !== undefined) updates.color = color;
+    if (starts_at !== undefined) updates.starts_at = starts_at || null;
+    if (ends_at !== undefined) updates.ends_at = ends_at || null;
+    if (active !== undefined) updates.active = active;
+    const { data, error } = await supabase
+      .from('sale_campaigns')
+      .update(updates)
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.delete('/api/sale-campaigns/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    // Desvincula deals dessa campanha antes de remover (não deixa órfão).
+    await supabase
+      .from('deals')
+      .update({ campaign_id: null })
+      .eq('campaign_id', req.params.id)
+      .eq('user_id', userId);
+    await supabase.from('sale_campaigns').delete().eq('id', req.params.id).eq('user_id', userId);
     res.json({ success: true });
   });
 
@@ -8209,6 +8408,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     watermark_logo_path: null as string | null,
     watermark_opacity: 0.3,
     watermark_include_client: false,
+    watermark_mode: 'tiled' as 'tiled' | 'centered',
     sender_email: null as string | null,
     notify_studio_whatsapp: true,
     mp_access_token: null as string | null,
@@ -8236,6 +8436,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('user_id', userId)
       .maybeSingle();
     return data?.studio_name || 'Estúdio';
+  }
+
+  // Logo do estúdio (company_info.logo_url) pra exibir nas telas do cliente
+  // (login + cabeçalho da galeria pública). Null quando não há logo cadastrada.
+  async function getStudioLogoForGallery(userId: string): Promise<string | null> {
+    if (!supabaseAdmin) return null;
+    const { data } = await supabaseAdmin
+      .from('company_info')
+      .select('logo_url')
+      .eq('user_id', userId)
+      .maybeSingle();
+    return data?.logo_url || null;
   }
 
   // Preço default da foto extra vem do studio_settings ('35,00' → 35).
@@ -8533,6 +8745,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         watermark_logo_url: previewPublicUrl(s.watermark_logo_path),
         watermark_opacity: Number(s.watermark_opacity ?? 0.3),
         watermark_include_client_name: !!s.watermark_include_client,
+        watermark_mode: s.watermark_mode === 'centered' ? 'centered' : 'tiled',
         sender_email: s.sender_email,
         notify_studio_whatsapp: s.notify_studio_whatsapp !== false,
         categories: Array.isArray(s.categories) ? s.categories : [],
@@ -8592,6 +8805,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       payload.watermark_opacity = Math.min(1, Math.max(0.05, Number(body.watermark_opacity) || 0.3));
     }
     if (body.watermark_include_client_name !== undefined) payload.watermark_include_client = !!body.watermark_include_client_name;
+    if (body.watermark_mode !== undefined) payload.watermark_mode = body.watermark_mode === 'centered' ? 'centered' : 'tiled';
     if (body.sender_email !== undefined) payload.sender_email = body.sender_email || null;
     if (body.notify_studio_whatsapp !== undefined) payload.notify_studio_whatsapp = !!body.notify_studio_whatsapp;
     if (Array.isArray(body.categories)) payload.categories = body.categories.map(String);
@@ -8785,6 +8999,146 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     };
   }
 
+  // ── Presets de galeria (categorias prontas: nº de fotos, prazo, valores,
+  //    descontos). Escolher um preset ao criar a galeria preenche tudo. ──────
+
+  const presetTableMissing = (error: any) =>
+    error?.code === '42P01' || /gallery_presets/i.test(error?.message || '');
+
+  // Só os campos que o editor de preset suporta hoje (extensível via config JSONB).
+  function sanitizePresetConfig(cfg: any): any {
+    const c = cfg || {};
+    const out: any = {};
+    if (['no_charge', 'extra_avulso', 'upgrade_packs', 'sell_all'].includes(c.pricing_mode)) {
+      out.pricing_mode = c.pricing_mode;
+    }
+    if (c.cart_discount !== undefined) out.cart_discount = Math.max(0, Number(c.cart_discount) || 0);
+    if (['none', 'single_pct', 'progressive'].includes(c.discount_mode)) out.discount_mode = c.discount_mode;
+    if (c.discount_single_pct !== undefined) {
+      out.discount_single_pct = Math.min(100, Math.max(0, Number(c.discount_single_pct) || 0));
+    }
+    if (Array.isArray(c.discount_rules)) {
+      out.discount_rules = c.discount_rules
+        .map((r: any) => ({
+          percent: Math.min(100, Math.max(0, Number(r?.percent) || 0)),
+          min_photos: Math.max(1, Math.floor(Number(r?.min_photos) || 0)),
+        }))
+        .filter((r: any) => r.percent > 0 && r.min_photos >= 1)
+        .sort((a: any, b: any) => a.min_photos - b.min_photos)
+        .slice(0, 20);
+    }
+    return out;
+  }
+
+  function buildPresetPayload(body: any): any {
+    const p: any = {};
+    if (body.name !== undefined) p.name = String(body.name || '').trim().slice(0, 80);
+    if (body.category !== undefined) p.category = body.category ? String(body.category).slice(0, 60) : null;
+    if (body.included_count !== undefined) p.included_count = Math.max(0, Math.floor(Number(body.included_count) || 0));
+    if (body.extra_price !== undefined) p.extra_price = Math.max(0, Number(body.extra_price) || 0);
+    if (body.deadline_days !== undefined) {
+      const d = Math.floor(Number(body.deadline_days));
+      p.deadline_days = Number.isFinite(d) && d > 0 ? Math.min(365, d) : null;
+    }
+    if (body.config !== undefined) p.config = sanitizePresetConfig(body.config);
+    if (body.sort_order !== undefined) p.sort_order = Math.floor(Number(body.sort_order) || 0);
+    return p;
+  }
+
+  // Monta o "corpo" (no formato que buildGalleryPatch entende) a partir de um
+  // preset, pra aplicar prazo/cobrança/descontos na galeria recém-criada.
+  async function galleryPatchFromPreset(
+    supabase: SupabaseClient, userId: string, presetId: string,
+  ): Promise<any | null> {
+    const { data: preset } = await supabase
+      .from('gallery_presets').select('*').eq('id', presetId).eq('user_id', userId).maybeSingle();
+    if (!preset) return null;
+    const cfg = preset.config || {};
+    const out: any = {
+      pricing_mode: cfg.pricing_mode,
+      cart_discount: cfg.cart_discount,
+      discount_mode: cfg.discount_mode,
+      discount_single_pct: cfg.discount_single_pct,
+      discount_rules: cfg.discount_rules,
+    };
+    if (preset.deadline_days != null) {
+      const d = new Date();
+      d.setDate(d.getDate() + Number(preset.deadline_days));
+      out.selection_deadline = d.toISOString();
+    }
+    return out;
+  }
+
+  app.get('/api/gallery-presets', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const { data, error } = await supabase
+      .from('gallery_presets').select('*').eq('user_id', userId)
+      .order('sort_order', { ascending: true }).order('created_at', { ascending: true });
+    if (error) {
+      if (presetTableMissing(error)) return res.json({ tableMissing: true, presets: [] });
+      return res.status(500).json({ error: error.message });
+    }
+    res.json({ presets: data || [] });
+  });
+
+  app.post('/api/gallery-presets', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const payload = buildPresetPayload(req.body || {});
+    if (!payload.name) return res.status(400).json({ error: 'Informe o nome do preset.' });
+    const { data, error } = await supabase
+      .from('gallery_presets').insert({ user_id: userId, ...payload }).select().single();
+    if (error) {
+      if (presetTableMissing(error)) return res.status(400).json({ error: 'Tabela gallery_presets não existe. Rode a migration 055_gallery_presets.sql no Supabase.', table_missing: true });
+      return res.status(500).json({ error: error.message });
+    }
+    res.json({ preset: data });
+  });
+
+  app.put('/api/gallery-presets/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const payload = buildPresetPayload(req.body || {});
+    if (payload.name !== undefined && !payload.name) return res.status(400).json({ error: 'Informe o nome do preset.' });
+    const { data, error } = await supabase
+      .from('gallery_presets')
+      .update({ ...payload, updated_at: new Date().toISOString() })
+      .eq('id', req.params.id).eq('user_id', userId).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'Preset não encontrado' });
+    res.json({ preset: data });
+  });
+
+  app.post('/api/gallery-presets/:id/duplicate', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const { data: src } = await supabase
+      .from('gallery_presets').select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!src) return res.status(404).json({ error: 'Preset não encontrado' });
+    const { data, error } = await supabase.from('gallery_presets').insert({
+      user_id: userId,
+      name: `${src.name} (cópia)`,
+      category: src.category,
+      included_count: src.included_count,
+      extra_price: src.extra_price,
+      deadline_days: src.deadline_days,
+      config: src.config || {},
+      sort_order: src.sort_order,
+    }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ preset: data });
+  });
+
+  app.delete('/api/gallery-presets/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const { error } = await supabase
+      .from('gallery_presets').delete().eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
   app.post('/api/galleries', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
@@ -8818,7 +9172,22 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (error) {
       return galleryTableMissing(error) ? galleryMigrationError(res) : res.status(500).json({ error: error.message });
     }
-    const [gallery] = await decorateGalleries(supabase, [data]);
+
+    // Preset/categoria escolhido: aplica prazo, cobrança e descontos do preset.
+    // (nº de fotos, valor extra e categoria já vêm no corpo, pré-preenchidos
+    // pelo modal — o usuário pode ter ajustado, então o corpo prevalece neles.)
+    let finalRow = data;
+    if (body.preset_id) {
+      const presetBody = await galleryPatchFromPreset(supabase, userId, String(body.preset_id));
+      if (presetBody) {
+        await applyGalleryPatchResilient(supabase, userId, data.id, buildGalleryPatch(presetBody));
+        const { data: fresh } = await supabase
+          .from('galleries').select('*').eq('id', data.id).eq('user_id', userId).maybeSingle();
+        if (fresh) finalRow = fresh;
+      }
+    }
+
+    const [gallery] = await decorateGalleries(supabase, [finalRow]);
     res.json({ gallery });
   });
 
@@ -8925,15 +9294,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return patch;
   }
 
-  app.put('/api/galleries/:id', requireAuth, async (req, res) => {
-    const userId = (req as any).userId;
-    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
-    const patch = buildGalleryPatch(req.body || {});
+  // Aplica um patch na galeria tolerando colunas de desconto ainda não migradas:
+  // repete a query removendo as ausentes pra não travar o resto do save.
+  // Estágio 1: colunas da 052; estágio 2: as da 033.
+  async function applyGalleryPatchResilient(
+    supabase: SupabaseClient, userId: string, galleryId: string, patch: any,
+  ): Promise<{ error: any }> {
     const doUpdate = () => supabase
-      .from('galleries').update(patch).eq('id', req.params.id).eq('user_id', userId);
+      .from('galleries').update(patch).eq('id', galleryId).eq('user_id', userId);
     let { error } = await doUpdate();
-    // Colunas de desconto ainda não migradas? Repete tirando as ausentes pra não
-    // travar o resto do save. Estágio 1: colunas da 052; estágio 2: as da 033.
     if (error && (error as any).code === '42703') {
       delete patch.discount_value_rules;
       delete patch.deadline_discount_pct;
@@ -8949,6 +9318,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       delete patch.discount_rules;
       ({ error } = await doUpdate());
     }
+    return { error };
+  }
+
+  app.put('/api/galleries/:id', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const patch = buildGalleryPatch(req.body || {});
+    const { error } = await applyGalleryPatchResilient(supabase, userId, req.params.id, patch);
     if (error) {
       return galleryTableMissing(error) ? galleryMigrationError(res) : res.status(500).json({ error: error.message });
     }
@@ -9108,6 +9485,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       logo,
       opacity: Number(s.watermark_opacity ?? 0.3),
       clientLabel: s.watermark_include_client ? gallery.client_name : null,
+      watermarkMode: (s.watermark_mode === 'centered' ? 'centered' : 'tiled') as 'tiled' | 'centered',
     };
   }
 
@@ -9198,6 +9576,35 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const { error } = await supabase.from('gallery_photos').delete().eq('id', photo.id);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
+  });
+
+  // Exclusão em massa de fotos selecionadas pelo fotógrafo (multi-seleção na UI).
+  // Recebe { photo_ids: string[] } e remove storage + linhas de uma vez.
+  app.post('/api/galleries/:id/photos/bulk-delete', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const { data: gallery } = await supabase
+      .from('galleries').select('id').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
+
+    const ids = Array.isArray(req.body?.photo_ids)
+      ? req.body.photo_ids.map((x: any) => String(x)).filter(Boolean)
+      : [];
+    if (ids.length === 0) return res.json({ removed: 0 });
+
+    const { data: photos } = await supabase
+      .from('gallery_photos')
+      .select('id, original_path, preview_path, thumb_path')
+      .eq('gallery_id', gallery.id)
+      .in('id', ids);
+    const list = photos || [];
+    if (list.length === 0) return res.json({ removed: 0 });
+
+    await removeGalleryStorage(list).catch(() => {});
+    const { error } = await supabase
+      .from('gallery_photos').delete().in('id', list.map((p) => p.id));
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ removed: list.length });
   });
 
   // ── Pacotes de upgrade (Fase 2) ────────────────────────────────────────────
@@ -9990,9 +10397,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const access = await ensureGalleryAccess(req, res, gallery);
     if (access === undefined) return;
 
-    const [settings, studioName, photosQ, selQ] = await Promise.all([
+    const [settings, studioName, studioLogo, photosQ, selQ] = await Promise.all([
       getGallerySettings(gallery.user_id),
       getStudioNameForGallery(gallery.user_id),
+      getStudioLogoForGallery(gallery.user_id),
       supabaseAdmin
         .from('gallery_photos')
         .select('id, file_name, preview_path, thumb_path')
@@ -10039,6 +10447,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         has_coupons: gallery.discount_mode === 'coupon',
         category: gallery.category,
         studio_name: studioName,
+        studio_logo_url: studioLogo,
         require_login: !!gallery.require_login,
         download_mode: gallery.download_mode || 'off',
         protection: {
@@ -10062,10 +10471,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível' });
     const gallery = await findGalleryByToken(req.params.token);
     if (!gallery) return res.status(404).json({ error: 'Galeria não encontrada' });
-    const studioName = await getStudioNameForGallery(gallery.user_id);
+    const [studioName, studioLogo] = await Promise.all([
+      getStudioNameForGallery(gallery.user_id),
+      getStudioLogoForGallery(gallery.user_id),
+    ]);
     res.json({
       title: gallery.title,
       studio_name: studioName,
+      studio_logo_url: studioLogo,
       require_login: !!gallery.require_login,
       status: gallery.status,
     });
@@ -10169,6 +10582,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           external_reference: payment.id,
           notification_url: `${galleryPublicBase()}/api/public/gallery/mp-webhook?payment=${payment.id}`,
           back_urls: { success: galleryLink(gallery.share_token) },
+          // Sem boleto: só cartão e Pix. ('ticket' = boleto/PEC no MP Brasil.)
+          // Juros do parcelamento ficam por conta do cliente (padrão do MP); para
+          // oferecer "parcelas sem juros" o estúdio liga em Custos na conta MP dele.
+          payment_methods: { excluded_payment_types: [{ id: 'ticket' }] },
         }),
       });
       const data: any = await resp.json().catch(() => null);
@@ -12427,7 +12844,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const stages = await ensurePipelineStages(supabase, userId);
-    const { client_id, title, value, stage, priority, expected_close_date, next_follow_up, notes, assigned_to, contact_name, contact_phone, contact_email, lead_source } = req.body;
+    const { client_id, title, value, stage, priority, expected_close_date, next_follow_up, notes, assigned_to, contact_name, contact_phone, contact_email, lead_source, campaign_id } = req.body;
     const nowIso = new Date().toISOString();
     const stageId = stageIdOrDefault(stages, stage);
     const stageName = stages.find((s) => s.id === stageId)?.name || stageId;
@@ -12456,6 +12873,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       next_follow_up: next_follow_up || null,
       notes: notes || null,
       assigned_to: assigned_to || null,
+      campaign_id: campaign_id || null,
       user_id: userId,
       updated_at: nowIso,
     };
@@ -12489,7 +12907,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const supabase = (req as any).supabase as SupabaseClient;
     const stages = await ensurePipelineStages(supabase, userId);
     const firstStage = stages.find((s) => !s.is_final) || DEFAULT_STAGES[0];
-    const { name, phone, email, value, source, stage: requestedStage, assigned_to, notes } = req.body;
+    const { name, phone, email, value, source, stage: requestedStage, assigned_to, notes, campaign_id } = req.body;
     if (!name || !phone) return res.status(400).json({ error: 'Nome e telefone são obrigatórios' });
 
     // Stage solicitado (drag direto pra coluna específica) > primeira stage
@@ -12517,6 +12935,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       ],
       priority: 'medium',
       assigned_to: assigned_to || null,
+      campaign_id: campaign_id || null,
       user_id: userId,
       updated_at: nowIso,
     };
@@ -12734,7 +13153,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const supabase = (req as any).supabase as SupabaseClient;
     const stages = await ensurePipelineStages(supabase, userId);
     const wonStage = stages.find((s) => s.is_won) || DEFAULT_STAGES.find((s) => s.is_won);
-    const { createClient, createJob, client, job, sinalAmount, existingClientId, converted_at } = req.body;
+    const { createClient, createJob, client, job, sinalAmount, existingClientId, converted_at, campaign_id } = req.body;
     const nowIso = new Date().toISOString();
     // Data da venda retroativa: aceita 'YYYY-MM-DD' (ou ISO) e usa como
     // converted_at do deal. Inválida ou no futuro → agora. O meio-dia evita
@@ -12864,6 +13283,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       temperature: 'hot',
       temperature_locked: true,
     };
+    // Campanha de venda especial: persiste no deal (não no job). Guard pra não
+    // sobrescrever uma campanha já marcada quando o convert não envia o campo.
+    if (campaign_id !== undefined) updates.campaign_id = campaign_id;
 
     const { error } = await supabase.from('deals').update(updates).eq('id', req.params.id).eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });

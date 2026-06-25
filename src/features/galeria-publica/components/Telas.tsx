@@ -7,7 +7,7 @@ import { formatarBRL } from "../utils";
 
 function TelaCentral({ children }: { children: React.ReactNode }) {
   return (
-    <div className="h-full overflow-y-auto bg-[#FAF8F6] text-neutral-900">
+    <div className="h-full overflow-y-auto bg-[#F5EFE6] text-neutral-900">
       <div className="min-h-full flex flex-col items-center justify-center px-6 py-12 text-center">
         {children}
       </div>
@@ -17,7 +17,7 @@ function TelaCentral({ children }: { children: React.ReactNode }) {
 
 function IconeRedondo({ children }: { children: React.ReactNode }) {
   return (
-    <div className="w-16 h-16 rounded-full bg-[#D4537E]/10 text-[#D4537E] flex items-center justify-center mb-5">
+    <div className="w-16 h-16 rounded-full bg-[#6F4E37]/10 text-[#6F4E37] flex items-center justify-center mb-5">
       {children}
     </div>
   );
@@ -26,7 +26,7 @@ function IconeRedondo({ children }: { children: React.ReactNode }) {
 export function TelaCarregando() {
   return (
     <TelaCentral>
-      <Loader2 size={32} className="animate-spin text-[#D4537E]" />
+      <Loader2 size={32} className="animate-spin text-[#6F4E37]" />
       <p className="mt-4 text-sm text-neutral-500">Carregando galeria…</p>
     </TelaCentral>
   );
@@ -65,7 +65,7 @@ export function TelaSucesso({ estudio }: { estudio?: string | null }) {
   return (
     <TelaCentral>
       <IconeRedondo>
-        <Heart size={28} className="fill-[#D4537E]" />
+        <Heart size={28} className="fill-[#6F4E37]" />
       </IconeRedondo>
       <h1 className="font-serif text-3xl">Seleção enviada!</h1>
       <p className="mt-2 text-sm text-neutral-500 max-w-xs">
@@ -98,7 +98,7 @@ export function TelaPagamento({ valor, orderCode, paymentUrl }: PropsTelaPagamen
           href={paymentUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="mt-6 inline-flex items-center gap-2 rounded-full bg-[#D4537E] px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-[#D4537E]/30 hover:bg-[#c24470] transition-colors"
+          className="mt-6 inline-flex items-center gap-2 rounded-full bg-[#6F4E37] px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-[#6F4E37]/30 hover:bg-[#553A29] transition-colors"
         >
           <CreditCard size={16} />
           Pagar com Mercado Pago

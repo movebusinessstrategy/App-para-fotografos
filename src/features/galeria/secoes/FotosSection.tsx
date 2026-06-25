@@ -40,9 +40,28 @@ export function FotosSection({
   const [subAba, setSubAba] = useState<SubAba>("enviar");
   const [resolution, setResolution] = useState<UploadResolution>(getSavedResolution());
 
+  // Modo de seleção múltipla pra exclusão em lote.
+  const [deleteMode, setDeleteMode] = useState(false);
+  const [markedForDelete, setMarkedForDelete] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+
   const changeResolution = (r: UploadResolution) => {
     setResolution(r);
     saveResolution(r);
+  };
+
+  const toggleMark = (id: string) =>
+    setMarkedForDelete((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const selectAllForDelete = () => setMarkedForDelete(new Set(photos.map((p) => p.id)));
+  const exitDeleteMode = () => {
+    setDeleteMode(false);
+    setMarkedForDelete(new Set());
   };
 
   const selectedByPhoto = useMemo(() => {
@@ -146,6 +165,29 @@ export function FotosSection({
     mutate(); onChanged();
   };
 
+  const handleBulkDelete = async () => {
+    const ids = Array.from(markedForDelete);
+    if (ids.length === 0) return;
+    if (!window.confirm(`Excluir ${ids.length} foto(s) selecionada(s)? Essa ação não pode ser desfeita.`)) return;
+    setBulkDeleting(true);
+    try {
+      const res = await authFetch(`/api/galleries/${galleryId}/photos/bulk-delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ photo_ids: ids }),
+      });
+      if (!res.ok) throw new Error("falha");
+      const { removed } = await res.json();
+      onNotify("success", `${removed} foto(s) excluída(s).`);
+      exitDeleteMode();
+      mutate(); onChanged();
+    } catch {
+      onNotify("error", "Não foi possível excluir as fotos.");
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
   const copyNames = async () => {
     try {
       await navigator.clipboard.writeText(selectedPhotos.map((p) => p.file_name).join("\n"));
@@ -169,7 +211,7 @@ export function FotosSection({
           className={
             "flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors " +
             (subAba === "enviar"
-              ? "bg-white dark:bg-gray-700 text-violet-700 dark:text-violet-300 shadow-sm"
+              ? "bg-white dark:bg-gray-700 text-brand-700 dark:text-brand-300 shadow-sm"
               : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200")
           }
         >
@@ -180,7 +222,7 @@ export function FotosSection({
           className={
             "flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors " +
             (subAba === "selecionadas"
-              ? "bg-white dark:bg-gray-700 text-violet-700 dark:text-violet-300 shadow-sm"
+              ? "bg-white dark:bg-gray-700 text-brand-700 dark:text-brand-300 shadow-sm"
               : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200")
           }
         >
@@ -194,23 +236,66 @@ export function FotosSection({
             <div className="text-sm text-gray-600 dark:text-gray-300">
               {photos.length} foto(s) {photos.some((p) => p.process_status !== "done") ? "· processando algumas…" : ""}
             </div>
-            <div className="flex items-center gap-2">
-              {photos.some((p) => p.process_status === "error") && (
-                <button
-                  onClick={handleClearErrors} disabled={clearingErrors || uploadingLocal}
-                  className="inline-flex items-center gap-2 px-3 py-2 bg-red-50 hover:bg-red-100 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-700 dark:text-red-200 text-xs font-semibold rounded-lg disabled:opacity-60"
-                >
-                  {clearingErrors ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
-                  Limpar com erro
-                </button>
+            <div className="flex items-center gap-2 flex-wrap">
+              {deleteMode ? (
+                <>
+                  <button
+                    onClick={selectAllForDelete}
+                    className="inline-flex items-center gap-2 px-3 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 text-xs font-semibold rounded-lg"
+                  >
+                    Selecionar todas
+                  </button>
+                  <button
+                    onClick={() => setMarkedForDelete(new Set())}
+                    disabled={markedForDelete.size === 0}
+                    className="inline-flex items-center gap-2 px-3 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 text-xs font-semibold rounded-lg disabled:opacity-50"
+                  >
+                    Limpar seleção
+                  </button>
+                  <button
+                    onClick={handleBulkDelete}
+                    disabled={markedForDelete.size === 0 || bulkDeleting}
+                    className="inline-flex items-center gap-2 px-3 py-2 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg disabled:opacity-60"
+                  >
+                    {bulkDeleting ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                    Excluir ({markedForDelete.size})
+                  </button>
+                  <button
+                    onClick={exitDeleteMode}
+                    disabled={bulkDeleting}
+                    className="inline-flex items-center gap-2 px-3 py-2 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 text-xs font-semibold rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-60"
+                  >
+                    Cancelar
+                  </button>
+                </>
+              ) : (
+                <>
+                  {photos.length > 0 && (
+                    <button
+                      onClick={() => setDeleteMode(true)} disabled={uploadingLocal}
+                      className="inline-flex items-center gap-2 px-3 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 text-xs font-semibold rounded-lg disabled:opacity-60"
+                    >
+                      <Trash2 size={13} /> Selecionar pra excluir
+                    </button>
+                  )}
+                  {photos.some((p) => p.process_status === "error") && (
+                    <button
+                      onClick={handleClearErrors} disabled={clearingErrors || uploadingLocal}
+                      className="inline-flex items-center gap-2 px-3 py-2 bg-red-50 hover:bg-red-100 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-700 dark:text-red-200 text-xs font-semibold rounded-lg disabled:opacity-60"
+                    >
+                      {clearingErrors ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                      Limpar com erro
+                    </button>
+                  )}
+                  <button
+                    onClick={() => fileInputRef.current?.click()} disabled={uploadingLocal}
+                    className="inline-flex items-center gap-2 px-3 py-2 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-lg disabled:opacity-60"
+                  >
+                    {uploadingLocal ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                    Enviar fotos
+                  </button>
+                </>
               )}
-              <button
-                onClick={() => fileInputRef.current?.click()} disabled={uploadingLocal}
-                className="inline-flex items-center gap-2 px-3 py-2 bg-violet-600 hover:bg-violet-700 text-white text-xs font-semibold rounded-lg disabled:opacity-60"
-              >
-                {uploadingLocal ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-                Enviar fotos
-              </button>
               <input
                 ref={fileInputRef} type="file" accept="image/*,.heic,.heif" multiple className="hidden"
                 onChange={(e) => handleFiles(e.target.files)}
@@ -235,7 +320,7 @@ export function FotosSection({
                     className={
                       "text-left p-2.5 rounded-lg border transition-colors " +
                       (active
-                        ? "border-violet-600 bg-violet-50 dark:bg-violet-900/20 ring-1 ring-violet-600/40"
+                        ? "border-brand-600 bg-brand-50 dark:bg-brand-900/20 ring-1 ring-brand-600/40"
                         : "border-gray-200 dark:border-gray-700 hover:border-gray-400")
                     }
                   >
@@ -255,7 +340,7 @@ export function FotosSection({
               </div>
               <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
                 <div
-                  className="h-full bg-violet-500 transition-all"
+                  className="h-full bg-brand-500 transition-all"
                   style={{ width: `${(progress.done / Math.max(1, progress.total)) * 100}%` }}
                 />
               </div>
@@ -265,7 +350,7 @@ export function FotosSection({
           {photos.length === 0 ? (
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="w-full h-32 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700 flex flex-col items-center justify-center gap-2 text-gray-400 hover:border-violet-400 hover:text-violet-500 transition-colors"
+              className="w-full h-32 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700 flex flex-col items-center justify-center gap-2 text-gray-400 hover:border-brand-400 hover:text-brand-500 transition-colors"
             >
               <Upload size={20} />
               <span className="text-sm">Clique pra enviar as fotos do ensaio</span>
@@ -276,6 +361,9 @@ export function FotosSection({
                 <ThumbFoto
                   key={p.id} photo={p}
                   selected={!!selectedByPhoto.get(p.id)?.selected}
+                  deleteMode={deleteMode}
+                  marked={markedForDelete.has(p.id)}
+                  onToggleMark={() => toggleMark(p.id)}
                   onDelete={() => handleDeletePhoto(p)}
                 />
               ))}
@@ -345,13 +433,22 @@ export function FotosSection({
   );
 }
 
-function ThumbFoto({ photo, selected, onDelete }: {
-  photo: GalleryPhoto; selected: boolean; onDelete: () => void; key?: React.Key | null;
+function ThumbFoto({ photo, selected, onDelete, deleteMode = false, marked = false, onToggleMark }: {
+  photo: GalleryPhoto; selected: boolean; onDelete: () => void;
+  deleteMode?: boolean; marked?: boolean; onToggleMark?: () => void;
+  key?: React.Key | null;
 }) {
   const failed = photo.process_status === "error";
   const processing = !photo.thumb_url && !failed;
   return (
-    <div className="group relative aspect-square rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-800 ring-1 ring-gray-200 dark:ring-gray-700">
+    <div
+      onClick={deleteMode ? onToggleMark : undefined}
+      className={
+        "group relative aspect-square rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-800 ring-1 " +
+        (deleteMode ? "cursor-pointer " : "") +
+        (marked ? "ring-2 ring-red-500" : "ring-gray-200 dark:ring-gray-700")
+      }
+    >
       {photo.thumb_url && (
         <img src={photo.thumb_url} alt={photo.file_name} loading="lazy" className="w-full h-full object-cover" />
       )}
@@ -366,18 +463,32 @@ function ThumbFoto({ photo, selected, onDelete }: {
           <span className="text-[10px] font-medium">Erro</span>
         </div>
       )}
-      {selected && (
-        <span className="absolute top-1 left-1 rounded-full bg-emerald-500 text-white p-0.5 shadow">
-          <Check size={11} />
+      {deleteMode && marked && <div className="absolute inset-0 bg-red-500/20 pointer-events-none" />}
+      {deleteMode ? (
+        <span
+          className={
+            "absolute top-1 left-1 w-5 h-5 rounded-full flex items-center justify-center border-2 shadow " +
+            (marked ? "bg-red-500 border-red-500 text-white" : "bg-black/30 border-white/80 text-transparent")
+          }
+        >
+          <Check size={12} />
         </span>
+      ) : (
+        selected && (
+          <span className="absolute top-1 left-1 rounded-full bg-emerald-500 text-white p-0.5 shadow">
+            <Check size={11} />
+          </span>
+        )
       )}
-      <button
-        onClick={onDelete}
-        className="absolute top-1 right-1 rounded-full bg-black/55 text-white p-1 opacity-0 group-hover:opacity-100 transition-opacity"
-        title="Remover foto"
-      >
-        <Trash2 size={11} />
-      </button>
+      {!deleteMode && (
+        <button
+          onClick={onDelete}
+          className="absolute top-1 right-1 rounded-full bg-black/55 text-white p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+          title="Remover foto"
+        >
+          <Trash2 size={11} />
+        </button>
+      )}
       <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/60 to-transparent px-1.5 py-1">
         <span className="text-[9px] text-white/90 truncate block">{photo.file_name}</span>
       </div>

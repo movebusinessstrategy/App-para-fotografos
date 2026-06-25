@@ -23,6 +23,21 @@
   --color-gold-900: #443210;
   --color-gold-950: #261c08;
 
+  /* Paleta do estúdio (marrom café + bege) — usada nas telas de galeria
+     e nas páginas do cliente (login + galeria pública). Aditiva ao gold,
+     que segue sendo a cor do restante do app interno. */
+  --color-brand-50:  #F5EFE6;
+  --color-brand-100: #EDE3D3;
+  --color-brand-200: #DCC9AE;
+  --color-brand-300: #C9A77C;
+  --color-brand-400: #A8814F;
+  --color-brand-500: #8B6B45;
+  --color-brand-600: #6F4E37;
+  --color-brand-700: #553A29;
+  --color-brand-800: #402C1F;
+  --color-brand-900: #2C1E15;
+  --color-brand-950: #1B120C;
+
   --color-luxury-black: #0A0A0A;
   --color-luxury-charcoal: #1A1A1A;
   --color-luxury-cream: #F5F2ED;

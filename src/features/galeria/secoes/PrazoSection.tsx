@@ -86,7 +86,7 @@ export function PrazoSection({ gallery, onChanged, onNotify }: PrazoSectionProps
           <input
             type="checkbox" checked={lockAfter}
             onChange={(e) => { setLockAfter(e.target.checked); save({ lock_after_deadline: e.target.checked }); }}
-            className="w-4 h-4 accent-violet-600"
+            className="w-4 h-4 accent-brand-600"
           />
           <span className="text-sm">
             Bloquear seleção após o prazo
@@ -99,7 +99,7 @@ export function PrazoSection({ gallery, onChanged, onNotify }: PrazoSectionProps
 
       <Bloco titulo="Lembrete (em breve)">
         <p className="text-sm text-gray-600 dark:text-gray-300 flex items-start gap-2">
-          <CalendarClock size={16} className="text-violet-600 dark:text-violet-400 mt-0.5" />
+          <CalendarClock size={16} className="text-brand-600 dark:text-brand-400 mt-0.5" />
           <span>
             Em breve: lembrete automático por WhatsApp / e-mail 3 dias e 1 dia antes do prazo.
             Por enquanto, dá pra reenviar a galeria pela ação "Enviar pra cliente".

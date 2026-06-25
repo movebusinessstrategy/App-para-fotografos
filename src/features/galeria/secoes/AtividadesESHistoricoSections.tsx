@@ -215,7 +215,7 @@ export function HistoricoSection({ galleryId }: { galleryId: string }) {
             className={
               "text-xs px-2.5 py-1 rounded-full transition-colors " +
               (filter === f.id
-                ? "bg-violet-600 text-white"
+                ? "bg-brand-600 text-white"
                 : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700")
             }
           >

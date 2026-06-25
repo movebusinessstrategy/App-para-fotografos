@@ -235,7 +235,7 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
                 className={
                   "text-left p-3 rounded-lg border transition-colors " +
                   (active
-                    ? "border-violet-600 bg-violet-50 dark:bg-violet-900/20 ring-2 ring-violet-600/40"
+                    ? "border-brand-600 bg-brand-50 dark:bg-brand-900/20 ring-2 ring-brand-600/40"
                     : "border-gray-200 dark:border-gray-700 hover:border-gray-400")
                 }
               >
@@ -279,7 +279,7 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
               </button>
               <button
                 onClick={savePacks} disabled={packsLoading || packs.length === 0}
-                className="inline-flex items-center gap-2 px-4 py-1.5 text-sm bg-violet-600 hover:bg-violet-700 text-white font-semibold rounded-lg disabled:opacity-60"
+                className="inline-flex items-center gap-2 px-4 py-1.5 text-sm bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-lg disabled:opacity-60"
               >
                 {packsLoading ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
                 Salvar pacotes
@@ -317,7 +317,7 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
                   className={
                     "text-left p-3 rounded-lg border transition-colors " +
                     (active
-                      ? "border-violet-600 bg-violet-50 dark:bg-violet-900/20 ring-2 ring-violet-600/40"
+                      ? "border-brand-600 bg-brand-50 dark:bg-brand-900/20 ring-2 ring-brand-600/40"
                       : "border-gray-200 dark:border-gray-700 hover:border-gray-400")
                   }
                 >
@@ -365,7 +365,7 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
               ))}
               <button
                 type="button" onClick={addRule} disabled={rules.length >= MAX_DISCOUNT_RULES}
-                className="w-full py-2 text-sm font-medium text-violet-700 dark:text-violet-300 bg-violet-50 dark:bg-violet-900/20 hover:bg-violet-100 dark:hover:bg-violet-900/30 rounded-lg disabled:opacity-50"
+                className="w-full py-2 text-sm font-medium text-brand-700 dark:text-brand-300 bg-brand-50 dark:bg-brand-900/20 hover:bg-brand-100 dark:hover:bg-brand-900/30 rounded-lg disabled:opacity-50"
               >
                 Adicionar regra de desconto
               </button>
@@ -399,7 +399,7 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
               ))}
               <button
                 type="button" onClick={addValueRule} disabled={valueRules.length >= MAX_DISCOUNT_RULES}
-                className="w-full py-2 text-sm font-medium text-violet-700 dark:text-violet-300 bg-violet-50 dark:bg-violet-900/20 hover:bg-violet-100 dark:hover:bg-violet-900/30 rounded-lg disabled:opacity-50"
+                className="w-full py-2 text-sm font-medium text-brand-700 dark:text-brand-300 bg-brand-50 dark:bg-brand-900/20 hover:bg-brand-100 dark:hover:bg-brand-900/30 rounded-lg disabled:opacity-50"
               >
                 Adicionar regra por valor
               </button>
@@ -445,7 +445,7 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
                       <span className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Tipo</span>
                       <select
                         value={c.type} onChange={(e) => updateCoupon(idx, "type", e.target.value)}
-                        className="w-full px-2 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500"
+                        className="w-full px-2 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
                       >
                         <option value="pct">%</option>
                         <option value="flat">R$</option>
@@ -462,7 +462,7 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
               ))}
               <button
                 type="button" onClick={addCoupon} disabled={coupons.length >= 50}
-                className="w-full py-2 text-sm font-medium text-violet-700 dark:text-violet-300 bg-violet-50 dark:bg-violet-900/20 hover:bg-violet-100 dark:hover:bg-violet-900/30 rounded-lg disabled:opacity-50"
+                className="w-full py-2 text-sm font-medium text-brand-700 dark:text-brand-300 bg-brand-50 dark:bg-brand-900/20 hover:bg-brand-100 dark:hover:bg-brand-900/30 rounded-lg disabled:opacity-50"
               >
                 Adicionar cupom
               </button>
@@ -474,7 +474,7 @@ export function VendaSection({ gallery, onChanged, onNotify }: VendaSectionProps
       <div className="flex justify-end">
         <button
           onClick={saveBasics} disabled={saving}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold rounded-lg disabled:opacity-60"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold rounded-lg disabled:opacity-60"
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
           Salvar configuração

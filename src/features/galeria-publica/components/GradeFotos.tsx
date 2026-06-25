@@ -38,7 +38,7 @@ function CartaoFoto({ foto, selecionada, bloquearImagens, podeEditar, onAbrir, o
       </button>
 
       {selecionada && (
-        <span className="pointer-events-none absolute left-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-[#D4537E] text-white shadow">
+        <span className="pointer-events-none absolute left-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-[#6F4E37] text-white shadow">
           <Check size={14} strokeWidth={3} />
         </span>
       )}
@@ -55,7 +55,7 @@ function CartaoFoto({ foto, selecionada, bloquearImagens, podeEditar, onAbrir, o
         >
           <Heart
             size={18}
-            className={selecionada ? "fill-[#D4537E] text-[#D4537E]" : "text-white"}
+            className={selecionada ? "fill-[#6F4E37] text-[#6F4E37]" : "text-white"}
           />
         </button>
       )}

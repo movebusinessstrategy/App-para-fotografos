@@ -93,7 +93,7 @@ export function EnviarGaleriaModal({ gallery, onClose, onSent, onNotify }: Envia
       <div className="relative bg-white dark:bg-gray-900 rounded-xl shadow-xl w-full max-w-lg border border-transparent dark:border-gray-800 max-h-[92vh] flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-800">
           <h3 className="text-base font-bold text-gray-900 dark:text-white flex items-center gap-2">
-            <Send size={16} className="text-violet-600 dark:text-violet-400" />
+            <Send size={16} className="text-brand-600 dark:text-brand-400" />
             Enviar galeria pra cliente
           </h3>
           <button onClick={onClose} className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800">
@@ -113,7 +113,7 @@ export function EnviarGaleriaModal({ gallery, onClose, onSent, onNotify }: Envia
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 rows={9}
-                className="w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white outline-none focus:border-violet-400 resize-y leading-relaxed"
+                className="w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white outline-none focus:border-brand-400 resize-y leading-relaxed"
               />
               <div className="flex flex-wrap gap-1.5 mt-1.5">
                 {PLACEHOLDERS.map((p) => (
@@ -122,7 +122,7 @@ export function EnviarGaleriaModal({ gallery, onClose, onSent, onNotify }: Envia
                     type="button"
                     title={p.desc}
                     onClick={() => setMessage((m) => m + (m.endsWith("\n") || m === "" ? "" : " ") + p.tag)}
-                    className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-violet-50 hover:text-violet-700 dark:hover:bg-violet-900/30 font-mono"
+                    className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-brand-50 hover:text-brand-700 dark:hover:bg-brand-900/30 font-mono"
                   >
                     {p.tag}
                   </button>
@@ -149,12 +149,12 @@ export function EnviarGaleriaModal({ gallery, onClose, onSent, onNotify }: Envia
               />
             </div>
 
-            <label className="flex items-start gap-2 cursor-pointer rounded-lg bg-violet-50/50 dark:bg-violet-900/10 border border-violet-100 dark:border-violet-900/30 p-3">
+            <label className="flex items-start gap-2 cursor-pointer rounded-lg bg-brand-50/50 dark:bg-brand-900/10 border border-brand-100 dark:border-brand-900/30 p-3">
               <input
                 type="checkbox"
                 checked={includeAccess}
                 onChange={(e) => setIncludeAccess(e.target.checked)}
-                className="mt-0.5 w-4 h-4 accent-violet-600"
+                className="mt-0.5 w-4 h-4 accent-brand-600"
               />
               <span className="text-sm">
                 Incluir dados de acesso (e-mail + senha)
@@ -169,7 +169,7 @@ export function EnviarGaleriaModal({ gallery, onClose, onSent, onNotify }: Envia
                 type="checkbox"
                 checked={saveAsDefault}
                 onChange={(e) => setSaveAsDefault(e.target.checked)}
-                className="w-3.5 h-3.5 accent-violet-600"
+                className="w-3.5 h-3.5 accent-brand-600"
               />
               Salvar este texto como padrão do estúdio
             </label>
@@ -186,7 +186,7 @@ export function EnviarGaleriaModal({ gallery, onClose, onSent, onNotify }: Envia
                 type="button"
                 onClick={enviar}
                 disabled={sending}
-                className="flex-1 py-2 inline-flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50"
+                className="flex-1 py-2 inline-flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50"
               >
                 {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
                 {sending ? "Enviando..." : "Enviar agora"}
@@ -213,7 +213,7 @@ function CanalCheckbox({ checked, onChange, icon, label, detail, disabled }: {
       (disabled
         ? "border-gray-100 dark:border-gray-800 opacity-50 cursor-not-allowed"
         : checked
-          ? "border-violet-300 dark:border-violet-800 bg-violet-50/50 dark:bg-violet-900/10 cursor-pointer"
+          ? "border-brand-300 dark:border-brand-800 bg-brand-50/50 dark:bg-brand-900/10 cursor-pointer"
           : "border-gray-200 dark:border-gray-700 cursor-pointer hover:border-gray-300")
     }>
       <input
@@ -221,7 +221,7 @@ function CanalCheckbox({ checked, onChange, icon, label, detail, disabled }: {
         checked={checked}
         disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
-        className="w-4 h-4 accent-violet-600"
+        className="w-4 h-4 accent-brand-600"
       />
       {icon}
       <span className="text-sm font-medium">{label}</span>

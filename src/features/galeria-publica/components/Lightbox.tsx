@@ -134,7 +134,7 @@ export function Lightbox(props: Props) {
           >
             <Heart
               size={24}
-              className={selecionada ? "fill-[#D4537E] text-[#D4537E]" : "text-white"}
+              className={selecionada ? "fill-[#6F4E37] text-[#6F4E37]" : "text-white"}
             />
           </button>
           <CampoComentario podeEditar={podeEditar} texto={texto} onDigitar={aoDigitar} />
@@ -179,7 +179,7 @@ function CampoComentario({
       value={texto}
       onChange={(e) => onDigitar(e.target.value)}
       placeholder="Comentário para o fotógrafo (opcional)"
-      className="w-full flex-1 rounded-full border border-white/15 bg-white/10 px-4 py-2.5 text-sm text-white placeholder-white/40 outline-none focus:border-[#D4537E]/60 focus:ring-1 focus:ring-[#D4537E]/60"
+      className="w-full flex-1 rounded-full border border-white/15 bg-white/10 px-4 py-2.5 text-sm text-white placeholder-white/40 outline-none focus:border-[#6F4E37]/60 focus:ring-1 focus:ring-[#6F4E37]/60"
     />
   );
 }

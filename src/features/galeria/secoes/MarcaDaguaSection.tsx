@@ -61,6 +61,7 @@ export function MarcaDaguaSection({ onNotify }: MarcaDaguaSectionProps) {
         watermark_text: settings.watermark_text || null,
         watermark_opacity: Number(settings.watermark_opacity ?? 0.3),
         watermark_include_client_name: !!settings.watermark_include_client_name,
+        watermark_mode: settings.watermark_mode === "centered" ? "centered" : "tiled",
       };
       if (settings.watermark_logo_path === "pending" && settings.watermark_logo_url?.startsWith("data:")) {
         payload.watermark_logo_base64 = settings.watermark_logo_url;
@@ -108,7 +109,7 @@ export function MarcaDaguaSection({ onNotify }: MarcaDaguaSectionProps) {
               className={
                 "p-3 rounded-lg border text-sm font-medium transition-colors flex items-center gap-2 " +
                 (type === v
-                  ? "border-violet-600 bg-violet-50 dark:bg-violet-900/20 ring-2 ring-violet-600/40"
+                  ? "border-brand-600 bg-brand-50 dark:bg-brand-900/20 ring-2 ring-brand-600/40"
                   : "border-gray-200 dark:border-gray-700 hover:border-gray-400")
               }
             >
@@ -155,6 +156,30 @@ export function MarcaDaguaSection({ onNotify }: MarcaDaguaSectionProps) {
               </p>
             </div>
           </div>
+
+          {/* Como a logo aparece na foto: repetida em diagonal ou uma só, grande e centralizada */}
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            {([
+              { v: "tiled" as const, label: "Repetida (diagonal)", hint: "Padrão diagonal cobrindo a foto" },
+              { v: "centered" as const, label: "Centralizada", hint: "Uma logo grande no centro" },
+            ]).map(({ v, label, hint }) => {
+              const active = (settings.watermark_mode || "tiled") === v;
+              return (
+                <button
+                  key={v} type="button" onClick={() => update("watermark_mode", v)}
+                  className={
+                    "p-3 rounded-lg border text-left transition-colors " +
+                    (active
+                      ? "border-brand-600 bg-brand-50 dark:bg-brand-900/20 ring-2 ring-brand-600/40"
+                      : "border-gray-200 dark:border-gray-700 hover:border-gray-400")
+                  }
+                >
+                  <div className="text-sm font-medium">{label}</div>
+                  <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">{hint}</div>
+                </button>
+              );
+            })}
+          </div>
         </Bloco>
       )}
 
@@ -163,7 +188,7 @@ export function MarcaDaguaSection({ onNotify }: MarcaDaguaSectionProps) {
           <input
             type="range" min={5} max={60} step={5} value={opacity}
             onChange={(e) => update("watermark_opacity", Number(e.target.value) / 100)}
-            className="w-full accent-violet-600"
+            className="w-full accent-brand-600"
           />
           <div className="flex justify-between text-xs text-gray-500">
             <span>Discreta · 5%</span>
@@ -175,7 +200,7 @@ export function MarcaDaguaSection({ onNotify }: MarcaDaguaSectionProps) {
           <input
             type="checkbox" checked={!!settings.watermark_include_client_name}
             onChange={(e) => update("watermark_include_client_name", e.target.checked)}
-            className="w-4 h-4 accent-violet-600"
+            className="w-4 h-4 accent-brand-600"
           />
           <span>Incluir o nome da cliente na marca (rastreável)</span>
         </label>
@@ -188,7 +213,7 @@ export function MarcaDaguaSection({ onNotify }: MarcaDaguaSectionProps) {
       <div className="flex justify-end">
         <button
           onClick={save} disabled={saving}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold rounded-lg disabled:opacity-60"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold rounded-lg disabled:opacity-60"
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
           Salvar marca d'água

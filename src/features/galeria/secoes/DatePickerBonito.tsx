@@ -167,13 +167,13 @@ export function DatePickerBonito({
                   className={
                     "text-xs h-8 rounded-lg flex items-center justify-center transition-colors " +
                     (isSelected
-                      ? "bg-violet-600 text-white font-semibold"
+                      ? "bg-brand-600 text-white font-semibold"
                       : disabled
                         ? "text-gray-300 dark:text-gray-700 cursor-not-allowed"
                         : outOfMonth
                           ? "text-gray-300 dark:text-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800"
                           : isToday
-                            ? "text-violet-600 dark:text-violet-300 font-semibold ring-1 ring-violet-200 dark:ring-violet-800 hover:bg-violet-50 dark:hover:bg-violet-900/30"
+                            ? "text-brand-600 dark:text-brand-300 font-semibold ring-1 ring-brand-200 dark:ring-brand-800 hover:bg-brand-50 dark:hover:bg-brand-900/30"
                             : "text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800")
                   }
                 >
@@ -205,7 +205,7 @@ function PresetButton({ label, onClick }: { label: string; onClick: () => void; 
     <button
       type="button"
       onClick={onClick}
-      className="px-2.5 py-1 text-xs font-medium rounded-lg bg-gray-100 hover:bg-violet-100 dark:bg-gray-800 dark:hover:bg-violet-900/30 text-gray-700 dark:text-gray-200 hover:text-violet-700 dark:hover:text-violet-300 transition-colors"
+      className="px-2.5 py-1 text-xs font-medium rounded-lg bg-gray-100 hover:bg-brand-100 dark:bg-gray-800 dark:hover:bg-brand-900/30 text-gray-700 dark:text-gray-200 hover:text-brand-700 dark:hover:text-brand-300 transition-colors"
     >
       {label}
     </button>
