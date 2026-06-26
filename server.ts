@@ -9503,19 +9503,27 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!photo?.original_path) return res.status(404).json({ error: 'Foto não encontrada' });
 
     await supabase.from('gallery_photos').update({ process_status: 'processing' }).eq('id', photo.id);
+    const basePath = `${userId}/${gallery.id}/${photo.id}`;
     try {
-      // HEIC do iPhone crasha o sharp (precisa de libheif com codec HEVC).
-      // O frontend converte pra JPEG antes; aqui é rede de proteção.
-      if (/\.heic$|\.heif$/i.test(photo.file_name || '')) {
-        throw new Error('Formato HEIC não suportado — converta pra JPEG antes de enviar.');
-      }
-      const original = await downloadGalleryObject(GALLERY_ORIGINALS_BUCKET, photo.original_path);
-      const opts = await buildWatermarkOpts(userId, gallery);
-      const out = await processGalleryPhoto(original, opts);
-
-      const basePath = `${userId}/${gallery.id}/${photo.id}`;
-      await uploadGalleryPreview(`${basePath}/preview.jpg`, out.preview);
-      await uploadGalleryPreview(`${basePath}/thumb.jpg`, out.thumb);
+      // Limite de tempo: se download/sharp/upload travar, marca 'error' em vez de
+      // deixar a foto presa em "processando" pra sempre (causa do "carregando infinito").
+      const out = await Promise.race([
+        (async () => {
+          // HEIC do iPhone crasha o sharp (precisa de libheif com codec HEVC).
+          // O frontend converte pra JPEG antes; aqui é rede de proteção.
+          if (/\.heic$|\.heif$/i.test(photo.file_name || '')) {
+            throw new Error('Formato HEIC não suportado — converta pra JPEG antes de enviar.');
+          }
+          const original = await downloadGalleryObject(GALLERY_ORIGINALS_BUCKET, photo.original_path);
+          const opts = await buildWatermarkOpts(userId, gallery);
+          const processed = await processGalleryPhoto(original, opts);
+          await uploadGalleryPreview(`${basePath}/preview.jpg`, processed.preview);
+          await uploadGalleryPreview(`${basePath}/thumb.jpg`, processed.thumb);
+          return processed;
+        })(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('processamento excedeu o tempo limite')), 120_000)),
+      ]);
 
       await supabase.from('gallery_photos').update({
         preview_path: `${basePath}/preview.jpg`,

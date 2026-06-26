@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Check, Copy, Heart, Loader2, Trash2, Upload } from "lucide-react";
+import { AlertCircle, Check, Copy, Heart, Loader2, RefreshCw, Trash2, Upload } from "lucide-react";
 
 import { authFetch } from "../../../utils/authFetch";
 import { GalleryDetailResponse, GalleryPhoto } from "../types";
@@ -75,17 +75,20 @@ export function FotosSection({
     [photos, selectedByPhoto],
   );
 
-  // Refresh automático enquanto houver foto processando (marca d'água roda em
-  // segundo plano): a miniatura aparece sozinha, sem precisar recarregar a página.
-  // Cap de ~4min (48 × 5s) pra não ficar atualizando pra sempre.
-  const pollRef = useRef(0);
+  // Processador automático: enquanto houver foto SEM miniatura (novas ou que
+  // travaram antes), processa em ondas de 12 (2 em paralelo), até 2 tentativas
+  // cada. A cada onda atualiza a lista — as miniaturas aparecem sozinhas. Para
+  // quando tudo vira 'done' ou 'error'. Pausa durante o envio pra não competir.
   useEffect(() => {
-    const processando = photos.some((p) => p.process_status === "pending" || p.process_status === "processing");
-    if (!processando) { pollRef.current = 0; return; }
-    if (pollRef.current >= 48) return;
-    const t = setTimeout(() => { pollRef.current += 1; mutate(); }, 5000);
-    return () => clearTimeout(t);
-  }, [photos, mutate]);
+    if (uploadingLocal || processingRef.current) return;
+    const todo = photos
+      .filter((p) => !p.thumb_url && p.process_status !== "error" && (attemptsRef.current.get(p.id) || 0) < 2)
+      .map((p) => p.id);
+    if (todo.length === 0) return;
+    processingRef.current = true;
+    processIds(todo.slice(0, 12)).finally(() => { processingRef.current = false; });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [photos, uploadingLocal]);
 
   // Sobe só o ORIGINAL pro storage — isso é o "envio" (rápido). Conta o progresso
   // aqui. Timeout pra nunca ficar carregando infinito se a rede travar.
@@ -93,7 +96,6 @@ export function FotosSection({
     upload: { photo_id: string; signed_url: string },
     file: File,
     errors: string[],
-    okIds: string[],
   ) => {
     try {
       const put = await fetch(upload.signed_url, {
@@ -103,7 +105,6 @@ export function FotosSection({
         signal: AbortSignal.timeout(120_000),
       });
       if (!put.ok) throw new Error("upload");
-      okIds.push(upload.photo_id);
     } catch {
       errors.push(file.name);
     } finally {
@@ -111,20 +112,32 @@ export function FotosSection({
     }
   };
 
-  // Processa a marca d'água em SEGUNDO PLANO (depois que tudo já foi enviado).
-  // Não trava a UI: as miniaturas aparecem sozinhas pelo refresh automático.
-  const processInBackground = async (photoIds: string[]) => {
-    if (photoIds.length === 0) return;
-    await runPool(2, photoIds.map((id) => async () => {
+  // Dispara o processamento da marca d'água (servidor gera preview+thumb) num
+  // conjunto de fotos, em paralelo limitado. Timeout no cliente; o servidor tem o
+  // dele (120s) e marca 'error' se travar — nunca fica "processando" pra sempre.
+  const attemptsRef = useRef<Map<string, number>>(new Map());
+  const processingRef = useRef(false);
+  const processIds = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    await runPool(2, ids.map((id) => async () => {
+      attemptsRef.current.set(id, (attemptsRef.current.get(id) || 0) + 1);
       try {
         await authFetch(`/api/galleries/${galleryId}/photos/${id}/process`, {
           method: "POST",
           signal: AbortSignal.timeout(180_000),
         });
-      } catch { /* lento/falhou — resolve no poll ou em "Limpar com erro" */ }
+      } catch { /* lento/falhou — servidor marca 'error' e sai do loop */ }
     }));
     mutate();
     onChanged();
+  };
+
+  // Reprocessa TUDO que está sem miniatura (inclui as que deram erro). Zera o
+  // contador de tentativas e dispara de novo — botão manual de recuperação.
+  const reprocessarPendentes = () => {
+    const ids = photos.filter((p) => !p.thumb_url).map((p) => p.id);
+    ids.forEach((id) => attemptsRef.current.delete(id));
+    processIds(ids);
   };
 
   const handleFiles = async (fileList: FileList | null) => {
@@ -134,9 +147,7 @@ export function FotosSection({
     if (raw.length === 0) return;
     setUploadingLocal(true);
     setUploading(true);
-    pollRef.current = 0; // libera o refresh automático das miniaturas
     const errors: string[] = [];
-    const okIds: string[] = []; // fotos que subiram OK → processa depois
     setProgress({ done: 0, total: raw.length });
 
     try {
@@ -163,20 +174,17 @@ export function FotosSection({
           continue;
         }
         const { uploads } = await res.json();
-        await runPool(3, batch.map((file, i) => () => uploadOriginal(uploads[i], file, errors, okIds)));
+        await runPool(3, batch.map((file, i) => () => uploadOriginal(uploads[i], file, errors)));
       }
     } finally {
       setUploadingLocal(false);
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
-      mutate();
+      mutate(); // dispara o processador automático (marca d'água em 2º plano)
       onChanged();
     }
     if (errors.length > 0) onNotify("error", `${errors.length} foto(s) falharam no envio.`);
     else onNotify("success", `${raw.length} foto(s) enviada(s). Aplicando marca d'água…`);
-
-    // Marca d'água em segundo plano — NÃO bloqueia a tela (miniaturas aparecem sozinhas).
-    void processInBackground(okIds);
   };
 
   const handleClearErrors = async () => {
@@ -311,6 +319,15 @@ export function FotosSection({
                       className="inline-flex items-center gap-2 px-3 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 text-xs font-semibold rounded-lg disabled:opacity-60"
                     >
                       <Trash2 size={13} /> Selecionar pra excluir
+                    </button>
+                  )}
+                  {!uploadingLocal && photos.some((p) => !p.thumb_url) && (
+                    <button
+                      onClick={reprocessarPendentes}
+                      className="inline-flex items-center gap-2 px-3 py-2 bg-amber-50 hover:bg-amber-100 dark:bg-amber-900/30 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-200 text-xs font-semibold rounded-lg"
+                      title="Reaplica a marca d'água nas fotos que ficaram pendentes"
+                    >
+                      <RefreshCw size={13} /> Processar pendentes ({photos.filter((p) => !p.thumb_url).length})
                     </button>
                   )}
                   {photos.some((p) => p.process_status === "error") && (
