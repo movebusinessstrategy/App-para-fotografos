@@ -9489,6 +9489,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     };
   }
 
+  // Trava de concorrência do processamento: no máx. 2 jobs de sharp por vez no
+  // servidor (RAM pequena ~512MB). Mesmo se o cliente disparar vários /process,
+  // eles entram numa fila e rodam de 2 em 2 — evita OOM e o "processando" eterno.
+  let galProcActive = 0;
+  const galProcQueue: (() => void)[] = [];
+  const acquireProcessSlot = () => new Promise<void>((resolve) => {
+    if (galProcActive < 2) { galProcActive++; resolve(); }
+    else galProcQueue.push(resolve);
+  });
+  const releaseProcessSlot = () => {
+    galProcActive = Math.max(0, galProcActive - 1);
+    const next = galProcQueue.shift();
+    if (next) { galProcActive++; next(); }
+  };
+
   // Gera preview 1600px + thumb 400px com marca d'água a partir do original.
   app.post('/api/galleries/:id/photos/:photoId/process', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
@@ -9504,6 +9519,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     await supabase.from('gallery_photos').update({ process_status: 'processing' }).eq('id', photo.id);
     const basePath = `${userId}/${gallery.id}/${photo.id}`;
+    await acquireProcessSlot(); // espera um slot livre (no máx. 2 processando por vez)
     try {
       // Limite de tempo: se download/sharp/upload travar, marca 'error' em vez de
       // deixar a foto presa em "processando" pra sempre (causa do "carregando infinito").
@@ -9537,6 +9553,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       console.error('[galeria] processamento falhou:', e?.message);
       await supabase.from('gallery_photos').update({ process_status: 'error' }).eq('id', photo.id);
       res.status(500).json({ error: e?.message || 'Falha ao processar a foto' });
+    } finally {
+      releaseProcessSlot();
     }
   });
 

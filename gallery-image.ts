@@ -5,6 +5,13 @@
 
 import sharp from 'sharp';
 
+// Servidor pequeno (Render ~512MB): trava o sharp pra NÃO estourar a RAM quando
+// várias fotos são processadas. 1 thread por operação + cache de memória pequeno.
+// Sem isso, o sharp usa todos os núcleos e acumula buffers → OOM → processamento
+// trava em "processando" pra sempre.
+sharp.concurrency(1);
+sharp.cache({ memory: 64, files: 0, items: 30 });
+
 export interface GalleryWatermarkOpts {
   watermarkType: 'text' | 'logo';
   watermarkText: string;
@@ -32,7 +39,7 @@ export async function processGalleryPhoto(
   original: Buffer,
   opts: GalleryWatermarkOpts
 ): Promise<ProcessedGalleryPhoto> {
-  const meta = await sharp(original).metadata();
+  const meta = await sharp(original, { failOn: 'none' }).metadata();
   const { width, height } = orientedDims(meta);
   const opacity = clampOpacity(opts.opacity);
 
@@ -65,29 +72,34 @@ async function buildVariant(
   opts: GalleryWatermarkOpts,
   opacity: number
 ): Promise<Buffer> {
-  // .rotate() sem args auto-orienta pelo EXIF ANTES de redimensionar
-  const { data, info } = await sharp(original)
-    .rotate()
-    .resize(maxSide, maxSide, { fit: 'inside', withoutEnlargement: true })
-    .png()
-    .toBuffer({ resolveWithObject: true });
+  // Dimensões DEPOIS do resize, calculadas só pela metadata (sem encodar a
+  // imagem). Antes isso era feito com um round-trip de PNG da imagem inteira
+  // (~3MB + re-decode) — o maior vilão de RAM. Agora é um pipeline só.
+  const meta = await sharp(original, { failOn: 'none' }).metadata();
+  const { width: ow, height: oh } = orientedDims(meta);
+  const longest = Math.max(ow || maxSide, oh || maxSide);
+  const scale = Math.min(1, maxSide / longest);
+  // floor garante tile/logo <= imagem real mesmo com arredondamento (composite exige).
+  const rw = Math.max(1, Math.floor((ow || maxSide) * scale));
+  const rh = Math.max(1, Math.floor((oh || maxSide) * scale));
 
-  // Modo "logo grande centralizada": uma única cópia no centro, sem tile.
+  // Um pipeline só: decodifica (com shrink-on-load do JPEG, que economiza RAM),
+  // orienta pelo EXIF, redimensiona, compõe a marca e gera o JPEG.
+  // failOn:'none' tolera JPEGs levemente corrompidos (não derruba o processamento).
+  const base = sharp(original, { failOn: 'none', limitInputPixels: 300_000_000 })
+    .rotate()
+    .resize(maxSide, maxSide, { fit: 'inside', withoutEnlargement: true });
+
+  let overlay: sharp.OverlayOptions;
   if (opts.watermarkMode === 'centered' && opts.watermarkType === 'logo' && opts.logo) {
-    const single = await centeredLogo(opts.logo, info.width, info.height, opacity);
-    return sharp(data)
-      .composite([{ input: single, gravity: 'center', blend: 'over' }])
-      .jpeg({ quality })
-      .toBuffer();
+    // Logo única grande e centralizada.
+    overlay = { input: await centeredLogo(opts.logo, rw, rh, opacity), gravity: 'center', blend: 'over' };
+  } else {
+    const tile = await buildTile(rw, rh, opts, opacity);
+    overlay = { input: await fitTile(tile, rw, rh), tile: true, blend: 'over' };
   }
 
-  const tile = await buildTile(info.width, info.height, opts, opacity);
-  const safeTile = await fitTile(tile, info.width, info.height);
-
-  return sharp(data)
-    .composite([{ input: safeTile, tile: true, blend: 'over' }])
-    .jpeg({ quality })
-    .toBuffer();
+  return base.composite([overlay]).jpeg({ quality }).toBuffer();
 }
 
 // Logo única, grande e centralizada (sem rotação nem repetição). Ocupa quase a
