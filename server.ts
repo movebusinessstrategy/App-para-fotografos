@@ -14937,8 +14937,40 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const stages = await ensurePipelineStages(supabase, userId);
     let deal: any = null;
 
-    if (phone) {
-      const variants = brazilianPhoneVariants(phone);
+    // Sem telefone no DOM (contato salvo no WhatsApp não expõe o número direto):
+    // antes de arriscar um match difuso por nome contra os deals (ambíguo —
+    // dois leads com nome parecido viram null de propósito), tenta achar o
+    // telefone REAL em wa_conversations. Essa tabela é sincronizada pelo Baileys
+    // direto do protocolo do WhatsApp (evento messaging-history.set / mensagens),
+    // não por raspagem de tela — então o nome ali é o nome de contato de
+    // verdade, e o telefone correspondente é exato. Resolvendo o telefone aqui,
+    // a busca cai no MESMO caminho seguro de match exato usado quando o DOM já
+    // trouxe o número.
+    let resolvedPhone = phone;
+    if (!resolvedPhone && contactName && supabaseAdmin) {
+      const { data: waConvs } = await supabaseAdmin
+        .from('wa_conversations')
+        .select('phone, contact_name')
+        .eq('user_id', userId)
+        .not('contact_name', 'is', null)
+        .limit(2000);
+      const normalizedWantedConv = normalizeContactNameForMatch(contactName);
+      const convMatches = (waConvs || []).filter((c: any) => (
+        normalizeContactNameForMatch(c.contact_name) === normalizedWantedConv ||
+        contactNamesMatch(c.contact_name, contactName)
+      ));
+      const exactConvMatches = convMatches.filter((c: any) => (
+        normalizeContactNameForMatch(c.contact_name) === normalizedWantedConv
+      ));
+      const safeConvMatches = exactConvMatches.length ? exactConvMatches : convMatches;
+      // Mais de um telefone DISTINTO pro mesmo nome = ambíguo até no Baileys,
+      // não arrisca. Telefones repetidos (linha duplicada por sync) não contam.
+      const distinctPhones = [...new Set(safeConvMatches.map((c: any) => c.phone).filter(Boolean))];
+      if (distinctPhones.length === 1) resolvedPhone = distinctPhones[0];
+    }
+
+    if (resolvedPhone) {
+      const variants = brazilianPhoneVariants(resolvedPhone);
 
       const { data: exactDeal } = await supabase
         .from('deals')
@@ -14960,7 +14992,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           .limit(500);
 
         deal = (candidates || []).find((candidate: any) => (
-          candidate.contact_phone && brazilianPhonesMatch(candidate.contact_phone, phone)
+          candidate.contact_phone && brazilianPhonesMatch(candidate.contact_phone, resolvedPhone)
         )) || null;
       }
     }
