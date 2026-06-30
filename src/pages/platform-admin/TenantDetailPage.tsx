@@ -308,12 +308,15 @@ export default function TenantDetailPage() {
             ))}
           </select>
           <button
-            onClick={() => update({ plan_id: planId || null })}
-            disabled={saving || planId === (data.account.plan_id ?? "")}
+            onClick={() => update({ plan_id: planId || null, subscription_status: "active" })}
+            disabled={saving}
             className="w-full px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-40 text-white rounded-lg text-sm"
           >
-            Salvar plano
+            Salvar plano e liberar acesso
           </button>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+            Libera o acesso completo nesse plano, sem cobrança (mesmo com trial expirado).
+          </p>
         </div>
       </div>
 

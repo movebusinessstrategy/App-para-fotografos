@@ -12511,7 +12511,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!supabaseAdmin) return res.status(500).json({ error: 'Service role indisponível' });
     const ownerId = req.params.ownerId;
     const adminId = (req as any).realUserId as string;
-    const { plan_id, status, suspended_reason, trial_ends_at, notes } = req.body ?? {};
+    const { plan_id, status, suspended_reason, trial_ends_at, notes, subscription_status } = req.body ?? {};
 
     const update: Record<string, any> = {};
     if (plan_id !== undefined) update.plan_id = plan_id;
@@ -12524,6 +12524,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (suspended_reason !== undefined) update.suspended_reason = suspended_reason;
     if (trial_ends_at !== undefined) update.trial_ends_at = trial_ends_at;
     if (notes !== undefined) update.notes = notes;
+    // Permite o admin conceder acesso pago sem cobrança real (plano manual,
+    // cortesia, parceria) — accountRequiresPayment() só libera com status='active'.
+    if (subscription_status !== undefined) {
+      if (!['trial', 'active', 'past_due', 'cancelled', 'expired'].includes(subscription_status)) {
+        return res.status(400).json({ error: 'subscription_status inválido' });
+      }
+      update.subscription_status = subscription_status;
+    }
 
     if (Object.keys(update).length === 0) {
       return res.status(400).json({ error: 'Nada para atualizar' });
