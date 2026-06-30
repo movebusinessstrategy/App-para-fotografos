@@ -365,6 +365,42 @@ const normalizeBrazilianPhone = (digits: string): string => {
   return digits;
 };
 
+const brazilianPhoneVariants = (value: unknown): string[] => {
+  const raw = normalizePhone(value);
+  if (!raw) return [];
+
+  const variants = new Set<string>();
+  const add = (candidate: unknown) => {
+    const clean = normalizePhone(candidate);
+    if (clean) variants.add(clean);
+  };
+
+  add(raw);
+  const tail = raw.startsWith('55') && raw.length >= 12 ? raw.slice(2) : raw;
+  add(tail);
+  add(`55${tail}`);
+
+  if (tail.length === 10) {
+    const withNine = `${tail.slice(0, 2)}9${tail.slice(2)}`;
+    add(withNine);
+    add(`55${withNine}`);
+  }
+
+  if (tail.length === 11 && tail[2] === '9') {
+    const withoutNine = `${tail.slice(0, 2)}${tail.slice(3)}`;
+    add(withoutNine);
+    add(`55${withoutNine}`);
+  }
+
+  return Array.from(variants);
+};
+
+const brazilianPhonesMatch = (a: unknown, b: unknown): boolean => {
+  const av = new Set(brazilianPhoneVariants(a));
+  if (!av.size) return false;
+  return brazilianPhoneVariants(b).some((variant) => av.has(variant));
+};
+
 // ─── Follow-up automático: agendamento respeitando horário de silêncio ───────
 // Brasil = UTC-3 (sem horário de verão desde 2019)
 const BRT_OFFSET_MS = 3 * 60 * 60 * 1000;
@@ -12933,7 +12969,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       client_id: client_id || null,
       title,
       contact_name: contact_name || title || null,
-      contact_phone: contact_phone || null,
+      contact_phone: normalizePhone(contact_phone) || null,
       contact_email: contact_email || null,
       lead_source: lead_source || null,
       value: value || 0,
@@ -12997,7 +13033,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const payload: any = {
       title: name,
       contact_name: name,
-      contact_phone: phone,
+      contact_phone: normalizePhone(phone) || null,
       contact_email: email || null,
       lead_source: source || null,
       notes: notes || null,
@@ -13058,6 +13094,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!existing) return res.status(404).json({ error: 'Deal not found' });
 
     const updates: any = { ...req.body, updated_at: new Date().toISOString() };
+    if (updates.contact_phone !== undefined) {
+      updates.contact_phone = normalizePhone(updates.contact_phone) || null;
+    }
     // Funcionário sem 'finance' não enxerga o valor (vem zerado pra ele) — então
     // NÃO deixa sobrescrever value/estimated_value, senão zeraria o real ao editar
     // outros campos (ex: nome/telefone pela extensão).
@@ -14840,33 +14879,31 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const stages = await ensurePipelineStages(supabase, userId);
 
-    // Gera variantes pra match flexível: com/sem DDI 55, com/sem nono dígito do celular Brasil.
-    // Ex.: 554398387146 → também tenta 4398387146, 5543998387146, 43998387146
-    const variants = new Set<string>([phone]);
-    const tail = phone.startsWith('55') && phone.length >= 12 ? phone.slice(2) : phone;
-    variants.add(tail);
-    variants.add(`55${tail}`);
-    // 10 dígitos = DDD + 8 (sem nono) — adiciona variante com nono
-    if (tail.length === 10) {
-      const withNine = `${tail.slice(0, 2)}9${tail.slice(2)}`;
-      variants.add(withNine);
-      variants.add(`55${withNine}`);
-    }
-    // 11 dígitos com nono — adiciona variante sem nono
-    if (tail.length === 11 && tail[2] === '9') {
-      const withoutNine = `${tail.slice(0, 2)}${tail.slice(3)}`;
-      variants.add(withoutNine);
-      variants.add(`55${withoutNine}`);
-    }
+    const variants = brazilianPhoneVariants(phone);
 
-    const { data: deal } = await supabase
+    const { data: exactDeal } = await supabase
       .from('deals')
       .select('*')
       .eq('user_id', userId)
-      .in('contact_phone', Array.from(variants))
+      .in('contact_phone', variants)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
+    let deal = exactDeal;
+
+    if (!deal) {
+      const { data: candidates } = await supabase
+        .from('deals')
+        .select('*')
+        .eq('user_id', userId)
+        .not('contact_phone', 'is', null)
+        .order('updated_at', { ascending: false })
+        .limit(500);
+
+      deal = (candidates || []).find((candidate: any) => (
+        candidate.contact_phone && brazilianPhonesMatch(candidate.contact_phone, phone)
+      )) || null;
+    }
 
     if (!deal) return res.json({ deal: null, stages, pending_tasks: [] });
 

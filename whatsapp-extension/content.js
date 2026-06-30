@@ -1066,6 +1066,12 @@
     return expectedVariants.some((e) => actualVariants.includes(e));
   }
 
+  function findDealByPhoneLocal(phone) {
+    const clean = digits(phone || '');
+    if (!clean) return null;
+    return deals.find((d) => d.contact_phone && phonesMatch(d.contact_phone, clean)) || null;
+  }
+
   function normalizeNameForMatch(name) {
     return String(name || '')
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -1090,6 +1096,18 @@
     const [short, long] = at.length <= bt.length ? [at, bt] : [bt, at];
     const longSet = new Set(long);
     return short.every((t) => longSet.has(t)) && short.some((t) => t.length >= 3);
+  }
+
+  function findDealByNameLocal(name) {
+    const wanted = normalizeNameForMatch(name);
+    if (!wanted) return null;
+    const matches = deals.filter((d) => {
+      const dealName = d.contact_name || d.title || '';
+      return normalizeNameForMatch(dealName) === wanted || namesMatch(dealName, wanted);
+    });
+    const exact = matches.filter((d) => normalizeNameForMatch(d.contact_name || d.title || '') === wanted);
+    const candidates = exact.length ? exact : matches;
+    return candidates.length === 1 ? candidates[0] : null;
   }
 
   function chatListItems() {
@@ -4575,7 +4593,7 @@
     // deal incorreto por engano de matching.
     const dealPhoneDigits = digits(deal?.contact_phone || '');
     const chatPhoneDigits = digits(chatPhone || '');
-    if (deal && dealPhoneDigits && chatPhoneDigits && dealPhoneDigits !== chatPhoneDigits) {
+    if (deal && dealPhoneDigits && chatPhoneDigits && !phonesMatch(dealPhoneDigits, chatPhoneDigits)) {
       console.warn('[fp-extension] injectChatStrip abortado — phone mismatch:',
         { deal_phone: dealPhoneDigits, chat_phone: chatPhoneDigits });
       return;
@@ -4736,6 +4754,7 @@
     chatKey = nextKey;
     chatPhone = cleanPhone || null;
     chatDeal = null;
+    const requestKey = nextKey;
     rememberContactPhoto(cleanPhone, getWAChatPhoto());
 
     // Só exibe/usa um deal cujo NOME bate com o header visível. Protege contra o
@@ -4756,6 +4775,29 @@
     };
 
     if (!cleanPhone) {
+      const cachedByName = findDealByNameLocal(chatName);
+      if (cachedByName && nameMatchesHeader(cachedByName)) {
+        chatDeal = cachedByName;
+        chatStages = chatStages.length ? chatStages : stages;
+        injectChatStrip(chatDeal, chatStages);
+        return;
+      }
+
+      // Contato salvo às vezes abre primeiro sem telefone no DOM. Espera uma
+      // janela curta antes de concluir que ele não está no pipeline, evitando
+      // piscar "Não está no pipeline" e logo depois trocar para o lead certo.
+      const startedKey = chatKey;
+      const start = Date.now();
+      while (chatKey === startedKey && Date.now() - start < 900) {
+        await sleep(150);
+        const recoveredPhone = digits(getWAChatPhone() || '');
+        if (recoveredPhone) {
+          onChatOpened(recoveredPhone);
+          return;
+        }
+      }
+      if (chatKey !== startedKey) return;
+
       if (!chatStages.length && !stages.length) {
         try { chatStages = await ensureStagesForUi(); } catch { /* sem etapas, o modal ainda permite tentar */ }
       }
@@ -4765,17 +4807,12 @@
 
     try {
       // Mostra a faixa NA HORA a partir do cache (o deal já veio do funil).
-      // CRÍTICO: usar APENAS match exato — match por 8 dígitos finais causava
-      // falso positivo entre dois clientes com finais iguais, e ao clicar
-      // "Ganho" a conversão saía pro deal errado. Bug reportado 2026-06-03.
+      // CRÍTICO: usa equivalência completa de telefone (com/sem DDI 55 e nono
+      // dígito), sem cair no antigo match por 8 dígitos finais que gerava falso
+      // positivo entre clientes diferentes.
       const stgsNow = chatStages.length ? chatStages : stages;
       const pd = digits(cleanPhone);
-      const cachedDeal = stgsNow.length
-        ? deals.find((d) => {
-            const dd = digits(d.contact_phone || '');
-            return dd && pd && dd === pd;
-          })
-        : null;
+      const cachedDeal = findDealByPhoneLocal(pd);
       if (cachedDeal && nameMatchesHeader(cachedDeal)) {
         chatDeal = cachedDeal;
         chatStages = stgsNow;
@@ -4784,14 +4821,14 @@
 
       // Busca a versão completa (deal + etapas + tarefas) e atualiza.
       const result = await bg({ type: 'GET_DEAL_BY_PHONE', phone: cleanPhone });
-      if (chatPhone !== cleanPhone) return; // trocou de chat enquanto carregava
+      if (chatKey !== requestKey || !phonesMatch(chatPhone, cleanPhone)) return; // trocou de chat enquanto carregava
       chatStages = result.stages || stages;
 
-      // Validação extra: o deal retornado precisa bater EXATAMENTE com o chat
+      // Validação extra: o deal retornado precisa bater com o telefone do chat
       // aberto. Se o backend retornou outro deal (raríssimo, mas possível),
       // ignora pra não exibir/converter pessoa errada.
       const returnedDealPhone = digits(result.deal?.contact_phone || '');
-      if (result.deal && returnedDealPhone && returnedDealPhone !== pd) {
+      if (result.deal && returnedDealPhone && !phonesMatch(returnedDealPhone, pd)) {
         console.warn('[fp-extension] deal-by-phone retornou phone diferente:',
           { expected: pd, got: returnedDealPhone });
         chatDeal = null;
