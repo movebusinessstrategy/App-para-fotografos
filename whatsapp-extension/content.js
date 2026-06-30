@@ -60,6 +60,9 @@
   let kanbanCustomRange = null;
   // Filtro de responsável do Pipeline: '' (todos) | id do membro | 'none' (sem ninguém)
   let kanbanAssignee = '';
+  // Filtro de situação (tempo parado na etapa): '' (todos) | 'ok' (em dia/verde)
+  // | 'warning' (amarelo/+12h) | 'urgent' (vermelho/+24h)
+  let kanbanStaleness = '';
 
   const LEAD_SOURCE_OPTIONS = ['WhatsApp', 'Anúncio', 'Indicação', 'Instagram', 'Facebook', 'Google', 'Site', 'Cliente antigo', 'Outro'];
 
@@ -451,6 +454,7 @@
           <span id="fp-kpi-range-label"></span>
         </div>
         <div id="fp-kpi-assignee" style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:4px"></div>
+        <div id="fp-kpi-staleness" style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:4px"></div>
         <div id="fp-kpi-stats">
           <div class="fp-kpi-stat" title="Total de leads no período">
             <span class="fp-kpi-num" id="fp-kpi-total">—</span>
@@ -778,6 +782,7 @@
     const prevScrollTop = b.scrollTop;
     renderKpi();
     renderAssigneeFilter();
+    renderStalenessFilter();
     const all = orderedStages(stages);
     if (!all.length) { showBoardState('<p>Nenhuma etapa encontrada.</p>'); return; }
 
@@ -1418,8 +1423,30 @@
     return d.assigned_to === kanbanAssignee;
   }
 
+  // Situação do lead pelo tempo parado na etapa: 'urgent' (vermelho/+24h),
+  // 'warning' (amarelo/+12h) ou null (em dia). Etapas finais (ganho/perda) já
+  // fecharam — não há ação a tomar, então nunca ficam amarelo/vermelho.
+  function dealStaleness(d) {
+    const dealStage = stages.find(s => s.id === d.stage);
+    if (dealStage?.is_final) return null;
+    return staleness(d.current_stage_entered_at);
+  }
+
+  // Filtro de situação: '' = todos; 'ok' = em dia (lead aberto e sem alerta);
+  // 'warning' = amarelo (+12h); 'urgent' = vermelho (+24h). Com qualquer situação
+  // selecionada, leads em etapa final (ganho/perda) ficam de fora.
+  function matchesStaleness(d) {
+    if (!kanbanStaleness) return true;
+    const st = dealStaleness(d);
+    if (kanbanStaleness === 'ok') {
+      const dealStage = stages.find(s => s.id === d.stage);
+      return !dealStage?.is_final && st === null;
+    }
+    return st === kanbanStaleness;
+  }
+
   function matches(d) {
-    if (!matchesPeriod(d) || !matchesAssignee(d)) return false;
+    if (!matchesPeriod(d) || !matchesAssignee(d) || !matchesStaleness(d)) return false;
     if (!q) return true;
     const txt = `${d.contact_name || d.title || ''} ${d.contact_phone || ''} ${getDealShootType(d)}`.toLowerCase();
     return txt.includes(q);
@@ -1441,6 +1468,37 @@
     el.querySelectorAll('.fp-kpi-chip').forEach((b) => {
       b.addEventListener('click', () => {
         kanbanAssignee = b.getAttribute('data-assignee') || '';
+        renderBoard();
+      });
+    });
+  }
+
+  // Monta os chips de filtro por situação (Todos / Em dia / Amarelo / Vermelho),
+  // com a contagem de leads em cada estado. A contagem respeita os filtros de
+  // período e responsável (mas não a própria situação), pra refletir o que o
+  // usuário veria ao escolher cada cor — útil pra saber quantos follow-ups faltam.
+  function renderStalenessFilter() {
+    const el = document.getElementById('fp-kpi-staleness');
+    if (!el) return;
+    const base = deals.filter((d) => matchesPeriod(d) && matchesAssignee(d));
+    let ok = 0, warning = 0, urgent = 0;
+    for (const d of base) {
+      const st = dealStaleness(d);
+      if (st === 'urgent') urgent++;
+      else if (st === 'warning') warning++;
+      else if (!stages.find(s => s.id === d.stage)?.is_final) ok++;
+    }
+    const chip = (val, label, count) =>
+      `<button class="fp-kpi-chip${kanbanStaleness === val ? ' fp-kpi-chip-active' : ''}" data-staleness="${esc(val)}">${label}${count != null ? ` <b class="fp-chip-count">${count}</b>` : ''}</button>`;
+    el.innerHTML =
+      `<span class="fp-kpi-period-label">Situação:</span>` +
+      chip('', 'Todos', null) +
+      chip('ok', '🟢 Em dia', ok) +
+      chip('warning', '🟡 Amarelo', warning) +
+      chip('urgent', '🔴 Vermelho', urgent);
+    el.querySelectorAll('.fp-kpi-chip').forEach((b) => {
+      b.addEventListener('click', () => {
+        kanbanStaleness = b.getAttribute('data-staleness') || '';
         renderBoard();
       });
     });
@@ -1620,8 +1678,7 @@
     const sub = [type, phoneLabel || stripDealMetaFromNotes(d.notes)?.substring(0, 40)].filter(Boolean).join(' · ');
     // Alerta de tempo parado só em etapas ABERTAS: card em ganho/perda já
     // fechou — não há ação a tomar, então não fica amarelo/vermelho.
-    const dealStage = stages.find(s => s.id === d.stage);
-    const st = dealStage?.is_final ? null : staleness(d.current_stage_entered_at);
+    const st = dealStaleness(d);
     const avatarInner = photo
       ? `<div class="fpc-av fpc-av-img"><img src="${esc(photo)}" alt="" /></div>`
       : `<div class="fpc-av" style="background:${c.dot}">${esc(initials(name))}</div>`;

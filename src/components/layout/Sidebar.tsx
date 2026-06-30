@@ -74,7 +74,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
 
   // Esconde itens não liberados pelo plano (galeria/álbum só Studio/Premium).
   const planAllowsItem = (item: { feature?: string }) =>
-    !item.feature || (features as Record<string, boolean>)[item.feature] !== false;
+    !item.feature || features[item.feature as keyof typeof features] !== false;
 
   // Papel de produção: vê SÓ "Produção", nada mais (sem catálogo/config/tarefas).
   const navItems = isProductionOnly

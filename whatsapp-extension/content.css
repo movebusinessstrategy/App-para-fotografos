@@ -453,6 +453,11 @@ body.fp-kanban-open #pane-side { display: none !important; }
   color: #fff !important;
   border-color: #00a884 !important;
 }
+.fp-chip-count {
+  font-weight: 800;
+  opacity: 0.75;
+  margin-left: 1px;
+}
 #fp-kpi-range-label {
   font-size: 11px;
   color: #667781;
