@@ -5040,6 +5040,7 @@
         + Adicionar ao Pipeline <span class="fp-strip-caret">▾</span>
       </button>
       <button class="fp-strip-stage-btn" id="fp-strip-add-details" title="Informar nome, telefone e valor">Criar com dados</button>
+      <button class="fp-strip-stage-btn" id="fp-strip-link-existing" title="Já existe um card dela no funil? Conecte aqui em vez de criar outro">🔗 Vincular a lead existente</button>
       <button class="fp-strip-stage-btn" id="fp-strip-funil2" style="background:#111b21;color:#fff;border-color:#111b21">⬡ Voltar ao Funil</button>
     `;
 
@@ -5055,9 +5056,97 @@
       const contact = await waitForChatContact(phone);
       openModal(contact.phone, contact.name, firstOpenStage(chatStages.length ? chatStages : stages)?.id, true);
     });
+    bindPress(strip.querySelector('#fp-strip-link-existing'), (e) => openLinkExistingPicker(phone, e.currentTarget));
     bindPress(strip.querySelector('#fp-strip-funil2'), showKanban);
 
     mountChatStrip(strip);
+  }
+
+  // Conecta a conversa aberta a um lead JÁ EXISTENTE no funil (em vez de criar
+  // um card duplicado). Cobre os casos em que o matching automático por
+  // telefone/nome não achou (ambíguo, contato salvo sem telefone exposto pelo
+  // WhatsApp, número diferente do cadastrado, etc.) mas o lead já está lá.
+  function closeLinkExistingPicker() {
+    document.getElementById('fp-link-existing-popover')?.remove();
+  }
+
+  function openLinkExistingPicker(phone, anchorEl) {
+    closeLinkExistingPicker();
+    const rect = anchorEl.getBoundingClientRect();
+    const pop = document.createElement('div');
+    pop.id = 'fp-link-existing-popover';
+    pop.style.cssText = `position:fixed;top:${Math.round(rect.bottom + 4)}px;left:${Math.round(rect.left)}px;z-index:100000;width:280px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);overflow:hidden;font-family:inherit`;
+    pop.innerHTML = `
+      <div style="padding:8px 10px;border-bottom:1px solid #f0f0f0">
+        <input id="fp-link-existing-input" type="text" placeholder="Buscar lead pelo nome…" autocomplete="off"
+          style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #e5e7eb;border-radius:6px;font-size:13px;outline:none" />
+      </div>
+      <div id="fp-link-existing-results" style="max-height:240px;overflow-y:auto"></div>
+    `;
+    document.body.appendChild(pop);
+
+    const input = pop.querySelector('#fp-link-existing-input');
+    const resultsBox = pop.querySelector('#fp-link-existing-results');
+    input.focus();
+
+    const renderResults = (raw) => {
+      const q = normalizeNameForMatch(raw);
+      const source = q
+        ? deals.filter((d) => normalizeNameForMatch(d.contact_name || d.title || '').includes(q))
+        : deals.slice().sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
+      const list = source.slice(0, 20);
+      if (!list.length) {
+        resultsBox.innerHTML = `<div style="padding:10px;font-size:12px;color:#888">Nenhum lead encontrado</div>`;
+        return;
+      }
+      resultsBox.innerHTML = list.map((d, i) => `
+        <button class="fp-link-existing-item" data-i="${i}" style="display:flex;flex-direction:column;align-items:flex-start;gap:1px;width:100%;text-align:left;padding:8px 10px;border:0;border-bottom:1px solid #f5f5f5;background:#fff;cursor:pointer">
+          <span style="font-size:13px;font-weight:600;color:#111b21">${esc(d.contact_name || d.title || 'Contato')}</span>
+          <span style="font-size:11px;color:#888">${esc(d.contact_phone ? `+${digits(d.contact_phone)}` : 'sem telefone salvo')}</span>
+        </button>
+      `).join('');
+      resultsBox.querySelectorAll('.fp-link-existing-item').forEach((b) => {
+        b.addEventListener('mouseenter', () => { b.style.background = '#f5f6f6'; });
+        b.addEventListener('mouseleave', () => { b.style.background = '#fff'; });
+        b.addEventListener('click', () => linkChatToExistingDeal(list[Number(b.getAttribute('data-i'))], phone));
+      });
+    };
+
+    renderResults('');
+    input.addEventListener('input', () => renderResults(input.value.trim()));
+
+    setTimeout(() => {
+      document.addEventListener('mousedown', function onOutside(e) {
+        if (!pop.contains(e.target) && e.target !== anchorEl) {
+          closeLinkExistingPicker();
+          document.removeEventListener('mousedown', onOutside);
+        }
+      });
+    }, 0);
+  }
+
+  async function linkChatToExistingDeal(deal, phone) {
+    closeLinkExistingPicker();
+    const cleanPhone = digits(phone || '');
+    if (!deal || !cleanPhone) return;
+    try {
+      const updates = { contact_phone: cleanPhone };
+      if (!deal.contact_name && !deal.title) updates.contact_name = getWAChatName() || undefined;
+      await bg({ type: 'UPDATE_DEAL', dealId: deal.id, data: updates });
+      Object.assign(deal, updates, { updated_at: new Date().toISOString() });
+      const globalDeal = deals.find((d) => Number(d.id) === Number(deal.id));
+      if (globalDeal && globalDeal !== deal) Object.assign(globalDeal, updates, { updated_at: deal.updated_at });
+      rememberContactPhoto(cleanPhone, getWAChatPhoto());
+      toast(`Conversa vinculada a "${deal.contact_name || deal.title || 'lead'}"`);
+      chatDeal = deal;
+      chatPhone = cleanPhone;
+      chatStages = chatStages.length ? chatStages : stages;
+      injectChatStrip(chatDeal, chatStages);
+      injectPendingTasksRow(chatDeal);
+      await loadKanban();
+    } catch (err) {
+      toast(err.message || 'Falha ao vincular', true);
+    }
   }
 
   function openDealEditModal(deal) {
