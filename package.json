@@ -5,12 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "kill-port 3000 24678 && tsx --no-cache server.ts",
-    "build": "vite build",
+    "build": "node scripts/fix-baileys.cjs && vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
+    "prestart": "node scripts/fix-baileys.cjs",
     "start": "node server.ts",
-    "postinstall": "patch-package"
+    "postinstall": "node scripts/fix-baileys.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.97.1",
