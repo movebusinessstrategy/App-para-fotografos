@@ -12581,9 +12581,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const maxAllowed = new Date(startedAt.getTime() + 14 * 24 * 60 * 60 * 1000);
     const capped = newEnds > maxAllowed ? maxAllowed : newEnds;
 
+    // Só mexe na data — não força subscription_status pra 'trial', senão
+    // desfaz um "liberar acesso" (active) ou "cancelar" feito antes.
     const { error } = await supabaseAdmin
       .from('platform_accounts')
-      .update({ trial_ends_at: capped.toISOString(), subscription_status: 'trial' })
+      .update({ trial_ends_at: capped.toISOString() })
       .eq('owner_user_id', ownerId);
     if (error) return res.status(500).json({ error: error.message });
 

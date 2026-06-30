@@ -71,6 +71,8 @@ export default function TenantDetailPage() {
   const [saving, setSaving] = useState(false);
   const [notes, setNotes] = useState("");
   const [planId, setPlanId] = useState<string>("");
+  const [subStatus, setSubStatus] = useState<string>("trial");
+  const [accessUntil, setAccessUntil] = useState<string>("");
   const { startAsOwner, startAsMember } = useImpersonation();
 
   const load = async () => {
@@ -85,6 +87,8 @@ export default function TenantDetailPage() {
     setMembers(Array.isArray(m) ? m : []);
     setNotes(d.account?.notes ?? "");
     setPlanId(d.account?.plan_id ?? "");
+    setSubStatus(d.account?.subscription_status ?? "trial");
+    setAccessUntil(d.account?.trial_ends_at ? String(d.account.trial_ends_at).slice(0, 10) : "");
     setLoading(false);
   };
 
@@ -296,7 +300,9 @@ export default function TenantDetailPage() {
         </div>
 
         <div className="bg-white dark:bg-gray-900 rounded-xl p-5 border border-gray-200 dark:border-gray-800">
-          <h3 className="font-semibold text-sm mb-3">Plano</h3>
+          <h3 className="font-semibold text-sm mb-3">Plano e assinatura</h3>
+
+          <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wide">Plano</label>
           <select
             value={planId}
             onChange={(e) => setPlanId(e.target.value)}
@@ -307,15 +313,49 @@ export default function TenantDetailPage() {
               <option key={p.id} value={p.id}>{p.name} ({p.slug})</option>
             ))}
           </select>
-          <button
-            onClick={() => update({ plan_id: planId || null, subscription_status: "active" })}
-            disabled={saving}
-            className="w-full px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-40 text-white rounded-lg text-sm"
+
+          <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wide">Status da assinatura</label>
+          <select
+            value={subStatus}
+            onChange={(e) => setSubStatus(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-sm mb-1"
           >
-            Salvar plano e liberar acesso
+            <option value="active">Ativo — liberado, sem cobrança</option>
+            <option value="trial">Trial</option>
+            <option value="cancelled">Cancelado</option>
+            <option value="past_due">Pagamento atrasado</option>
+          </select>
+          <div className="flex gap-1.5 mb-3">
+            <button type="button" onClick={() => setSubStatus("active")} className="text-[11px] px-2 py-1 rounded border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800">Liberar</button>
+            <button type="button" onClick={() => setSubStatus("cancelled")} className="text-[11px] px-2 py-1 rounded border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800">Cancelar assinatura</button>
+            <button type="button" onClick={() => setSubStatus("trial")} className="text-[11px] px-2 py-1 rounded border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800">Voltar a trial</button>
+          </div>
+
+          <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wide">
+            Acesso garantido até (opcional)
+          </label>
+          <input
+            type="date"
+            value={accessUntil}
+            onChange={(e) => setAccessUntil(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-sm mb-3"
+          />
+
+          <button
+            onClick={() => update({
+              plan_id: planId || null,
+              subscription_status: subStatus,
+              trial_ends_at: accessUntil ? new Date(`${accessUntil}T23:59:59`).toISOString() : null,
+            })}
+            disabled={saving}
+            className="w-full px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-40 text-white rounded-lg text-sm font-semibold"
+          >
+            Aplicar
           </button>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-            Libera o acesso completo nesse plano, sem cobrança (mesmo com trial expirado).
+            <strong>Ativo</strong>: libera de vez, a data abaixo não tem efeito (decorativa). <strong>Trial</strong> +
+            data: dá acesso só até aquele dia — depois disso volta ao modo somente-leitura sozinho. Pra
+            bloquear o login por completo, use "Suspender" no topo da página.
           </p>
         </div>
       </div>
