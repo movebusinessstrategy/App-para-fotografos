@@ -103,8 +103,10 @@ async function handleMessage(message) {
       return { ok: true };
     }
     case 'GET_DEAL_BY_PHONE': {
-      const encoded = encodeURIComponent(message.phone);
-      return apiFetch(`/api/extension/deal-by-phone?phone=${encoded}`);
+      const params = new URLSearchParams();
+      if (message.phone) params.set('phone', message.phone);
+      if (message.name) params.set('name', message.name);
+      return apiFetch(`/api/extension/deal-by-phone?${params.toString()}`);
     }
     case 'GET_WHATSAPP_STATUS': {
       return apiFetch('/api/whatsapp/status');

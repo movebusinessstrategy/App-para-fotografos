@@ -401,6 +401,28 @@ const brazilianPhonesMatch = (a: unknown, b: unknown): boolean => {
   return brazilianPhoneVariants(b).some((variant) => av.has(variant));
 };
 
+const normalizeContactNameForMatch = (value: unknown): string => (
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+);
+
+const contactNamesMatch = (expected: unknown, actual: unknown): boolean => {
+  const a = normalizeContactNameForMatch(expected);
+  const b = normalizeContactNameForMatch(actual);
+  if (!a || !b || a.length < 3 || b.length < 3) return false;
+  if (a === b) return true;
+  const at = a.split(' ').filter(Boolean);
+  const bt = b.split(' ').filter(Boolean);
+  const [short, long] = at.length <= bt.length ? [at, bt] : [bt, at];
+  const longSet = new Set(long);
+  return short.every((token) => longSet.has(token)) && short.some((token) => token.length >= 3);
+};
+
 // ─── Follow-up automático: agendamento respeitando horário de silêncio ───────
 // Brasil = UTC-3 (sem horário de verão desde 2019)
 const BRT_OFFSET_MS = 3 * 60 * 60 * 1000;
@@ -14875,34 +14897,61 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
     const phone = String(req.query.phone || '').replace(/\D/g, '');
-    if (!phone) return res.status(400).json({ error: 'phone é obrigatório' });
+    const contactName = String(req.query.name || '').trim();
+    if (!phone && !contactName) return res.status(400).json({ error: 'phone ou name é obrigatório' });
 
     const stages = await ensurePipelineStages(supabase, userId);
+    let deal: any = null;
 
-    const variants = brazilianPhoneVariants(phone);
+    if (phone) {
+      const variants = brazilianPhoneVariants(phone);
 
-    const { data: exactDeal } = await supabase
-      .from('deals')
-      .select('*')
-      .eq('user_id', userId)
-      .in('contact_phone', variants)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    let deal = exactDeal;
-
-    if (!deal) {
-      const { data: candidates } = await supabase
+      const { data: exactDeal } = await supabase
         .from('deals')
         .select('*')
         .eq('user_id', userId)
-        .not('contact_phone', 'is', null)
-        .order('updated_at', { ascending: false })
-        .limit(500);
+        .in('contact_phone', variants)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      deal = exactDeal;
 
-      deal = (candidates || []).find((candidate: any) => (
-        candidate.contact_phone && brazilianPhonesMatch(candidate.contact_phone, phone)
-      )) || null;
+      if (!deal) {
+        const { data: candidates } = await supabase
+          .from('deals')
+          .select('*')
+          .eq('user_id', userId)
+          .not('contact_phone', 'is', null)
+          .order('updated_at', { ascending: false })
+          .limit(500);
+
+        deal = (candidates || []).find((candidate: any) => (
+          candidate.contact_phone && brazilianPhonesMatch(candidate.contact_phone, phone)
+        )) || null;
+      }
+    }
+
+    if (!deal && contactName) {
+      const { data: nameCandidates } = await supabase
+        .from('deals')
+        .select('*')
+        .eq('user_id', userId)
+        .order('updated_at', { ascending: false })
+        .limit(1000);
+
+      const normalizedWanted = normalizeContactNameForMatch(contactName);
+      const matches = (nameCandidates || []).filter((candidate: any) => {
+        const candidateName = candidate.contact_name || candidate.title || '';
+        return (
+          normalizeContactNameForMatch(candidateName) === normalizedWanted ||
+          contactNamesMatch(candidateName, contactName)
+        );
+      });
+      const exactMatches = matches.filter((candidate: any) => (
+        normalizeContactNameForMatch(candidate.contact_name || candidate.title || '') === normalizedWanted
+      ));
+      const safeMatches = exactMatches.length ? exactMatches : matches;
+      deal = safeMatches.length === 1 ? safeMatches[0] : null;
     }
 
     if (!deal) return res.json({ deal: null, stages, pending_tasks: [] });

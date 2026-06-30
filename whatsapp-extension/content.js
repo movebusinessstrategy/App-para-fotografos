@@ -4798,6 +4798,23 @@
       }
       if (chatKey !== startedKey) return;
 
+      try {
+        const result = await bg({ type: 'GET_DEAL_BY_PHONE', name: chatName });
+        if (chatKey !== startedKey) return;
+        chatStages = result.stages || stages;
+        chatPendingTasks = result.pending_tasks || [];
+        if (result.deal && nameMatchesHeader(result.deal)) {
+          chatDeal = result.deal;
+          chatPhone = digits(result.deal.contact_phone || '') || null;
+          rememberChatPhoneByName(chatName, chatPhone);
+          injectChatStrip(chatDeal, chatStages);
+          injectPendingTasksRow(chatDeal);
+          return;
+        }
+      } catch (err) {
+        console.warn('[fp-extension] lookup por nome falhou:', err);
+      }
+
       if (!chatStages.length && !stages.length) {
         try { chatStages = await ensureStagesForUi(); } catch { /* sem etapas, o modal ainda permite tentar */ }
       }
@@ -4820,7 +4837,7 @@
       }
 
       // Busca a versão completa (deal + etapas + tarefas) e atualiza.
-      const result = await bg({ type: 'GET_DEAL_BY_PHONE', phone: cleanPhone });
+      const result = await bg({ type: 'GET_DEAL_BY_PHONE', phone: cleanPhone, name: chatName });
       if (chatKey !== requestKey || !phonesMatch(chatPhone, cleanPhone)) return; // trocou de chat enquanto carregava
       chatStages = result.stages || stages;
 
