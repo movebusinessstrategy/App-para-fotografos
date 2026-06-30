@@ -1712,9 +1712,31 @@ async function startServer() {
     missing: getMissingZApiConfig(),
   });
 
+  // Guard: impede resets "duros" concorrentes da mesma conta (clique repetido
+  // no botão "Limpar sessão e gerar novo QR" enquanto o anterior ainda roda).
+  const waFreshResetInFlight = new Set<string>();
+
   app.post('/api/whatsapp/instance', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
+    // fresh=true: ação EXPLÍCITA do usuário ("Limpar sessão e gerar novo QR").
+    // Limpa as credenciais ANTES de iniciar, forçando um QR de pareamento novo.
+    // Resolve o caso em que há creds registradas que não reconectam — aí o
+    // Baileys tentaria "retomar" a sessão e NUNCA emitiria um QR. No fluxo
+    // normal (sem fresh) NUNCA apaga credenciais — preserva a garantia da
+    // da1fe0a (não re-escanear o QR em queda transitória).
+    const fresh = req.body?.fresh === true;
+
+    if (fresh && waFreshResetInFlight.has(userId)) {
+      return res.status(429).json({ error: 'Já estamos limpando esta sessão. Aguarde alguns segundos.' });
+    }
+    if (fresh) waFreshResetInFlight.add(userId);
+
     try {
+      if (fresh) {
+        console.log(`[Baileys] Reset explícito (limpar sessão + novo QR) para ${userId}`);
+        await BaileysManager.resetSession(userId);
+        await new Promise(r => setTimeout(r, 600));
+      }
       console.log(`[Baileys] Iniciando sessão para usuário ${userId}`);
       await BaileysManager.startSession(userId);
       // Aguarda QR (até 35s) — retorna inline se disponível
@@ -1731,6 +1753,8 @@ async function startServer() {
     } catch (error: any) {
       console.error('[Baileys] Erro ao iniciar sessão:', error);
       return res.status(500).json({ error: error.message || 'Falha ao iniciar sessão WhatsApp' });
+    } finally {
+      if (fresh) waFreshResetInFlight.delete(userId);
     }
   });
 

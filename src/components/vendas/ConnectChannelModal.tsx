@@ -65,7 +65,11 @@ export function ConnectChannelModal({ open, onClose, onStatusChange }: ConnectCh
     return false;
   }, [onStatusChange]);
 
-  const handleConnectWhatsApp = async () => {
+  // fresh=false (Gerar/Atualizar QR): nunca apaga credenciais — respeita uma
+  // sessão válida que esteja só reconectando. fresh=true ("Limpar sessão e
+  // gerar novo QR"): limpa as creds no servidor antes, destravando o caso de
+  // creds registradas que não reconectam (o WhatsApp nunca emite QR nesse caso).
+  const handleConnectWhatsApp = async (fresh = false) => {
     setWaLoading(true);
     setWaQrCode(null);
     setWaError(null);
@@ -75,7 +79,11 @@ export function ConnectChannelModal({ open, onClose, onStatusChange }: ConnectCh
 
     let qr: string | null = null;
     try {
-      const createRes = await authFetch("/api/whatsapp/instance", { method: "POST" });
+      const createRes = await authFetch("/api/whatsapp/instance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fresh }),
+      });
       const createData = await createRes.json().catch(() => ({}));
       qr = extractQr(createData);
     } catch { /* continua para polling */ }
@@ -282,10 +290,11 @@ export function ConnectChannelModal({ open, onClose, onStatusChange }: ConnectCh
               pairingCode={pairingCode}
               pairingLoading={pairingLoading}
               pairingError={pairingError}
-              onConnect={handleConnectWhatsApp}
+              onConnect={() => handleConnectWhatsApp(false)}
+              onFreshConnect={() => handleConnectWhatsApp(true)}
               onDisconnect={handleDisconnectWhatsApp}
               onResync={handleResyncWhatsApp}
-              onRefresh={handleConnectWhatsApp}
+              onRefresh={() => handleConnectWhatsApp(false)}
               onGoToSettings={() => { onClose(); navigate("/settings"); }}
               onMethodChange={handleMethodChange}
               onPairingPhoneChange={setPairingPhone}
@@ -313,6 +322,7 @@ interface WhatsAppPanelProps {
   pairingLoading: boolean;
   pairingError: string | null;
   onConnect: () => void;
+  onFreshConnect: () => void;
   onDisconnect: () => void;
   onResync: () => void;
   onRefresh: () => void;
@@ -327,7 +337,7 @@ interface WhatsAppPanelProps {
 function WhatsAppPanel({
   status, qrCode, loading, error,
   connectMethod, pairingPhone, pairingCode, pairingLoading, pairingError,
-  onConnect, onDisconnect, onResync, onRefresh, onGoToSettings,
+  onConnect, onFreshConnect, onDisconnect, onResync, onRefresh, onGoToSettings,
   onMethodChange, onPairingPhoneChange, onRequestPairingCode,
 }: WhatsAppPanelProps) {
 
@@ -534,6 +544,7 @@ function WhatsAppPanel({
           pairingLoading={pairingLoading}
           pairingError={pairingError}
           onConnect={onConnect}
+          onFreshConnect={onFreshConnect}
           onPairingPhoneChange={onPairingPhoneChange}
           onRequestPairingCode={onRequestPairingCode}
           onTogglePhone={() => onMethodChange(connectMethod === "code" ? "qr" : "code")}
@@ -551,11 +562,11 @@ function WhatsAppPanel({
 
 function WhatsAppConnectPanel({
   usePhone, error, loading, pairingPhone, pairingLoading, pairingError,
-  onConnect, onPairingPhoneChange, onRequestPairingCode, onTogglePhone,
+  onConnect, onFreshConnect, onPairingPhoneChange, onRequestPairingCode, onTogglePhone,
 }: {
   usePhone: boolean; error: string | null; loading: boolean;
   pairingPhone: string; pairingLoading: boolean; pairingError: string | null;
-  onConnect: () => void; onPairingPhoneChange: (v: string) => void;
+  onConnect: () => void; onFreshConnect: () => void; onPairingPhoneChange: (v: string) => void;
   onRequestPairingCode: () => void; onTogglePhone: () => void;
 }) {
   return (
@@ -586,9 +597,20 @@ function WhatsAppConnectPanel({
         ))}
 
         {(error || pairingError) && (
-          <div className="flex items-start gap-2 rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-3 mt-2">
-            <AlertCircle size={14} className="mt-0.5 flex-shrink-0 text-red-500" />
-            <p className="text-xs text-red-700 dark:text-red-400">{error || pairingError}</p>
+          <div className="rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-3 mt-2">
+            <div className="flex items-start gap-2">
+              <AlertCircle size={14} className="mt-0.5 flex-shrink-0 text-red-500" />
+              <p className="text-xs text-red-700 dark:text-red-400">{error || pairingError}</p>
+            </div>
+            {!usePhone && (
+              <button
+                onClick={onFreshConnect}
+                disabled={loading}
+                className="mt-2.5 flex items-center gap-1.5 rounded-lg bg-red-600 hover:bg-red-700 px-3 py-2 text-xs font-semibold text-white transition disabled:opacity-60"
+              >
+                <RotateCcw size={12} /> Limpar sessão e gerar novo QR
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -628,6 +650,15 @@ function WhatsAppConnectPanel({
             >
               {loading ? <Loader2 size={16} className="animate-spin" /> : <QrCode size={16} />}
               {loading ? "Aguarde…" : "Gerar QR Code"}
+            </button>
+            {/* Destrava o caso de sessão antiga "presa" (creds registradas que
+                não reconectam): limpa no servidor e gera um QR novo. */}
+            <button
+              onClick={onFreshConnect}
+              disabled={loading}
+              className="flex items-center gap-1.5 text-[11px] text-gray-400 hover:text-green-700 dark:hover:text-green-400 transition-colors disabled:opacity-50"
+            >
+              <RotateCcw size={11} /> Não carregou? Limpar sessão e gerar novo QR
             </button>
           </>
         )}

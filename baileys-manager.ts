@@ -310,6 +310,26 @@ export async function stopSession(userId: string): Promise<void> {
   console.log(`[Baileys] Sessão removida — usuário ${userId}`);
 }
 
+// Reset "duro": limpa credenciais e sessão SEM tentar logout no servidor do
+// WhatsApp. Diferente de stopSession, NÃO chama sock.logout() — logout exige
+// socket vivo e TRAVA quando a credencial está morta. Usado SOMENTE por ação
+// explícita do usuário ("Limpar sessão e gerar novo QR"), para destravar o caso
+// em que existem creds registradas que não reconectam: aí o Baileys tenta
+// "retomar" a sessão e NUNCA emite um QR novo (só emite QR quando NÃO há creds
+// registradas). Preserva a garantia da da1fe0a: nunca apaga creds sozinho em
+// queda transitória — só aqui, sob pedido direto do usuário.
+export async function resetSession(userId: string): Promise<void> {
+  const session = sessions.get(userId);
+  if (session) {
+    session.reconnecting = true; // impede o handler 'close' de auto-reconectar
+    try { session.sock?.end(undefined); } catch {}
+    sessions.delete(userId);
+  }
+  const sessionDir = path.join(SESSIONS_DIR, userId);
+  try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch {}
+  console.log(`[Baileys] Sessão resetada (credenciais limpas) — usuário ${userId}`);
+}
+
 // ─── Status e QR ─────────────────────────────────────────────────────────────
 
 export function getStatus(userId: string): 'open' | 'connecting' | 'close' | 'not_initialized' {
