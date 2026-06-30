@@ -1,13 +1,10 @@
 diff --git a/node_modules/@whiskeysockets/baileys/lib/Utils/messages.js b/node_modules/@whiskeysockets/baileys/lib/Utils/messages.js
-index eff7a53..be182c9 100644
+index 247b1f1..8aa413d 100644
 --- a/node_modules/@whiskeysockets/baileys/lib/Utils/messages.js
 +++ b/node_modules/@whiskeysockets/baileys/lib/Utils/messages.js
-@@ -132,9 +132,9 @@ export const prepareWAMessageMedia = async (message, options) => {
-     }
-     const requiresDurationComputation = mediaType === 'audio' && typeof uploadData.seconds === 'undefined';
+@@ -135,7 +135,7 @@ export const prepareWAMessageMedia = async (message, options) => {
      const requiresThumbnailComputation = (mediaType === 'image' || mediaType === 'video') && typeof uploadData['jpegThumbnail'] === 'undefined';
--    const requiresWaveformProcessing = mediaType === 'audio' && uploadData.ptt === true;
-+    const requiresWaveformProcessing = mediaType === 'audio' && uploadData.ptt === true && typeof uploadData.waveform === 'undefined';
+     const requiresWaveformProcessing = mediaType === 'audio' && uploadData.ptt === true && typeof uploadData.waveform === 'undefined';
      const requiresAudioBackground = options.backgroundColor && mediaType === 'audio' && uploadData.ptt === true;
 -    const requiresOriginalForSomeProcessing = requiresDurationComputation || requiresThumbnailComputation;
 +    const requiresOriginalForSomeProcessing = requiresDurationComputation || requiresThumbnailComputation || requiresWaveformProcessing;
