@@ -23,7 +23,8 @@ import crypto from 'crypto';
 const sentryReady = initSentry();
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createSupabaseClient, supabaseAdmin } from './supabase.js';
-import { getAgentReply, extractCadastroWithAI, DEFAULT_PERSONA, DEFAULT_OBJECTIVE, DEFAULT_KNOWLEDGE, DEFAULT_RULES, DEFAULT_SALES_STRATEGY } from './ai-agent.js';
+import { getAgentReply, extractCadastroWithAI, analyzeDossierWithAI, DEFAULT_PERSONA, DEFAULT_OBJECTIVE, DEFAULT_KNOWLEDGE, DEFAULT_RULES, DEFAULT_SALES_STRATEGY } from './ai-agent.js';
+import { buildDossierPdf, normalizePhotoToJpeg, DossierPhoto } from './dossier-pdf.js';
 import * as plugnotas from './plugnotas.js';
 import { understandMedia } from './media-understanding.js';
 import {
@@ -7675,6 +7676,193 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
   });
 
+  // ── Dossiê de alinhamento (IA) ──────────────────────────────────────
+  // Ao marcar GANHO, a IA analisa a conversa do WhatsApp e monta o dossiê pro
+  // time de produção: o que a cliente quer, falas/fotos de referência,
+  // preferências e combinados. Persistido em alignment_dossiers (migration 058).
+  async function generateAlignmentDossier(userId: string, dealId: number): Promise<any> {
+    const db = supabaseAdmin;
+    if (!db) throw new Error('Servidor sem service role — dossiê indisponível.');
+    const { data: deal } = await db.from('deals')
+      .select('id, contact_name, title, contact_phone, converted_job_id')
+      .eq('id', dealId).eq('user_id', userId).single();
+    if (!deal) throw new Error('Venda não encontrada.');
+
+    const upsertBase = {
+      user_id: userId,
+      deal_id: dealId,
+      job_id: deal.converted_job_id || null,
+      client_name: deal.contact_name || deal.title || 'Cliente',
+      phone: deal.contact_phone || null,
+      updated_at: new Date().toISOString(),
+    };
+    const fail = async (msg: string) => {
+      await db.from('alignment_dossiers')
+        .upsert({ ...upsertBase, status: 'error', error: msg }, { onConflict: 'user_id,deal_id' });
+      return null;
+    };
+
+    const phoneDigits = String(deal.contact_phone || '').replace(/\D/g, '');
+    if (!phoneDigits) return fail('Lead sem telefone — não há conversa pra analisar.');
+
+    const variants = brazilianPhoneVariants(phoneDigits);
+    const { data: msgsDesc } = await db.from('wa_messages')
+      .select('message_id, body, from_me, timestamp, type, media_url')
+      .eq('user_id', userId)
+      .in('phone', variants)
+      .order('timestamp', { ascending: false })
+      .limit(400);
+    const msgs = (msgsDesc || []).reverse();
+    if (!msgs.length) return fail('Sem conversa do WhatsApp registrada pra este lead.');
+
+    await db.from('alignment_dossiers')
+      .upsert({ ...upsertBase, status: 'generating', error: null }, { onConflict: 'user_id,deal_id' });
+
+    // Transcript numerado: a IA devolve os índices das fotos de referência
+    const lines: string[] = [];
+    msgs.forEach((m: any, i: number) => {
+      const who = m.from_me ? 'ESTÚDIO' : 'CLIENTE';
+      const isText = !m.type || m.type === 'chat' || m.type === 'text';
+      const marker = m.type === 'image' ? '[FOTO] ' : (isText ? '' : `[${String(m.type).toUpperCase()}] `);
+      const body = String(m.body || '').trim();
+      if (!marker && !body) return;
+      lines.push(`[#${i}] ${who}: ${marker}${body}`.trim());
+    });
+
+    try {
+      const content = await analyzeDossierWithAI(lines.join('\n'));
+      // Índices → message_ids de fotos DA CLIENTE com mídia salva
+      const refIds = content.fotos_referencia_indices
+        .map((i) => msgs[i])
+        .filter((m: any) => m && !m.from_me && m.type === 'image' && m.media_url)
+        .map((m: any) => m.message_id)
+        .slice(0, 12);
+      const stored: any = { ...content, reference_photo_ids: refIds };
+      delete stored.fotos_referencia_indices;
+      const { data: saved } = await db.from('alignment_dossiers')
+        .upsert({ ...upsertBase, content: stored, status: 'ready', error: null }, { onConflict: 'user_id,deal_id' })
+        .select().single();
+      console.log(`[dossie] gerado | deal=${dealId} | fotos=${refIds.length} (user ${userId})`);
+      return saved;
+    } catch (e: any) {
+      return fail(e?.message || 'Falha na análise da IA.');
+    }
+  }
+
+  async function findDossierByJob(userId: string, jobId: number): Promise<any> {
+    const db = supabaseAdmin;
+    if (!db || !Number.isFinite(jobId)) return null;
+    const { data } = await db.from('alignment_dossiers')
+      .select('*').eq('user_id', userId).eq('job_id', jobId).maybeSingle();
+    if (data) return data;
+    // Fallback: dossiê gerado antes do job existir (ganho sem ensaio na hora)
+    const { data: deal } = await db.from('deals')
+      .select('id').eq('user_id', userId).eq('converted_job_id', jobId).maybeSingle();
+    if (!deal) return null;
+    const { data: d2 } = await db.from('alignment_dossiers')
+      .select('*').eq('user_id', userId).eq('deal_id', deal.id).maybeSingle();
+    return d2;
+  }
+
+  async function fetchMediaBuffer(url: string): Promise<Buffer | null> {
+    try {
+      if (url.startsWith('data:')) {
+        const b64 = url.split(',')[1] || '';
+        return b64 ? Buffer.from(b64, 'base64') : null;
+      }
+      if (/^https?:\/\//.test(url)) {
+        const r = await fetch(url);
+        if (!r.ok) return null;
+        return Buffer.from(await r.arrayBuffer());
+      }
+      return null;
+    } catch { return null; }
+  }
+
+  async function loadDossierPhotos(userId: string, dossier: any): Promise<DossierPhoto[]> {
+    const db = supabaseAdmin;
+    const ids: string[] = Array.isArray(dossier?.content?.reference_photo_ids)
+      ? dossier.content.reference_photo_ids : [];
+    if (!db || !ids.length) return [];
+    const { data: rows } = await db.from('wa_messages')
+      .select('message_id, media_url')
+      .eq('user_id', userId)
+      .in('message_id', ids.slice(0, 12));
+    const photos: DossierPhoto[] = [];
+    for (const r of rows || []) {
+      const raw = await fetchMediaBuffer(String((r as any).media_url || ''));
+      if (!raw) continue;
+      const photo = await normalizePhotoToJpeg(raw);
+      if (photo) photos.push(photo);
+    }
+    return photos;
+  }
+
+  app.get('/api/jobs/:id/dossie', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const dossier = await findDossierByJob(userId, Number(req.params.id));
+    if (!dossier) return res.status(404).json({ error: 'Dossiê ainda não gerado.' });
+    res.json(dossier);
+  });
+
+  app.post('/api/jobs/:id/dossie/regenerate', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const db = supabaseAdmin;
+    if (!db) return res.status(500).json({ error: 'Dossiê indisponível neste servidor.' });
+    const jobId = Number(req.params.id);
+    const { data: deal } = await db.from('deals')
+      .select('id').eq('user_id', userId).eq('converted_job_id', jobId).maybeSingle();
+    if (!deal) return res.status(404).json({ error: 'Nenhuma venda vinculada a este trabalho.' });
+    try {
+      const dossier = await generateAlignmentDossier(userId, Number(deal.id));
+      if (!dossier) {
+        const d = await findDossierByJob(userId, jobId);
+        return res.status(422).json({ error: d?.error || 'Não foi possível gerar o dossiê.' });
+      }
+      res.json(dossier);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || 'Erro ao gerar o dossiê.' });
+    }
+  });
+
+  app.get('/api/jobs/:id/dossie/pdf', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const db = supabaseAdmin;
+    const jobId = Number(req.params.id);
+    const dossier = await findDossierByJob(userId, jobId);
+    if (!dossier || dossier.status !== 'ready') {
+      return res.status(404).json({ error: dossier?.error || 'Dossiê ainda não gerado.' });
+    }
+    let jobLabel: string | null = null;
+    if (db) {
+      const { data: job } = await db.from('jobs')
+        .select('job_type, job_date, job_time').eq('id', jobId).eq('user_id', userId).maybeSingle();
+      if (job) {
+        const dt = job.job_date ? String(job.job_date).split('-').reverse().join('/') : '';
+        jobLabel = [job.job_type, dt, job.job_time].filter(Boolean).join(' — ');
+      }
+    }
+    try {
+      const photos = await loadDossierPhotos(userId, dossier);
+      const pdf = buildDossierPdf({
+        clientName: dossier.client_name || 'Cliente',
+        phone: dossier.phone,
+        jobLabel,
+        generatedAt: dossier.updated_at || dossier.created_at,
+        content: dossier.content || {},
+        photos,
+      });
+      const slug = String(dossier.client_name || 'cliente')
+        .normalize('NFD').replace(/\p{Diacritic}/gu, '').replace(/[^\w]+/g, '-').toLowerCase();
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="dossie-${slug}.pdf"`);
+      res.send(pdf);
+    } catch (e: any) {
+      console.error('[dossie pdf] erro:', e?.message || e);
+      res.status(500).json({ error: 'Erro ao montar o PDF do dossiê.' });
+    }
+  });
+
   // ── Painel "Atendimentos da Lia" (Fase 3 agêntica) ─────────────────
   // Lista as conversas que a Lia tocou, em 3 baldes: precisa de humano (hand-off),
   // orçamento enviado (aguardando), e Lia conversando. Só leitura, escopo do user.
@@ -13610,6 +13798,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         .eq('client_id', clientId)
         .in('status', ['em_kanban', 'future', 'active', 'urgent', 'pendente']);
     }
+
+    // Dossiê de alinhamento: IA analisa a conversa e monta o dossiê pro time
+    // de produção (fire-and-forget — não atrasa a resposta da conversão).
+    generateAlignmentDossier(userId, Number(req.params.id)).catch((e: any) =>
+      console.warn('[dossie] geração no convert falhou:', e?.message || e));
 
     res.json({ success: true, client_id: clientId, job_id: jobId });
   });

@@ -158,6 +158,82 @@ export function isAgentReady(): boolean {
   return anthropic !== null;
 }
 
+// ── Dossiê de alinhamento ───────────────────────────────────────────
+// Analisa a conversa de venda e monta o dossiê pro time de alinhamento:
+// o que a cliente quer, falas de referência (citações), preferências,
+// combinados e QUAIS fotos enviadas por ela são referência do ensaio.
+// O transcript chega numerado ("[#12] CLIENTE: ..."), fotos marcadas com
+// [FOTO] — o modelo devolve os índices das fotos que são referência.
+export interface DossierContent {
+  resumo: string;
+  o_que_quer: string[];
+  falas_referencia: string[];
+  preferencias: string[];
+  combinados: string[];
+  evitar: string[];
+  fotos_referencia_indices: number[];
+}
+
+export async function analyzeDossierWithAI(transcript: string): Promise<DossierContent> {
+  if (!anthropic) {
+    throw new Error('ANTHROPIC_API_KEY não configurada no servidor.');
+  }
+  const text = String(transcript || '').trim().slice(-60000);
+  if (!text) throw new Error('Conversa vazia.');
+
+  const response = await anthropic.messages.create({
+    model: MODEL,
+    max_tokens: 2500,
+    system:
+      'Você prepara dossiês de alinhamento para a equipe de produção de um estúdio fotográfico brasileiro, a partir da conversa de venda no WhatsApp. Seja fiel à conversa: NUNCA invente. Responda APENAS com JSON válido — sem markdown, sem cercas de código.',
+    messages: [
+      {
+        role: 'user',
+        content: `A venda abaixo foi fechada. Monte o dossiê de alinhamento pro time que vai executar o ensaio — pra ninguém precisar realinhar tudo com a cliente de novo.
+
+Retorne JSON com exatamente estas chaves:
+- "resumo": 2-4 frases — quem é a cliente, o que comprou e o essencial do que ela espera.
+- "o_que_quer": lista objetiva do que a cliente quer no ensaio (estilo, poses, cenário, acompanhantes, produtos).
+- "falas_referencia": citações LITERAIS da cliente que mostram o que ela quer (copie a fala como está, curta). Máx 8.
+- "preferencias": preferências declaradas (cores, estilo, local, horário, inspirações).
+- "combinados": tudo que ficou combinado (pacote, valores, sinal, data/horário, local, entregas, prazos).
+- "evitar": o que a cliente NÃO quer / cuidados (inseguranças, restrições, traumas de outras experiências).
+- "fotos_referencia_indices": índices ([#N]) das mensagens com [FOTO] enviadas PELA CLIENTE que são REFERÊNCIA do que ela quer (inspiração/exemplo). NÃO inclua comprovantes de pagamento, documentos, prints de conversa ou fotos irrelevantes. Se não der pra saber, inclua as fotos que ela mandou perto de falas sobre estilo/inspiração.
+
+Regras: campos sem informação → lista vazia (ou "" no resumo). NUNCA invente dado que não está na conversa. Escreva em português do Brasil, direto e útil pra equipe.
+
+CONVERSA (CLIENTE = quem comprou, ESTÚDIO = vendedor):
+${text}`,
+      },
+    ],
+  });
+
+  const raw = response.content
+    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+    .map((b) => b.text)
+    .join('')
+    .trim();
+  const jsonStr = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '');
+  let parsed: any;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch {
+    throw new Error('A IA retornou um formato inesperado — tente regerar.');
+  }
+  const arr = (v: any) => (Array.isArray(v) ? v.map((x) => String(x)) : []);
+  return {
+    resumo: String(parsed.resumo || ''),
+    o_que_quer: arr(parsed.o_que_quer),
+    falas_referencia: arr(parsed.falas_referencia),
+    preferencias: arr(parsed.preferencias),
+    combinados: arr(parsed.combinados),
+    evitar: arr(parsed.evitar),
+    fotos_referencia_indices: (Array.isArray(parsed.fotos_referencia_indices) ? parsed.fotos_referencia_indices : [])
+      .map((n: any) => Number(n))
+      .filter((n: number) => Number.isFinite(n)),
+  };
+}
+
 // ── Extração de cadastro por IA ─────────────────────────────────────
 // Lê os textos de uma conversa do WhatsApp e extrai os dados cadastrais do
 // CLIENTE. Fallback do parser por regex do texto pré-pronto — quando a cliente

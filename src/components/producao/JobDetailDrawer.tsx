@@ -151,6 +151,53 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
   const [editLabelColor, setEditLabelColor] = useState("#6366f1");
   const [labelPalette, setLabelPalette] = useState<{ id: string; name: string; color: string }[]>([]);
   const [newLabelName, setNewLabelName] = useState("");
+  // Dossiê de alinhamento (IA) — gerado no ganho; aqui só consulta/regera/baixa
+  const [dossier, setDossier] = useState<any | null>(null);
+  const [dossierBusy, setDossierBusy] = useState(false);
+
+  useEffect(() => {
+    setDossier(null);
+    if (!job) return;
+    let on = true;
+    authFetch(`/api/jobs/${job.id}/dossie`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (on) setDossier(d); })
+      .catch(() => {});
+    return () => { on = false; };
+  }, [job?.id]);
+
+  const abrirDossiePdf = async () => {
+    if (!job) return;
+    setDossierBusy(true);
+    try {
+      const r = await authFetch(`/api/jobs/${job.id}/dossie/pdf`);
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({}));
+        throw new Error(e.error || 'Dossiê ainda não gerado.');
+      }
+      const blob = await r.blob();
+      window.open(URL.createObjectURL(blob), '_blank');
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setDossierBusy(false);
+    }
+  };
+
+  const regerarDossie = async () => {
+    if (!job) return;
+    setDossierBusy(true);
+    try {
+      const r = await authFetch(`/api/jobs/${job.id}/dossie/regenerate`, { method: 'POST' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'Não foi possível gerar o dossiê.');
+      setDossier(d);
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setDossierBusy(false);
+    }
+  };
   const [newLabelColor, setNewLabelColor] = useState("#6366f1");
   const [contractId, setContractId] = useState<number | null>(null);
   const [creatingContract, setCreatingContract] = useState(false);
@@ -1114,6 +1161,44 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                     )}
                   </div>
                 )}
+              </section>
+
+              {/* Dossiê de alinhamento (IA analisa a conversa da venda) */}
+              <section>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                  Dossiê de alinhamento
+                </h3>
+                <div className="space-y-2">
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    {dossier?.status === 'ready'
+                      ? `Gerado pela IA a partir da conversa do WhatsApp em ${new Date(dossier.updated_at || dossier.created_at).toLocaleDateString('pt-BR')} — falas e fotos de referência da cliente.`
+                      : dossier?.status === 'error'
+                      ? `Não foi possível gerar: ${dossier.error || 'erro desconhecido'}`
+                      : dossier?.status === 'generating'
+                      ? 'Gerando o dossiê…'
+                      : 'Ainda não gerado — a IA analisa a conversa da venda e monta o dossiê pro alinhamento.'}
+                  </p>
+                  <div className="flex gap-2">
+                    {dossier?.status === 'ready' && (
+                      <button
+                        onClick={abrirDossiePdf}
+                        disabled={dossierBusy}
+                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-700 dark:text-emerald-300 text-sm font-semibold rounded-lg transition-colors disabled:opacity-60"
+                      >
+                        <FileText size={14} />
+                        Baixar PDF
+                      </button>
+                    )}
+                    <button
+                      onClick={regerarDossie}
+                      disabled={dossierBusy}
+                      className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 text-sm font-semibold rounded-lg transition-colors disabled:opacity-60"
+                    >
+                      <RefreshCw size={14} className={dossierBusy ? 'animate-spin' : ''} />
+                      {dossier?.status === 'ready' ? 'Regerar' : 'Gerar dossiê'}
+                    </button>
+                  </div>
+                </div>
               </section>
 
               {/* Galeria de seleção de fotos (proofing) */}
