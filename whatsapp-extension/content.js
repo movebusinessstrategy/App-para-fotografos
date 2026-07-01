@@ -4939,6 +4939,32 @@
         return;
       }
 
+      // Contato salvo (número escondido no DOM): usa o cache nome→telefone de
+      // aberturas anteriores pra casar com o deal do cache NA HORA — instantâneo,
+      // sem esperar o servidor (Render). É o caso comum: os mesmos leads são
+      // reabertos nos follow-ups. O servidor só atualiza tarefas/detalhes depois.
+      const cachedPhone = chatPhoneByName.get(chatNameKey(chatName));
+      const dealByCachedPhone = cachedPhone ? findDealByPhoneLocal(cachedPhone) : null;
+      if (dealByCachedPhone && nameMatchesHeader(dealByCachedPhone)) {
+        chatPhone = digits(cachedPhone);
+        chatDeal = dealByCachedPhone;
+        chatStages = chatStages.length ? chatStages : stages;
+        injectChatStrip(chatDeal, chatStages);
+        bg({ type: 'GET_DEAL_BY_PHONE', phone: cachedPhone, name: chatName })
+          .then((result) => {
+            if (chatKey !== requestKey) return; // trocou de conversa
+            if (result?.stages) chatStages = result.stages;
+            chatPendingTasks = result?.pending_tasks || [];
+            if (result?.deal && dealMatchesOpenChat(result.deal)) {
+              chatDeal = result.deal;
+              injectChatStrip(chatDeal, chatStages);
+              injectPendingTasksRow(chatDeal);
+            }
+          })
+          .catch(() => {});
+        return;
+      }
+
       // Contato salvo às vezes abre primeiro sem telefone no DOM. Espera uma
       // janela curta antes de concluir que ele não está no pipeline, evitando
       // piscar "Não está no pipeline" e logo depois trocar para o lead certo.
