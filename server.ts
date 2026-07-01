@@ -4192,10 +4192,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         if (linkedDeals && linkedDeals.length) {
           const stages = await ensurePipelineStages(supabase, userId);
           const wonIds = new Set(stages.filter((s: any) => s.is_won).map((s: any) => s.id));
+          // Por FLAG (ids são únicos por tenant; escrever o DEFAULT criaria etapa
+          // órfã). Sem etapa de perda, o guard `&& lostStage` abaixo só desconverte.
           const lostStage =
-            stages.find((s: any) => s.id === 'lost') ||
             stages.find((s: any) => s.is_final && !s.is_won) ||
-            DEFAULT_STAGES.find((s: any) => s.id === 'lost');
+            stages.find((s: any) => s.id === 'lost');
           const nowIso = new Date().toISOString();
           for (const d of linkedDeals) {
             const upd: any = { converted: false, converted_at: null, converted_job_id: null };
@@ -13590,8 +13591,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.post('/api/deals/:id/lost', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const stages = await ensurePipelineStages(supabase, userId);
-    const lostStage = stages.find((s) => s.id === req.body.stageId) || stages.find((s) => s.id === 'lost') || DEFAULT_STAGES.find((s) => s.id === 'lost');
+    let stages = await ensurePipelineStages(supabase, userId);
+    // Garante etapa de perda persistida (contas novas têm ids únicos por tenant —
+    // não existe id literal 'lost'; o fallback antigo gravava stage órfã e o lead sumia).
+    stages = await ensureWonLostStages(supabase, userId, stages);
+    const lostStage = stages.find((s) => s.id === req.body.stageId)
+      || stages.find((s) => s.is_final && !s.is_won)
+      || DEFAULT_STAGES.find((s) => s.id === 'lost');
     const { reason, notes } = req.body;
     const nowIso = new Date().toISOString();
 
@@ -14856,14 +14862,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
-    const stages = await ensurePipelineStages(supabase, userId);
+    let stages = await ensurePipelineStages(supabase, userId);
+    // Garante etapa de perda persistida (ids agora são únicos por tenant — não
+    // existe id literal 'lost' em conta nova; escrever o DEFAULT criaria etapa órfã).
+    stages = await ensureWonLostStages(supabase, userId, stages);
 
-    // Resolução robusta da etapa "perdido": prioriza id='lost' (mais comum),
-    // depois qualquer is_final && !is_won, depois fallback do DEFAULT.
-    const lostStage =
-      stages.find((s) => s.id === 'lost') ||
-      stages.find((s) => s.is_final && !s.is_won) ||
-      DEFAULT_STAGES.find((s) => s.id === 'lost');
+    // Resolução por FLAG (is_final && !is_won) — nunca escreve id que não existe.
+    const lostStage = stages.find((s) => s.is_final && !s.is_won);
     if (!lostStage) {
       console.warn('[cancel-sale] sem etapa "perdido" configurada', { userId });
       return res.status(400).json({ error: 'Sem etapa "perdido" configurada no funil' });

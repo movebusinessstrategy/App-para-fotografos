@@ -63,8 +63,9 @@ export function DealDetailsModal({
   if (!deal) return null;
 
   const currentStage = stages.find(s => s.id === deal.stage);
-  const isWon = currentStage?.stage_type === "won";
-  const isLost = currentStage?.stage_type === "lost";
+  // Flags is_won/is_final (a API não envia stage_type; ids são únicos por tenant)
+  const isWon = !!(currentStage?.is_final && currentStage?.is_won);
+  const isLost = !!(currentStage?.is_final && !currentStage?.is_won);
   const isFinal = currentStage?.is_final;
 
   const handleChange = (field: keyof Deal, value: any) => {
@@ -109,7 +110,7 @@ export function DealDetailsModal({
   };
 
   const handleMarkAsLost = async () => {
-    const lostStage = stages.find(s => s.stage_type === "lost");
+    const lostStage = stages.find(s => s.is_final && !s.is_won);
     if (!lostStage) {
       alert("Stage 'Perdido' não encontrado. Configure nas etapas.");
       return;
