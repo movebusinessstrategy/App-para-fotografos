@@ -1294,6 +1294,18 @@
     return true;
   }
 
+  // Fecha o alerta "O número de telefone compartilhado por url é inválido" que o
+  // WhatsApp mostra quando o /send?phone= recebe um número que não é conta WA.
+  // Só age nesse alerta específico (checa o texto) pra não fechar outros modais.
+  function dismissWaInvalidNumberDialog() {
+    const dlg = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].find((d) => d.offsetWidth);
+    if (!dlg) return;
+    const txt = (dlg.textContent || '').toLowerCase();
+    if (!/inv[aá]lid|invalid|n[ãa]o.*whatsapp|not.*whatsapp/.test(txt)) return;
+    const btn = [...dlg.querySelectorAll('button, [role="button"]')].find((b) => b.offsetWidth);
+    if (btn) simulateRealClick(btn);
+  }
+
   async function tryOpenSendRouteInApp(phoneFull) {
     const previousUrl = window.location.href;
 
@@ -1363,8 +1375,18 @@
     // 2) Abre PELO NÚMERO, via a rota interna do WhatsApp Web (/send?phone=),
     //    SEM digitar na busca. É o caminho principal — confiável e não depende
     //    de achar o contato pelo nome.
+    //    CRÍTICO: tenta TODAS as variantes do número (com/sem o 9º dígito, com/
+    //    sem 55). O número salvo no CRM pode estar em formato diferente do que o
+    //    WhatsApp registrou — ex.: o backend força o 9º dígito (13 dígitos), mas
+    //    a conta é do formato antigo de 8 dígitos (12). Sem tentar as duas, o
+    //    /send não resolve e a conversa "acha mas não abre".
     hideKanban();
-    if (phoneFull && await tryOpenSendRouteInApp(phoneFull)) return true;
+    for (const variant of phoneVariants(phoneFull)) {
+      if (await tryOpenSendRouteInApp(variant)) return true;
+      // Se a variante errada disparou o alerta "número inválido" do WhatsApp,
+      // fecha antes de tentar a próxima — senão o popup bloqueia o clique.
+      dismissWaInvalidNumberDialog();
+    }
 
     // 3) Fallback: busca interna do WhatsApp (caso a rota por número falhe).
     // WhatsApp Web 2026 mudou de contenteditable pra <input> — testamos ambos.
