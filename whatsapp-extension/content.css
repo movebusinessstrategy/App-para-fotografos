@@ -1212,7 +1212,7 @@ body.fp-kanban-open #pane-side { display: none !important; }
 }
 #fp-chat-btn:hover { background: #e9edef; }
 
-/* Faixa CRM dentro do chat */
+/* Faixa CRM dentro do chat — vidro fosco no tom do WhatsApp (sem placa branca) */
 #fp-chat-strip {
   position: fixed;
   top: var(--fp-chat-strip-top, 60px);
@@ -1223,14 +1223,18 @@ body.fp-kanban-open #pane-side { display: none !important; }
   align-items: center;
   gap: 8px;
   padding: 6px 14px;
-  background: #fff;
-  border-bottom: 1px solid #f0f2f5;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  background:
+    linear-gradient(90deg, rgba(0, 168, 132, 0.055), rgba(0, 168, 132, 0) 230px),
+    rgba(240, 242, 245, 0.88);
+  backdrop-filter: blur(14px) saturate(1.5);
+  -webkit-backdrop-filter: blur(14px) saturate(1.5);
+  border-bottom: 1px solid rgba(11, 20, 26, 0.08);
+  box-shadow: 0 8px 22px -14px rgba(11, 20, 26, 0.28);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 12px;
   flex-wrap: nowrap;
-  min-height: 42px;
-  max-height: 42px;
+  min-height: 44px;
+  max-height: 44px;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -1245,16 +1249,19 @@ body.fp-kanban-open #pane-side { display: none !important; }
   pointer-events: auto !important;
 }
 .fp-strip-label {
-  color: #667781;
+  color: #54656f;
   font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
   flex: 0 0 auto;
   white-space: nowrap;
 }
 .fp-strip-badge {
   display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 9px; border-radius: 20px;
+  padding: 4px 11px; border-radius: 999px;
   font-size: 11px; font-weight: 700;
   border: 1.5px solid transparent;
+  box-shadow: inset 0 0 0 1px rgba(11, 20, 26, 0.06), 0 1px 2px rgba(11, 20, 26, 0.06);
   font-family: inherit;
   flex: 0 0 auto;
   white-space: nowrap;
@@ -1269,26 +1276,58 @@ body.fp-kanban-open #pane-side { display: none !important; }
   box-shadow: 0 2px 8px rgba(0,0,0,0.08);
   transform: translateY(-1px);
 }
-.fp-strip-caret { font-size: 10px; line-height: 1; margin-left: 2px; }
-.fp-strip-sep { color: #e5e7eb; }
+.fp-strip-caret { font-size: 10px; line-height: 1; margin-left: 2px; opacity: 0.75; }
+.fp-strip-sep { color: rgba(11, 20, 26, 0.12); }
 .fp-strip-stages {
   display: flex; gap: 5px; flex-wrap: wrap;
 }
 .fp-strip-stage-btn {
-  padding: 3px 9px; border-radius: 20px; border: 1.5px solid #e5e7eb;
-  background: #fff; font-size: 11px; font-weight: 600; color: #667781;
-  cursor: pointer; font-family: inherit; transition: all 0.12s;
+  padding: 4px 11px; border-radius: 999px; border: 1px solid rgba(11, 20, 26, 0.10);
+  background: rgba(255, 255, 255, 0.72); font-size: 11px; font-weight: 600; color: #54656f;
+  cursor: pointer; font-family: inherit;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.12s, box-shadow 0.15s;
   position: relative;
   z-index: 1;
   flex: 0 0 auto;
   white-space: nowrap;
 }
-.fp-strip-stage-btn:hover { border-color: #00a884; color: #00a884; }
-.fp-strip-stage-btn.fp-active { border-color: #00a884; background: #e7f8f3; color: #00a884; }
+.fp-strip-stage-btn:hover {
+  border-color: rgba(0, 168, 132, 0.55); color: #008069;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 2px 8px -3px rgba(11, 20, 26, 0.2);
+  transform: translateY(-1px);
+}
+.fp-strip-stage-btn.fp-active { border-color: #00a884; background: rgba(0, 168, 132, 0.12); color: #008069; }
 .fp-strip-primary-add {
-  border-color: #00a884;
-  background: #e7f8f3;
-  color: #007a63;
+  border-color: rgba(0, 168, 132, 0.55);
+  background: rgba(0, 168, 132, 0.12);
+  color: #008069;
+}
+/* Ganho/Perda dentro da faixa: tons suaves, sem gritar */
+#fp-chat-strip .fp-btn-won {
+  border-color: rgba(16, 185, 129, 0.45) !important;
+  background: rgba(16, 185, 129, 0.08) !important;
+  color: #047857 !important;
+}
+#fp-chat-strip .fp-btn-won:hover { background: rgba(16, 185, 129, 0.18) !important; }
+#fp-chat-strip .fp-btn-won.fp-active-won { background: #059669 !important; border-color: #059669 !important; color: #fff !important; }
+#fp-chat-strip .fp-btn-lost {
+  border-color: rgba(239, 68, 68, 0.4) !important;
+  background: rgba(239, 68, 68, 0.06) !important;
+  color: #b91c1c !important;
+}
+#fp-chat-strip .fp-btn-lost:hover { background: rgba(239, 68, 68, 0.14) !important; }
+#fp-chat-strip .fp-btn-lost.fp-active-lost { background: #dc2626 !important; border-color: #dc2626 !important; color: #fff !important; }
+/* "Voltar ao Funil": verde-oceano do WhatsApp no lugar do preto (inline no JS) */
+#fp-strip-funil, #fp-strip-funil2 {
+  background: #008069 !important;
+  border-color: #008069 !important;
+  color: #fff !important;
+}
+#fp-strip-funil:hover, #fp-strip-funil2:hover {
+  background: #00695a !important;
+  border-color: #00695a !important;
+  color: #fff !important;
 }
 #fp-strip-funil,
 #fp-strip-funil2 {
@@ -1302,6 +1341,58 @@ body.fp-kanban-open #pane-side { display: none !important; }
 #fp-chat-strip.fp-chat-strip-compact #fp-strip-funil,
 #fp-chat-strip.fp-chat-strip-compact #fp-strip-funil2 {
   margin-left: 0 !important;
+}
+/* Dark mode do WhatsApp — faixa acompanha o tema escuro */
+@media (prefers-color-scheme: dark) {
+  #fp-chat-strip {
+    background:
+      linear-gradient(90deg, rgba(0, 168, 132, 0.07), rgba(0, 168, 132, 0) 230px),
+      rgba(32, 44, 51, 0.88);
+    border-bottom: 1px solid rgba(233, 237, 239, 0.08);
+    box-shadow: 0 8px 22px -12px rgba(0, 0, 0, 0.5);
+  }
+  .fp-strip-label { color: #8696a0; }
+  .fp-strip-sep { color: rgba(233, 237, 239, 0.14); }
+  .fp-strip-badge { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.25); }
+  .fp-strip-stage-btn {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(233, 237, 239, 0.14);
+    color: #aebac1;
+  }
+  .fp-strip-stage-btn:hover {
+    background: rgba(255, 255, 255, 0.10);
+    border-color: rgba(0, 168, 132, 0.6);
+    color: #00d9a5;
+    box-shadow: 0 2px 8px -3px rgba(0, 0, 0, 0.5);
+  }
+  .fp-strip-stage-btn.fp-active { background: rgba(0, 168, 132, 0.16); color: #00d9a5; }
+  .fp-strip-primary-add { background: rgba(0, 168, 132, 0.16); color: #00d9a5; }
+  #fp-chat-strip .fp-btn-won {
+    background: rgba(16, 185, 129, 0.12) !important;
+    color: #34d399 !important;
+  }
+  #fp-chat-strip .fp-btn-lost {
+    background: rgba(239, 68, 68, 0.10) !important;
+    color: #f87171 !important;
+  }
+  #fp-strip-funil, #fp-strip-funil2 {
+    background: #00a884 !important;
+    border-color: #00a884 !important;
+    color: #0b141a !important;
+  }
+  #fp-strip-funil:hover, #fp-strip-funil2:hover {
+    background: #00c298 !important;
+    border-color: #00c298 !important;
+    color: #0b141a !important;
+  }
+  .fp-stage-menu {
+    background: #233138;
+    border-color: rgba(233, 237, 239, 0.1);
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
+  }
+  .fp-stage-menu-title { color: #8696a0; }
+  .fp-stage-menu-btn { color: #e9edef; }
+  .fp-stage-menu-btn:hover { background: rgba(255, 255, 255, 0.06); }
 }
 
 /* Menu compacto de etapas no chat */

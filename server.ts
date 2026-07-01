@@ -13480,6 +13480,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     let jobId: number | null = null;
     if (createJob && job) {
+      // Guardas com mensagem CLARA — sem isso a falha do insert no Supabase
+      // voltava enigmática e o usuário só via "não converteu".
+      const jobDate = String(job.job_date || '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(jobDate)) {
+        return res.status(400).json({ error: 'Data do ensaio inválida — selecione a data no calendário.' });
+      }
+      job.job_date = jobDate;
+      if (!String(job.job_type || '').trim()) {
+        return res.status(400).json({ error: 'Tipo de ensaio é obrigatório.' });
+      }
       // Determina a etapa de entrada da produção: primeira etapa do primeiro
       // processo não-especial (tipicamente "Ensaios Vendidos" → "Vendido").
       // Se a config não existir, o job nasce fora da produção (production_stage null).

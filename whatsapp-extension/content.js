@@ -5780,7 +5780,11 @@
     return false;
   }
 
-  function applyConversationCadastroToWonModal(modal) {
+  function applyConversationCadastroToWonModal(modal, deal) {
+    // TRAVA ANTI-MISTURA: só extrai da conversa VISÍVEL se ela pertence ao lead.
+    // Converter pelo kanban com OUTRA conversa aberta na tela puxava e-mail/CPF
+    // de outra pessoa pro cadastro (ex.: Mariana salva com e-mail da Isabela).
+    if (!dealMatchesOpenChat(deal)) return 0;
     const data = extractCadastroFromVisibleConversation();
     modal.__fpParsedConversationData = data;
 
@@ -6219,7 +6223,7 @@
 
     // Cliente existente e catálogo são populados depois (load*ForConversion)
     seedWonCatalogItems(modal, deal);
-    applyConversationCadastroToWonModal(modal);
+    applyConversationCadastroToWonModal(modal, deal);
     loadClientsForConversion(modal);
     loadCatalogForConversion(modal);
     loadCampaignsForConversion(modal);
@@ -6327,17 +6331,26 @@
       const pendingItems = createJob ? catalogItems.filter(item => !item.existing) : [];
       if (pendingItems.length && btn) btn.textContent = 'Salvando itens...';
       for (const item of pendingItems) {
-        const result = await bg({
-          type: 'ADD_DEAL_ITEM',
-          dealId: deal.id,
-          data: {
-            catalog_type: item.type,
-            catalog_id: item.id,
-            catalog_name: item.name,
-            catalog_value: Number(item.value) || 0,
-            quantidade: Number(item.quantity) || 1,
-          },
-        });
+        let result;
+        try {
+          result = await bg({
+            type: 'ADD_DEAL_ITEM',
+            dealId: deal.id,
+            data: {
+              catalog_type: item.type,
+              catalog_id: item.id,
+              catalog_name: item.name,
+              catalog_value: Number(item.value) || 0,
+              quantidade: Number(item.quantity) || 1,
+            },
+          });
+        } catch (itemErr) {
+          // Nomeia o item que falhou e ABORTA antes do convert — senão o pacote
+          // fica pela metade e o usuário não sabe o que deu errado.
+          throw new Error(`Falha ao salvar o item "${item.name}": ${itemErr.message}`);
+        }
+        // Só marca como salvo DEPOIS do sucesso (antes marcava sempre — item
+        // perdido em falha silenciosa nunca era reenviado na nova tentativa).
         item.existing = true;
         if (result?.item?.id) item.serverId = result.item.id;
       }
@@ -6358,13 +6371,18 @@
         deal.items = catalogItems;
       }
       modal.remove();
-      await loadKanban();
-      if (chatDeal && Number(chatDeal.id) === Number(deal.id)) {
-        chatDeal = { ...chatDeal, ...deal };
-        injectChatStrip(chatDeal, chatStages.length ? chatStages : stages);
-      }
+      // A conversão JÁ FOI SALVA no servidor — comemora primeiro. O refresh do
+      // board é best-effort: uma falha de rede aqui mostrava erro e parecia que
+      // "não converteu", levando o usuário a converter DE NOVO.
       celebrateSale();
       toast('Venda convertida com sucesso!');
+      try {
+        await loadKanban();
+        if (chatDeal && Number(chatDeal.id) === Number(deal.id)) {
+          chatDeal = { ...chatDeal, ...deal };
+          injectChatStrip(chatDeal, chatStages.length ? chatStages : stages);
+        }
+      } catch { /* polling de 5s atualiza o board depois */ }
     } catch (err) {
       toast(err.message, true);
       if (btn) {
