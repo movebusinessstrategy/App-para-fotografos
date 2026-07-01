@@ -56,7 +56,25 @@ function dateLabel(iso: string): string {
 
 export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props) {
   const { waTheme, toggleWaTheme } = useTheme();
-  const { conversations, loading: loadingConvs, refresh } = useConversations();
+  // 2º WhatsApp (pós-venda): visão SEPARADA — o seletor só aparece quando o
+  // 2º número está conectado; cada visão lista só as conversas do seu número
+  // e responde pelo número certo (sem misturar nem confundir a equipe).
+  const [waSlot, setWaSlot] = useState<'main' | 'posvenda'>('main');
+  const [posvendaOn, setPosvendaOn] = useState(false);
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token) return;
+        const r = await fetch('/api/whatsapp/posvenda/status', {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        const d = r.ok ? await r.json() : null;
+        setPosvendaOn(!!d?.connected);
+      } catch { /* silencioso */ }
+    })();
+  }, []);
+  const { conversations, loading: loadingConvs, refresh } = useConversations(waSlot);
   const { connected } = useWaStatus();
   const [selectedPhone, setSelectedPhone] = useState<string | null>(initialPhone || null);
   const [unreadOnly, setUnreadOnly] = useState(false);
@@ -64,7 +82,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
     ? conversations.filter((c) => c.unread_count > 0)
     : conversations;
   const unreadTotal = conversations.filter((c) => c.unread_count > 0).length;
-  const { messages, loading: loadingMsgs, sendText } = useMessages(selectedPhone);
+  const { messages, loading: loadingMsgs, sendText } = useMessages(selectedPhone, waSlot);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -449,6 +467,27 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
               </button>
             );
           })}
+          {posvendaOn && (
+            <div
+              className="flex items-center rounded-full overflow-hidden"
+              style={{ border: '1px solid var(--wa-border)' }}
+              title="Cada número tem sua própria lista de conversas — nada se mistura"
+            >
+              {([['main', '📞 Vendas'], ['posvenda', '🤝 Pós-venda']] as const).map(([k, label]) => (
+                <button
+                  key={k}
+                  onClick={() => { setWaSlot(k); setSelectedPhone(null); }}
+                  className="px-3 py-1 text-[12px] font-semibold transition-colors"
+                  style={{
+                    background: waSlot === k ? 'var(--wa-accent-green)' : 'transparent',
+                    color: waSlot === k ? '#fff' : 'var(--wa-text-secondary)',
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
           <span className="ml-auto text-[12px]" style={{ color: 'var(--wa-text-muted)' }}>
             {loadingConvs ? 'Carregando...' : `${shownConversations.length}`}
           </span>

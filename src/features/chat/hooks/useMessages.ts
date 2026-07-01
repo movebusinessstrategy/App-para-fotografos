@@ -3,7 +3,8 @@ import { supabase } from '../../../integrations/supabase/client';
 import { Message } from '../types';
 import { startVisiblePoll } from '../../../utils/poll';
 
-export function useMessages(phone: string | null) {
+// slot 'posvenda' → o envio sai pelo 2º número (socket do slot), não pelo principal
+export function useMessages(phone: string | null, slot: 'main' | 'posvenda' = 'main') {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const intervalRef = useRef<(() => void) | null>(null);
@@ -67,7 +68,7 @@ export function useMessages(phone: string | null) {
         Authorization: `Bearer ${session.access_token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ phone: phone!.replace(/\D/g, ''), text }),
+      body: JSON.stringify({ phone: phone!.replace(/\D/g, ''), text, ...(slot === 'posvenda' ? { slot } : {}) }),
     });
 
     setMessages(prev => prev.filter(m => m.message_id !== tmpId));

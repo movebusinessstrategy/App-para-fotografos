@@ -3,7 +3,9 @@ import { supabase } from '../../../integrations/supabase/client';
 import { Conversation } from '../types';
 import { startVisiblePoll } from '../../../utils/poll';
 
-export function useConversations() {
+// slot: 'main' = WhatsApp de vendas (padrão) | 'posvenda' = 2º número
+// (alinhamento) — visões SEPARADAS, cada uma só com as conversas do seu número.
+export function useConversations(slot: 'main' | 'posvenda' = 'main') {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
   const intervalRef = useRef<(() => void) | null>(null);
@@ -13,7 +15,7 @@ export function useConversations() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) return;
 
-      const res = await fetch('/api/inbox/conversations', {
+      const res = await fetch(`/api/inbox/conversations${slot === 'posvenda' ? '?slot=posvenda' : ''}`, {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       if (!res.ok) return;
@@ -41,10 +43,11 @@ export function useConversations() {
   }
 
   useEffect(() => {
+    setLoading(true);
     fetchConversations();
     intervalRef.current = startVisiblePoll(fetchConversations, 25000);
     return () => { if (intervalRef.current) intervalRef.current(); };
-  }, []);
+  }, [slot]);
 
   return { conversations, loading, refresh: fetchConversations };
 }

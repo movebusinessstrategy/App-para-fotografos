@@ -2827,6 +2827,16 @@ async function startServer() {
   app.get('/api/inbox/conversations', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const db = supabaseAdmin;
+    // ?slot=posvenda → visão SEPARADA do 2º número: só as conversas dele.
+    // Sem o slot conectado, devolve [] (não mistura com as de vendas).
+    if (req.query.slot === 'posvenda') {
+      const pvNumber = BaileysManager.getConnectedPhone(posvendaKey(userId)) || '';
+      if (!pvNumber || !db) return res.json([]);
+      const { data } = await db.from('wa_conversations')
+        .select('*').eq('user_id', userId).eq('wa_number', pvNumber)
+        .order('last_message_at', { ascending: false }).limit(200);
+      return res.json(data || []);
+    }
     // Filtra pelas conversas do WhatsApp atualmente conectado.
     // Tenta Baileys primeiro, depois fallback Meta Cloud (sem isso, usuário
     // que migrou pra Cloud API via Embedded Signup nunca vê conversa — Baileys
@@ -3121,9 +3131,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Envia mensagem de texto
   app.post('/api/inbox/send', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const { phone, text } = req.body;
+    const { phone, text, slot } = req.body;
 
     if (!phone || !text) return res.status(400).json({ error: 'phone e text são obrigatórios' });
+    // 2º número (pós-venda): a resposta sai pelo socket do slot, não pelo principal
+    const waKey = slot === 'posvenda' ? posvendaKey(userId) : userId;
 
     // Usa o phone exatamente como armazenado (JID do WhatsApp) — normalizeBrazilianPhone
     // adiciona "9" e corrompe números que já têm o formato correto
@@ -3132,7 +3144,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const cleanPhone = rawDigits.startsWith('55') ? rawDigits : '55' + rawDigits;
     const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
 
-    const waNumber = BaileysManager.getConnectedPhone(userId) || '';
+    const waNumber = BaileysManager.getConnectedPhone(waKey) || '';
     // Para envio, usa o JID em 12 dígitos (formato nativo do WhatsApp).
     // Se o phone guardado tiver 13 dígitos (ex: 5543999093114 — resultado da normalização antiga),
     // remove o "9" extra na posição 4 para recuperar o JID correto (554399093114).
@@ -3168,10 +3180,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         });
       }
     };
-    if (BaileysManager.getStatus(userId) === 'open') {
+    if (BaileysManager.getStatus(waKey) === 'open') {
       try {
-        const msgId = await BaileysManager.sendText(userId, baileysPhone, text);
-        console.log(`[Send] Baileys enviou | msgId=${msgId}`);
+        const msgId = await BaileysManager.sendText(waKey, baileysPhone, text);
+        console.log(`[Send] Baileys enviou | msgId=${msgId}${slot ? ` | slot=${slot}` : ''}`);
         await saveToDb(msgId);
         return res.json({ success: true, message_id: msgId });
       } catch (err: any) {
@@ -13469,7 +13481,22 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         if (!phone || BaileysManager.getStatus(userId) !== 'open') return;
         const onlyDigits = String(phone).replace(/\D/g, '');
         if (!onlyDigits) return;
+        // O JID do WhatsApp é AUTORITATIVO e nem sempre tem o "9" extra que o
+        // normalizeBrazilianPhone adiciona — aplicar a etiqueta SÓ no formato
+        // normalizado marcava um chat inexistente e a etiqueta "não mudava"
+        // (mesma causa do bug antigo do marcar-como-lida). Resolve o formato
+        // REAL pela wa_conversations; se não achar, aplica nos dois formatos.
         const normalized = normalizeBrazilianPhone(onlyDigits) || onlyDigits;
+        let targets = [...new Set([onlyDigits, normalized])];
+        if (supabaseAdmin && targets.length > 1) {
+          const { data: convs } = await supabaseAdmin
+            .from('wa_conversations')
+            .select('phone')
+            .eq('user_id', userId)
+            .in('phone', targets);
+          const real = (convs || []).map((c: any) => c.phone).filter(Boolean);
+          if (real.length) targets = [...new Set(real)];
+        }
         const toStage = stages.find((s) => s.id === toStageId);
         const fromStage = fromStageId ? stages.find((s) => s.id === fromStageId) : null;
 
@@ -13480,8 +13507,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
             .select('label_id')
             .eq('user_id', userId).eq('stage_id', fromStage.id).maybeSingle();
           if (prev?.label_id) {
-            try { await BaileysManager.removeChatLabel(userId, normalized, prev.label_id); }
-            catch (e) { console.warn('[wa-label] remove falhou:', (e as any)?.message || e); }
+            for (const t of targets) {
+              try { await BaileysManager.removeChatLabel(userId, t, prev.label_id); }
+              catch (e) { console.warn('[wa-label] remove falhou:', (e as any)?.message || e); }
+            }
           }
         }
 
@@ -13489,8 +13518,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         if (toStage) {
           const entry = await getOrCreateWaStageLabel(userId, toStage, stages);
           if (entry) {
-            await BaileysManager.addChatLabel(userId, normalized, entry.labelId);
-            console.log(`[wa-label] "${toStage.name}" (label ${entry.labelId}) -> ${normalized} (user ${userId})`);
+            for (const t of targets) {
+              try {
+                await BaileysManager.addChatLabel(userId, t, entry.labelId);
+                console.log(`[wa-label] "${toStage.name}" (label ${entry.labelId}) -> ${t} (user ${userId})`);
+              } catch (e) { console.warn('[wa-label] add falhou:', (e as any)?.message || e); }
+            }
           }
         }
       } catch (e) {
