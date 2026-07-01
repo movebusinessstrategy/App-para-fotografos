@@ -37,6 +37,7 @@ const PlanosPage = lazy(() => import("./pages/PlanosPage"));
 const AssinaturaPage = lazy(() => import("./pages/AssinaturaPage"));
 const AgentePage = lazy(() => import("./pages/AgentePage"));
 const WhatsappPage = lazy(() => import("./pages/WhatsappPage"));
+const PosVendaPage = lazy(() => import("./pages/PosVendaPage"));
 const GaleriasPage = lazy(() => import("./features/galeria/GaleriasPage"));
 const GaleriaDetailPage = lazy(() => import("./features/galeria/GaleriaDetailPage"));
 const GaleriaPublicaPage = lazy(() => import("./features/galeria-publica/GaleriaPublicaPage"));
@@ -134,6 +135,7 @@ export default function App() {
                 <Route path="agente" element={<AgentePage />} />
                 <Route path="vendas" element={<PermissionRoute module="vendas"><VendasPage /></PermissionRoute>} />
                 <Route path="whatsapp" element={<PermissionRoute module="whatsapp"><WhatsappPage /></PermissionRoute>} />
+                <Route path="pos-venda" element={<PermissionRoute module="posvenda"><PosVendaPage /></PermissionRoute>} />
                 <Route path="calendar" element={<PermissionRoute module="calendar"><CalendarPage /></PermissionRoute>} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="finance" element={<PermissionRoute module="finance"><FinancePage /></PermissionRoute>} />

@@ -3248,7 +3248,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.post('/api/inbox/send-media', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { phone, mediaBase64, mimetype, filename, caption } = req.body;
+    const { phone, mediaBase64, mimetype, filename, caption, slot } = req.body;
+    // 2º número (pós-venda): mídia sai pelo socket do slot
+    const mediaKey = slot === 'posvenda' ? posvendaKey(userId) : userId;
 
     if (!phone || !mediaBase64 || !mimetype) {
       return res.status(400).json({ error: 'phone, mediaBase64 e mimetype são obrigatórios' });
@@ -3328,8 +3330,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     };
 
     // ── Baileys (primário) ───────────────────────────────────────────────────
-    const baileysStatus = BaileysManager.getStatus(userId);
-    console.log(`[SendMedia] Baileys status=${baileysStatus} cleanPhone=${cleanPhone} finalMimetype=${finalMimetype}`);
+    const baileysStatus = BaileysManager.getStatus(mediaKey);
+    console.log(`[SendMedia] Baileys status=${baileysStatus} cleanPhone=${cleanPhone} finalMimetype=${finalMimetype}${slot ? ` slot=${slot}` : ''}`);
     if (baileysStatus === 'open') {
       try {
         if (audioWaveform) {
@@ -3340,7 +3342,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
             waveformSample: Array.from(audioWaveform.subarray(0, 5)),
           });
         }
-        const msgId = await BaileysManager.sendMedia(userId, cleanPhone, finalBase64, finalMimetype, finalFilename, caption || '', audioWaveform, audioSeconds || undefined);
+        const msgId = await BaileysManager.sendMedia(mediaKey, cleanPhone, finalBase64, finalMimetype, finalFilename, caption || '', audioWaveform, audioSeconds || undefined);
         console.log(`[SendMedia] ✅ Baileys enviou áudio | msgId=${msgId}`);
         await saveToDb(msgId);
         return res.json({ success: true, message_id: msgId });

@@ -14,6 +14,7 @@ const MODULES = [
   { key: "clients",          label: "Clientes",                     group: "Módulos" },
   { key: "jobs",             label: "Produção",                     group: "Módulos" },
   { key: "vendas",           label: "Vendas",                       group: "Módulos" },
+  { key: "posvenda",         label: "Pós-venda (2º WhatsApp)",      group: "Módulos" },
   { key: "calendar",         label: "Agenda",                       group: "Módulos" },
   { key: "finance",          label: "Financeiro",                   group: "Módulos" },
   { key: "oportunidades",    label: "Oportunidades",                group: "Módulos" },

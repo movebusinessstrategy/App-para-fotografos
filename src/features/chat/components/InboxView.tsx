@@ -26,6 +26,8 @@ interface Props {
   stages: PipelineStage[];
   initialPhone?: string;
   onDealUpdated: () => void;
+  /** 'main' = WhatsApp de vendas (padrão) | 'posvenda' = página do 2º número */
+  slot?: 'main' | 'posvenda';
 }
 
 function DateSep({ label }: { label: string }) {
@@ -54,12 +56,13 @@ function dateLabel(iso: string): string {
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
 }
 
-export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props) {
+export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = 'main' }: Props) {
   const { waTheme, toggleWaTheme } = useTheme();
-  // 2º WhatsApp (pós-venda): visão SEPARADA — o seletor só aparece quando o
-  // 2º número está conectado; cada visão lista só as conversas do seu número
-  // e responde pelo número certo (sem misturar nem confundir a equipe).
-  const [waSlot, setWaSlot] = useState<'main' | 'posvenda'>('main');
+  // Página DEDICADA por número (equipes diferentes): /whatsapp = Vendas,
+  // /pos-venda = Pós-venda. Cada uma lista só as conversas do seu número e
+  // responde pelo socket certo — nada se mistura. posvendaOn habilita o botão
+  // "enviar pro pós-venda" na visão de vendas.
+  const waSlot = slot;
   const [posvendaOn, setPosvendaOn] = useState(false);
   useEffect(() => {
     (async () => {
@@ -229,6 +232,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
         },
         body: JSON.stringify({
           phone: selectedPhone.replace(/\D/g, ''),
+          ...(waSlot === 'posvenda' ? { slot: waSlot } : {}),
           mediaBase64: base64,
           mimetype: mediaPreview.file.type,
           filename: mediaPreview.file.name,
@@ -301,6 +305,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
       },
       body: JSON.stringify({
         phone,
+        ...(waSlot === 'posvenda' ? { slot: waSlot } : {}),
         mediaBase64: base64,
         mimetype: blob.type || 'audio/webm',
         filename: 'audio.webm',
@@ -467,26 +472,14 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
               </button>
             );
           })}
-          {posvendaOn && (
-            <div
-              className="flex items-center rounded-full overflow-hidden"
-              style={{ border: '1px solid var(--wa-border)' }}
-              title="Cada número tem sua própria lista de conversas — nada se mistura"
+          {waSlot === 'posvenda' && (
+            <span
+              className="px-2.5 py-1 rounded-full text-[11px] font-bold"
+              style={{ background: 'var(--wa-accent-green)', color: '#fff' }}
+              title="Página do 2º número — só conversas do WhatsApp de alinhamento"
             >
-              {([['main', '📞 Vendas'], ['posvenda', '🤝 Pós-venda']] as const).map(([k, label]) => (
-                <button
-                  key={k}
-                  onClick={() => { setWaSlot(k); setSelectedPhone(null); }}
-                  className="px-3 py-1 text-[12px] font-semibold transition-colors"
-                  style={{
-                    background: waSlot === k ? 'var(--wa-accent-green)' : 'transparent',
-                    color: waSlot === k ? '#fff' : 'var(--wa-text-secondary)',
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+              🤝 Pós-venda
+            </span>
           )}
           <span className="ml-auto text-[12px]" style={{ color: 'var(--wa-text-muted)' }}>
             {loadingConvs ? 'Carregando...' : `${shownConversations.length}`}
@@ -584,6 +577,44 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated }: Props)
 
               {/* FEATURE 6 - botões do header */}
               <div className="flex items-center gap-1 flex-shrink-0">
+                {/* Encaminhar entre os dois WhatsApps: venda fechada → pós-venda;
+                    cliente do pós-venda querendo comprar de novo → NOVO lead em vendas */}
+                {waSlot === 'main' && posvendaOn && selectedPhone && (
+                  <button
+                    onClick={() => { window.location.href = `/pos-venda?phone=${encodeURIComponent(selectedPhone)}`; }}
+                    className="px-2.5 h-8 rounded-full flex items-center gap-1 text-[12px] font-semibold transition-colors"
+                    style={{ color: 'var(--wa-accent-green)', border: '1px solid var(--wa-border)' }}
+                    title="Abrir este contato na página do Pós-venda (a 1ª mensagem sai pelo 2º número)"
+                  >
+                    🤝 Pós-venda
+                  </button>
+                )}
+                {waSlot === 'posvenda' && selectedPhone && (
+                  <button
+                    onClick={async () => {
+                      try {
+                        const { data: { session } } = await supabase.auth.getSession();
+                        if (!session?.access_token) return;
+                        const r = await fetch('/api/deals/quick', {
+                          method: 'POST',
+                          headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ name: displayName || selectedPhone, phone: selectedPhone, source: 'Pós-venda' }),
+                        });
+                        const d = await r.json().catch(() => ({}));
+                        if (!r.ok) throw new Error(d.error || 'Falha ao criar o lead');
+                        alert('✅ Novo lead criado no funil de Vendas — nova oportunidade contabilizada!');
+                        onDealUpdated();
+                      } catch (e: any) {
+                        alert(e.message);
+                      }
+                    }}
+                    className="px-2.5 h-8 rounded-full flex items-center gap-1 text-[12px] font-semibold transition-colors"
+                    style={{ color: 'var(--wa-accent-green)', border: '1px solid var(--wa-border)' }}
+                    title="Cliente quer comprar de novo? Cria um NOVO lead no funil de Vendas"
+                  >
+                    📞 → Vendas
+                  </button>
+                )}
                 <FunnelStatusButton
                   phone={selectedPhone || ''}
                   contactName={displayName}
