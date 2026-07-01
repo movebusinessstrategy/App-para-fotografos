@@ -6888,17 +6888,28 @@
     }, true);
 
     let lastStripPos = 0;
+    let lastDetectRun = 0;
     new MutationObserver(() => {
       // Garante que a rail nativa sobreviva às re-renderizações da sidebar
       if (!document.getElementById('fp-rail-mounted')?.isConnected) mountNativeRail();
       if (kanbanVisible) return;
       // O WhatsApp re-renderiza o DOM dezenas de vezes/seg (digitando, rolando).
       // positionChatStrip faz getBoundingClientRect (reflow) — limitamos a ~8x/seg
-      // pra não travar a digitação. A detecção do chat já é debounced (500ms).
+      // pra não travar a digitação.
       const now = Date.now();
       if (now - lastStripPos >= 120) { lastStripPos = now; positionChatStrip(); }
-      clearTimeout(detectDebounce);
-      detectDebounce = setTimeout(detectState, 500);
+      // Detecção do chat com BORDA DE SUBIDA: dispara NA HORA que a conversa
+      // abre (faixa instantânea) se já passou o intervalo mínimo; senão agenda
+      // pro fim da janela. Antes era só trailing (500ms fixos) — era esse o
+      // "tempinho" pra faixa aparecer. onChatOpened é idempotente (guarda por
+      // chatKey), então rodar mais vezes NÃO reprocessa o mesmo chat.
+      if (now - lastDetectRun >= 250) {
+        lastDetectRun = now;
+        detectState();
+      } else {
+        clearTimeout(detectDebounce);
+        detectDebounce = setTimeout(() => { lastDetectRun = Date.now(); detectState(); }, 250);
+      }
     }).observe(document.body, { childList: true, subtree: true });
   }
 
