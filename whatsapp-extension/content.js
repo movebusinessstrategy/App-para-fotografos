@@ -4568,7 +4568,7 @@
   // Classifica uma etapa final em ganho/perda/neutro com base no nome
   function classifyFinalStage(s) {
     const n = (s?.name || '').toLowerCase();
-    if (/ganho|ganhou|fechad|vendid|conclu|won/.test(n)) return 'won';
+    if (/ganho|ganhou|fechad|vendid|conclu|convert|won/.test(n)) return 'won';
     if (/perd|cancel|sem interesse|desistiu|lost/.test(n)) return 'lost';
     return 'neutral';
   }
@@ -4738,10 +4738,12 @@
     const stage = stgs.find(s => s.id === deal?.stage);
     const c = C(stage?.position ?? 0);
 
-    // Pega as etapas de Ganho e Perda (primeira de cada tipo)
+    // Pega as etapas de Ganho e Perda pela FLAG (is_won/is_final), com fallback
+    // por nome — assim uma etapa marcada como ganho (ex.: "Convertido") mostra o
+    // botão mesmo que o nome não case no regex.
     const finals = stgs.filter(s => s.is_final);
-    const wonStage  = finals.find(s => classifyFinalStage(s) === 'won');
-    const lostStage = finals.find(s => classifyFinalStage(s) === 'lost');
+    const wonStage  = finals.find(s => isWonStage(s));
+    const lostStage = finals.find(s => isLostStage(s) && !isWonStage(s));
     const isAtWon  = wonStage  && deal.stage === wonStage.id;
     const isAtLost = lostStage && deal.stage === lostStage.id;
 

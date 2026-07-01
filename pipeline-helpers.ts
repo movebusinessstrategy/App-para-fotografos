@@ -165,13 +165,23 @@ export const ensureWonLostStages = async (
     }
     if (!hasLost) {
       const cand = list.find((s) => !s.is_won && LOST_NAME_RE.test(s.name || ''));
-      if (cand && !cand.is_final) {
-        cand.is_final = true;
-        ops.push(
-          supabase.from('deal_stages')
-            .update({ is_final: true })
-            .eq('id', cand.id).eq('user_id', userId),
-        );
+      if (cand) {
+        if (!cand.is_final) {
+          cand.is_final = true;
+          ops.push(
+            supabase.from('deal_stages')
+              .update({ is_final: true })
+              .eq('id', cand.id).eq('user_id', userId),
+          );
+        }
+      } else {
+        // Nenhuma etapa de perda: cria uma (id único por tenant — PK global).
+        // Sem isso a extensão/app não mostram o botão "Perda".
+        const id = `${tid('lost', userId)}-${randomUUID().slice(0, 4)}`;
+        const position = list.length ? Math.max(...list.map((s) => Number(s.position ?? 0))) + 1 : 0;
+        const row: any = { id, name: 'Perdido', color: '#FEE2E2', position, is_final: true, is_won: false, user_id: userId };
+        ops.push(supabase.from('deal_stages').insert(row));
+        list.push(normalizeStage(row, DEFAULT_STAGES[5]));
       }
     }
     if (ops.length) await Promise.all(ops);
