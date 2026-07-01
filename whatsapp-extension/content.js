@@ -4709,6 +4709,20 @@
     setTimeout(() => positionChatStrip(strip), 1400);
   }
 
+  // Confere se um deal ainda corresponde à conversa aberta AGORA (no momento do
+  // clique). Trava as ações da faixa (trocar etapa, editar) contra cruzamento:
+  // se você trocou de conversa e a faixa antiga ficou na tela, um clique nela
+  // NÃO pode agir no lead anterior.
+  function dealMatchesOpenChat(deal) {
+    if (!deal) return false;
+    const dealPhone = digits(deal.contact_phone || '');
+    const openPhone = digits(getWAChatPhone() || chatPhone || '');
+    if (dealPhone && openPhone) return phonesMatch(dealPhone, openPhone);
+    const openName = getWAChatName() || '';
+    if (openName) return namesMatch(deal.contact_name || deal.title || '', openName);
+    return !!(chatDeal && Number(chatDeal.id) === Number(deal.id));
+  }
+
   function injectChatStrip(deal, stgs) {
     removeChatStrip();
     // Trava de segurança: se o telefone do deal não bate com o chat aberto,
@@ -4769,6 +4783,14 @@
     // Ganho / Perda — mover fase
     const moveTo = async (sid, label) => {
       if (!sid || sid === deal.stage) return;
+      // TRAVA ANTI-CRUZAMENTO: só age se esta faixa ainda for do chat aberto AGORA.
+      // Sem isso, trocar de conversa e clicar na faixa antiga movia o lead ERRADO.
+      if (!dealMatchesOpenChat(deal)) {
+        toast('A conversa mudou — reabra o lead pra trocar a etapa.', true);
+        removeChatStrip();
+        fastDetect();
+        return;
+      }
       const targetStage = stgs.find(s => s.id === sid);
       if (isWonStage(targetStage)) {
         openWonConversionModal(deal);
@@ -4794,8 +4816,14 @@
     bindPress(strip.querySelector('#fp-strip-won'), () => moveTo(wonStage.id, wonStage.name));
     bindPress(strip.querySelector('#fp-strip-lost'), () => moveTo(lostStage.id, lostStage.name));
 
-    bindPress(strip.querySelector('#fp-strip-info'), () => openClientInfoModal(deal, stage));
-    bindPress(strip.querySelector('#fp-strip-edit'), () => openDealEditModal(deal));
+    bindPress(strip.querySelector('#fp-strip-info'), () => {
+      if (!dealMatchesOpenChat(deal)) { toast('A conversa mudou — reabra o lead.', true); removeChatStrip(); fastDetect(); return; }
+      openClientInfoModal(deal, stage);
+    });
+    bindPress(strip.querySelector('#fp-strip-edit'), () => {
+      if (!dealMatchesOpenChat(deal)) { toast('A conversa mudou — reabra o lead.', true); removeChatStrip(); fastDetect(); return; }
+      openDealEditModal(deal);
+    });
     bindPress(strip.querySelector('#fp-strip-funil'), showKanban);
 
     mountChatStrip(strip);
@@ -4877,6 +4905,11 @@
     chatKey = nextKey;
     chatPhone = cleanPhone || null;
     chatDeal = null;
+    // Trocou de conversa: remove a faixa do lead ANTERIOR na hora. Sem isso ela
+    // fica mostrando o lead/etapa errados até o novo resolver — e um clique nela
+    // cairia no lead anterior. A faixa do novo lead é remontada abaixo
+    // (instantânea quando vem do cache; some só nos casos que precisam resolver).
+    removeChatStrip();
     const requestKey = nextKey;
     rememberContactPhoto(cleanPhone, getWAChatPhoto());
 
