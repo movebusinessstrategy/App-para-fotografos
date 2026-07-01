@@ -421,6 +421,35 @@ export async function sendMedia(
   return result?.key?.id ?? `baileys-${Date.now()}`;
 }
 
+// ─── Etiquetas (labels) do WhatsApp Business ─────────────────────────────────
+// Etiquetas SÓ existem em conta WhatsApp Business — em conta pessoal a chamada
+// não dá erro garantido mas não surte efeito. Tudo passa por chatModify → app-
+// state do WhatsApp, que exige a sessão já sincronizada (app-state key presente);
+// por isso PODE lançar logo após conectar. Quem chama trata (best-effort).
+// Nesta versão do Baileys (7.x) não existe getLabels — as etiquetas existentes
+// só chegam por evento; por isso o app CRIA e gerencia as próprias (ensureLabel).
+
+// Cria/edita a DEFINIÇÃO de uma etiqueta (idempotente — é um SET pelo id).
+export async function ensureLabel(userId: string, labelId: string, name: string, color: number): Promise<void> {
+  const sock = _requireSocket(userId) as any;
+  // addLabel(jid, {...}) → chatModify({addLabel}, jid). O jid não identifica a
+  // etiqueta (o índice do patch é ['label_edit', id]); usa o próprio número.
+  const selfDigits = String(sock.user?.id || '0').split('@')[0].split(':')[0];
+  await sock.addLabel(_jid(selfDigits), { id: labelId, name, color });
+}
+
+// Aplica uma etiqueta EXISTENTE (por id) a um chat.
+export async function addChatLabel(userId: string, phone: string, labelId: string): Promise<void> {
+  const sock = _requireSocket(userId) as any;
+  await sock.addChatLabel(_jid(phone), labelId);
+}
+
+// Remove uma etiqueta (por id) de um chat.
+export async function removeChatLabel(userId: string, phone: string, labelId: string): Promise<void> {
+  const sock = _requireSocket(userId) as any;
+  await sock.removeChatLabel(_jid(phone), labelId);
+}
+
 export async function requestPairingCode(userId: string, phone: string): Promise<string | null> {
   const session = sessions.get(userId);
   if (!session?.sock) {

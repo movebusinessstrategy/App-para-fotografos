@@ -13133,6 +13133,92 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ id: data.id });
   });
 
+  // ─── Sincronização etapa do funil → etiqueta do WhatsApp Business ──────────
+  // Quando o lead muda de etapa, espelha no WhatsApp: remove a etiqueta da etapa
+  // ANTERIOR e aplica a da NOVA (o app cria/gerencia as próprias etiquetas). O
+  // mapa etapa→labelId fica em whatsapp_stage_labels (migration 057) pra ser
+  // ESTÁVEL entre reinícios. 100% best-effort: NUNCA lança, NUNCA atrasa a
+  // resposta (chamado sem await). Só age com WhatsApp conectado e telefone.
+  // Etiquetas só existem em conta WhatsApp Business.
+
+  // WhatsApp Business: cor é um índice 0..19. verde=ganho, vermelho=perdido,
+  // demais variam por posição (fora do verde/vermelho).
+  function waLabelColor(stage: any, index: number): number {
+    if (stage?.is_won) return 2;
+    if (stage?.is_final) return 5;
+    return (index % 16) + 4;
+  }
+
+  async function getOrCreateWaStageLabel(
+    userId: string, stage: any, stages: any[],
+  ): Promise<{ labelId: string; color: number } | null> {
+    if (!supabaseAdmin || !stage?.id) return null;
+    const { data: existing } = await supabaseAdmin
+      .from('whatsapp_stage_labels')
+      .select('label_id, color')
+      .eq('user_id', userId)
+      .eq('stage_id', stage.id)
+      .maybeSingle();
+    if (existing?.label_id) {
+      // garante a definição (idempotente) — cobre etiqueta apagada à mão / restart
+      try { await BaileysManager.ensureLabel(userId, existing.label_id, stage.name || stage.id, existing.color ?? 4); } catch {}
+      return { labelId: existing.label_id, color: existing.color ?? 4 };
+    }
+    // id novo sequencial por conta, começando em 20 (evita colidir com as ~5
+    // etiquetas predefinidas do WhatsApp Business, de id baixo).
+    const { data: rows } = await supabaseAdmin
+      .from('whatsapp_stage_labels')
+      .select('label_id')
+      .eq('user_id', userId);
+    const maxId = (rows || []).reduce((m: number, r: any) => Math.max(m, Number(r.label_id) || 0), 19);
+    const labelId = String(maxId + 1);
+    const idx = Array.isArray(stages) ? stages.findIndex((s) => s.id === stage.id) : 0;
+    const color = waLabelColor(stage, idx < 0 ? 0 : idx);
+    await BaileysManager.ensureLabel(userId, labelId, stage.name || stage.id, color);
+    await supabaseAdmin.from('whatsapp_stage_labels').insert({
+      user_id: userId, stage_id: stage.id, label_id: labelId, color, stage_name: stage.name || null,
+    });
+    return { labelId, color };
+  }
+
+  function syncWhatsAppStageLabel(
+    userId: string, phone: any, fromStageId: any, toStageId: any, stages: any[],
+  ): void {
+    (async () => {
+      try {
+        if (!phone || BaileysManager.getStatus(userId) !== 'open') return;
+        const onlyDigits = String(phone).replace(/\D/g, '');
+        if (!onlyDigits) return;
+        const normalized = normalizeBrazilianPhone(onlyDigits) || onlyDigits;
+        const toStage = stages.find((s) => s.id === toStageId);
+        const fromStage = fromStageId ? stages.find((s) => s.id === fromStageId) : null;
+
+        // Remove a etiqueta da etapa anterior (se já provisionada)
+        if (fromStage && supabaseAdmin) {
+          const { data: prev } = await supabaseAdmin
+            .from('whatsapp_stage_labels')
+            .select('label_id')
+            .eq('user_id', userId).eq('stage_id', fromStage.id).maybeSingle();
+          if (prev?.label_id) {
+            try { await BaileysManager.removeChatLabel(userId, normalized, prev.label_id); }
+            catch (e) { console.warn('[wa-label] remove falhou:', (e as any)?.message || e); }
+          }
+        }
+
+        // Aplica a etiqueta da nova etapa
+        if (toStage) {
+          const entry = await getOrCreateWaStageLabel(userId, toStage, stages);
+          if (entry) {
+            await BaileysManager.addChatLabel(userId, normalized, entry.labelId);
+            console.log(`[wa-label] "${toStage.name}" (label ${entry.labelId}) -> ${normalized} (user ${userId})`);
+          }
+        }
+      } catch (e) {
+        console.warn('[wa-label] sync ignorado:', (e as any)?.message || e);
+      }
+    })();
+  }
+
   app.put('/api/deals/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
@@ -13181,6 +13267,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         existing.stage, updates.stage,
         existing.current_stage_entered_at || existing.stage_entered_at
       );
+      // Espelha a etapa como etiqueta no WhatsApp (fire-and-forget, best-effort)
+      syncWhatsAppStageLabel(userId, existing.contact_phone, existing.stage, updates.stage, stages);
     }
 
     const { error } = await supabase.from('deals').update(updates).eq('id', dealId).eq('user_id', userId);
@@ -13472,6 +13560,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       updates.stage,
       deal.current_stage_entered_at || deal.stage_entered_at
     );
+    // Espelha a etapa (ganho) como etiqueta no WhatsApp (fire-and-forget)
+    syncWhatsAppStageLabel(userId, deal.contact_phone, deal.stage, updates.stage, stages);
 
     // Marcar oportunidades do cliente como convertidas
     if (clientId) {
@@ -13524,6 +13614,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       updates.stage,
       deal.current_stage_entered_at || deal.stage_entered_at
     );
+    // Espelha a etapa (perdido) como etiqueta no WhatsApp (fire-and-forget)
+    syncWhatsAppStageLabel(userId, deal.contact_phone, deal.stage, updates.stage, stages);
     res.json({ success: true });
   });
 
@@ -15092,6 +15184,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (error) return res.status(500).json({ error: error.message });
 
     await recordStageEvent(supabase, userId, Number(req.params.id), deal.stage, stageId, deal.current_stage_entered_at || deal.stage_entered_at);
+    // Espelha a etapa como etiqueta no WhatsApp (fire-and-forget, best-effort)
+    syncWhatsAppStageLabel(userId, deal.contact_phone, deal.stage, stageId, stages);
 
     res.json({ success: true, stage: targetStage });
   });
