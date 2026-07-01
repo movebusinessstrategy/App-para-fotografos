@@ -16,6 +16,50 @@ interface WaAccount {
   connected_at?: string;
 }
 
+// ── Etiquetas do funil no WhatsApp: sincronizar tudo de uma vez ─────────────
+// A troca automática acontece a cada mudança de etapa; este botão aplica a
+// etiqueta da etapa ATUAL em TODOS os leads com conversa (e limpa as antigas).
+function EtiquetasFunilCard() {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+
+  const sincronizar = async () => {
+    setBusy(true);
+    setDone(null);
+    try {
+      const r = await authFetch('/api/whatsapp/sync-stage-labels', { method: 'POST' });
+      const d = await r.json().catch(() => ({} as any));
+      if (!r.ok) throw new Error(d.error || 'Falha ao iniciar a sincronização.');
+      setDone(`Sincronizando ${d.total} lead(s) em segundo plano — as etiquetas vão aparecendo no WhatsApp nos próximos minutos.`);
+    } catch (e: any) {
+      setDone(`⚠ ${e.message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-5">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="font-semibold text-gray-900 dark:text-white">Etiquetas do funil no WhatsApp</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Aplica em todos os leads a etiqueta da etapa atual (WhatsApp Business conectado via QR). A troca automática continua a cada mudança de etapa.
+          </p>
+        </div>
+        <button
+          onClick={sincronizar}
+          disabled={busy}
+          className="px-3.5 py-2 text-sm font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg disabled:opacity-60"
+        >
+          {busy ? 'Iniciando…' : 'Sincronizar etiquetas agora'}
+        </button>
+      </div>
+      {done && <p className="mt-3 text-xs text-gray-600 dark:text-gray-300">{done}</p>}
+    </div>
+  );
+}
+
 // ── 2º WhatsApp: Pós-venda / Alinhamento (Baileys, sessão separada) ────────
 // Conecta um segundo número na MESMA conta. As conversas dele entram no mesmo
 // inbox (wa_number próprio) e a Lia autônoma NÃO atende por ele — é o canal
@@ -636,6 +680,9 @@ export default function IntegracaoWhatsApp() {
           </div>
         </div>
       )}
+
+      {/* Etiquetas do funil: sincronizar tudo */}
+      <EtiquetasFunilCard />
 
       {/* 2º número: pós-venda/alinhamento */}
       <PosVendaWhatsAppCard />

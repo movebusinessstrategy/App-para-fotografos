@@ -13458,13 +13458,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       try { await BaileysManager.ensureLabel(userId, existing.label_id, stage.name || stage.id, existing.color ?? 4); } catch {}
       return { labelId: existing.label_id, color: existing.color ?? 4 };
     }
-    // id novo sequencial por conta, começando em 20 (evita colidir com as ~5
-    // etiquetas predefinidas do WhatsApp Business, de id baixo).
+    // id novo sequencial por conta, começando em 1000 — BEM acima das etiquetas
+    // que o usuário cria à mão no WhatsApp Business (ids baixos, sequenciais).
+    // Base 20 antiga podia COLIDIR com etiqueta manual e renomeá-la ("sem critério").
     const { data: rows } = await supabaseAdmin
       .from('whatsapp_stage_labels')
       .select('label_id')
       .eq('user_id', userId);
-    const maxId = (rows || []).reduce((m: number, r: any) => Math.max(m, Number(r.label_id) || 0), 19);
+    const maxId = (rows || []).reduce((m: number, r: any) => Math.max(m, Number(r.label_id) || 0), 999);
     const labelId = String(maxId + 1);
     const idx = Array.isArray(stages) ? stages.findIndex((s) => s.id === stage.id) : 0;
     const color = waLabelColor(stage, idx < 0 ? 0 : idx);
@@ -13475,10 +13476,25 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return { labelId, color };
   }
 
+  // Operações de etiqueta são patches de APP STATE do WhatsApp — em paralelo
+  // elas se atropelam (conflito de versão do estado) e o WhatsApp descarta
+  // parte em silêncio ("uma etiqueta pega, outra não"). A fila serializa TODAS
+  // as operações de etiqueta por conta, com respiro entre elas.
+  const waLabelQueues = new Map<string, Promise<void>>();
+  const waitMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  function enqueueLabelOp(userId: string, op: () => Promise<void>): Promise<void> {
+    const prev = waLabelQueues.get(userId) || Promise.resolve();
+    const next = prev
+      .then(op)
+      .catch((e) => console.warn('[wa-label] op na fila falhou:', (e as any)?.message || e));
+    waLabelQueues.set(userId, next);
+    return next;
+  }
+
   function syncWhatsAppStageLabel(
     userId: string, phone: any, fromStageId: any, toStageId: any, stages: any[],
   ): void {
-    (async () => {
+    enqueueLabelOp(userId, async () => {
       try {
         if (!phone || BaileysManager.getStatus(userId) !== 'open') return;
         const onlyDigits = String(phone).replace(/\D/g, '');
@@ -13510,7 +13526,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
             .eq('user_id', userId).eq('stage_id', fromStage.id).maybeSingle();
           if (prev?.label_id) {
             for (const t of targets) {
-              try { await BaileysManager.removeChatLabel(userId, t, prev.label_id); }
+              try { await BaileysManager.removeChatLabel(userId, t, prev.label_id); await waitMs(300); }
               catch (e) { console.warn('[wa-label] remove falhou:', (e as any)?.message || e); }
             }
           }
@@ -13523,6 +13539,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
             for (const t of targets) {
               try {
                 await BaileysManager.addChatLabel(userId, t, entry.labelId);
+                await waitMs(300);
                 console.log(`[wa-label] "${toStage.name}" (label ${entry.labelId}) -> ${t} (user ${userId})`);
               } catch (e) { console.warn('[wa-label] add falhou:', (e as any)?.message || e); }
             }
@@ -13531,8 +13548,80 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       } catch (e) {
         console.warn('[wa-label] sync ignorado:', (e as any)?.message || e);
       }
-    })();
+    });
   }
+
+  // Sincroniza TODAS as etiquetas do funil de uma vez: cada lead com telefone
+  // e conversa no WhatsApp recebe a etiqueta da etapa ATUAL (e perde as das
+  // etapas antigas pelo histórico). Roda em background pela fila serial —
+  // responde na hora e vai aplicando com respiro (patches em rajada o
+  // WhatsApp descarta). Botão em Configurações → WhatsApp.
+  app.post('/api/whatsapp/sync-stage-labels', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    if (BaileysManager.getStatus(userId) !== 'open') {
+      return res.status(400).json({ error: 'WhatsApp não está conectado — conecte pelo QR primeiro.' });
+    }
+    if (!supabaseAdmin) return res.status(500).json({ error: 'Indisponível neste servidor.' });
+
+    let stages = await ensurePipelineStages(supabase, userId);
+    stages = await ensureWonLostStages(supabase, userId, stages);
+    const stageById = new Map(stages.map((s: any) => [s.id, s]));
+
+    const { data: deals } = await supabase.from('deals')
+      .select('id, stage, contact_phone, stage_history')
+      .eq('user_id', userId)
+      .not('contact_phone', 'is', null)
+      .order('updated_at', { ascending: false })
+      .limit(300);
+
+    const { data: allLabels } = await supabaseAdmin.from('whatsapp_stage_labels')
+      .select('stage_id, label_id').eq('user_id', userId);
+    const labelByStage = new Map((allLabels || []).map((r: any) => [String(r.stage_id), String(r.label_id)]));
+
+    const list = deals || [];
+    res.json({ started: true, total: list.length });
+
+    enqueueLabelOp(userId, async () => {
+      let ok = 0, skipped = 0, failed = 0;
+      for (const d of list) {
+        try {
+          const stage = stageById.get(d.stage);
+          const digitsPhone = String(d.contact_phone || '').replace(/\D/g, '');
+          if (!stage || !digitsPhone) { skipped++; continue; }
+          const normalized = normalizeBrazilianPhone(digitsPhone) || digitsPhone;
+          const { data: convs } = await supabaseAdmin!.from('wa_conversations')
+            .select('phone').eq('user_id', userId)
+            .in('phone', [...new Set([digitsPhone, normalized])]);
+          const targets = [...new Set((convs || []).map((c: any) => c.phone).filter(Boolean))];
+          if (!targets.length) { skipped++; continue; } // sem conversa = sem chat pra etiquetar
+
+          const entry = await getOrCreateWaStageLabel(userId, stage, stages);
+          if (!entry) { skipped++; continue; }
+          // Etapas antigas do lead (pelo histórico) → remove essas etiquetas
+          const pastStageIds = [...new Set(
+            (Array.isArray(d.stage_history) ? d.stage_history : [])
+              .map((h: any) => String(h?.stage_id || ''))
+              .filter((sid: string) => sid && sid !== d.stage),
+          )];
+          for (const t of targets) {
+            for (const sid of pastStageIds) {
+              const lid = labelByStage.get(sid);
+              if (!lid || lid === entry.labelId) continue;
+              try { await BaileysManager.removeChatLabel(userId, t, lid); await waitMs(200); } catch {}
+            }
+            await BaileysManager.addChatLabel(userId, t, entry.labelId);
+            await waitMs(350);
+          }
+          ok++;
+        } catch (e: any) {
+          failed++;
+          console.warn(`[wa-label][sync-all] deal ${d.id} falhou:`, e?.message || e);
+        }
+      }
+      console.log(`[wa-label][sync-all] user ${userId}: ok=${ok} pulados=${skipped} falhas=${failed} de ${list.length}`);
+    });
+  });
 
   app.put('/api/deals/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
