@@ -14964,9 +14964,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       ));
       const safeConvMatches = exactConvMatches.length ? exactConvMatches : convMatches;
       // Mais de um telefone DISTINTO pro mesmo nome = ambíguo até no Baileys,
-      // não arrisca. Telefones repetidos (linha duplicada por sync) não contam.
-      const distinctPhones = [...new Set(safeConvMatches.map((c: any) => c.phone).filter(Boolean))];
-      if (distinctPhones.length === 1) resolvedPhone = distinctPhones[0];
+      // não arrisca. Compara pela forma NORMALIZADA — senão o mesmo número
+      // salvo em formatos diferentes (com/sem 55, sync antiga) conta como
+      // "dois telefones" e bloqueia uma resolução que era segura.
+      const distinctPhonesNormalized = new Map<string, string>();
+      for (const c of safeConvMatches) {
+        if (!c.phone) continue;
+        const norm = normalizeBrazilianPhone(normalizePhone(c.phone));
+        if (norm) distinctPhonesNormalized.set(norm, c.phone);
+      }
+      if (distinctPhonesNormalized.size === 1) {
+        resolvedPhone = [...distinctPhonesNormalized.values()][0];
+      }
     }
 
     if (resolvedPhone) {

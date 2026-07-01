@@ -5127,8 +5127,19 @@
 
   async function linkChatToExistingDeal(deal, phone) {
     closeLinkExistingPicker();
-    const cleanPhone = digits(phone || '');
-    if (!deal || !cleanPhone) return;
+    if (!deal) return;
+    // NÃO confia no `phone` capturado quando a faixa foi montada — pode estar
+    // nulo (contato salvo, WhatsApp não expôs o número no DOM) ou desatualizado
+    // (leitura atrasada de uma conversa anterior). Revalida AGORA, na hora do
+    // clique, igual o fluxo "Criar com dados" já faz — inclusive abrindo o
+    // painel de dados do contato como último recurso.
+    toast('Confirmando telefone da conversa…');
+    const contact = await waitForChatContact(phone);
+    const cleanPhone = digits(contact.phone || '');
+    if (!cleanPhone) {
+      toast('Não consegui confirmar o telefone dessa conversa. Abra "Dados do contato" no WhatsApp e tente de novo.', true);
+      return;
+    }
     try {
       const updates = { contact_phone: cleanPhone };
       if (!deal.contact_name && !deal.title) updates.contact_name = getWAChatName() || undefined;
