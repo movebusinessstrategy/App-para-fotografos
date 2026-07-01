@@ -1851,6 +1851,73 @@ async function startServer() {
     }
   });
 
+  // ── 2º WhatsApp (pós-venda/alinhamento) — sessão Baileys independente ──────
+  // Mesma conta, outro número: slot 'posvenda'. Mensagens entram no MESMO inbox
+  // com wa_number próprio; Lia autônoma não atende por ele (é canal humano).
+  const POSVENDA_SLOT = 'posvenda';
+  const posvendaKey = (userId: string) => BaileysManager.slotKey(userId, POSVENDA_SLOT);
+
+  app.get('/api/whatsapp/slots', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const slots = ['main', POSVENDA_SLOT].map((slot) => {
+      const key = BaileysManager.slotKey(userId, slot);
+      return {
+        slot,
+        label: slot === 'main' ? 'Vendas (principal)' : 'Pós-venda / Alinhamento',
+        status: BaileysManager.getStatus(key),
+        phone: BaileysManager.getConnectedPhone(key),
+      };
+    });
+    res.json({ slots });
+  });
+
+  app.get('/api/whatsapp/posvenda/status', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const key = posvendaKey(userId);
+    const status = BaileysManager.getStatus(key);
+    res.json({
+      connected: status === 'open',
+      state: status,
+      phone: BaileysManager.getConnectedPhone(key),
+      provider: 'baileys',
+    });
+  });
+
+  app.get('/api/whatsapp/posvenda/qrcode', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const key = posvendaKey(userId);
+    const status = BaileysManager.getStatus(key);
+    if (status === 'open') {
+      return res.json({ state: 'open', connectionStatus: 'open', provider: 'baileys' });
+    }
+    if (status === 'not_initialized') {
+      await BaileysManager.startSession(key);
+    }
+    const qr = await BaileysManager.waitForQR(key, 30000);
+    if (qr) return res.json({ base64: qr, qrcode: { base64: qr }, provider: 'baileys' });
+    return res.status(408).json({ error: 'QR Code não gerado. Tente novamente.', provider: 'baileys' });
+  });
+
+  app.post('/api/whatsapp/posvenda/disconnect', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    try {
+      await BaileysManager.stopSession(posvendaKey(userId));
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || 'Erro ao desconectar.' });
+    }
+  });
+
+  app.post('/api/whatsapp/posvenda/reset', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    try {
+      await BaileysManager.resetSession(posvendaKey(userId));
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || 'Erro ao limpar a sessão.' });
+    }
+  });
+
   app.get('/api/whatsapp/qrcode_legacy', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const instanceName = getInstanceName(userId);
@@ -19884,8 +19951,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   // ── Baileys: lista de conversas ao conectar ──────────────────────────────
   // Ao conectar: vincula conversas/mensagens sem wa_number ao número atual
-  BaileysManager.setConnectHandler(async (userId, phone) => {
+  BaileysManager.setConnectHandler(async (sessionKey, phone) => {
     if (!supabaseAdmin) return;
+    const { userId, slot } = BaileysManager.parseSlotKey(sessionKey);
+    // Slot secundário (pós-venda): NÃO re-carimba o histórico — a migração
+    // abaixo é exclusiva do número PRINCIPAL (senão o 2º número sequestraria
+    // a atribuição wa_number de TODAS as conversas da conta).
+    if (slot !== 'main') {
+      console.log(`[Baileys] Slot "${slot}" conectado (${phone}) para ${userId}`);
+      return;
+    }
     console.log(`[Baileys] Vinculando histórico ao número ${phone} para ${userId}`);
     // Corrige QUALQUER wa_number diferente do número atual (inclui '' e valores corrompidos como "55438841668246")
     const { error: eConv } = await supabaseAdmin
@@ -19903,9 +19978,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!eConv && !eMsg) console.log(`[Baileys] ✅ Histórico vinculado ao número ${phone}`);
   });
 
-  BaileysManager.setChatsSetHandler(async (userId, chats) => {
+  BaileysManager.setChatsSetHandler(async (sessionKey, chats) => {
     if (!supabaseAdmin) { console.warn('[Baileys] setChatsSetHandler: supabaseAdmin não disponível'); return; }
-    const waNumber = BaileysManager.getConnectedPhone(userId) || '';
+    // Slot pós-venda importa as conversas dele pro MESMO inbox (centralizado);
+    // o wa_number de cada uma fica sendo o número do slot.
+    const { userId } = BaileysManager.parseSlotKey(sessionKey);
+    const waNumber = BaileysManager.getConnectedPhone(sessionKey) || '';
     // Filtra apenas conversas individuais (não grupos)
     const individual = chats.filter((c: any) =>
       typeof c.id === 'string' && c.id.endsWith('@s.whatsapp.net')
@@ -20180,8 +20258,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }, delay));
   }
 
-  BaileysManager.setMessageHandler(async (userId, msg, sock, isHistory = false) => {
+  BaileysManager.setMessageHandler(async (sessionKey, msg, sock, isHistory = false) => {
     if (!supabaseAdmin) { console.warn('[Baileys] MessageHandler: supabaseAdmin não disponível'); return; }
+    // 2º número (pós-venda) usa a MESMA pipeline: mensagens entram no inbox da
+    // conta com o wa_number do slot. Lia autônoma responde SÓ pelo principal.
+    const { userId, slot } = BaileysManager.parseSlotKey(sessionKey);
     const rawRemoteJid = msg.key.remoteJid || '';
     // WhatsApp @lid addressing: remoteJid vem como "12345@lid" — usar remoteJidAlt que tem o JID padrão
     const remoteJid = rawRemoteJid.endsWith('@lid')
@@ -20191,7 +20272,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Nota: NÃO ignoramos fromMe em tempo real — pode ser mensagem enviada do celular físico.
     // O insert em wa_messages usa message_id único, então duplicatas do app são tratadas via erro ignorado.
 
-    const waNumber = BaileysManager.getConnectedPhone(userId) || '';
+    const waNumber = BaileysManager.getConnectedPhone(sessionKey) || '';
     const rawPhone = remoteJid.replace('@s.whatsapp.net', '');
     // JID do WhatsApp é autoritativo — normalizeBrazilianPhone adiciona "9" extra em números
     // que já têm 9 (ex: 554399093114 → 5543999093114), corrompendo o destinatário
@@ -20372,7 +20453,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Fase C: agenda a resposta autônoma da Lia (só age se o estúdio ligou o
     // auto_send; debounce espera a pessoa terminar de mandar as mensagens).
     if (!isHistory && !msg.key.fromMe && (msgType === 'text' || msgType === 'audio' || msgType === 'image')) {
-      scheduleAutonomousReply(userId, phone, msgType);
+      // Lia autônoma só atende pelo número PRINCIPAL — o pós-venda é humano.
+      if (slot === 'main') scheduleAutonomousReply(userId, phone, msgType);
     }
 
     // Auto-cria lead apenas para mensagens novas recebidas
@@ -20417,7 +20499,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Acks do WhatsApp → status das mensagens enviadas (✓ enviado, ✓✓ entregue,
   // ✓✓ azul lido). O MessageBubble do app já renderiza pelos valores
   // 'sent'/'delivered'/'read' — faltava alimentar. Nunca rebaixa um 'read'.
-  BaileysManager.setAckHandler(async (userId, updates) => {
+  BaileysManager.setAckHandler(async (sessionKey, updates) => {
+    const { userId } = BaileysManager.parseSlotKey(sessionKey);
     if (!supabaseAdmin) return;
     for (const u of updates) {
       try {

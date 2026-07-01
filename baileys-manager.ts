@@ -36,6 +36,23 @@ interface Session {
 
 const sessions = new Map<string, Session>();
 
+// ── Multi-slot: 2º número na MESMA conta (ex.: pós-venda/alinhamento) ──────
+// Um "slot" é só um SUFIXO na chave de sessão: o Map acima, a pasta em disco e
+// o restoreAllSessions continuam funcionando sem NENHUMA mudança (a pasta do
+// slot é um diretório normal com creds.json). O server separa o userId real do
+// slot com parseSlotKey() na ENTRADA dos handlers (mensagem/conexão/acks) —
+// todo o resto do código continua chamando com o userId puro (= slot 'main').
+const SLOT_SEP = '__slot__';
+export function slotKey(userId: string, slot?: string | null): string {
+  return slot && slot !== 'main' ? `${userId}${SLOT_SEP}${slot}` : userId;
+}
+export function parseSlotKey(key: string): { userId: string; slot: string } {
+  const i = key.indexOf(SLOT_SEP);
+  return i === -1
+    ? { userId: key, slot: 'main' }
+    : { userId: key.slice(0, i), slot: key.slice(i + SLOT_SEP.length) };
+}
+
 export type IncomingMessageHandler = (userId: string, msg: WAMessage, sock: Socket, isHistory?: boolean) => Promise<void>;
 let globalOnMessage: IncomingMessageHandler = async () => {};
 

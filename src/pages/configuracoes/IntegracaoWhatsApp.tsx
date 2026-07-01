@@ -16,6 +16,145 @@ interface WaAccount {
   connected_at?: string;
 }
 
+// ── 2º WhatsApp: Pós-venda / Alinhamento (Baileys, sessão separada) ────────
+// Conecta um segundo número na MESMA conta. As conversas dele entram no mesmo
+// inbox (wa_number próprio) e a Lia autônoma NÃO atende por ele — é o canal
+// humano do time de alinhamento depois da venda.
+function PosVendaWhatsAppCard() {
+  const [pvStatus, setPvStatus] = useState<{ connected: boolean; state: string; phone: string | null } | null>(null);
+  const [qr, setQr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
+
+  const loadStatus = async () => {
+    try {
+      const r = await authFetch('/api/whatsapp/posvenda/status');
+      if (r.ok) setPvStatus(await r.json());
+    } catch { /* silencioso */ }
+  };
+
+  useEffect(() => {
+    loadStatus();
+    const t = setInterval(loadStatus, 5000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => { if (pvStatus?.connected) setQr(null); }, [pvStatus?.connected]);
+
+  const conectar = async () => {
+    setBusy(true);
+    setQr(null);
+    try {
+      const r = await authFetch('/api/whatsapp/posvenda/qrcode');
+      const d = await r.json().catch(() => ({} as any));
+      if (d.base64) setQr(d.base64);
+      else if (d.state === 'open') loadStatus();
+      else alert(d.error || 'Não foi possível gerar o QR. Tente de novo.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const desconectar = async () => {
+    setBusy(true);
+    try {
+      await authFetch('/api/whatsapp/posvenda/disconnect', { method: 'POST' });
+      setQr(null);
+      await loadStatus();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resetar = async () => {
+    setConfirmReset(false);
+    setBusy(true);
+    try {
+      await authFetch('/api/whatsapp/posvenda/reset', { method: 'POST' });
+      setQr(null);
+      await loadStatus();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const connected = !!pvStatus?.connected;
+  return (
+    <div className="mt-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-5">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-teal-500/15 flex items-center justify-center">
+            <Smartphone size={20} className="text-teal-600 dark:text-teal-400" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-gray-900 dark:text-white">WhatsApp Pós-venda / Alinhamento</h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              {connected
+                ? `Conectado${pvStatus?.phone ? ` — +${pvStatus.phone}` : ''} · conversas entram no mesmo inbox, com o número do pós-venda`
+                : '2º número da conta, usado pela equipe de alinhamento depois da venda (a Lia não atende por ele)'}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {connected ? (
+            <>
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 text-xs font-semibold">
+                <CheckCircle2 size={13} /> Conectado
+              </span>
+              <button
+                onClick={desconectar}
+                disabled={busy}
+                className="px-3 py-1.5 text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg disabled:opacity-60"
+              >
+                Desconectar
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={conectar}
+                disabled={busy}
+                className="px-3.5 py-2 text-sm font-semibold bg-teal-600 hover:bg-teal-700 text-white rounded-lg disabled:opacity-60"
+              >
+                {busy ? 'Gerando QR…' : qr ? 'Gerar novo QR' : 'Conectar 2º número'}
+              </button>
+              <button
+                onClick={() => setConfirmReset(true)}
+                disabled={busy}
+                title="Apaga as credenciais salvas deste número"
+                className="px-2.5 py-2 text-xs text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg disabled:opacity-60"
+              >
+                Limpar sessão
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      {!connected && qr && (
+        <div className="mt-4 flex flex-col items-center gap-2">
+          <img
+            src={qr}
+            alt="QR Code do WhatsApp Pós-venda"
+            className="w-52 h-52 rounded-xl border border-gray-200 dark:border-gray-700 bg-white p-2"
+          />
+          <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
+            No celular do pós-venda: WhatsApp → Aparelhos conectados → Conectar aparelho
+          </p>
+        </div>
+      )}
+      <ConfirmModal
+        open={confirmReset}
+        title="Limpar sessão do pós-venda?"
+        message="Apaga as credenciais salvas deste 2º número. Você vai precisar escanear o QR de novo."
+        confirmText="Limpar"
+        variant="warning"
+        onConfirm={resetar}
+        onCancel={() => setConfirmReset(false)}
+      />
+    </div>
+  );
+}
+
 export default function IntegracaoWhatsApp() {
   const [tab, setTab] = useState<Tab>("conexao");
   const [connected, setConnected] = useState(false);
@@ -497,6 +636,9 @@ export default function IntegracaoWhatsApp() {
           </div>
         </div>
       )}
+
+      {/* 2º número: pós-venda/alinhamento */}
+      <PosVendaWhatsAppCard />
     </div>
   );
 }
