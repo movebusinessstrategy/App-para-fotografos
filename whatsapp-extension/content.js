@@ -2276,13 +2276,16 @@
   }
 
   async function startMassFollowUpQueue(targetDeals, template, autoSend = false, moveNext = false) {
+    // BAILEYS PRIMEIRO: se a conta está conectada via QR (Baileys), envia direto
+    // pelo servidor — confiável e sem mexer na tela do WhatsApp Web. A busca/UI
+    // do WhatsApp é só a 2ª opção, quando o Baileys NÃO está conectado.
+    // (Antes o envio por Baileys só valia no modo automático; agora vale nos
+    // dois — automático e manual.)
     let apiSend = false;
-    if (autoSend) {
-      try {
-        const status = await bg({ type: 'GET_WHATSAPP_STATUS' });
-        apiSend = status?.connected === true || status?.whatsapp?.connected === true;
-      } catch {}
-    }
+    try {
+      const status = await bg({ type: 'GET_WHATSAPP_STATUS' });
+      apiSend = status?.connected === true || status?.whatsapp?.connected === true;
+    } catch {}
     massQueue = { deals: targetDeals, message: collapseRepeatedMessage(template), idx: 0, autoSend, apiSend, moveNext };
     showMassQueueWidget(autoSend);
     await openCurrentMassQueueLead();
@@ -2309,19 +2312,28 @@
 
   function showMassQueueWidget(autoSend) {
     document.getElementById('fp-mass-widget')?.remove();
+    // Manual + Baileys conectado: o "Próximo" envia pelo servidor e avança.
+    const manualApi = !autoSend && massQueue?.apiSend;
+    const nextLabel = manualApi ? 'Enviar e próximo →' : 'Próximo →';
+    const title = autoSend
+      ? 'Enviando automaticamente (Baileys)'
+      : (manualApi ? 'Follow-up em massa (Baileys)' : 'Follow-up em massa');
     const w = document.createElement('div');
     w.id = 'fp-mass-widget';
     w.innerHTML = `
       <div class="fp-mw-info">
-        <div class="fp-mw-title">${autoSend ? 'Enviando automaticamente' : 'Follow-up em massa'}</div>
+        <div class="fp-mw-title">${title}</div>
         <div class="fp-mw-prog" id="fp-mw-prog">—</div>
       </div>
       ${autoSend ? '' : '<button class="fp-mw-btn fp-mw-skip" id="fp-mw-skip">Pular</button>'}
-      ${autoSend ? '' : '<button class="fp-mw-btn fp-mw-next" id="fp-mw-next">Próximo →</button>'}
+      ${autoSend ? '' : `<button class="fp-mw-btn fp-mw-next" id="fp-mw-next">${nextLabel}</button>`}
       <button class="fp-mw-btn fp-mw-stop" id="fp-mw-stop" title="Parar fila">✕ Parar</button>
     `;
     document.body.appendChild(w);
-    w.querySelector('#fp-mw-next')?.addEventListener('click', () => advanceMassQueue(false));
+    w.querySelector('#fp-mw-next')?.addEventListener('click', () => {
+      if (!massQueue?.autoSend && massQueue?.apiSend) sendCurrentMassViaApiAndAdvance();
+      else advanceMassQueue(false);
+    });
     w.querySelector('#fp-mw-skip')?.addEventListener('click', () => advanceMassQueue(true));
     w.querySelector('#fp-mw-stop')?.addEventListener('click', stopMassQueue);
   }
@@ -2359,7 +2371,12 @@
     if (!prog || !massQueue) return;
     const cur = massQueue.deals[massQueue.idx];
     const name = cur ? (cur.contact_name || cur.title || cur.contact_phone) : '—';
-    prog.innerHTML = `${massQueue.idx + 1}/${massQueue.deals.length} · <strong>${esc(name)}</strong>`;
+    let html = `${massQueue.idx + 1}/${massQueue.deals.length} · <strong>${esc(name)}</strong>`;
+    // Manual + Baileys: mostra a mensagem que será enviada (o WA não abre pra revisar).
+    if (cur && !massQueue.autoSend && massQueue.apiSend) {
+      html += `<div style="margin-top:4px;font-size:11px;color:#667781;white-space:normal;max-width:260px">${esc(composeMassMsg(cur))}</div>`;
+    }
+    prog.innerHTML = html;
   }
 
   async function waitForExpectedChat(deal, maxMs = 2800) {
@@ -2403,6 +2420,30 @@
     return bg({ type: 'SEND_WHATSAPP_TEXT', phone, text: msg });
   }
 
+  function composeMassMsg(deal) {
+    const first = firstNameOf(deal);
+    return massQueue.message
+      .replace(/\{nome\}/gi, first)
+      .replace(/\{primeiro_nome\}/gi, first)
+      .replace(/\{name\}/gi, first);
+  }
+
+  // Envio via Baileys do lead atual (modo MANUAL): dispara pelo servidor, sem
+  // abrir o WhatsApp Web, e avança a fila. Ligado no botão "Enviar e próximo →".
+  async function sendCurrentMassViaApiAndAdvance() {
+    if (!massQueue) return;
+    const deal = massQueue.deals[massQueue.idx];
+    if (!deal) return;
+    const first = firstNameOf(deal);
+    try {
+      await sendMassFollowupViaApi(deal, composeMassMsg(deal));
+      toast(`✓ Enviado (Baileys) pra ${first || deal.contact_phone}`);
+      advanceMassQueue(false);
+    } catch (err) {
+      toast(err?.message || 'Falha no envio via Baileys', true);
+    }
+  }
+
   async function openCurrentMassQueueLead() {
     if (!massQueue) return;
     const deal = massQueue.deals[massQueue.idx];
@@ -2410,25 +2451,28 @@
     updateMassWidget();
 
     const first = firstNameOf(deal);
-    const msg = massQueue.message
-      .replace(/\{nome\}/gi, first)
-      .replace(/\{primeiro_nome\}/gi, first)
-      .replace(/\{name\}/gi, first);
+    const msg = composeMassMsg(deal);
 
-    if (massQueue?.autoSend && massQueue?.apiSend) {
-      try {
-        await sendMassFollowupViaApi(deal, msg);
-        toast(`✓ Enviado com segurança pra ${first || deal.contact_phone}`);
-        await sleep(1600);
-        if (!massQueue) return;
-        advanceMassQueue(false);
-      } catch (err) {
-        toast(err?.message || 'Falha no envio seguro — parei a fila', true);
-        stopMassQueue();
+    // BAILEYS conectado → envia pelo servidor, SEM tocar no WhatsApp Web.
+    if (massQueue?.apiSend) {
+      if (massQueue.autoSend) {
+        try {
+          await sendMassFollowupViaApi(deal, msg);
+          toast(`✓ Enviado (Baileys) pra ${first || deal.contact_phone}`);
+          await sleep(1600);
+          if (!massQueue) return;
+          advanceMassQueue(false);
+        } catch (err) {
+          toast(err?.message || 'Falha no envio via Baileys — parei a fila', true);
+          stopMassQueue();
+        }
       }
+      // Manual + Baileys: o widget mostra o lead + a mensagem; o botão
+      // "Enviar e próximo →" (sendCurrentMassViaApiAndAdvance) dispara e avança.
       return;
     }
 
+    // BAILEYS desconectado → 2ª opção: abre a conversa no WhatsApp Web (frágil).
     const ok = await openByNumberInApp(deal.contact_phone, deal.contact_name || '');
     if (!ok) {
       // Falhou em abrir o chat — em modo auto, pula pro próximo
