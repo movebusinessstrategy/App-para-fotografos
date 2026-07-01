@@ -1691,6 +1691,60 @@
     }
   }
 
+  // Cria um tipo novo na lista mestre (mesma de Config → Oportunidades no app)
+  // e atualiza o cache local. Lança em caso de erro da API.
+  async function createTipoEnsaio(nome) {
+    const clean = String(nome || '').trim();
+    if (!clean) return null;
+    await bg({ type: 'CREATE_TIPO_ENSAIO', nome: clean });
+    const list = getTiposEnsaio().slice();
+    if (!list.some((t) => t.toLowerCase() === clean.toLowerCase())) list.push(clean);
+    tiposEnsaioCache = list;
+    return clean;
+  }
+
+  // Monta o select de tipo de ensaio com a opção "➕ Criar novo tipo…" no fim.
+  // Ao criar, persiste na lista mestre e RECONSTRÓI o select já com o novo tipo
+  // selecionado (fpSelect não tem setItems). onBuilt roda a cada (re)construção
+  // pra quem guarda referência externa (ex.: modalTypeSel).
+  const FP_NEW_TIPO = '__fp_new_tipo__';
+  function buildTipoEnsaioSelect(slot, opts = {}) {
+    const { value = '', placeholder = 'Tipo de ensaio', extraFirst = [], searchable = false, onBuilt } = opts;
+    const base = getTiposEnsaio();
+    const known = value && !base.includes(value) && !extraFirst.some((it) => it.value === value)
+      ? [value, ...base]
+      : base;
+    const sel = fpSelect({
+      items: [
+        ...extraFirst,
+        ...known.map((t) => ({ value: t, label: t })),
+        { value: FP_NEW_TIPO, label: '➕ Criar novo tipo…' },
+      ],
+      value,
+      placeholder,
+      searchable,
+      onChange: async (v) => {
+        if (v !== FP_NEW_TIPO) return;
+        const nome = window.prompt('Nome do novo tipo de ensaio:');
+        const clean = String(nome || '').trim();
+        if (!clean) { buildTipoEnsaioSelect(slot, opts); return; }
+        try {
+          await createTipoEnsaio(clean);
+          toast(`Tipo "${clean}" criado!`);
+          buildTipoEnsaioSelect(slot, { ...opts, value: clean });
+        } catch (err) {
+          toast(err.message, true);
+          buildTipoEnsaioSelect(slot, opts);
+        }
+      },
+    });
+    slot.innerHTML = '';
+    slot.appendChild(sel.element);
+    slot._fpSel = sel;
+    if (onBuilt) onBuilt(sel);
+    return sel;
+  }
+
   function card(d, c) {
     const name = d.contact_name || d.title || 'Sem nome';
     const phone = d.contact_phone || '';
@@ -5818,6 +5872,59 @@
     return filled;
   }
 
+  // Preenche APENAS campos vazios com o que a IA extraiu — nunca sobrescreve o
+  // que o usuário digitou ou o parser por regex já preencheu.
+  function applyAIDataToWonModal(modal, data) {
+    if (!data || typeof data !== 'object') return 0;
+    const setIfEmpty = (sel, v) => {
+      if (!v) return false;
+      const el = modal.querySelector(sel);
+      if (!el || (el.value || '').trim()) return false;
+      return setModalValue(modal, sel, String(v));
+    };
+    let filled = 0;
+    if (setIfEmpty('#fp-win-client-name', data.name)) filled++;
+    if (setIfEmpty('#fp-win-client-phone', data.phone)) filled++;
+    if (setIfEmpty('#fp-win-client-email', data.email)) filled++;
+    if (setIfEmpty('#fp-win-client-doc', data.document)) filled++;
+    if (setIfEmpty('#fp-win-client-birth', data.birth_date)) filled++;
+    if (setIfEmpty('#fp-win-client-instagram', data.instagram)) filled++;
+    if (setIfEmpty('#fp-win-client-address', data.address)) filled++;
+    if (setIfEmpty('#fp-win-client-city', data.city)) filled++;
+    if (setIfEmpty('#fp-win-client-state', data.state)) filled++;
+    if (setIfEmpty('#fp-win-client-zip', data.zip_code)) filled++;
+    if (data.found && setSelectByText(modal.querySelector('#fp-win-client-found-slot'), data.found)) filled++;
+    return filled;
+  }
+
+  // Fallback com IA: quando a cliente responde "solto" (fora do texto pré-pronto),
+  // o parser regex não acha nada — a IA lê a conversa aberta e extrai o cadastro.
+  // Mesma trava anti-mistura do prefill: só lê se a conversa É a do lead.
+  async function runAICadastroExtraction(modal, deal, { silent = false } = {}) {
+    if (!dealMatchesOpenChat(deal)) {
+      if (!silent) toast('Abra a conversa deste lead no WhatsApp pra IA ler os dados.', true);
+      return;
+    }
+    const blocks = getVisibleChatTextBlocks();
+    if (!blocks.length) {
+      if (!silent) toast('Não achei texto na conversa aberta.', true);
+      return;
+    }
+    const btn = modal.querySelector('#fp-win-ai-read');
+    if (btn) { btn.disabled = true; btn.textContent = 'Lendo conversa…'; }
+    try {
+      const r = await bg({ type: 'EXTRACT_CADASTRO_AI', blocks });
+      if (!modal.isConnected) return; // modal fechou enquanto a IA lia
+      const filled = applyAIDataToWonModal(modal, r?.data);
+      if (filled > 0) toast(`IA preencheu ${filled} campo(s) da conversa 🪄`);
+      else if (!silent) toast('IA não achou dados novos na conversa.', true);
+    } catch (err) {
+      if (!silent) toast(err.message, true);
+    } finally {
+      if (btn && modal.isConnected) { btn.disabled = false; btn.textContent = '🪄 Ler dados da conversa (IA)'; }
+    }
+  }
+
   function catalogTypeLabel(type) {
     if (type === 'combo') return 'Combo';
     if (type === 'servico') return 'Serviço';
@@ -6085,7 +6192,10 @@
           </div>
 
           <div class="fp-won-section fp-won-client-section">
-            <div class="fp-won-section-title">Dados do cliente</div>
+            <div class="fp-won-section-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+              <span>Dados do cliente</span>
+              <button type="button" id="fp-win-ai-read" class="fp-btn-w" style="font-size:11px;padding:4px 10px;border-radius:999px" title="A IA lê a conversa aberta e preenche os campos vazios">🪄 Ler dados da conversa (IA)</button>
+            </div>
             <div class="fp-won-grid">
               <div class="fp-mf"><label class="fp-ml">Nome *</label><input class="fp-mi" id="fp-win-client-name" value="${esc(deal.contact_name || deal.title || '')}" /></div>
               <div class="fp-mf"><label class="fp-ml">Telefone *</label><input class="fp-mi" id="fp-win-client-phone" value="${esc(digits(deal.contact_phone || ''))}" /></div>
@@ -6175,19 +6285,12 @@
     foundSlot.appendChild(foundSel.element);
     foundSlot._fpSel = foundSel;
 
-    // Lista mestre (mesma do app); inclui o tipo atual do lead se foi removido
-    const jobTypes = (() => {
-      const base = getTiposEnsaio();
-      return shootType && !base.includes(shootType) ? [shootType, ...base] : base;
-    })();
-    const typeSel = fpSelect({
-      items: jobTypes.map((t) => ({ value: t, label: t })),
-      value: jobTypes.includes(shootType) ? shootType : jobTypes[0],
+    // Lista mestre (mesma do app) + "➕ Criar novo tipo…" direto daqui
+    const typeSlot = modal.querySelector('#fp-win-job-type-slot');
+    buildTipoEnsaioSelect(typeSlot, {
+      value: shootType || getTiposEnsaio()[0],
       placeholder: 'Tipo de ensaio',
     });
-    const typeSlot = modal.querySelector('#fp-win-job-type-slot');
-    typeSlot.appendChild(typeSel.element);
-    typeSlot._fpSel = typeSel;
 
     const paymentSel = fpSelect({
       items: [
@@ -6223,7 +6326,11 @@
 
     // Cliente existente e catálogo são populados depois (load*ForConversion)
     seedWonCatalogItems(modal, deal);
-    applyConversationCadastroToWonModal(modal, deal);
+    const prefilled = applyConversationCadastroToWonModal(modal, deal);
+    // Cliente respondeu fora do texto pré-pronto (regex achou quase nada)?
+    // IA lê a conversa e completa os campos vazios. Silencioso: se a conversa
+    // aberta não for a do lead, simplesmente não roda (trava anti-mistura).
+    if (prefilled < 2) runAICadastroExtraction(modal, deal, { silent: true });
     loadClientsForConversion(modal);
     loadCatalogForConversion(modal);
     loadCampaignsForConversion(modal);
@@ -6245,6 +6352,7 @@
     modal.querySelectorAll('input[name="fp-win-mode"]').forEach(input => input.addEventListener('change', updateMode));
     modal.querySelector('#fp-win-create-job')?.addEventListener('change', updateJobVisibility);
     modal.querySelector('#fp-win-catalog-add')?.addEventListener('click', () => addCatalogItemToWonModal(modal));
+    modal.querySelector('#fp-win-ai-read')?.addEventListener('click', () => runAICadastroExtraction(modal, deal));
     modal.querySelector('#fp-win-sinal')?.addEventListener('input', () => updateWonSummary(modal));
     modal.querySelector('#fp-won-save')?.addEventListener('click', () => saveWonConversion(deal, modal));
     updateMode();
@@ -7113,14 +7221,14 @@
     // Tipo de ensaio: lista mestre (mesma dos outros formulários)
     const typeSlot = document.getElementById('fp-mtype-slot');
     if (typeSlot) {
-      const typeSel = fpSelect({
-        items: [{ value: '', label: 'Selecione (opcional)' }, ...getTiposEnsaio().map((t) => ({ value: t, label: t }))],
+      // "➕ Criar novo tipo…" cria na lista mestre e já seleciona; onBuilt mantém
+      // modalTypeSel apontando pro select vivo após o rebuild.
+      const typeSel = buildTipoEnsaioSelect(typeSlot, {
         value: '',
         placeholder: 'Selecione (opcional)',
-        searchable: false,
+        extraFirst: [{ value: '', label: 'Selecione (opcional)' }],
+        onBuilt: (s) => { modalTypeSel = s; },
       });
-      typeSlot.innerHTML = '';
-      typeSlot.appendChild(typeSel.element);
       modalTypeSel = typeSel;
     }
     // Vendedor: default no usuário logado se já conhecido, e re-carrega lista em background

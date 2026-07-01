@@ -160,6 +160,22 @@ async function handleMessage(message) {
       // Lista mestre de tipos de ensaio (Configurações → Oportunidades no app)
       return apiFetch('/api/tipo-ensaio-precos');
     }
+    case 'CREATE_TIPO_ENSAIO': {
+      // Insere um tipo novo na lista mestre (PUT upsert em batch com 1 item;
+      // preco_minimo 0 = sem valor mínimo — o usuário ajusta depois no app)
+      return apiFetch('/api/tipo-ensaio-precos', {
+        method: 'PUT',
+        body: JSON.stringify({ items: [{ tipo_nome: message.nome, preco_minimo: 0 }] }),
+      });
+    }
+    case 'EXTRACT_CADASTRO_AI': {
+      // IA lê a conversa e extrai os dados cadastrais do cliente (fallback do
+      // parser regex do texto pré-pronto)
+      return apiFetch('/api/agent/extract-cadastro', {
+        method: 'POST',
+        body: JSON.stringify({ blocks: message.blocks || [] }),
+      });
+    }
     case 'GET_CATALOG': {
       const [produtos, servicos, combos] = await Promise.all([
         apiFetch('/api/produtos'),

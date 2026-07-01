@@ -158,6 +158,60 @@ export function isAgentReady(): boolean {
   return anthropic !== null;
 }
 
+// ── Extração de cadastro por IA ─────────────────────────────────────
+// Lê os textos de uma conversa do WhatsApp e extrai os dados cadastrais do
+// CLIENTE. Fallback do parser por regex do texto pré-pronto — quando a cliente
+// responde "solta", sem seguir a ficha. Haiku: rápido e barato pra extração.
+const EXTRACT_MODEL = 'claude-haiku-4-5-20251001';
+
+export async function extractCadastroWithAI(blocks: string[]): Promise<Record<string, string | null>> {
+  if (!anthropic) {
+    throw new Error('ANTHROPIC_API_KEY não configurada no servidor.');
+  }
+  const text = (blocks || [])
+    .map((b) => String(b || '').trim())
+    .filter(Boolean)
+    .join('\n')
+    // Teto de segurança: mantém o FIM da conversa (dados de cadastro chegam
+    // perto do fechamento; conversas longas estouram tokens à toa).
+    .slice(-24000);
+  if (!text) throw new Error('Conversa vazia.');
+
+  const response = await anthropic.messages.create({
+    model: EXTRACT_MODEL,
+    max_tokens: 700,
+    system:
+      'Você extrai dados cadastrais de clientes a partir de conversas de WhatsApp de um estúdio fotográfico brasileiro. Responda APENAS com JSON válido — sem markdown, sem cercas de código, sem comentários.',
+    messages: [
+      {
+        role: 'user',
+        content: `Extraia os dados cadastrais do CLIENTE (nunca do estúdio/fotógrafo) da conversa abaixo.
+
+Regras:
+- Retorne JSON com exatamente estas chaves: name, phone, email, document, birth_date, address, city, state, zip_code, instagram, baby, package_choice, found.
+- document = CPF ou CNPJ (apenas dígitos). phone = telefone com DDD (apenas dígitos, sem o 55). birth_date = data de NASCIMENTO do cliente em YYYY-MM-DD (não confunda com a data do ensaio). state = UF com 2 letras. zip_code = CEP (apenas dígitos). instagram = @usuario. found = como conheceu o estúdio (ex.: Instagram, indicação). baby = nome e/ou idade do bebê, se citado. package_choice = pacote que o cliente escolheu, se citado.
+- Campo não encontrado → null. NUNCA invente ou deduza dado que não está na conversa.
+- Se houver uma ficha preenchida (Nome:, CPF:, Endereço:, ...), ela tem prioridade; senão, garimpe das mensagens soltas.
+
+CONVERSA:
+${text}`,
+      },
+    ],
+  });
+
+  const raw = response.content
+    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+    .map((b) => b.text)
+    .join('')
+    .trim();
+  const jsonStr = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '');
+  try {
+    return JSON.parse(jsonStr);
+  } catch {
+    throw new Error('A IA retornou um formato inesperado — tente de novo.');
+  }
+}
+
 // Tira um horário no começo do texto (metadado que vaza da leitura do WhatsApp).
 // Ex.: "[15:34] oi" / "15:34 - oi" / "[15:34, 19/06/2026] oi" → "oi". Nunca
 // esvazia a mensagem (se sobrar nada, mantém o original).

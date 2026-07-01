@@ -23,7 +23,7 @@ import crypto from 'crypto';
 const sentryReady = initSentry();
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createSupabaseClient, supabaseAdmin } from './supabase.js';
-import { getAgentReply, DEFAULT_PERSONA, DEFAULT_OBJECTIVE, DEFAULT_KNOWLEDGE, DEFAULT_RULES, DEFAULT_SALES_STRATEGY } from './ai-agent.js';
+import { getAgentReply, extractCadastroWithAI, DEFAULT_PERSONA, DEFAULT_OBJECTIVE, DEFAULT_KNOWLEDGE, DEFAULT_RULES, DEFAULT_SALES_STRATEGY } from './ai-agent.js';
 import * as plugnotas from './plugnotas.js';
 import { understandMedia } from './media-understanding.js';
 import {
@@ -7656,6 +7656,22 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     } catch (e: any) {
       console.error('[Agent suggest] erro:', e?.message || e);
       res.status(500).json({ error: e?.message || 'Erro ao gerar a sugestão.' });
+    }
+  });
+
+  // Extrai dados cadastrais do cliente a partir da conversa (fallback do parser
+  // por regex quando a cliente não responde no formato do texto pré-pronto).
+  app.post('/api/agent/extract-cadastro', requireAuth, async (req, res) => {
+    const blocks: string[] = Array.isArray(req.body?.blocks)
+      ? req.body.blocks.map((b: any) => String(b || '')).slice(0, 400)
+      : [];
+    if (!blocks.length) return res.status(400).json({ error: 'Conversa vazia.' });
+    try {
+      const data = await extractCadastroWithAI(blocks);
+      res.json({ data });
+    } catch (e: any) {
+      console.error('[extract-cadastro] erro:', e?.message || e);
+      res.status(500).json({ error: e?.message || 'Erro ao extrair os dados.' });
     }
   });
 
