@@ -33,6 +33,14 @@ const normalizeStage = (stage: any, fallback: PipelineStage): PipelineStage => (
   follow_up_template_id: stage.follow_up_template_id ?? null,
 });
 
+// A PRIMARY KEY de deal_stages/production_processes é o `id` SOZINHO (global, não
+// por tenant). Portanto os ids padrão ('lead','won','proc-1','prod-etapa-1'...) só
+// cabem UMA vez no sistema inteiro — a 1ª conta os pega e as demais falham no
+// INSERT (duplicate key) e caem em defaults em memória (nunca persistem). Era a
+// causa real de "só funciona pra 1 conta". Todo seed passa a usar id único por
+// usuário: o user_id garante unicidade global.
+const tid = (baseId: string, userId: string) => `${baseId}-${userId}`;
+
 // Etapas de produção: IDs começam com "prod-"
 export const ensureProductionStages = async (supabase: SupabaseClient, userId: string): Promise<PipelineStage[]> => {
   try {
@@ -49,12 +57,19 @@ export const ensureProductionStages = async (supabase: SupabaseClient, userId: s
     }
 
     if (!data || data.length === 0) {
-      const payload = DEFAULT_PRODUCTION_STAGES.map((s) => ({ ...s, user_id: userId }));
+      // IMPORTANTE: semeia COMPATÍVEL com a V2. O board de produção (V2) filtra
+      // process_id não-nulo; se a V1 semear SEM process_id, essas linhas ficam
+      // invisíveis pro board E colidem quando a V2 tenta reinserir os mesmos ids
+      // (era a causa do "ganho some da produção" em contas novas). Por isso
+      // garantimos o processo e semeamos com o process_id do processo padrão.
+      const procs = await ensureProductionProcesses(supabase, userId);
+      const procId = (procs as any[]).find((p) => !p.is_special)?.id || (procs as any[])[0]?.id || tid('proc-1', userId);
+      const payload = DEFAULT_PRODUCTION_STAGES_V2.map((s) => ({ ...s, id: tid(s.id, userId), process_id: procId, user_id: userId }));
       const { error: insertError } = await supabase.from('deal_stages').insert(payload);
       if (insertError) {
         console.warn('Não foi possível inserir etapas de produção padrão:', insertError.message);
       }
-      return DEFAULT_PRODUCTION_STAGES;
+      return payload as any;
     }
 
     return data.map((row: any) => {
@@ -83,7 +98,7 @@ export const ensurePipelineStages = async (supabase: SupabaseClient, userId: str
     }
 
     if (!data || data.length === 0) {
-      const payload = DEFAULT_STAGES.map((s) => ({ ...s, user_id: userId }));
+      const payload = DEFAULT_STAGES.map((s) => ({ ...s, id: tid(s.id, userId), user_id: userId }));
       const { error: insertError } = await supabase.from('deal_stages').insert(payload);
       if (insertError) {
         console.warn('Não foi possível inserir etapas padrão:', insertError.message);
@@ -99,6 +114,71 @@ export const ensurePipelineStages = async (supabase: SupabaseClient, userId: str
     console.error('ensurePipelineStages error', err);
     return DEFAULT_STAGES;
   }
+};
+
+// Garante que a conta tenha uma etapa de GANHO (is_won) e uma de PERDA
+// (is_final && !is_won). Contas que refizeram o funil podiam ficar SEM etapa de
+// ganho — aí o convert mandava o negócio pra uma etapa "won" órfã (que não
+// existia no funil) e o ganho sumia; a extensão nem mostrava a coluna de ganho.
+// Idempotente: no caso normal (já tem ganho E perda) NÃO escreve nada. Recebe as
+// stages já carregadas (de ensurePipelineStages) pra não fazer query extra.
+const WON_NAME_RE = /ganho|ganhou|fechad|vendid|conclu|convert|won/i;
+const LOST_NAME_RE = /perd|cancel|sem interesse|desist|lost/i;
+// Evita casar "não convertido"/"sem fechar" como ganho (falso positivo do WON_RE).
+const NEG_NAME_RE = /\bn[ãa]o\b|\bsem\b/i;
+// Match forte de ganho — preferido quando há vários candidatos.
+const STRONG_WON_RE = /ganho|convertid|vendid|fechad/i;
+
+export const ensureWonLostStages = async (
+  supabase: SupabaseClient,
+  userId: string,
+  stages: PipelineStage[],
+): Promise<PipelineStage[]> => {
+  const list = Array.isArray(stages) ? stages.map((s) => ({ ...s })) : [];
+  const hasWon = list.some((s) => s.is_won);
+  const hasLost = list.some((s) => s.is_final && !s.is_won);
+  if (hasWon && hasLost) return list; // caso normal: nada a fazer
+
+  const ops: any[] = [];
+  try {
+    if (!hasWon) {
+      const wonCands = list.filter((s) =>
+        WON_NAME_RE.test(s.name || '') && !LOST_NAME_RE.test(s.name || '') && !NEG_NAME_RE.test(s.name || ''));
+      const cand = wonCands.find((s) => STRONG_WON_RE.test(s.name || '')) || wonCands[0];
+      if (cand) {
+        cand.is_won = true;
+        cand.is_final = true;
+        ops.push(
+          supabase.from('deal_stages')
+            .update({ is_won: true, is_final: true })
+            .eq('id', cand.id).eq('user_id', userId),
+        );
+      } else {
+        // Cria a etapa de ganho com id ÚNICO por tenant (a PK de deal_stages é
+        // global; um id 'won' fixo só caberia em uma conta no sistema todo).
+        const id = `${tid('won', userId)}-${randomUUID().slice(0, 4)}`;
+        const position = list.length ? Math.max(...list.map((s) => Number(s.position ?? 0))) + 1 : 0;
+        const row: any = { id, name: 'Fechado Ganho', color: '#DCFCE7', position, is_final: true, is_won: true, user_id: userId };
+        ops.push(supabase.from('deal_stages').insert(row));
+        list.push(normalizeStage(row, DEFAULT_STAGES[4]));
+      }
+    }
+    if (!hasLost) {
+      const cand = list.find((s) => !s.is_won && LOST_NAME_RE.test(s.name || ''));
+      if (cand && !cand.is_final) {
+        cand.is_final = true;
+        ops.push(
+          supabase.from('deal_stages')
+            .update({ is_final: true })
+            .eq('id', cand.id).eq('user_id', userId),
+        );
+      }
+    }
+    if (ops.length) await Promise.all(ops);
+  } catch (err) {
+    console.warn('ensureWonLostStages skipped', (err as any)?.message || err);
+  }
+  return list;
 };
 
 export const fetchActivityMetrics = async (
@@ -327,9 +407,10 @@ export const ensureProductionProcesses = async (supabase: SupabaseClient, userId
     }
 
     if (!data || data.length === 0) {
-      const payload = DEFAULT_PRODUCTION_PROCESSES.map(p => ({ ...p, user_id: userId }));
-      await supabase.from('production_processes').insert(payload);
-      return DEFAULT_PRODUCTION_PROCESSES;
+      const payload = DEFAULT_PRODUCTION_PROCESSES.map(p => ({ ...p, id: tid(p.id, userId), user_id: userId }));
+      const { error: insErr } = await supabase.from('production_processes').insert(payload);
+      if (insErr) console.warn('Não foi possível inserir processos padrão:', insErr.message);
+      return payload;
     }
 
     return data;
@@ -341,7 +422,7 @@ export const ensureProductionProcesses = async (supabase: SupabaseClient, userId
 
 export const ensureProductionStagesV2 = async (supabase: SupabaseClient, userId: string): Promise<ProductionStageDef[]> => {
   try {
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('deal_stages')
       .select('*')
       .eq('user_id', userId)
@@ -355,10 +436,43 @@ export const ensureProductionStagesV2 = async (supabase: SupabaseClient, userId:
     }
 
     if (!data || data.length === 0) {
-      const payload = DEFAULT_PRODUCTION_STAGES_V2.map(s => ({ ...s, user_id: userId }));
-      const { error: insertError } = await supabase.from('deal_stages').insert(payload);
-      if (insertError) console.warn('Não foi possível inserir etapas v2:', insertError.message);
-      return DEFAULT_PRODUCTION_STAGES_V2;
+      const procs = await ensureProductionProcesses(supabase, userId);
+      const procId = (procs as any[]).find((p) => !p.is_special)?.id || (procs as any[])[0]?.id || tid('proc-1', userId);
+      // SELF-HEAL: se existem etapas prod-% ÓRFÃS (process_id nulo — semeadas pela
+      // V1 antiga ao abrir "Configurar etapas"), NÃO tenta reinserir os mesmos ids
+      // (colidiria por PK e o board ficaria vazio). Em vez disso, vincula-as ao
+      // primeiro processo. Só quando NÃO há órfãs é que semeia as etapas padrão.
+      const { data: orphans } = await supabase
+        .from('deal_stages')
+        .select('id')
+        .eq('user_id', userId)
+        .like('id', 'prod-%')
+        .is('process_id', null);
+      if (orphans && orphans.length > 0) {
+        await supabase
+          .from('deal_stages')
+          .update({ process_id: procId })
+          .eq('user_id', userId)
+          .like('id', 'prod-%')
+          .is('process_id', null);
+      } else {
+        // IDs únicos por tenant — a PK de deal_stages é global (id sozinho), então
+        // 'prod-etapa-1' fixo só caberia em UMA conta no sistema todo.
+        const payload = DEFAULT_PRODUCTION_STAGES_V2.map(s => ({ ...s, id: tid(s.id, userId), process_id: procId, user_id: userId }));
+        const { error: insertError } = await supabase.from('deal_stages').insert(payload);
+        if (insertError) console.warn('Não foi possível inserir etapas v2:', insertError.message);
+      }
+      // Re-lê o estado REAL persistido (não confia em defaults em memória, que era
+      // o que fazia o job cair numa etapa que não existia no banco).
+      const reread = await supabase
+        .from('deal_stages')
+        .select('*')
+        .eq('user_id', userId)
+        .like('id', 'prod-%')
+        .not('process_id', 'is', null)
+        .order('position');
+      data = reread.data || [];
+      if (!data.length) return DEFAULT_PRODUCTION_STAGES_V2;
     }
 
     return data.map((row: any) => ({

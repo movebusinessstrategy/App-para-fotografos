@@ -34,6 +34,7 @@ import {
   computePipelineAnalytics,
   createStageId,
   ensurePipelineStages,
+  ensureWonLostStages,
   ensureProductionStages,
   ensureProductionProcesses,
   ensureProductionStagesV2,
@@ -6220,7 +6221,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.get('/api/pipeline/stages', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const stages = await ensurePipelineStages(supabase, userId);
+    let stages = await ensurePipelineStages(supabase, userId);
+    // Auto-cura: conta que refez o funil e ficou sem etapa de ganho passa a ter
+    // uma (assim a coluna "ganho" volta a aparecer e o convert tem destino real).
+    stages = await ensureWonLostStages(supabase, userId, stages);
     res.json(stages);
   });
 
@@ -6715,7 +6719,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const position = nonFinal.length;
     const id = `prod-${createStageId(name)}-${Math.random().toString(36).slice(2, 7)}`;
 
-    const payload: any = { id, name, color: '#94a3b8', position, is_final: false, is_won: false, user_id: userId };
+    // Vincula ao primeiro processo (V2). Sem process_id a etapa fica invisível no
+    // board de produção (que filtra process_id não-nulo).
+    const procs = await ensureProductionProcesses(supabase, userId);
+    const firstProc = (procs as any[]).filter((p) => !p.is_special).sort((a, b) => (a.position || 0) - (b.position || 0))[0] || (procs as any[])[0];
+    const payload: any = { id, name, color: '#94a3b8', position, is_final: false, is_won: false, process_id: firstProc?.id || null, user_id: userId };
     const { error, data } = await supabase.from('deal_stages').insert(payload).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
@@ -13414,7 +13422,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.post('/api/deals/:id/convert', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const stages = await ensurePipelineStages(supabase, userId);
+    let stages = await ensurePipelineStages(supabase, userId);
+    // Garante uma etapa de ganho REAL e persistida (contas que refizeram o funil
+    // ficavam sem is_won → o negócio ia pra uma etapa 'won' órfã e sumia).
+    stages = await ensureWonLostStages(supabase, userId, stages);
     const wonStage = stages.find((s) => s.is_won) || DEFAULT_STAGES.find((s) => s.is_won);
     const { createClient, createJob, client, job, sinalAmount, existingClientId, converted_at, campaign_id } = req.body;
     const nowIso = new Date().toISOString();
