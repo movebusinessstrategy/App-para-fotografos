@@ -60,6 +60,153 @@ function EtiquetasFunilCard() {
   );
 }
 
+// ── WhatsApp do Atendimento (principal) — conexão via QR, ali mesmo ─────────
+// Espelho do card do pós-venda: deixa claro QUAL número está conectado como
+// Atendimento (aba 💬 do chat), com conectar (QR), desconectar e limpar sessão
+// no MESMO lugar — sem caçar a conexão em outra tela.
+function AtendimentoWhatsAppCard() {
+  const [status, setStatus] = useState<{ connected: boolean; phone: string | null } | null>(null);
+  const [qr, setQr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [confirmDisc, setConfirmDisc] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
+
+  const loadStatus = async () => {
+    try {
+      const r = await authFetch('/api/whatsapp/slots');
+      if (!r.ok) return;
+      const d = await r.json().catch(() => ({} as any));
+      const main = (d.slots || []).find((s: any) => s.slot === 'main');
+      if (main) setStatus({ connected: main.status === 'open', phone: main.phone });
+    } catch { /* silencioso */ }
+  };
+
+  useEffect(() => {
+    loadStatus();
+    const t = setInterval(loadStatus, 5000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => { if (status?.connected) setQr(null); }, [status?.connected]);
+
+  // fresh=true = "Limpar sessão": apaga as creds no servidor e força QR novo
+  const conectar = async (fresh = false) => {
+    setBusy(true);
+    setQr(null);
+    try {
+      const r = await authFetch('/api/whatsapp/instance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fresh }),
+      });
+      const d = await r.json().catch(() => ({} as any));
+      const base64 = d.base64 || d.qrcode?.base64 || null;
+      if (base64) setQr(base64);
+      else if (d.state === 'open' || d.instance?.state === 'open') loadStatus();
+      else if (d.error) alert(d.error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const desconectar = async () => {
+    setConfirmDisc(false);
+    setBusy(true);
+    try {
+      await authFetch('/api/whatsapp/instance', { method: 'DELETE' });
+      setQr(null);
+      await loadStatus();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const connected = !!status?.connected;
+  return (
+    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-5">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/15 flex items-center justify-center">
+            <MessageCircle size={20} className="text-emerald-600 dark:text-emerald-400" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-gray-900 dark:text-white">💬 WhatsApp do Atendimento (principal)</h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              {connected
+                ? <>Conectado{status?.phone ? <> — <strong className="text-gray-700 dark:text-gray-200">+{status.phone}</strong></> : ''} · este número recebe os leads — aba <strong>💬 Atendimento</strong> do chat</>
+                : <>Número principal do estúdio, conectado por QR Code. As conversas dele aparecem na aba <strong>💬 Atendimento</strong> do chat.</>}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {connected ? (
+            <>
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 text-xs font-semibold">
+                <CheckCircle2 size={13} /> Conectado
+              </span>
+              <button
+                onClick={() => setConfirmDisc(true)}
+                disabled={busy}
+                className="px-3 py-1.5 text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg disabled:opacity-60"
+              >
+                Desconectar
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => conectar(false)}
+                disabled={busy}
+                className="px-3.5 py-2 text-sm font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg disabled:opacity-60"
+              >
+                {busy ? 'Gerando QR…' : qr ? 'Gerar novo QR' : 'Conectar (QR Code)'}
+              </button>
+              <button
+                onClick={() => setConfirmReset(true)}
+                disabled={busy}
+                title="Apaga as credenciais salvas deste número e gera um QR de pareamento novo"
+                className="px-2.5 py-2 text-xs text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg disabled:opacity-60"
+              >
+                Limpar sessão
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      {!connected && qr && (
+        <div className="mt-4 flex flex-col items-center gap-2">
+          <img
+            src={qr}
+            alt="QR Code do WhatsApp do Atendimento"
+            className="w-52 h-52 rounded-xl border border-gray-200 dark:border-gray-700 bg-white p-2"
+          />
+          <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
+            No celular do <strong>atendimento</strong>: WhatsApp → Aparelhos conectados → Conectar aparelho
+          </p>
+        </div>
+      )}
+      <ConfirmModal
+        open={confirmDisc}
+        title="Desconectar o WhatsApp do Atendimento?"
+        message="O número principal sai do sistema e você vai precisar escanear o QR de novo pra reconectar. As conversas ficam salvas."
+        confirmText="Desconectar"
+        variant="warning"
+        onConfirm={desconectar}
+        onCancel={() => setConfirmDisc(false)}
+      />
+      <ConfirmModal
+        open={confirmReset}
+        title="Limpar sessão do Atendimento?"
+        message="Apaga as credenciais salvas do número principal e gera um QR de pareamento novo. Use se o QR não estiver aparecendo."
+        confirmText="Limpar e gerar QR"
+        variant="warning"
+        onConfirm={() => { setConfirmReset(false); conectar(true); }}
+        onCancel={() => setConfirmReset(false)}
+      />
+    </div>
+  );
+}
+
 // ── 2º WhatsApp: Pós-venda / Alinhamento (Baileys, sessão separada) ────────
 // Conecta um segundo número na MESMA conta. As conversas dele entram no mesmo
 // inbox (wa_number próprio) e a Lia autônoma NÃO atende por ele — é o canal
@@ -124,18 +271,18 @@ function PosVendaWhatsAppCard() {
 
   const connected = !!pvStatus?.connected;
   return (
-    <div className="mt-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-5">
+    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-5">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-teal-500/15 flex items-center justify-center">
             <Smartphone size={20} className="text-teal-600 dark:text-teal-400" />
           </div>
           <div>
-            <h3 className="font-semibold text-gray-900 dark:text-white">WhatsApp Pós-venda / Alinhamento</h3>
+            <h3 className="font-semibold text-gray-900 dark:text-white">🤝 WhatsApp do Pós-venda (2º número)</h3>
             <p className="text-xs text-gray-500 dark:text-gray-400">
               {connected
-                ? `Conectado${pvStatus?.phone ? ` — +${pvStatus.phone}` : ''} · conversas entram no mesmo inbox, com o número do pós-venda`
-                : '2º número da conta, usado pela equipe de alinhamento depois da venda (a Lia não atende por ele)'}
+                ? <>Conectado{pvStatus?.phone ? <> — <strong className="text-gray-700 dark:text-gray-200">+{pvStatus.phone}</strong></> : ''} · este número é o do pós-venda — aba <strong>🤝 Pós-venda</strong> do chat</>
+                : <>2º número da conta, usado pela equipe depois da venda. As conversas dele aparecem só na aba <strong>🤝 Pós-venda</strong> do chat (a Lia não atende por ele).</>}
             </p>
           </div>
         </div>
@@ -418,15 +565,24 @@ export default function IntegracaoWhatsApp() {
         <ChevronLeft size={16} /> Voltar para integrações
       </Link>
 
-      {/* Header */}
+      {/* ── Números conectados via QR Code — um card por número, com conectar/
+          desconectar ALI MESMO. Cada card diz em qual aba do chat as conversas
+          daquele número aparecem, pra nunca restar dúvida de qual é qual. */}
+      <h3 className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-2">Números conectados (QR Code)</h3>
+      <div className="space-y-3 mb-6">
+        <AtendimentoWhatsAppCard />
+        <PosVendaWhatsAppCard />
+      </div>
+
+      {/* Header — API oficial da Meta (independente dos números via QR acima) */}
       <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 mb-4">
         <div className="flex items-start gap-4">
           <div className="w-14 h-14 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl flex items-center justify-center flex-shrink-0">
-            <MessageCircle size={26} className="text-emerald-600 dark:text-emerald-400" />
+            <Cloud size={26} className="text-emerald-600 dark:text-emerald-400" />
           </div>
           <div className="flex-1">
             <div className="flex items-center gap-2 mb-1">
-              <h2 className="text-xl font-bold text-gray-900 dark:text-white">WhatsApp Business</h2>
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white">WhatsApp Business — API oficial da Meta</h2>
               {connected && (
                 <span className="flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300">
                   <CheckCircle2 size={11} /> Conectado
@@ -434,7 +590,7 @@ export default function IntegracaoWhatsApp() {
               )}
             </div>
             <p className="text-sm text-gray-600 dark:text-gray-400">
-              Conecte sua conta oficial do WhatsApp Business pra enviar mensagens, templates aprovados pelo Meta e automações de follow-up.
+              Opcional e independente dos números via QR acima: conta oficial autorizada na Meta pra templates aprovados e automações de follow-up.
             </p>
             {connected && account && (
               <div className="mt-2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
@@ -681,8 +837,6 @@ export default function IntegracaoWhatsApp() {
         </div>
       )}
 
-      {/* 2º número: pós-venda/alinhamento */}
-      <PosVendaWhatsAppCard />
     </div>
   );
 }
