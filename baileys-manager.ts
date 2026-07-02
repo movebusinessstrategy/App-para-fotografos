@@ -195,6 +195,7 @@ async function _initSocket(session: Session, sessionDir: string) {
         console.log(`[Baileys] ${loggedOut ? 'Logout pelo celular' : 'Sessão inválida (500)'} — removendo credenciais de ${userId}`);
         fs.rmSync(sessionDir, { recursive: true, force: true });
         sessions.delete(userId);
+        registeredPhoneCache.delete(userId);
         return;
       }
 
@@ -320,6 +321,7 @@ export async function stopSession(userId: string): Promise<void> {
   const session = sessions.get(userId);
   if (!session) return;
   sessions.delete(userId);
+  registeredPhoneCache.delete(userId);
   try { await session.sock?.logout(); } catch {}
   try { session.sock?.end(undefined); } catch {}
   const sessionDir = path.join(SESSIONS_DIR, userId);
@@ -342,6 +344,7 @@ export async function resetSession(userId: string): Promise<void> {
     try { session.sock?.end(undefined); } catch {}
     sessions.delete(userId);
   }
+  registeredPhoneCache.delete(userId);
   const sessionDir = path.join(SESSIONS_DIR, userId);
   try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch {}
   console.log(`[Baileys] Sessão resetada (credenciais limpas) — usuário ${userId}`);
@@ -361,6 +364,40 @@ export function getConnectedPhone(userId: string): string | null {
   const rawId = session.sock.user.id;
   const phone = rawId.split('@')[0].split(':')[0].replace(/\D/g, '');
   return phone || null;
+}
+
+// Número REGISTRADO da sessão, mesmo com o socket fora do ar: cai pro creds.json
+// do disco (me.id fica gravado no pareamento). Essencial pra saber qual é o
+// número de um slot desconectado — ex.: o connect do principal precisa saber o
+// número do pós-venda pra NÃO re-carimbar as conversas dele. Cache em memória
+// porque o handler de mensagens chama isso 1x por mensagem (histórico = milhares);
+// invalidado onde a credencial morre (stopSession/resetSession/logout).
+const registeredPhoneCache = new Map<string, string>();
+
+// Existe credencial pareada em disco pra esta sessão? Distingue "slot nunca
+// pareado" (false) de "pareado mas número ilegível agora" (true + phone null)
+// — quem chama usa isso pra decidir entre seguir sem o slot ou FALHAR SEGURO.
+export function hasSessionCreds(sessionKey: string): boolean {
+  return fs.existsSync(path.join(SESSIONS_DIR, sessionKey, 'creds.json'));
+}
+
+export function getRegisteredPhone(sessionKey: string): string | null {
+  const live = getConnectedPhone(sessionKey);
+  if (live) {
+    registeredPhoneCache.set(sessionKey, live);
+    return live;
+  }
+  const cached = registeredPhoneCache.get(sessionKey);
+  if (cached) return cached;
+  try {
+    const raw = fs.readFileSync(path.join(SESSIONS_DIR, sessionKey, 'creds.json'), 'utf8');
+    const meId: string = JSON.parse(raw)?.me?.id || '';
+    const phone = meId.split('@')[0].split(':')[0].replace(/\D/g, '');
+    if (phone) registeredPhoneCache.set(sessionKey, phone);
+    return phone || null;
+  } catch {
+    return null;
+  }
 }
 
 export async function waitForQR(userId: string, timeoutMs = 40000): Promise<string | null> {

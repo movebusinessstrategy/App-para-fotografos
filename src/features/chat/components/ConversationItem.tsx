@@ -1,5 +1,5 @@
-import React from 'react';
-import { Mic, CheckCheck } from 'lucide-react';
+import React, { useState } from 'react';
+import { Mic, CheckCheck, ChevronDown } from 'lucide-react';
 import { Conversation } from '../types';
 import { extractContact, getInitials } from '../utils/contactHelpers';
 import { useContactProfile } from '../hooks/useContactProfile';
@@ -9,6 +9,10 @@ interface Props {
   conv: Conversation;
   selected: boolean;
   onClick: () => void;
+  /** Marca a conversa como não lida (badge volta) — pra responder depois */
+  onMarkUnread?: () => void;
+  /** Marca como lida sem precisar abrir a conversa */
+  onMarkRead?: () => void;
 }
 
 function timeLabel(iso: string | null): string {
@@ -42,7 +46,7 @@ function parsePreview(msg: string | null): { mic?: boolean; text: string } {
   return { text: msg };
 }
 
-export function ConversationItem({ conv, selected, onClick }: Props) {
+export function ConversationItem({ conv, selected, onClick, onMarkUnread, onMarkRead }: Props) {
   const { name: baseName, avatar: baseAvatar, phone } = extractContact(conv);
   const { name: resolvedName, avatar: resolvedAvatar } = useContactProfile(phone, baseName, baseAvatar);
   const name = resolvedName || baseName;
@@ -51,21 +55,29 @@ export function ConversationItem({ conv, selected, onClick }: Props) {
   const preview = parsePreview(conv.last_message);
   const hasUnread = conv.unread_count > 0;
   const initials = getInitials(name);
+  // Menu de ações (marcar não lida / lida) — chevron aparece no hover, como no
+  // WhatsApp. Em tela touch não existe hover: chevron fica sempre visível,
+  // senão a ação seria inalcançável no celular/tablet.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const isTouch = typeof window !== 'undefined' && window.matchMedia?.('(hover: none)')?.matches;
+  const chevronVisible = isTouch || hovered || menuOpen;
+  const menuAction = hasUnread ? onMarkRead : onMarkUnread;
+  const menuLabel = hasUnread ? 'Marcar como lida' : 'Marcar como não lida';
 
   return (
-    <button
-      onClick={onClick}
-      className="w-[calc(100%-12px)] mx-1.5 my-0.5 flex items-center gap-3 px-3 py-2.5 text-left rounded-2xl transition-all duration-150 active:scale-[0.985]"
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => { setMenuOpen(false); onClick(); }}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setMenuOpen(false); onClick(); } }}
+      className="relative w-[calc(100%-12px)] mx-1.5 my-0.5 flex items-center gap-3 px-3 py-2.5 text-left rounded-2xl transition-all duration-150 active:scale-[0.985] cursor-pointer select-none"
       style={{
-        background: selected ? 'var(--wa-bg-hover)' : 'transparent',
+        background: selected || hovered ? 'var(--wa-bg-hover)' : 'transparent',
         boxShadow: selected ? 'inset 3px 0 0 var(--wa-accent-green)' : 'none',
       }}
-      onMouseEnter={e => {
-        if (!selected) (e.currentTarget as HTMLButtonElement).style.background = 'var(--wa-bg-hover)';
-      }}
-      onMouseLeave={e => {
-        if (!selected) (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
-      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => { setHovered(false); setMenuOpen(false); }}
     >
       {/* Avatar */}
       <div
@@ -105,16 +117,47 @@ export function ConversationItem({ conv, selected, onClick }: Props) {
             <span className="truncate">{preview.text}</span>
           </span>
 
-          {hasUnread && (
-            <span
-              className="flex-shrink-0 min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-semibold flex items-center justify-center"
-              style={{ background: 'var(--wa-accent-green)', color: '#fff' }}
-            >
-              {conv.unread_count > 99 ? '99+' : conv.unread_count}
-            </span>
-          )}
+          <span className="flex items-center gap-1 flex-shrink-0">
+            {hasUnread && (
+              <span
+                className="min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-semibold flex items-center justify-center"
+                style={{ background: 'var(--wa-accent-green)', color: '#fff' }}
+              >
+                {conv.unread_count > 99 ? '99+' : conv.unread_count}
+              </span>
+            )}
+            {menuAction && chevronVisible && (
+              <span
+                role="button"
+                tabIndex={0}
+                title="Mais opções"
+                className="w-5 h-5 rounded-full flex items-center justify-center cursor-pointer"
+                style={{ color: 'var(--wa-text-muted)' }}
+                onClick={e => { e.stopPropagation(); setMenuOpen(o => !o); }}
+                onKeyDown={e => { if (e.key === 'Enter') { e.stopPropagation(); setMenuOpen(o => !o); } }}
+              >
+                <ChevronDown size={16} />
+              </span>
+            )}
+          </span>
         </div>
       </div>
-    </button>
+
+      {/* Menu flutuante: uma ação por vez (lida ⇄ não lida) */}
+      {menuOpen && menuAction && (
+        <div
+          className="absolute right-2 top-[70%] z-20 rounded-xl py-1 shadow-lg"
+          style={{ background: 'var(--wa-bg-tertiary)', border: '1px solid var(--wa-border)' }}
+        >
+          <button
+            className="w-full px-4 py-2 text-left text-[13px] whitespace-nowrap transition-colors hover:opacity-80"
+            style={{ color: 'var(--wa-text-primary)' }}
+            onClick={e => { e.stopPropagation(); setMenuOpen(false); menuAction(); }}
+          >
+            {menuLabel}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

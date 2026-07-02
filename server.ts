@@ -2828,9 +2828,11 @@ async function startServer() {
     const userId = (req as any).userId;
     const db = supabaseAdmin;
     // ?slot=posvenda → visão SEPARADA do 2º número: só as conversas dele.
-    // Sem o slot conectado, devolve [] (não mistura com as de vendas).
+    // Usa o número REGISTRADO (creds em disco) — uma queda temporária do socket
+    // não pode esconder o histórico (mesma regra da visão principal). Sem
+    // nenhum pareamento do slot, devolve [] (não mistura com as de vendas).
     if (req.query.slot === 'posvenda') {
-      const pvNumber = BaileysManager.getConnectedPhone(posvendaKey(userId)) || '';
+      const pvNumber = BaileysManager.getRegisteredPhone(posvendaKey(userId)) || '';
       if (!pvNumber || !db) return res.json([]);
       let { data, error: pvErr } = await db.from('wa_conversations')
         .select('*').eq('user_id', userId).eq('wa_number', pvNumber)
@@ -2945,9 +2947,19 @@ async function startServer() {
     const phone12 = phoneRaw.startsWith('55') ? phoneRaw : '55' + phoneRaw;
     const phone13 = normalizeBrazilianPhone(phone12); // versão com "9" adicionado
     const limit = Number(req.query.limit) || 60;
+    // ?slot=posvenda → mensagens do 2º número. Antes NÃO havia slot aqui: o
+    // filtro usava o número PRINCIPAL e a conversa aberta na aba Pós-venda
+    // aparecia vazia mesmo com as mensagens salvas no banco.
+    const isPosvenda = req.query.slot === 'posvenda';
     // Mesmo fallback do /conversations: tenta Baileys, depois Meta Cloud.
-    let waNumber = BaileysManager.getConnectedPhone(userId) || '';
-    if (!waNumber) {
+    let waNumber = isPosvenda
+      ? (BaileysManager.getRegisteredPhone(posvendaKey(userId)) || '')
+      : (BaileysManager.getConnectedPhone(userId) || '');
+    // Pós-venda sem número registrado: FAIL-CLOSED (paridade com o branch
+    // posvenda do /conversations). Cair no modo "disconnected" aqui mostraria
+    // a thread do número PRINCIPAL dentro da aba Pós-venda — mistura proibida.
+    if (isPosvenda && !waNumber) return res.json([]);
+    if (!waNumber && !isPosvenda) {
       try {
         const { data: metaAcc } = await supabase
           .from('whatsapp_business_accounts')
@@ -3046,6 +3058,29 @@ async function startServer() {
         .update({ unread_count: 0, updated_at: new Date().toISOString() })
         .eq('user_id', userId)
         .in('phone', variants);
+    } catch {}
+    return res.json({ ok: true });
+  });
+
+  // Marcar conversa como NÃO lida (badge volta) — pra responder depois.
+  // Só sobe 0 → 1: se já tem não-lidas de verdade (ex.: 3), não mexe.
+  app.post('/api/inbox/mark-unread/:phone', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const raw = req.params.phone.replace(/\D/g, '');
+    const with55 = raw.startsWith('55') ? raw : '55' + raw;
+    const phone13 = normalizeBrazilianPhone(with55);
+    const phone12 = phone13.length === 13 ? phone13.slice(0, 4) + phone13.slice(5) : phone13;
+    const variants = [...new Set([with55, phone13, phone12])];
+    // Desfaz o "lido até agora" do cache em memória (espelho do mark-read)
+    variants.forEach(v => readUpToTimestampByPhone.delete(liveKey(userId, v)));
+    try {
+      const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
+      await db
+        .from('wa_conversations')
+        .update({ unread_count: 1, updated_at: new Date().toISOString() })
+        .eq('user_id', userId)
+        .in('phone', variants)
+        .or('unread_count.eq.0,unread_count.is.null');
     } catch {}
     return res.json({ ok: true });
   });
@@ -20301,17 +20336,36 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       return;
     }
     console.log(`[Baileys] Vinculando histórico ao número ${phone} para ${userId}`);
-    // Corrige QUALQUER wa_number diferente do número atual (inclui '' e valores corrompidos como "55438841668246")
-    const { error: eConv } = await supabaseAdmin
+    // Corrige QUALQUER wa_number diferente do número atual (inclui '' e valores
+    // corrompidos como "55438841668246") — EXCETO as conversas do 2º número
+    // (pós-venda). Sem essa exceção, cada reconexão do principal (todo deploy
+    // do Render!) re-carimbava TUDO e a aba Pós-venda ficava vazia. Usa o
+    // número REGISTRADO no creds do slot, que vale mesmo com o pós-venda
+    // desconectado no momento.
+    const pvPhone = BaileysManager.getRegisteredPhone(posvendaKey(userId));
+    // FAIL-SAFE: se as creds do pós-venda EXISTEM mas o número não pôde ser
+    // lido agora (ex.: creds.json sendo escrito no exato momento — boot sobe
+    // as duas sessões juntas), NÃO roda a migração em massa: sem a exclusão
+    // ela re-carimbaria as conversas do pós-venda (o bug original, de volta).
+    // A próxima reconexão do principal tenta de novo.
+    if (!pvPhone && BaileysManager.hasSessionCreds(posvendaKey(userId))) {
+      console.warn(`[Baileys] Migração de wa_number ADIADA para ${userId}: creds do pós-venda existem mas o número não pôde ser lido`);
+      return;
+    }
+    let qConv = supabaseAdmin
       .from('wa_conversations')
       .update({ wa_number: phone })
       .eq('user_id', userId)
       .neq('wa_number', phone);
-    const { error: eMsg } = await supabaseAdmin
+    if (pvPhone && pvPhone !== phone) qConv = qConv.neq('wa_number', pvPhone);
+    const { error: eConv } = await qConv;
+    let qMsg = supabaseAdmin
       .from('wa_messages')
       .update({ wa_number: phone })
       .eq('user_id', userId)
       .neq('wa_number', phone);
+    if (pvPhone && pvPhone !== phone) qMsg = qMsg.neq('wa_number', pvPhone);
+    const { error: eMsg } = await qMsg;
     if (eConv) console.error('[Baileys] Erro ao migrar conversas:', eConv.message);
     if (eMsg) console.error('[Baileys] Erro ao migrar mensagens:', eMsg.message);
     if (!eConv && !eMsg) console.log(`[Baileys] ✅ Histórico vinculado ao número ${phone}`);
@@ -20322,7 +20376,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Slot pós-venda importa as conversas dele pro MESMO inbox (centralizado);
     // o wa_number de cada uma fica sendo o número do slot.
     const { userId } = BaileysManager.parseSlotKey(sessionKey);
-    const waNumber = BaileysManager.getConnectedPhone(sessionKey) || '';
+    // Registrado (creds em disco): histórico pode chegar antes do status 'open'
+    const waNumber = BaileysManager.getRegisteredPhone(sessionKey) || '';
     // Filtra apenas conversas individuais (não grupos)
     const individual = chats.filter((c: any) =>
       typeof c.id === 'string' && c.id.endsWith('@s.whatsapp.net')
@@ -20374,6 +20429,37 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // ── Baileys: handler de mensagens ────────────────────────────────────────
+  // Reparo em LOTE do wa_number de mensagens de histórico que já existiam no
+  // banco (re-sync do 2º número devolve mensagens sequestradas pelo principal).
+  // Sem o lote, cada duplicata viraria 1 PATCH ao Supabase — um re-pareamento
+  // com milhares de mensagens adicionaria minutos de round-trips seriais.
+  const waNumRepairBuf = new Map<string, Set<string>>(); // `${userId}|${waNumber}` → message_ids
+  const waNumRepairTimers = new Map<string, NodeJS.Timeout>();
+  function queueWaNumberRepair(userId: string, waNumber: string, msgId: string) {
+    const key = `${userId}|${waNumber}`;
+    let ids = waNumRepairBuf.get(key);
+    if (!ids) { ids = new Set(); waNumRepairBuf.set(key, ids); }
+    ids.add(msgId);
+    if (waNumRepairTimers.has(key)) return;
+    waNumRepairTimers.set(key, setTimeout(async () => {
+      waNumRepairTimers.delete(key);
+      const batch = [...(waNumRepairBuf.get(key) || [])];
+      waNumRepairBuf.delete(key);
+      if (!batch.length || !supabaseAdmin) return;
+      // Blocos de 200: o filtro .in() vai na URL do PostgREST (limite de tamanho)
+      for (let i = 0; i < batch.length; i += 200) {
+        try {
+          await supabaseAdmin.from('wa_messages')
+            .update({ wa_number: waNumber })
+            .eq('user_id', userId)
+            .in('message_id', batch.slice(i, i + 200))
+            .neq('wa_number', waNumber);
+        } catch { /* melhor esforço — o próximo re-sync repara */ }
+      }
+      console.log(`[Baileys] wa_number reparado em lote: ${batch.length} msgs → ${waNumber}`);
+    }, 2000));
+  }
+
   // Conversas já limpas do "nome do estúdio" neste boot (chave userId:nome)
   const ownerNameHealed = new Set<string>();
 
@@ -20621,7 +20707,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Nota: NÃO ignoramos fromMe em tempo real — pode ser mensagem enviada do celular físico.
     // O insert em wa_messages usa message_id único, então duplicatas do app são tratadas via erro ignorado.
 
-    const waNumber = BaileysManager.getConnectedPhone(sessionKey) || '';
+    // Registrado (creds em disco) cobre a janela logo após parear em que o
+    // status ainda não é 'open' mas o histórico já começa a chegar — antes
+    // essas mensagens eram carimbadas com wa_number vazio.
+    const waNumber = BaileysManager.getRegisteredPhone(sessionKey) || '';
     const rawPhone = remoteJid.replace('@s.whatsapp.net', '');
     // JID do WhatsApp é autoritativo — normalizeBrazilianPhone adiciona "9" extra em números
     // que já têm 9 (ex: 554399093114 → 5543999093114), corrompendo o destinatário
@@ -20689,8 +20778,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       ...(mediaDataUrl ? { media_url: mediaDataUrl } : {}),
     });
     if (msgSaveErr) {
-      if (!msgSaveErr.message.includes('duplicate') && !msgSaveErr.code?.includes('23505')) {
+      const isDup = msgSaveErr.message.includes('duplicate') || msgSaveErr.code?.includes('23505');
+      if (!isDup) {
         console.error('[Baileys] Erro ao salvar mensagem:', msgSaveErr.message, msgSaveErr.code);
+      } else if (isHistory && slot !== 'main' && waNumber) {
+        // Mensagem do histórico do 2º número que JÁ existia no banco: antes do
+        // fix do connect handler, o principal re-carimbava o wa_number dela.
+        // A re-sincronização (re-parear o QR do pós-venda) devolve a mensagem
+        // pro número certo — sem isso a conversa abria vazia na aba Pós-venda.
+        queueWaNumberRepair(userId, waNumber, msgId);
       }
     }
 

@@ -107,7 +107,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
       setPvQrBusy(false);
     }
   };
-  const { conversations, loading: loadingConvs, refresh } = useConversations(waSlot);
+  const { conversations, loading: loadingConvs, refresh, mutateUnread } = useConversations(waSlot);
   const { connected } = useWaStatus();
   const [selectedPhone, setSelectedPhone] = useState<string | null>(initialPhone || null);
   const [unreadOnly, setUnreadOnly] = useState(false);
@@ -637,6 +637,21 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
                 conv={conv}
                 selected={conv.phone === selectedPhone}
                 onClick={() => setSelectedPhone(conv.phone)}
+                onMarkUnread={() => {
+                  // Fecha a conversa se for a aberta — senão o mark-read de
+                  // "conversa aberta" desfaz o não-lida na próxima mensagem
+                  if (conv.phone === selectedPhone) setSelectedPhone(null);
+                  mutateUnread(conv.phone, 1); // otimista: badge aparece na hora
+                  authFetch(`/api/inbox/mark-unread/${conv.phone.replace(/\D/g, '')}`, { method: 'POST' })
+                    .then(() => refresh())
+                    .catch(() => {});
+                }}
+                onMarkRead={() => {
+                  mutateUnread(conv.phone, 0); // otimista: badge some na hora
+                  authFetch(`/api/inbox/mark-read/${conv.phone.replace(/\D/g, '')}`, { method: 'POST' })
+                    .then(() => refresh())
+                    .catch(() => {});
+                }}
               />
             ))
           )}

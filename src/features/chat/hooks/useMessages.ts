@@ -16,7 +16,9 @@ export function useMessages(phone: string | null, slot: 'main' | 'posvenda' = 'm
       if (!session?.access_token) { console.warn('[useMessages] sem sessão'); return; }
 
       const clean = phone.replace(/\D/g, '');
-      const res = await fetch(`/api/inbox/messages/${clean}?limit=80`, {
+      // slot na BUSCA também: sem ele o server filtrava pelo número principal
+      // e a conversa aberta na aba Pós-venda aparecia vazia
+      const res = await fetch(`/api/inbox/messages/${clean}?limit=80${slot === 'posvenda' ? '&slot=posvenda' : ''}`, {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       if (!res.ok) return;
@@ -44,7 +46,8 @@ export function useMessages(phone: string | null, slot: 'main' | 'posvenda' = 'm
     intervalRef.current = startVisiblePoll(fetchMessages, 8000);
 
     return () => { if (intervalRef.current) intervalRef.current(); };
-  }, [phone]);
+    // slot nos deps: trocar de aba com a MESMA conversa aberta refaz a busca
+  }, [phone, slot]);
 
   async function sendText(text: string): Promise<void> {
     const { data: { session } } = await supabase.auth.getSession();

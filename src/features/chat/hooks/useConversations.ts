@@ -9,8 +9,13 @@ export function useConversations(slot: 'main' | 'posvenda' = 'main') {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
   const intervalRef = useRef<(() => void) | null>(null);
+  // Sequência das buscas: o poll de 25s e o refresh() (pós mark-read/unread)
+  // rodam concorrentes — uma resposta VELHA chegando depois sobrescrevia o
+  // estado novo (badge recém-marcado sumia até o próximo tick).
+  const fetchSeqRef = useRef(0);
 
   async function fetchConversations() {
+    const seq = ++fetchSeqRef.current;
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) return;
@@ -22,6 +27,7 @@ export function useConversations(slot: 'main' | 'posvenda' = 'main') {
 
       const data = await res.json();
       if (!Array.isArray(data)) return;
+      if (seq !== fetchSeqRef.current) return; // já existe busca mais nova
 
       // Deduplicar por phone — manter a mais recente quando há duplicatas no DB
       const seen = new Map<string, typeof data[0]>();
@@ -42,6 +48,13 @@ export function useConversations(slot: 'main' | 'posvenda' = 'main') {
     }
   }
 
+  // Update otimista do badge (mark-read/unread): a UI responde na hora e o
+  // refresh() confirma com o servidor em seguida.
+  function mutateUnread(phone: string, unread: number) {
+    fetchSeqRef.current++; // invalida buscas em voo: o snapshot delas é anterior à mutação
+    setConversations(prev => prev.map(c => (c.phone === phone ? { ...c, unread_count: unread } : c)));
+  }
+
   useEffect(() => {
     setLoading(true);
     fetchConversations();
@@ -49,5 +62,5 @@ export function useConversations(slot: 'main' | 'posvenda' = 'main') {
     return () => { if (intervalRef.current) intervalRef.current(); };
   }, [slot]);
 
-  return { conversations, loading, refresh: fetchConversations };
+  return { conversations, loading, refresh: fetchConversations, mutateUnread };
 }
