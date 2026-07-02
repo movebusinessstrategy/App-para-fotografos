@@ -3,6 +3,7 @@ import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic
 import { authFetch } from '../../../utils/authFetch';
 import EmojiPicker, { Theme as EmojiTheme } from 'emoji-picker-react';
 import { useTheme } from '../../../contexts/ThemeContext';
+import { useAuth } from '../../../contexts/AuthContext';
 import { extractContact, formatBrazilianPhone, getInitials } from '../utils/contactHelpers';
 import { useContactProfile } from '../hooks/useContactProfile';
 import { updateCachedContact } from '../utils/contactCache';
@@ -28,6 +29,9 @@ interface Props {
   onDealUpdated: () => void;
   /** 'main' = WhatsApp de vendas (padrão) | 'posvenda' = página do 2º número */
   slot?: 'main' | 'posvenda';
+  /** Quando presente, mostra as abas Atendimento | Pós-venda dentro da tela
+   *  (o pai troca o setor — sem ícone extra no menu lateral). */
+  onSlotChange?: (slot: 'main' | 'posvenda', phone?: string) => void;
 }
 
 function DateSep({ label }: { label: string }) {
@@ -56,8 +60,9 @@ function dateLabel(iso: string): string {
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
 }
 
-export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = 'main' }: Props) {
+export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = 'main', onSlotChange }: Props) {
   const { waTheme, toggleWaTheme } = useTheme();
+  const { canAccess } = useAuth();
   // Página DEDICADA por número (equipes diferentes): /whatsapp = Vendas,
   // /pos-venda = Pós-venda. Cada uma lista só as conversas do seu número e
   // responde pelo socket certo — nada se mistura. posvendaOn habilita o botão
@@ -451,10 +456,30 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
           </div>
         </div>
 
+        {/* Setores (pastas): Atendimento | Pós-venda — só com 2º número conectado
+            e permissão do membro (módulo "posvenda" em Permissões) */}
+        {onSlotChange && posvendaOn && canAccess('posvenda') && (
+          <div className="px-3 pt-2 pb-1 flex-shrink-0 flex items-center gap-1.5">
+            {([['main', '💬 Atendimento'], ['posvenda', '🤝 Pós-venda']] as const).map(([k, label]) => (
+              <button
+                key={k}
+                onClick={() => { if (k !== waSlot) onSlotChange(k); }}
+                className="flex-1 py-2 rounded-xl text-[13px] font-semibold transition-all"
+                style={{
+                  background: waSlot === k ? 'var(--wa-accent-green)' : 'var(--wa-bg-hover)',
+                  color: waSlot === k ? '#fff' : 'var(--wa-text-secondary)',
+                  boxShadow: waSlot === k ? '0 2px 10px -4px rgba(0,168,132,0.6)' : 'none',
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Filtros: Todas / Não lidas (igual WhatsApp) */}
         <div
           className="px-3 py-2 flex-shrink-0 flex items-center gap-2"
-          style={{ borderBottom: '1px solid var(--wa-border)' }}
         >
           {([['all', 'Todas'], ['unread', 'Não lidas']] as const).map(([k, label]) => {
             const active = (k === 'unread') === unreadOnly;
@@ -472,7 +497,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
               </button>
             );
           })}
-          {waSlot === 'posvenda' && (
+          {waSlot === 'posvenda' && !onSlotChange && (
             <span
               className="px-2.5 py-1 rounded-full text-[11px] font-bold"
               style={{ background: 'var(--wa-accent-green)', color: '#fff' }}
@@ -581,7 +606,10 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
                     cliente do pós-venda querendo comprar de novo → NOVO lead em vendas */}
                 {waSlot === 'main' && posvendaOn && selectedPhone && (
                   <button
-                    onClick={() => { window.location.href = `/pos-venda?phone=${encodeURIComponent(selectedPhone)}`; }}
+                    onClick={() => {
+                      if (onSlotChange) onSlotChange('posvenda', selectedPhone);
+                      else window.location.href = `/pos-venda?phone=${encodeURIComponent(selectedPhone)}`;
+                    }}
                     className="px-2.5 h-8 rounded-full flex items-center gap-1 text-[12px] font-semibold transition-colors"
                     style={{ color: 'var(--wa-accent-green)', border: '1px solid var(--wa-border)' }}
                     title="Abrir este contato na página do Pós-venda (a 1ª mensagem sai pelo 2º número)"

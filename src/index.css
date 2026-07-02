@@ -236,7 +236,7 @@
   --wa-text-muted:    #667781;
   --wa-accent-green:  #00A884;
   --wa-accent-read:   #53BDEB;
-  --wa-border:        #2A3942;
+  --wa-border:        rgba(134, 150, 160, 0.16);
 }
 
 [data-theme="light"] {
@@ -252,7 +252,7 @@
   --wa-text-muted:    #8696A0;
   --wa-accent-green:  #00A884;
   --wa-accent-read:   #53BDEB;
-  --wa-border:        #E9EDEF;
+  --wa-border:        rgba(17, 27, 33, 0.08);
 }
 
 /* ===== WhatsApp chat background pattern ===== */

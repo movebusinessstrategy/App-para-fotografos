@@ -24,6 +24,10 @@ function PageFallback() {
 export default function WhatsappPage() {
   const [searchParams] = useSearchParams();
   const initialPhone = searchParams.get("phone") || undefined;
+  // Setores como "pastas" DENTRO da tela (sem ícone extra no menu):
+  // Atendimento (vendas) | Pós-venda. O key remonta o chat ao trocar de setor.
+  const [setor, setSetor] = React.useState<'main' | 'posvenda'>('main');
+  const [phoneOverride, setPhoneOverride] = React.useState<string | undefined>(undefined);
 
   // Os mesmos endpoints que VendasDashboard usa — SWR cacheia entre páginas,
   // então quem já abriu /vendas antes não paga nada aqui.
@@ -56,10 +60,13 @@ export default function WhatsappPage() {
     <div className="h-full flex flex-col min-h-0 overflow-hidden">
       <Suspense fallback={<PageFallback />}>
         <InboxView
+          key={setor}
           deals={deals}
           stages={stages}
-          initialPhone={initialPhone}
+          initialPhone={phoneOverride ?? initialPhone}
           onDealUpdated={onDealUpdated}
+          slot={setor}
+          onSlotChange={(s, p) => { setPhoneOverride(p); setSetor(s); }}
         />
       </Suspense>
     </div>

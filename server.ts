@@ -2832,9 +2832,15 @@ async function startServer() {
     if (req.query.slot === 'posvenda') {
       const pvNumber = BaileysManager.getConnectedPhone(posvendaKey(userId)) || '';
       if (!pvNumber || !db) return res.json([]);
-      const { data } = await db.from('wa_conversations')
+      let { data, error: pvErr } = await db.from('wa_conversations')
         .select('*').eq('user_id', userId).eq('wa_number', pvNumber)
+        .neq('archived', true)
         .order('last_message_at', { ascending: false }).limit(200);
+      if (pvErr && /archived/.test(pvErr.message || '')) {
+        ({ data } = await db.from('wa_conversations')
+          .select('*').eq('user_id', userId).eq('wa_number', pvNumber)
+          .order('last_message_at', { ascending: false }).limit(200));
+      }
       return res.json(data || []);
     }
     // Filtra pelas conversas do WhatsApp atualmente conectado.
@@ -2873,11 +2879,18 @@ async function startServer() {
       let q = db
         .from('wa_conversations')
         .select('*')
-        .eq('user_id', userId);
+        .eq('user_id', userId)
+        .neq('archived', true); // arquivadas no WhatsApp ficam fora do CRM
       if (!disconnected) q = q.eq('wa_number', waNumber);
-      const { data, error } = await q
+      let { data, error } = await q
         .order('last_message_at', { ascending: false })
         .limit(200);
+      if (error && /archived/.test(error.message || '')) {
+        // Migration 059 pendente — lista sem o filtro
+        let q2 = db.from('wa_conversations').select('*').eq('user_id', userId);
+        if (!disconnected) q2 = q2.eq('wa_number', waNumber);
+        ({ data, error } = await q2.order('last_message_at', { ascending: false }).limit(200));
+      }
 
       if (error) {
         console.error('[Inbox] Erro ao buscar conversas:', error.message, error.code);
@@ -20127,13 +20140,23 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           last_message_at: ts,
           unread_count: Number((chat as any).unreadCount) || 0,
           wa_number: waNumber,
+          // Estado de arquivada vem do WhatsApp — o chat do CRM esconde essas
+          // conversas (migration 059; sem a coluna, o retry abaixo remove o campo)
+          archived: !!((chat as any).archived ?? (chat as any).archive),
           ...(name ? { contact_name: name } : {}),
         };
         const { data: existingChat } = await supabaseAdmin
           .from('wa_conversations').select('id').eq('user_id', userId).eq('phone', phone).maybeSingle();
-        const { error } = existingChat
+        let { error } = existingChat
           ? await supabaseAdmin.from('wa_conversations').update(chatPayload).eq('user_id', userId).eq('phone', phone)
           : await supabaseAdmin.from('wa_conversations').insert(chatPayload);
+        if (error && /archived/.test(error.message || '')) {
+          // Coluna ainda não existe (migration 059 pendente) — segue sem o campo
+          delete chatPayload.archived;
+          ({ error } = existingChat
+            ? await supabaseAdmin.from('wa_conversations').update(chatPayload).eq('user_id', userId).eq('phone', phone)
+            : await supabaseAdmin.from('wa_conversations').insert(chatPayload));
+        }
         if (error) {
           console.error(`[Baileys] ChatsSet erro ${phone}:`, error.message, error.code);
           errors++;

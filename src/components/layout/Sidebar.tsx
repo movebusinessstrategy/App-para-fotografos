@@ -24,7 +24,6 @@ import {
   Briefcase,
   BookOpen,
   Bot,
-  HeartHandshake,
 } from "lucide-react";
 
 import { cn } from "../../utils/cn";
@@ -36,7 +35,6 @@ const ALL_NAV_ITEMS = [
   { to: "/oportunidades", label: "Oportunidades",    icon: TrendingUp,      module: "oportunidades" },
   { to: "/clients",       label: "Clientes",         icon: Users,           module: "clients" },
   { to: "/jobs",          label: "Produção",         icon: Workflow,        module: "jobs" },
-  { to: "/pos-venda",     label: "Pós-venda",        icon: HeartHandshake,  module: "posvenda" },
   { to: "/tarefas",       label: "Tarefas",          icon: ListChecks,      module: "jobs" },
   { to: "/galeria",       label: "Galeria",          icon: Images,          module: "jobs", feature: "gallery" },
   { to: "/album",         label: "Álbuns",           icon: BookImage,       module: "jobs", feature: "album" },
