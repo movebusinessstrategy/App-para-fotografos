@@ -303,6 +303,10 @@ async function handleMessage(message) {
         body: JSON.stringify({ messages: message.messages || [] }),
       });
     }
+    case 'SYNC_STAGE_LABELS': {
+      // Sincroniza as etiquetas do WhatsApp com as etapas do funil (todos os leads)
+      return apiFetch('/api/whatsapp/sync-stage-labels', { method: 'POST' });
+    }
     case 'SAVE_STAGE_FOLLOWUP': {
       // Salva a mensagem padrão de follow-up de uma etapa do funil.
       return apiFetch(`/api/pipeline/stages/${message.stageId}/follow-up`, {

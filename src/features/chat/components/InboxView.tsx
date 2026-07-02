@@ -1081,66 +1081,20 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
         </div>
       )}
 
-      {/* Painel de informações do contato (abre ao clicar no nome, estilo WhatsApp) */}
-      {infoOpen && selectedPhone && (() => {
-        const digits = selectedPhone.replace(/\D/g, '');
-        const deal = deals.find(d => (d.contact_phone || '').replace(/\D/g, '').endsWith(digits.slice(-8)));
-        const stage = deal ? stages.find(s => s.id === deal.stage) : null;
-        return (
-          <div className="fixed inset-0 z-[75] flex justify-end bg-black/40 backdrop-blur-sm" onClick={() => setInfoOpen(false)}>
-            <div
-              className="w-full max-w-sm h-full flex flex-col shadow-2xl"
-              style={{ background: 'var(--wa-bg-secondary)' }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center gap-3 px-4 py-3 flex-shrink-0" style={{ background: 'var(--wa-bg-tertiary)', borderBottom: '1px solid var(--wa-border)' }}>
-                <button onClick={() => setInfoOpen(false)} className="p-1 rounded-full" style={{ color: 'var(--wa-text-secondary)' }}><X size={20} /></button>
-                <span className="text-sm font-semibold" style={{ color: 'var(--wa-text-primary)' }}>Informações do contato</span>
-              </div>
-              <div className="flex-1 overflow-y-auto wa-scrollbar">
-                <div className="flex flex-col items-center gap-3 py-8 px-4" style={{ borderBottom: '8px solid var(--wa-bg-primary)' }}>
-                  <div className="w-28 h-28 rounded-full flex items-center justify-center text-white text-3xl font-semibold overflow-hidden" style={{ background: '#00756A' }}>
-                    {avatarUrl
-                      ? <img src={avatarUrl} alt={displayName} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-                      : getInitials(displayName)}
-                  </div>
-                  <div className="text-center">
-                    <p className="text-lg font-semibold" style={{ color: 'var(--wa-text-primary)' }}>{displayName}</p>
-                    <p className="text-sm mt-0.5" style={{ color: 'var(--wa-text-muted)' }}>{formatBrazilianPhone(selectedPhone)}</p>
-                  </div>
-                </div>
-                {infoData?.about && (
-                  <div className="px-5 py-4" style={{ borderBottom: '8px solid var(--wa-bg-primary)' }}>
-                    <p className="text-[11px] uppercase tracking-wide font-semibold mb-1" style={{ color: 'var(--wa-text-muted)' }}>Recado</p>
-                    <p className="text-sm" style={{ color: 'var(--wa-text-primary)' }}>{infoData.about}</p>
-                  </div>
-                )}
-                <div className="px-5 py-4">
-                  <p className="text-[11px] uppercase tracking-wide font-semibold mb-2" style={{ color: 'var(--wa-text-muted)' }}>Funil</p>
-                  {deal ? (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm" style={{ color: 'var(--wa-text-secondary)' }}>Etapa</span>
-                        <span className="text-sm font-semibold px-2.5 py-1 rounded-full" style={{ background: 'rgba(0,168,132,0.14)', color: 'var(--wa-accent-green)' }}>{stage?.name || deal.stage}</span>
-                      </div>
-                      {typeof deal.value === 'number' && deal.value > 0 && (
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-sm" style={{ color: 'var(--wa-text-secondary)' }}>Valor</span>
-                          <span className="text-sm font-semibold" style={{ color: 'var(--wa-text-primary)' }}>
-                            {deal.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <p className="text-sm" style={{ color: 'var(--wa-text-muted)' }}>Este contato ainda não está no funil.</p>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+      {/* Painel de informações do contato (clique no nome) — dados EDITÁVEIS */}
+      {infoOpen && selectedPhone && (
+        <ContactInfoPanel
+          key={selectedPhone}
+          phone={selectedPhone}
+          displayName={displayName}
+          avatarUrl={avatarUrl}
+          about={infoData?.about || null}
+          deals={deals}
+          stages={stages}
+          onClose={() => setInfoOpen(false)}
+          onDealUpdated={onDealUpdated}
+        />
+      )}
 
       {/* Confirmação (custom, sem popup nativo) — encaminhar pro funil de Vendas */}
       {confirmToVendas && (
@@ -1190,6 +1144,201 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
 // ─── Funnel status button (header da conversa) ──────────────────────────────
 // Mostra badge com etapa atual se a conversa já tem deal, ou botão de adicionar
 // ao funil de vendas se ainda não tem.
+
+// Painel "Informações do contato" — o feijão com arroz EDITÁVEL sem sair do
+// chat: nome, e-mail, observações, etapa do funil e marcar como ganho.
+// Sem lead no funil, oferece "Adicionar ao funil".
+function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages, onClose, onDealUpdated }: {
+  phone: string;
+  displayName: string;
+  avatarUrl: string | null;
+  about: string | null;
+  deals: Deal[];
+  stages: PipelineStage[];
+  onClose: () => void;
+  onDealUpdated: () => void;
+}) {
+  const digits = phone.replace(/\D/g, '');
+  const deal = deals.find(d => (d.contact_phone || '').replace(/\D/g, '').endsWith(digits.slice(-8))) || null;
+  const [nome, setNome] = useState((deal as any)?.contact_name || displayName);
+  const [email, setEmail] = useState((deal as any)?.contact_email || '');
+  const [notes, setNotes] = useState((deal as any)?.notes || '');
+  const [stageId, setStageId] = useState((deal as any)?.stage || '');
+  const [busy, setBusy] = useState<false | 'save' | 'won' | 'add'>(false);
+  const [saved, setSaved] = useState(false);
+  const wonStage = stages.find(s => (s as any).is_won);
+  const isWonNow = !!(stageId && wonStage && stageId === wonStage.id);
+
+  const authedFetch = async (url: string, init?: RequestInit) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) throw new Error('Sessão expirada — faça login de novo.');
+    return fetch(url, {
+      ...init,
+      headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    });
+  };
+
+  const salvar = async () => {
+    if (!deal) return;
+    setBusy('save');
+    try {
+      const body: any = { contact_name: nome.trim() || null, contact_email: email.trim() || null, notes };
+      if (stageId && stageId !== (deal as any).stage) body.stage = stageId;
+      const r = await authedFetch(`/api/deals/${(deal as any).id}`, { method: 'PUT', body: JSON.stringify(body) });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || 'Falha ao salvar'); }
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1800);
+      onDealUpdated();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const marcarGanho = async () => {
+    if (!deal || !wonStage) return;
+    setBusy('won');
+    try {
+      const r = await authedFetch(`/api/deals/${(deal as any).id}`, { method: 'PUT', body: JSON.stringify({ stage: wonStage.id }) });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || 'Falha ao marcar ganho'); }
+      setStageId(wonStage.id);
+      onDealUpdated();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const adicionarAoFunil = async () => {
+    setBusy('add');
+    try {
+      const r = await authedFetch('/api/deals/quick', {
+        method: 'POST',
+        body: JSON.stringify({ name: displayName || phone, phone: digits, source: 'WhatsApp' }),
+      });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || 'Falha ao adicionar'); }
+      onDealUpdated();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const inputCls = "w-full px-3 py-2 rounded-xl text-sm outline-none";
+  const inputStyle = { background: 'var(--wa-bg-input)', color: 'var(--wa-text-primary)', border: '1px solid var(--wa-border)' } as React.CSSProperties;
+  const labelCls = "text-[11px] uppercase tracking-wide font-semibold mb-1 block";
+  const labelStyle = { color: 'var(--wa-text-muted)' } as React.CSSProperties;
+
+  return (
+    <div className="fixed inset-0 z-[75] flex justify-end bg-black/40 backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="w-full max-w-sm h-full flex flex-col shadow-2xl"
+        style={{ background: 'var(--wa-bg-secondary)' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-3 px-4 py-3 flex-shrink-0" style={{ background: 'var(--wa-bg-tertiary)', borderBottom: '1px solid var(--wa-border)' }}>
+          <button onClick={onClose} className="p-1 rounded-full" style={{ color: 'var(--wa-text-secondary)' }}><X size={20} /></button>
+          <span className="text-sm font-semibold" style={{ color: 'var(--wa-text-primary)' }}>Informações do contato</span>
+        </div>
+
+        <div className="flex-1 min-h-0 overflow-y-auto wa-scrollbar">
+          {/* Cabeçalho: foto + nome + telefone */}
+          <div className="flex flex-col items-center gap-3 py-7 px-4" style={{ borderBottom: '8px solid var(--wa-bg-primary)' }}>
+            <div className="w-24 h-24 rounded-full flex items-center justify-center text-white text-3xl font-semibold overflow-hidden" style={{ background: '#00756A' }}>
+              {avatarUrl
+                ? <img src={avatarUrl} alt={displayName} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                : getInitials(displayName)}
+            </div>
+            <div className="text-center">
+              <p className="text-lg font-semibold" style={{ color: 'var(--wa-text-primary)' }}>{displayName}</p>
+              <p className="text-sm mt-0.5" style={{ color: 'var(--wa-text-muted)' }}>{formatBrazilianPhone(phone)}</p>
+            </div>
+            {about && <p className="text-[13px] italic text-center px-4" style={{ color: 'var(--wa-text-secondary)' }}>“{about}”</p>}
+          </div>
+
+          {deal ? (
+            <div className="px-5 py-4 space-y-4">
+              {/* Etapa + Ganho */}
+              <div>
+                <label className={labelCls} style={labelStyle}>Etapa do funil</label>
+                <select
+                  value={stageId}
+                  onChange={(e) => setStageId(e.target.value)}
+                  className={inputCls}
+                  style={inputStyle}
+                >
+                  {stages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+                {wonStage && !isWonNow && (
+                  <button
+                    onClick={marcarGanho}
+                    disabled={!!busy}
+                    className="mt-2 w-full py-2.5 rounded-xl text-sm font-bold text-white transition-colors disabled:opacity-60"
+                    style={{ background: 'var(--wa-accent-green)' }}
+                  >
+                    {busy === 'won' ? 'Marcando…' : '🏆 Marcar como Ganho'}
+                  </button>
+                )}
+                {isWonNow && (
+                  <p className="mt-2 text-[13px] font-semibold text-center" style={{ color: 'var(--wa-accent-green)' }}>🏆 Venda ganha!</p>
+                )}
+              </div>
+
+              {typeof (deal as any).value === 'number' && (deal as any).value > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm" style={{ color: 'var(--wa-text-secondary)' }}>Valor</span>
+                  <span className="text-sm font-semibold" style={{ color: 'var(--wa-text-primary)' }}>
+                    {(deal as any).value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </span>
+                </div>
+              )}
+
+              {/* Dados editáveis */}
+              <div>
+                <label className={labelCls} style={labelStyle}>Nome</label>
+                <input value={nome} onChange={(e) => setNome(e.target.value)} className={inputCls} style={inputStyle} />
+              </div>
+              <div>
+                <label className={labelCls} style={labelStyle}>E-mail</label>
+                <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="email@exemplo.com" className={inputCls} style={inputStyle} />
+              </div>
+              <div>
+                <label className={labelCls} style={labelStyle}>Observações</label>
+                <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} placeholder="Anotações sobre o cliente…" className={`${inputCls} resize-none wa-scrollbar`} style={inputStyle} />
+              </div>
+
+              <button
+                onClick={salvar}
+                disabled={!!busy}
+                className="w-full py-2.5 rounded-xl text-sm font-bold transition-colors disabled:opacity-60"
+                style={saved
+                  ? { background: 'rgba(0,168,132,0.15)', color: 'var(--wa-accent-green)' }
+                  : { background: 'var(--wa-accent-green)', color: '#fff' }}
+              >
+                {busy === 'save' ? 'Salvando…' : saved ? '✓ Salvo!' : 'Salvar alterações'}
+              </button>
+            </div>
+          ) : (
+            <div className="px-5 py-6 text-center space-y-3">
+              <p className="text-sm" style={{ color: 'var(--wa-text-muted)' }}>Este contato ainda não está no funil.</p>
+              <button
+                onClick={adicionarAoFunil}
+                disabled={!!busy}
+                className="w-full py-2.5 rounded-xl text-sm font-bold text-white transition-colors disabled:opacity-60"
+                style={{ background: 'var(--wa-accent-green)' }}
+              >
+                {busy === 'add' ? 'Adicionando…' : '+ Adicionar ao funil'}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function FunnelStatusButton({
   phone, contactName, deals, stages, onAdded,

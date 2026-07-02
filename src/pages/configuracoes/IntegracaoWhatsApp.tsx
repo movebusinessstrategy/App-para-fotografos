@@ -681,9 +681,6 @@ export default function IntegracaoWhatsApp() {
         </div>
       )}
 
-      {/* Etiquetas do funil: sincronizar tudo */}
-      <EtiquetasFunilCard />
-
       {/* 2º número: pós-venda/alinhamento */}
       <PosVendaWhatsAppCard />
     </div>

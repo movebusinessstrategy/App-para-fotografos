@@ -26,6 +26,7 @@ import {
   Bot,
   PanelLeftClose,
   PanelLeftOpen,
+  MessageCircle,
 } from "lucide-react";
 
 import { cn } from "../../utils/cn";
@@ -34,6 +35,7 @@ import { useAuth } from "../../contexts/AuthContext";
 const ALL_NAV_ITEMS = [
   { to: "/dashboard",     label: "Dashboard",       icon: LayoutDashboard, end: true,  module: "dashboard" },
   { to: "/vendas",        label: "Vendas",           icon: Trello,          module: "vendas" },
+  { to: "/whatsapp",      label: "Atendimento",      icon: MessageCircle,   module: "whatsapp" },
   { to: "/oportunidades", label: "Oportunidades",    icon: TrendingUp,      module: "oportunidades" },
   { to: "/clients",       label: "Clientes",         icon: Users,           module: "clients" },
   { to: "/jobs",          label: "Produção",         icon: Workflow,        module: "jobs" },

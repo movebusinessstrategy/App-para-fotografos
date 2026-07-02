@@ -440,6 +440,7 @@
           <input id="fp-q" type="text" placeholder="Buscar lead..." />
         </div>
         <button id="fp-kh-refresh" title="Recarregar">↺</button>
+        <button id="fp-kh-labels" title="Sincronizar as etiquetas do WhatsApp com as etapas do funil (todos os leads)">🏷️ Etiquetas</button>
         <button id="fp-kh-add">+ Novo Lead</button>
         <button id="fp-kh-logout" title="Sair da conta">⏻</button>
       </div>
@@ -516,6 +517,20 @@
 
     // Eventos base — addEventListener (não .onclick) para sobreviver à CSP do WA
     document.getElementById('fp-kh-refresh').addEventListener('click', () => loadKanban());
+    document.getElementById('fp-kh-labels').addEventListener('click', async (e) => {
+      // Aplica em TODOS os leads a etiqueta da etapa atual (roda no servidor,
+      // em segundo plano — as etiquetas vão aparecendo no WhatsApp aos poucos)
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        const r = await bg({ type: 'SYNC_STAGE_LABELS' });
+        toast(`🏷️ Sincronizando etiquetas de ${r?.total ?? 'todos os'} leads em segundo plano…`);
+      } catch (err) {
+        toast(err.message, true);
+      } finally {
+        setTimeout(() => { btn.disabled = false; }, 5000);
+      }
+    });
     document.getElementById('fp-kh-add').addEventListener('click', () => openModal());
     document.getElementById('fp-kh-logout').addEventListener('click', confirmLogout);
     document.getElementById('fp-q').addEventListener('input', (e) => { q = e.target.value.toLowerCase(); renderBoard(); });
