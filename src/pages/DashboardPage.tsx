@@ -231,6 +231,9 @@ export default function DashboardPage() {
 
   const a = analytics;
   const periodLabel = formatRangeLabel(dateRange);
+  const periodDelta = a.finance.revenueLastMonth > 0
+    ? Math.round(((a.finance.revenueThisMonth - a.finance.revenueLastMonth) / a.finance.revenueLastMonth) * 100)
+    : null;
   // ── Visão de diretoria (derivados) ────────────────────────────────────────
   const lucro = a.finance.revenueThisMonth - a.finance.expensesThisMonth;
   const margem = a.finance.revenueThisMonth > 0 ? (lucro / a.finance.revenueThisMonth) * 100 : 0;
@@ -241,9 +244,6 @@ export default function DashboardPage() {
   const lostCount = lostAgg.reduce((x, s) => x + s.count, 0);
   const convPeriodo = wonCount + lostCount > 0 ? Math.round((wonCount / (wonCount + lostCount)) * 100) : null;
   const insights = computeInsights(a, periodDelta, canSeeFinance, hideValues);
-  const periodDelta = a.finance.revenueLastMonth > 0
-    ? Math.round(((a.finance.revenueThisMonth - a.finance.revenueLastMonth) / a.finance.revenueLastMonth) * 100)
-    : null;
 
   return (
     <div className="space-y-3">

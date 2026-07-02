@@ -5728,6 +5728,159 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // período (deals em etapa ganha, por converted_at) + comissão devida
   // (valor vendido × % do vendedor) e progresso da meta. Inclui todos os
   // membros ativos (mesmo com 0) e um balde "Sem vendedor".
+  // ── Central comercial (Vendas → Análises): tudo em UMA chamada ────────────
+  // KPIs com período anterior, série diária, ranking de vendedores com META,
+  // meta vs realizado (6 meses), ticket médio mensal e campeões de venda
+  // (itens do catálogo vendidos). Mesmo critério anti-venda-cancelada do
+  // relatório por vendedor.
+  app.get('/api/vendas/analytics', requireAuth, requirePermission('finance'), async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const now = new Date();
+    const fromQ = String(req.query.from || '').trim();
+    const toQ = String(req.query.to || '').trim();
+    let dInicio: string, dFimIncl: string;
+    if (okYMD(fromQ) && okYMD(toQ)) {
+      dInicio = fromQ <= toQ ? fromQ : toQ;
+      dFimIncl = fromQ <= toQ ? toQ : fromQ;
+    } else {
+      dInicio = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1)).toISOString().slice(0, 10);
+      dFimIncl = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 0)).toISOString().slice(0, 10);
+    }
+    const dayMs = 86400000;
+    const startMs = Date.parse(`${dInicio}T00:00:00Z`);
+    const endMs = Date.parse(`${dFimIncl}T00:00:00Z`);
+    const periodDays = Math.max(1, Math.round((endMs - startMs) / dayMs) + 1);
+    const prevEnd = new Date(startMs - dayMs).toISOString().slice(0, 10);
+    const prevStart = new Date(startMs - periodDays * dayMs).toISOString().slice(0, 10);
+    const sixStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 5, 1)).toISOString().slice(0, 10);
+    const histStart = sixStart < prevStart ? sixStart : prevStart;
+
+    const stages = await ensurePipelineStages(supabase, userId);
+    const wonStageIds = stages.filter((s: any) => s.is_won).map((s: any) => s.id);
+    let deals: any[] = [];
+    if (wonStageIds.length) {
+      const { data } = await supabase.from('deals')
+        .select('id, assigned_to, value, converted_at, converted_job_id')
+        .eq('user_id', userId)
+        .in('stage', wonStageIds)
+        .gte('converted_at', histStart)
+        .limit(10000);
+      deals = data || [];
+    }
+    if (deals.length) {
+      const jobIds = deals.map((d) => d.converted_job_id).filter(Boolean);
+      const jobStatusById = new Map<number, string>();
+      if (jobIds.length) {
+        const { data: jobsRows } = await supabase.from('jobs').select('id, status').eq('user_id', userId).in('id', jobIds);
+        for (const j of jobsRows || []) jobStatusById.set((j as any).id, String((j as any).status || ''));
+      }
+      deals = deals.filter((d) => {
+        if (!d.converted_job_id) return true;
+        const st = jobStatusById.get(d.converted_job_id);
+        return st !== undefined && !/cancel/i.test(st);
+      });
+    }
+    const dOf = (d: any) => String(d.converted_at || '').slice(0, 10);
+    const inWin = (d: any, a: string, b: string) => { const x = dOf(d); return x >= a && x <= b; };
+    const periodo = deals.filter((d) => inWin(d, dInicio, dFimIncl));
+    const anterior = deals.filter((d) => inWin(d, prevStart, prevEnd));
+    const sum = (arr: any[]) => arr.reduce((x, d) => x + (Number(d.value) || 0), 0);
+
+    // Itens vendidos (deal_items) do período e do anterior + campeões
+    const adminDb = supabaseAdmin || supabase;
+    const wantedIds = [...periodo, ...anterior].map((d) => d.id);
+    let items: any[] = [];
+    if (wantedIds.length) {
+      const { data: it } = await adminDb.from('deal_items')
+        .select('deal_id, catalog_name, catalog_value, quantidade')
+        .in('deal_id', wantedIds.slice(0, 1000));
+      items = it || [];
+    }
+    const periodIds = new Set(periodo.map((d) => d.id));
+    const prevIds = new Set(anterior.map((d) => d.id));
+    const qty = (arr: any[]) => arr.reduce((x, i) => x + (Number(i.quantidade) || 1), 0);
+    const itemsPeriodo = items.filter((i) => periodIds.has(i.deal_id));
+    const itemsPrev = items.filter((i) => prevIds.has(i.deal_id));
+    const champMap = new Map<string, { nome: string; qtd: number; total: number }>();
+    itemsPeriodo.forEach((i) => {
+      const k = String(i.catalog_name || 'Item');
+      const e = champMap.get(k) || { nome: k, qtd: 0, total: 0 };
+      e.qtd += Number(i.quantidade) || 1;
+      e.total += (Number(i.catalog_value) || 0) * (Number(i.quantidade) || 1);
+      champMap.set(k, e);
+    });
+    const campeoes = [...champMap.values()].sort((a, b) => b.total - a.total).slice(0, 6);
+
+    // Ranking de vendedores com META (migration 042: meta_venda por membro)
+    const { data: membersData } = await supabase.from('team_members').select('*').eq('owner_user_id', userId);
+    const members = (membersData || []) as any[];
+    const memberById = new Map(members.map((m) => [m.id, m]));
+    const rkMap = new Map<string, any>();
+    for (const m of members) {
+      if (m.is_active === false) continue;
+      rkMap.set(m.id, { id: m.id, nome: m.name || 'Vendedor', cor: m.color || null, meta: Number(m.meta_venda) || 0, realizado: 0, vendas: 0 });
+    }
+    for (const d of periodo) {
+      const k = d.assigned_to && memberById.has(d.assigned_to) ? d.assigned_to : '__none__';
+      let r = rkMap.get(k);
+      if (!r) {
+        const m = k !== '__none__' ? memberById.get(k) : null;
+        r = m
+          ? { id: m.id, nome: m.name || 'Vendedor', cor: m.color || null, meta: Number(m.meta_venda) || 0, realizado: 0, vendas: 0 }
+          : { id: null, nome: 'Sem vendedor', cor: null, meta: 0, realizado: 0, vendas: 0 };
+        rkMap.set(k, r);
+      }
+      r.realizado += Number(d.value) || 0;
+      r.vendas += 1;
+    }
+    const ranking = [...rkMap.values()]
+      .filter((r) => r.vendas > 0 || r.meta > 0)
+      .map((r) => ({ ...r, pct: r.meta > 0 ? Math.round((r.realizado / r.meta) * 100) : null }))
+      .sort((a, b) => b.realizado - a.realizado);
+
+    // Séries mensais (últimos 6 meses, incluindo o atual) + meta do time
+    const metaTime = members.filter((m) => m.is_active !== false).reduce((x, m) => x + (Number(m.meta_venda) || 0), 0);
+    const months: string[] = [];
+    for (let i = 5; i >= 0; i--) {
+      months.push(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1)).toISOString().slice(0, 7));
+    }
+    const mensal = months.map((m) => {
+      const monthDeals = deals.filter((d) => dOf(d).slice(0, 7) === m);
+      const realizado = sum(monthDeals);
+      return { month: m, meta: metaTime, realizado, vendas: monthDeals.length, ticket: monthDeals.length ? realizado / monthDeals.length : 0 };
+    });
+
+    // Série diária do período (sparklines dos KPIs)
+    const dailyMap = new Map<string, { total: number; count: number }>();
+    periodo.forEach((d) => {
+      const k = dOf(d);
+      const e = dailyMap.get(k) || { total: 0, count: 0 };
+      e.total += Number(d.value) || 0;
+      e.count += 1;
+      dailyMap.set(k, e);
+    });
+    const daily = [...dailyMap.entries()].map(([date, v]) => ({ date, ...v })).sort((a, b) => a.date.localeCompare(b.date));
+
+    res.json({
+      period: { from: dInicio, to: dFimIncl },
+      kpis: {
+        faturamento: { value: sum(periodo), prev: sum(anterior) },
+        vendas: { value: periodo.length, prev: anterior.length },
+        ticketMedio: {
+          value: periodo.length ? sum(periodo) / periodo.length : 0,
+          prev: anterior.length ? sum(anterior) / anterior.length : 0,
+        },
+        itensVendidos: { value: qty(itemsPeriodo), prev: qty(itemsPrev) },
+      },
+      metaTime,
+      daily,
+      ranking,
+      mensal,
+      campeoes,
+    });
+  });
+
   app.get('/api/relatorios/vendas-por-vendedor', requireAuth, requirePermission('finance'), async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
