@@ -1,6 +1,7 @@
 import React, { Suspense, useEffect, useMemo, useState } from "react";
 import { Outlet, useLocation, Navigate } from "react-router-dom";
 
+import { PanelLeftOpen } from "lucide-react";
 import Sidebar from "./Sidebar";
 import Header from "./Header";
 import ContactOpportunityModal from "../shared/ContactOpportunityModal";
@@ -57,6 +58,16 @@ export default function AppLayout() {
   const location = useLocation();
   const [contactModal, setContactModal] = useState<ContactModalPayload | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Recolher o menu no desktop → mais espaço (essencial pro chat em tela cheia).
+  // Persistido por navegador. Mobile continua usando o drawer (sidebarOpen).
+  const [deskCollapsed, setDeskCollapsed] = useState(() => {
+    try { return localStorage.getItem('fp_sidebar_collapsed') === '1'; } catch { return false; }
+  });
+  const toggleDeskCollapsed = () => setDeskCollapsed((v) => {
+    const nv = !v;
+    try { localStorage.setItem('fp_sidebar_collapsed', nv ? '1' : '0'); } catch {}
+    return nv;
+  });
 
   // Mantém o backend acordado (Render free tier dorme após 15min)
   useKeepAlive();
@@ -84,10 +95,23 @@ export default function AppLayout() {
 
   return (
     <div className="flex h-screen bg-luxury-paper dark:bg-[#070707] text-luxury-black dark:text-gray-100 font-sans">
-      <Sidebar 
-        isOpen={sidebarOpen} 
-        onClose={() => setSidebarOpen(false)} 
+      <Sidebar
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        collapsed={deskCollapsed}
+        onToggleCollapse={toggleDeskCollapsed}
       />
+
+      {/* Reabrir o menu quando recolhido (desktop) — botão flutuante discreto */}
+      {deskCollapsed && (
+        <button
+          onClick={toggleDeskCollapsed}
+          className="hidden lg:flex fixed top-3 left-3 z-[60] w-9 h-9 rounded-full items-center justify-center bg-white dark:bg-[#161616] border border-black/10 dark:border-white/10 shadow-md text-gray-600 dark:text-gray-300 hover:text-gold-600 transition-colors"
+          title="Mostrar menu"
+        >
+          <PanelLeftOpen size={18} />
+        </button>
+      )}
 
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <ImpersonationBanner />
@@ -110,7 +134,7 @@ export default function AppLayout() {
           >
             {/* /vendas e /whatsapp não têm padding — o chat precisa ocupar
                 a tela inteira pra ficar parecido com o WhatsApp Web. */}
-            {location.pathname.startsWith('/vendas') || location.pathname.startsWith('/whatsapp') ? (
+            {location.pathname.startsWith('/vendas') || location.pathname.startsWith('/whatsapp') || location.pathname.startsWith('/pos-venda') ? (
               <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
                 <Outlet context={{ openContactModal }} />
               </div>

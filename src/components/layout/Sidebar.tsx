@@ -24,6 +24,7 @@ import {
   Briefcase,
   BookOpen,
   Bot,
+  PanelLeftClose,
 } from "lucide-react";
 
 import { cn } from "../../utils/cn";
@@ -63,9 +64,11 @@ const CATALOGO_SUBITEMS = [
 interface SidebarProps {
   isOpen: boolean;
   onClose: () => void;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
-export default function Sidebar({ isOpen, onClose }: SidebarProps) {
+export default function Sidebar({ isOpen, onClose, collapsed = false, onToggleCollapse }: SidebarProps) {
   const { canAccess, isMember, isPlatformAdmin, isProductionOnly, features } = useAuth();
   const location = useLocation();
 
@@ -98,9 +101,10 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
         className={cn(
           "fixed lg:static inset-y-0 left-0 z-50",
           "w-64 bg-white dark:bg-[#0d0d0d] border-r border-black/5 dark:border-white/5 flex flex-col",
-          "transform transition-transform duration-300 ease-in-out",
+          "transform transition-all duration-300 ease-in-out",
           isOpen ? "translate-x-0" : "-translate-x-full",
-          "lg:translate-x-0"
+          // Desktop: recolhido → some (largura 0) pra liberar a tela inteira
+          collapsed ? "lg:-translate-x-full lg:w-0 lg:border-0 lg:overflow-hidden" : "lg:translate-x-0"
         )}
       >
         {/* Header */}
@@ -109,6 +113,16 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
             <img src="/logo-light.png" alt="CRM Trilha" className="h-9 w-auto dark:hidden" />
             <img src="/logo-dark.png" alt="CRM Trilha" className="h-9 w-auto hidden dark:block" />
           </div>
+          {/* Desktop: recolher o menu (mais espaço, tela cheia). Mobile: fechar drawer. */}
+          {onToggleCollapse && (
+            <button
+              onClick={onToggleCollapse}
+              className="hidden lg:flex p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 dark:text-gray-400"
+              title="Recolher menu"
+            >
+              <PanelLeftClose size={18} />
+            </button>
+          )}
           <button
             onClick={onClose}
             className="lg:hidden p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 dark:text-gray-400"

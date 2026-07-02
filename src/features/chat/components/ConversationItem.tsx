@@ -54,8 +54,11 @@ export function ConversationItem({ conv, selected, onClick }: Props) {
   return (
     <button
       onClick={onClick}
-      className="w-[calc(100%-12px)] mx-1.5 my-0.5 flex items-center gap-3 px-3 py-2.5 text-left transition-colors rounded-2xl"
-      style={{ background: selected ? 'var(--wa-bg-hover)' : 'transparent' }}
+      className="w-[calc(100%-12px)] mx-1.5 my-0.5 flex items-center gap-3 px-3 py-2.5 text-left rounded-2xl transition-all duration-150 active:scale-[0.985]"
+      style={{
+        background: selected ? 'var(--wa-bg-hover)' : 'transparent',
+        boxShadow: selected ? 'inset 3px 0 0 var(--wa-accent-green)' : 'none',
+      }}
       onMouseEnter={e => {
         if (!selected) (e.currentTarget as HTMLButtonElement).style.background = 'var(--wa-bg-hover)';
       }}
@@ -78,7 +81,7 @@ export function ConversationItem({ conv, selected, onClick }: Props) {
       {/* Sem divisória — cards arredondados deixam a lista mais leve */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-sm font-medium truncate" style={{ color: 'var(--wa-text-primary)' }}>
+          <span className={`text-sm truncate ${hasUnread ? 'font-bold' : 'font-medium'}`} style={{ color: 'var(--wa-text-primary)' }}>
             {name}
           </span>
           <span

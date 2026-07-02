@@ -105,6 +105,30 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
   const [mediaCaption, setMediaCaption] = useState('');
   const [sendingMedia, setSendingMedia] = useState(false);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const [confirmToVendas, setConfirmToVendas] = useState<{ phone: string; name: string } | null>(null);
+  const [movingToVendas, setMovingToVendas] = useState(false);
+
+  const doMoveToVendas = async () => {
+    if (!confirmToVendas) return;
+    setMovingToVendas(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const r = await fetch('/api/deals/quick', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: confirmToVendas.name, phone: confirmToVendas.phone, source: 'Pós-venda' }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'Falha ao criar o lead');
+      setConfirmToVendas(null);
+      onDealUpdated();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setMovingToVendas(false);
+    }
+  };
   const fileRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
@@ -364,9 +388,9 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
   return (
     <div className="flex h-full overflow-hidden" style={{ background: 'var(--wa-bg-secondary)', fontFamily: 'Inter, system-ui, sans-serif' }}>
 
-      {/* ── SIDEBAR ── */}
+      {/* ── SIDEBAR ── (min-h-0 permite a lista interna rolar até o fim) */}
       <div
-        className="flex flex-col flex-shrink-0 overflow-hidden"
+        className="flex flex-col flex-shrink-0 min-h-0 overflow-hidden"
         style={{ width: 360, borderRight: '1px solid var(--wa-border)', background: 'var(--wa-bg-secondary)' }}
       >
         {/* Header do sidebar */}
@@ -511,8 +535,9 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
           </span>
         </div>
 
-        {/* Lista de conversas */}
-        <div className="flex-1 overflow-y-auto wa-scrollbar">
+        {/* Lista de conversas (min-h-0 = deixa o flex encolher e a lista rolar
+            até o fim; pb-4 = respiro pra última conversa não colar na borda) */}
+        <div className="flex-1 min-h-0 overflow-y-auto wa-scrollbar pb-4">
           {loadingConvs ? (
             <div className="flex flex-col">
               {[...Array(7)].map((_, i) => (
@@ -619,23 +644,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
                 )}
                 {waSlot === 'posvenda' && selectedPhone && (
                   <button
-                    onClick={async () => {
-                      try {
-                        const { data: { session } } = await supabase.auth.getSession();
-                        if (!session?.access_token) return;
-                        const r = await fetch('/api/deals/quick', {
-                          method: 'POST',
-                          headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ name: displayName || selectedPhone, phone: selectedPhone, source: 'Pós-venda' }),
-                        });
-                        const d = await r.json().catch(() => ({}));
-                        if (!r.ok) throw new Error(d.error || 'Falha ao criar o lead');
-                        alert('✅ Novo lead criado no funil de Vendas — nova oportunidade contabilizada!');
-                        onDealUpdated();
-                      } catch (e: any) {
-                        alert(e.message);
-                      }
-                    }}
+                    onClick={() => setConfirmToVendas({ phone: selectedPhone, name: displayName || selectedPhone })}
                     className="px-2.5 h-8 rounded-full flex items-center gap-1 text-[12px] font-semibold transition-colors"
                     style={{ color: 'var(--wa-accent-green)', border: '1px solid var(--wa-border)' }}
                     title="Cliente quer comprar de novo? Cria um NOVO lead no funil de Vendas"
@@ -989,6 +998,48 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
                 else alert(message);
               }}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Confirmação (custom, sem popup nativo) — encaminhar pro funil de Vendas */}
+      {confirmToVendas && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+          onClick={() => !movingToVendas && setConfirmToVendas(null)}
+        >
+          <div
+            className="w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl"
+            style={{ background: 'var(--wa-bg-secondary)', border: '1px solid var(--wa-border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-5 flex items-start gap-3" style={{ borderBottom: '1px solid var(--wa-border)' }}>
+              <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-xl flex-shrink-0" style={{ background: 'rgba(0,168,132,0.14)' }}>📞</div>
+              <div>
+                <h3 className="text-[15px] font-bold" style={{ color: 'var(--wa-text-primary)' }}>Enviar para Vendas?</h3>
+                <p className="mt-1 text-[13px] leading-snug" style={{ color: 'var(--wa-text-secondary)' }}>
+                  Cria um <b>novo lead</b> de <b>{confirmToVendas.name}</b> no funil de Vendas — conta como <b>nova oportunidade</b>. A equipe de vendas assume a partir daí.
+                </p>
+              </div>
+            </div>
+            <div className="p-4 flex gap-2 justify-end">
+              <button
+                onClick={() => setConfirmToVendas(null)}
+                disabled={movingToVendas}
+                className="px-4 py-2 rounded-xl text-[13px] font-semibold transition-colors disabled:opacity-60"
+                style={{ background: 'var(--wa-bg-hover)', color: 'var(--wa-text-secondary)' }}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={doMoveToVendas}
+                disabled={movingToVendas}
+                className="px-4 py-2 rounded-xl text-[13px] font-bold text-white transition-colors disabled:opacity-60"
+                style={{ background: 'var(--wa-accent-green)' }}
+              >
+                {movingToVendas ? 'Criando…' : 'Sim, criar oportunidade'}
+              </button>
+            </div>
           </div>
         </div>
       )}

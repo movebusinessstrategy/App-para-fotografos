@@ -60,6 +60,13 @@
     height: 100%;
     margin: 0;
   }
+  /* Densidade geral do app: base 15px (≈94% do padrão 16px). Como o Tailwind v4
+     usa rem em texto E espaçamentos, tudo encolhe proporcionalmente — visual
+     mais "normal", menos ampliado — sem mexer em vh/h-screen (nada de zoom, que
+     deixaria sobra no rodapé). Reversível: ajustar só este valor. */
+  html {
+    font-size: 15px;
+  }
   body {
     overflow: hidden;
     @apply bg-luxury-paper text-luxury-black antialiased;
