@@ -19734,6 +19734,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
       // ── JOBS metrics ───────────────────────────────────────────────────────
       const jobsThisMonth = jobs.filter((j: any) => j.job_date >= periodStart && j.job_date <= periodEnd);
+      // Receita/volume por TIPO de ensaio no período (donut + tabela do dashboard)
+      const byTypeMap = new Map<string, { count: number; total: number }>();
+      jobsThisMonth.filter((j: any) => j.status !== 'cancelled').forEach((j: any) => {
+        const t = String(j.job_type || 'Outros');
+        const e = byTypeMap.get(t) || { count: 0, total: 0 };
+        e.count += 1;
+        e.total += Number(j.amount) || 0;
+        byTypeMap.set(t, e);
+      });
+      const jobsByType = [...byTypeMap.entries()]
+        .map(([type, v]) => ({ type, count: v.count, total: v.total }))
+        .sort((a, b) => b.total - a.total);
       const completedThisMonth = jobsThisMonth.filter((j: any) => j.status === 'completed' || (j.job_date < todayStr && j.status !== 'cancelled'));
       const scheduledThisMonth = jobsThisMonth.filter((j: any) => j.job_date >= todayStr && j.status === 'scheduled');
       const todayJobs = jobs.filter((j: any) => j.job_date === todayStr && j.status !== 'cancelled');
@@ -19997,6 +20009,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
             list: awaitingContractFutureOnly.slice(0, 5).map(trim),
           },
           awaitingSelection: { count: awaitingSelection.length, list: awaitingSelection.slice(0, 5).map(trim) },
+          byType: jobsByType,
         },
         sales: {
           activeCount: activeDeals.length,

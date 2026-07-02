@@ -6,11 +6,12 @@ import {
 } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import {
-  Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Area, AreaChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import {
-  ArrowRight, Calendar as CalendarIcon, Camera, Check, ChevronLeft, ChevronRight,
-  DollarSign, Eye, EyeOff, FileClock, FileText, Sparkles, Target, TrendingDown, TrendingUp, X,
+  AlertTriangle, ArrowRight, Calendar as CalendarIcon, Camera, Check, ChevronLeft, ChevronRight,
+  DollarSign, Eye, EyeOff, FileClock, FileText, Lightbulb, PieChart as PieIcon,
+  Sparkles, Target, TrendingDown, TrendingUp, Trophy, Wallet, X,
 } from "lucide-react";
 
 import { motion, animate } from "motion/react";
@@ -49,6 +50,7 @@ interface Analytics {
     late: { count: number; list: JobLite[] };
     awaitingContract: { count: number; list: JobLite[] };
     awaitingSelection: { count: number; list: JobLite[] };
+    byType?: Array<{ type: string; count: number; total: number }>;
   };
   sales: {
     activeCount: number;
@@ -229,6 +231,16 @@ export default function DashboardPage() {
 
   const a = analytics;
   const periodLabel = formatRangeLabel(dateRange);
+  // ── Visão de diretoria (derivados) ────────────────────────────────────────
+  const lucro = a.finance.revenueThisMonth - a.finance.expensesThisMonth;
+  const margem = a.finance.revenueThisMonth > 0 ? (lucro / a.finance.revenueThisMonth) * 100 : 0;
+  const wonAgg = a.sales.byStage.filter(s => s.is_won);
+  const lostAgg = a.sales.byStage.filter(s => s.is_final && !s.is_won);
+  const wonCount = wonAgg.reduce((x, s) => x + s.count, 0);
+  const wonValue = wonAgg.reduce((x, s) => x + s.total_value, 0);
+  const lostCount = lostAgg.reduce((x, s) => x + s.count, 0);
+  const convPeriodo = wonCount + lostCount > 0 ? Math.round((wonCount / (wonCount + lostCount)) * 100) : null;
+  const insights = computeInsights(a, periodDelta, canSeeFinance, hideValues);
   const periodDelta = a.finance.revenueLastMonth > 0
     ? Math.round(((a.finance.revenueThisMonth - a.finance.revenueLastMonth) / a.finance.revenueLastMonth) * 100)
     : null;
@@ -265,31 +277,133 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Top: 4 KPIs + Funnel side-by-side */}
+      {/* ── HERO: visão de diretoria em 10 segundos ── */}
+      {canSeeFinance && (
+        <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+          <HeroCard
+            icon={<DollarSign size={16} />}
+            title="Faturamento"
+            num={a.finance.revenueThisMonth}
+            render={(n) => formatBRL(n, hideValues)}
+            deltaPct={periodDelta}
+            spark={a.finance.dailyRevenue}
+          />
+          <HeroCard
+            icon={<Wallet size={16} />}
+            title="Lucro"
+            num={lucro}
+            render={(n) => formatBRL(n, hideValues)}
+            hint="Entrada − Saída no período"
+            negative={lucro < 0}
+          />
+          <HeroCard
+            icon={<PieIcon size={16} />}
+            title="Margem"
+            num={hideValues ? 0 : margem}
+            render={(n) => (hideValues ? '•••' : `${n.toFixed(1)}%`)}
+            hint={hideValues ? 'Valores ocultos' : 'Lucro / Faturamento'}
+            negative={margem < 0}
+          />
+          <HeroCard
+            icon={<Trophy size={16} />}
+            title="Vendas fechadas"
+            num={wonCount}
+            render={(n) => String(Math.round(n))}
+            hint={`${formatBRLShort(wonValue, hideValues)}${convPeriodo !== null ? ` · conversão ${convPeriodo}%` : ''}`}
+          />
+        </div>
+      )}
+
+      {/* ── Evolução do faturamento (grande) + Faturamento por tipo (donut) ── */}
+      {canSeeFinance && (
+        <div className="grid grid-cols-1 xl:grid-cols-[1fr_340px] gap-3">
+          <Card>
+            <div className="flex items-start justify-between mb-1">
+              <div>
+                <CardHeader icon={<TrendingUp size={16} />} title="Evolução do faturamento" inline />
+                <p className="text-xl font-bold text-gray-900 dark:text-white tabular-nums mt-2">
+                  <AnimatedNumber value={a.finance.revenueThisMonth} format={(n) => formatBRL(n, hideValues)} />
+                  {periodDelta !== null && (
+                    <span className={cn("ml-2 text-xs font-bold align-middle", periodDelta >= 0 ? "text-emerald-500" : "text-red-400")}>
+                      {periodDelta >= 0 ? '↑' : '↓'} {Math.abs(periodDelta)}%
+                    </span>
+                  )}
+                </p>
+              </div>
+              <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mt-1">{formatRangeShort(dateRange)}</span>
+            </div>
+            <div className="-mx-2">
+              <ResponsiveContainer width="100%" height={210} minWidth={0}>
+                <AreaChart data={a.finance.dailyRevenue}>
+                  <defs>
+                    <linearGradient id="revGold" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#F1C665" stopOpacity={0.5} />
+                      <stop offset="100%" stopColor="#F1C665" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fill: '#6b7280', fontSize: 10 }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(d) => format(parseISO(String(d)), 'dd/MM')}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis
+                    tick={{ fill: '#6b7280', fontSize: 10 }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(v) => hideValues ? '•••' : `R$ ${Number(v) >= 1000 ? `${(Number(v) / 1000).toFixed(0)}k` : Number(v).toFixed(0)}`}
+                    width={50}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      background: 'rgba(20, 20, 20, 0.95)',
+                      border: '1px solid rgba(241, 198, 101, 0.3)',
+                      borderRadius: 12,
+                      color: '#fff',
+                      fontSize: 12,
+                    }}
+                    formatter={(v: any) => hideValues ? ['•••', 'Receita'] : [`R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, 'Receita']}
+                    labelFormatter={(d) => format(parseISO(String(d)), "dd 'de' MMMM", { locale: ptBR })}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="total"
+                    stroke="#F1C665"
+                    strokeWidth={2.5}
+                    fill="url(#revGold)"
+                    activeDot={{ r: 4, fill: '#F1C665', stroke: '#fff', strokeWidth: 2 }}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+          <Card>
+            <CardHeader icon={<PieIcon size={16} />} title="Faturamento por tipo" inline />
+            <TypeDonut byType={a.jobs.byType || []} hideValues={hideValues} />
+          </Card>
+        </div>
+      )}
+
+      {/* ── Desempenho por tipo + Insights de ação ── */}
+      <div className={cn("grid grid-cols-1 gap-3", canSeeFinance && "xl:grid-cols-[1fr_340px]")}>
+        {canSeeFinance && (
+          <Card>
+            <CardHeader icon={<Camera size={16} />} title="Desempenho por tipo de ensaio" inline />
+            <TypeTable byType={a.jobs.byType || []} hideValues={hideValues} />
+          </Card>
+        )}
+        <Card>
+          <CardHeader icon={<Lightbulb size={16} />} title="Insights de ação" inline />
+          <ActionInsights items={insights} />
+        </Card>
+      </div>
+
+      {/* ── Operação: indicadores do dia a dia + funil ── */}
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-3">
-        {/* Left column: KPIs grid + Linha do tempo */}
         <div className="space-y-3">
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-            {canSeeFinance && (<>
-            <Card>
-              <CardHeader icon={<DollarSign size={16} />} title="Entrada" />
-              <CardValue num={a.finance.revenueThisMonth} render={(n) => formatBRL(n, hideValues)} />
-              {periodDelta !== null ? (
-                <CardHint tone={periodDelta >= 0 ? 'pos' : 'neg'}>
-                  {periodDelta >= 0 ? '↑' : '↓'} {Math.abs(periodDelta)}% vs período anterior
-                </CardHint>
-              ) : (
-                <CardHint>Recebido no período</CardHint>
-              )}
-            </Card>
-
-            <Card>
-              <CardHeader icon={<TrendingDown size={16} />} title="Saída" />
-              <CardValue num={a.finance.expensesThisMonth} render={(n) => formatBRL(n, hideValues)} />
-              <CardHint>Despesas pagas no período</CardHint>
-            </Card>
-            </>)}
-
             <Card>
               <CardHeader icon={<Camera size={16} />} title="Ensaios no período" />
               <CardValue num={a.jobs.thisMonth.total} />
@@ -330,62 +444,6 @@ export default function DashboardPage() {
               <CardHint>{a.jobs.today.count === 0 ? 'Sem ensaios hoje' : a.jobs.today.count === 1 ? 'ensaio agendado' : 'ensaios agendados'}</CardHint>
             </Card>
           </div>
-
-          {/* Linha do tempo (receita ao longo do tempo) — só quem tem permissão Financeiro */}
-          {canSeeFinance && (
-          <Card>
-            <div className="flex items-center justify-between mb-3">
-              <CardHeader icon={<TrendingUp size={16} />} title="Linha do tempo" inline />
-              <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500">{formatRangeShort(dateRange)}</span>
-            </div>
-            <div className="-mx-2">
-              <ResponsiveContainer width="100%" height={140} minWidth={0}>
-                <AreaChart data={a.finance.dailyRevenue}>
-                  <defs>
-                    <linearGradient id="revGold" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#F1C665" stopOpacity={0.5} />
-                      <stop offset="100%" stopColor="#F1C665" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <XAxis
-                    dataKey="date"
-                    tick={{ fill: '#6b7280', fontSize: 10 }}
-                    axisLine={false}
-                    tickLine={false}
-                    tickFormatter={(d) => format(parseISO(String(d)), 'dd/MM')}
-                    interval="preserveStartEnd"
-                  />
-                  <YAxis
-                    tick={{ fill: '#6b7280', fontSize: 10 }}
-                    axisLine={false}
-                    tickLine={false}
-                    tickFormatter={(v) => hideValues ? '•••' : `R$ ${Number(v) >= 1000 ? `${(Number(v) / 1000).toFixed(0)}k` : Number(v).toFixed(0)}`}
-                    width={50}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      background: 'rgba(20, 20, 20, 0.95)',
-                      border: '1px solid rgba(241, 198, 101, 0.3)',
-                      borderRadius: 12,
-                      color: '#fff',
-                      fontSize: 12,
-                    }}
-                    formatter={(v: any) => hideValues ? ['•••', 'Receita'] : [`R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, 'Receita']}
-                    labelFormatter={(d) => format(parseISO(String(d)), "dd 'de' MMMM", { locale: ptBR })}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="total"
-                    stroke="#F1C665"
-                    strokeWidth={2}
-                    fill="url(#revGold)"
-                    activeDot={{ r: 4, fill: '#F1C665', stroke: '#fff', strokeWidth: 2 }}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </Card>
-          )}
         </div>
 
         {/* Right column: Funnel */}
@@ -876,6 +934,210 @@ function PendingCard({
 }
 
 // ─── Sales funnel ────────────────────────────────────────────────────────────
+
+// ─── Visão de diretoria: componentes ─────────────────────────────────────────
+
+// Card herói: número grande + variação % + mini-gráfico. O "10 segundos" do dono.
+function HeroCard({ icon, title, num, render, deltaPct, hint, spark, negative }: {
+  icon: React.ReactNode;
+  title: string;
+  num: number;
+  render: (n: number) => string;
+  deltaPct?: number | null;
+  hint?: string;
+  spark?: Array<{ date: string; total: number }>;
+  negative?: boolean;
+}) {
+  const sparkId = `spk-${title.replace(/\W/g, '')}`;
+  return (
+    <Card>
+      <CardHeader icon={icon} title={title} />
+      <p className={cn(
+        "text-[25px] leading-8 font-bold tabular-nums tracking-tight truncate",
+        negative ? "text-red-500" : "text-gray-900 dark:text-white"
+      )}>
+        <AnimatedNumber value={num} format={render} />
+      </p>
+      {deltaPct !== null && deltaPct !== undefined ? (
+        <span className={cn(
+          "inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded-md text-[11px] font-bold tabular-nums",
+          deltaPct >= 0
+            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+            : "bg-red-500/10 text-red-500"
+        )}>
+          {deltaPct >= 0 ? '↑' : '↓'} {Math.abs(deltaPct)}% <span className="font-medium opacity-70">vs anterior</span>
+        </span>
+      ) : hint ? (
+        <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400 truncate">{hint}</p>
+      ) : null}
+      {spark && spark.length > 1 && (
+        <div className="mt-2 -mx-2 -mb-1 h-10 pointer-events-none">
+          <ResponsiveContainer width="100%" height={40}>
+            <AreaChart data={spark}>
+              <defs>
+                <linearGradient id={sparkId} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#F1C665" stopOpacity={0.45} />
+                  <stop offset="100%" stopColor="#F1C665" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <Area type="monotone" dataKey="total" stroke="#F1C665" strokeWidth={1.5} fill={`url(#${sparkId})`} dot={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+const TYPE_COLORS = ['#D4A94A', '#8A6620', '#4B3F72', '#1B6B4A', '#7A3045', '#2C5364', '#F1C665'];
+
+// Donut de faturamento por tipo de ensaio (período) com total no centro.
+function TypeDonut({ byType, hideValues }: { byType: Array<{ type: string; count: number; total: number }>; hideValues: boolean }) {
+  const top = byType.slice(0, 6);
+  const restTotal = byType.slice(6).reduce((x, t) => x + t.total, 0);
+  const data = restTotal > 0 ? [...top, { type: 'Outros', count: 0, total: restTotal }] : top;
+  const total = data.reduce((x, t) => x + t.total, 0);
+
+  if (data.length === 0 || total <= 0) {
+    return <p className="text-sm text-gray-500 dark:text-gray-400 italic py-10 text-center">Sem ensaios com valor no período.</p>;
+  }
+
+  return (
+    <div className="mt-2">
+      <div className="relative h-[170px]">
+        <ResponsiveContainer width="100%" height={170}>
+          <PieChart>
+            <Pie
+              data={data}
+              dataKey="total"
+              nameKey="type"
+              innerRadius={55}
+              outerRadius={80}
+              paddingAngle={2}
+              stroke="none"
+              animationDuration={900}
+            >
+              {data.map((_, i) => <Cell key={i} fill={TYPE_COLORS[i % TYPE_COLORS.length]} />)}
+            </Pie>
+            <Tooltip
+              contentStyle={{ background: 'rgba(20,20,20,0.95)', border: '1px solid rgba(241,198,101,0.3)', borderRadius: 12, color: '#fff', fontSize: 12 }}
+              formatter={(v: any, name: any) => [hideValues ? '•••' : `R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, name]}
+            />
+          </PieChart>
+        </ResponsiveContainer>
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+          <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500">Total</span>
+          <span className="text-sm font-bold text-gray-900 dark:text-white tabular-nums">{formatBRLShort(total, hideValues)}</span>
+        </div>
+      </div>
+      <ul className="mt-2 space-y-1">
+        {data.map((t, i) => (
+          <li key={t.type} className="flex items-center gap-2 text-[12px]">
+            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: TYPE_COLORS[i % TYPE_COLORS.length] }} />
+            <span className="flex-1 truncate text-gray-600 dark:text-gray-300">{t.type}</span>
+            <span className="tabular-nums font-semibold text-gray-900 dark:text-white">{Math.round((t.total / total) * 100)}%</span>
+            <span className="tabular-nums text-gray-500 dark:text-gray-400 w-16 text-right">{formatBRLShort(t.total, hideValues)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// Tabela de desempenho por tipo: receita, volume e ticket médio.
+function TypeTable({ byType, hideValues }: { byType: Array<{ type: string; count: number; total: number }>; hideValues: boolean }) {
+  const rows = byType.slice(0, 6);
+  if (rows.length === 0) {
+    return <p className="text-sm text-gray-500 dark:text-gray-400 italic py-8 text-center">Sem ensaios no período.</p>;
+  }
+  const max = Math.max(1, ...rows.map(r => r.total));
+  return (
+    <div className="mt-2 space-y-0.5">
+      <div className="grid grid-cols-[1fr_52px_84px_84px] gap-2 px-2 pb-1 text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500">
+        <span>Tipo</span><span className="text-right">Qtd</span><span className="text-right">Receita</span><span className="text-right">Ticket médio</span>
+      </div>
+      {rows.map((r, i) => (
+        <motion.div
+          key={r.type}
+          initial={{ opacity: 0, x: -8 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.4, delay: 0.1 + i * 0.06 }}
+          className="relative grid grid-cols-[1fr_52px_84px_84px] gap-2 items-center px-2 py-2 rounded-lg overflow-hidden"
+        >
+          <span
+            className="absolute inset-y-0 left-0 bg-gold-500/[0.07] dark:bg-gold-500/10 rounded-lg"
+            style={{ width: `${(r.total / max) * 100}%` }}
+            aria-hidden
+          />
+          <span className="relative text-[13px] font-medium text-gray-900 dark:text-white truncate">{r.type}</span>
+          <span className="relative text-[12px] tabular-nums text-right text-gray-600 dark:text-gray-300">{r.count}</span>
+          <span className="relative text-[12px] tabular-nums text-right font-semibold text-gray-900 dark:text-white">{formatBRLShort(r.total, hideValues)}</span>
+          <span className="relative text-[12px] tabular-nums text-right text-gray-500 dark:text-gray-400">{formatBRLShort(r.count > 0 ? r.total / r.count : 0, hideValues)}</span>
+        </motion.div>
+      ))}
+    </div>
+  );
+}
+
+// Insights de AÇÃO gerados dos próprios dados — o que fazer agora.
+type Insight = { tone: 'pos' | 'warn' | 'info'; title: string; sub: string };
+
+function computeInsights(a: Analytics, periodDelta: number | null, canSeeFinance: boolean, hideValues: boolean): Insight[] {
+  const out: Insight[] = [];
+  if (canSeeFinance && periodDelta !== null) {
+    out.push(periodDelta >= 0
+      ? { tone: 'pos', title: `Faturamento ${periodDelta}% acima do período anterior`, sub: 'Mantenha o que está funcionando — campanhas e follow-ups em dia.' }
+      : { tone: 'warn', title: `Faturamento ${Math.abs(periodDelta)}% abaixo do período anterior`, sub: 'Reforce os follow-ups do funil e reative oportunidades internas.' });
+  }
+  const gargalo = a.sales.conversion
+    .filter(c => c.entered >= 3 && c.conversion_rate !== null)
+    .sort((x, y) => (x.conversion_rate! - y.conversion_rate!))[0];
+  if (gargalo && gargalo.conversion_rate! < 60) {
+    out.push({ tone: 'warn', title: `Gargalo em "${gargalo.stage_name}": só ${gargalo.conversion_rate}% avançam`, sub: 'É onde os leads mais param — priorize os follow-ups dessa etapa.' });
+  }
+  if (a.jobs.late.count > 0) {
+    out.push({ tone: 'warn', title: `${a.jobs.late.count} ensaio${a.jobs.late.count === 1 ? '' : 's'} atrasado${a.jobs.late.count === 1 ? '' : 's'} na produção`, sub: 'Passaram do prazo da etapa — destrave hoje.' });
+  }
+  if (canSeeFinance && a.finance.toReceiveOpen > 0) {
+    out.push({ tone: 'info', title: `${formatBRLShort(a.finance.toReceiveOpen, hideValues)} a receber em ${a.finance.openJobsCount} ensaio${a.finance.openJobsCount === 1 ? '' : 's'}`, sub: 'Combine os saldos antes das entregas.' });
+  }
+  if (a.opportunities.urgent > 0) {
+    out.push({ tone: 'pos', title: `${a.opportunities.urgent} cliente${a.opportunities.urgent === 1 ? '' : 's'} no momento de recomprar`, sub: 'Oportunidades internas urgentes — um oi hoje vira venda.' });
+  }
+  if (out.length === 0) {
+    out.push({ tone: 'pos', title: 'Tudo em dia por aqui', sub: 'Sem pendências críticas — bom momento pra prospectar novos leads.' });
+  }
+  return out.slice(0, 3);
+}
+
+function ActionInsights({ items }: { items: Insight[] }) {
+  const toneStyles: Record<Insight['tone'], { bg: string; icon: React.ReactNode }> = {
+    pos: { bg: 'bg-emerald-500/12 text-emerald-500', icon: <TrendingUp size={14} /> },
+    warn: { bg: 'bg-amber-500/12 text-amber-500', icon: <AlertTriangle size={14} /> },
+    info: { bg: 'bg-gold-500/15 text-gold-600 dark:text-gold-400', icon: <Wallet size={14} /> },
+  };
+  return (
+    <ul className="mt-2 space-y-2.5">
+      {items.map((it, i) => (
+        <motion.li
+          key={it.title}
+          initial={{ opacity: 0, x: 10 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.4, delay: 0.15 + i * 0.1 }}
+          className="flex items-start gap-3"
+        >
+          <span className={cn("w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0", toneStyles[it.tone].bg)}>
+            {toneStyles[it.tone].icon}
+          </span>
+          <div className="min-w-0">
+            <p className="text-[13px] font-semibold text-gray-900 dark:text-white leading-snug">{it.title}</p>
+            <p className="text-[11.5px] text-gray-500 dark:text-gray-400 leading-snug mt-0.5">{it.sub}</p>
+          </div>
+        </motion.li>
+      ))}
+    </ul>
+  );
+}
 
 // Funil de vendas HONESTO e vivo:
 // - Etapas abertas = foto de AGORA (quantos leads estão em cada uma), com a
