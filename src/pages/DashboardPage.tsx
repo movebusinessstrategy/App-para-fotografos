@@ -13,6 +13,8 @@ import {
   DollarSign, Eye, EyeOff, FileClock, FileText, Sparkles, Target, TrendingDown, TrendingUp, X,
 } from "lucide-react";
 
+import { motion, animate } from "motion/react";
+
 import { LayoutOutletContext } from "../components/layout/AppLayout";
 import { authFetch } from "../utils/authFetch";
 import { cn } from "../utils/cn";
@@ -271,7 +273,7 @@ export default function DashboardPage() {
             {canSeeFinance && (<>
             <Card>
               <CardHeader icon={<DollarSign size={16} />} title="Entrada" />
-              <CardValue value={formatBRL(a.finance.revenueThisMonth, hideValues)} />
+              <CardValue num={a.finance.revenueThisMonth} render={(n) => formatBRL(n, hideValues)} />
               {periodDelta !== null ? (
                 <CardHint tone={periodDelta >= 0 ? 'pos' : 'neg'}>
                   {periodDelta >= 0 ? '↑' : '↓'} {Math.abs(periodDelta)}% vs período anterior
@@ -283,33 +285,33 @@ export default function DashboardPage() {
 
             <Card>
               <CardHeader icon={<TrendingDown size={16} />} title="Saída" />
-              <CardValue value={formatBRL(a.finance.expensesThisMonth, hideValues)} />
+              <CardValue num={a.finance.expensesThisMonth} render={(n) => formatBRL(n, hideValues)} />
               <CardHint>Despesas pagas no período</CardHint>
             </Card>
             </>)}
 
             <Card>
               <CardHeader icon={<Camera size={16} />} title="Ensaios no período" />
-              <CardValue value={String(a.jobs.thisMonth.total)} />
+              <CardValue num={a.jobs.thisMonth.total} />
               <CardHint>{a.jobs.thisMonth.completed} feitos · {a.jobs.thisMonth.scheduled} agendados</CardHint>
             </Card>
 
             <Card onClick={() => navigate("/vendas")}>
               <CardHeader icon={<Target size={16} />} title="Funil ativo" />
-              <CardValue value={String(a.sales.activeCount)} />
+              <CardValue num={a.sales.activeCount} />
               <CardHint>{canSeeFinance ? `${formatBRLShort(a.sales.activeValue, hideValues)} em pipeline` : 'leads ativos'}</CardHint>
             </Card>
 
             {canSeeFinance && (<>
             <Card>
               <CardHeader icon={<Check size={16} />} title="Sinal recebido" />
-              <CardValue value={formatBRL(a.finance.sinalRecebidoOpen, hideValues)} />
+              <CardValue num={a.finance.sinalRecebidoOpen} render={(n) => formatBRL(n, hideValues)} />
               <CardHint>Já pago em ensaios em produção</CardHint>
             </Card>
 
             <Card>
               <CardHeader icon={<TrendingUp size={16} />} title="A receber" />
-              <CardValue value={formatBRL(a.finance.toReceiveOpen, hideValues)} />
+              <CardValue num={a.finance.toReceiveOpen} render={(n) => formatBRL(n, hideValues)} />
               <CardHint>
                 Saldo de {a.finance.openJobsCount} ensaio{a.finance.openJobsCount === 1 ? '' : 's'} em produção
               </CardHint>
@@ -318,13 +320,13 @@ export default function DashboardPage() {
 
             <Card>
               <CardHeader icon={<FileClock size={16} />} title="Pendências" />
-              <CardValue value={String(a.attention)} />
+              <CardValue num={a.attention} />
               <CardHint>Atrasados + contratos + seleção</CardHint>
             </Card>
 
             <Card onClick={() => navigate("/calendar")}>
               <CardHeader icon={<CalendarIcon size={16} />} title="Hoje" />
-              <CardValue value={String(a.jobs.today.count)} />
+              <CardValue num={a.jobs.today.count} />
               <CardHint>{a.jobs.today.count === 0 ? 'Sem ensaios hoje' : a.jobs.today.count === 1 ? 'ensaio agendado' : 'ensaios agendados'}</CardHint>
             </Card>
           </div>
@@ -736,13 +738,24 @@ function RangeMonth({
 
 // ─── Card primitives ─────────────────────────────────────────────────────────
 
+// Entrada em CASCATA: cada card guarda seu lugar na fila no primeiro render e
+// entra com um pequeno atraso — o dashboard "monta" na frente do usuário.
+let cardEntrySeq = 0;
+
 function Card({ children, onClick }: { children: React.ReactNode; onClick?: () => void }) {
-  const Comp: any = onClick ? 'button' : 'div';
+  const entryDelay = useRef((cardEntrySeq++ % 12) * 0.05).current;
+  const Comp: any = onClick ? motion.button : motion.div;
   return (
     <Comp
       onClick={onClick}
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5, delay: entryDelay, ease: [0.22, 1, 0.36, 1] }}
+      whileHover={{ y: -2 }}
+      whileTap={onClick ? { scale: 0.985 } : undefined}
       className={cn(
-        "relative overflow-hidden bg-white dark:bg-[#161616] border border-black/5 dark:border-white/5 rounded-2xl p-4 text-left transition-all w-full",
+        "relative overflow-hidden bg-white dark:bg-[#161616] border border-black/5 dark:border-white/5 rounded-2xl p-4 text-left w-full",
+        "transition-shadow hover:shadow-lg hover:shadow-black/5 dark:hover:shadow-black/40",
         onClick && "hover:border-gold-300 dark:hover:border-gold-500/50 cursor-pointer"
       )}
     >
@@ -752,6 +765,22 @@ function Card({ children, onClick }: { children: React.ReactNode; onClick?: () =
       <div className="relative">{children}</div>
     </Comp>
   );
+}
+
+// Número que CONTA até o valor (motion) — o "pulso de vida" dos KPIs.
+function AnimatedNumber({ value, format }: { value: number; format: (n: number) => string }) {
+  const [display, setDisplay] = useState(0);
+  const fromRef = useRef(0);
+  useEffect(() => {
+    const controls = animate(fromRef.current, value, {
+      duration: 0.9,
+      ease: [0.22, 1, 0.36, 1],
+      onUpdate: (v) => setDisplay(v),
+    });
+    fromRef.current = value;
+    return () => controls.stop();
+  }, [value]);
+  return <>{format(display)}</>;
 }
 
 function CardHeader({ icon, title, inline }: { icon: React.ReactNode; title: string; inline?: boolean }) {
@@ -765,8 +794,14 @@ function CardHeader({ icon, title, inline }: { icon: React.ReactNode; title: str
   );
 }
 
-function CardValue({ value }: { value: string }) {
-  return <p className="text-2xl font-bold text-gray-900 dark:text-white tabular-nums tracking-tight truncate">{value}</p>;
+function CardValue({ value, num, render }: { value?: string; num?: number; render?: (n: number) => string }) {
+  return (
+    <p className="text-2xl font-bold text-gray-900 dark:text-white tabular-nums tracking-tight truncate">
+      {num !== undefined
+        ? <AnimatedNumber value={num} format={(v) => (render ? render(v) : String(Math.round(v)))} />
+        : value}
+    </p>
+  );
 }
 
 function CardHint({ children, tone }: { children: React.ReactNode; tone?: 'pos' | 'neg' }) {
@@ -842,6 +877,11 @@ function PendingCard({
 
 // ─── Sales funnel ────────────────────────────────────────────────────────────
 
+// Funil de vendas HONESTO e vivo:
+// - Etapas abertas = foto de AGORA (quantos leads estão em cada uma), com a
+//   forma afunilada de verdade (barras centralizadas) e animação de entrada.
+// - Ganhos/perdidos = fechados NO PERÍODO selecionado, rotulados como tal.
+// - Conversão geral do período embaixo — o número que o dono quer ver.
 function SalesFunnel({
   byStage, conversion, hideValues,
 }: {
@@ -851,8 +891,14 @@ function SalesFunnel({
 }) {
   const stages = byStage.filter(s => !s.is_final).sort((a, b) => a.position - b.position);
   const wonStages = byStage.filter(s => s.is_won);
+  const lostStages = byStage.filter(s => s.is_final && !s.is_won);
   const wonCount = wonStages.reduce((acc, s) => acc + s.count, 0);
   const wonValue = wonStages.reduce((acc, s) => acc + s.total_value, 0);
+  const lostCount = lostStages.reduce((acc, s) => acc + s.count, 0);
+  const activeCount = stages.reduce((acc, s) => acc + s.count, 0);
+  const activeValue = stages.reduce((acc, s) => acc + s.total_value, 0);
+  const closed = wonCount + lostCount;
+  const convGeral = closed > 0 ? Math.round((wonCount / closed) * 100) : null;
 
   if (stages.length === 0) {
     return (
@@ -862,58 +908,96 @@ function SalesFunnel({
     );
   }
 
-  const max = Math.max(1, ...stages.map(s => s.count), wonCount);
+  const max = Math.max(1, ...stages.map(s => s.count));
 
   return (
-    <div className="space-y-3">
-      {stages.map(s => {
-        const conv = conversion.find(c => c.stage_id === s.id);
-        const widthPct = (s.count / max) * 100;
-        return (
-          <div key={s.id}>
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[11px] font-medium text-gray-600 dark:text-gray-300 truncate">{s.name}</span>
-              <div className="flex items-center gap-2 flex-shrink-0 tabular-nums">
-                <span className="text-xs font-bold text-gray-900 dark:text-white">{s.count}</span>
-                <span className="text-[10px] text-gray-500 dark:text-gray-400">{formatBRLShort(s.total_value, hideValues)}</span>
-                {conv && conv.conversion_rate !== null && conv.entered > 0 && (
+    <div className="space-y-2">
+      {/* Cabeçalho honesto: o que está em jogo AGORA */}
+      <div className="flex items-baseline justify-between mb-1">
+        <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500">No funil agora</span>
+        <span className="text-[11px] font-semibold text-gray-600 dark:text-gray-300 tabular-nums">
+          {activeCount} lead{activeCount === 1 ? '' : 's'}{hideValues ? '' : ` · ${formatBRLShort(activeValue, hideValues)}`}
+        </span>
+      </div>
+
+      {/* Barras centralizadas = silhueta de funil de verdade */}
+      <div className="space-y-1.5">
+        {stages.map((s, i) => {
+          const conv = conversion.find(c => c.stage_id === s.id);
+          const widthPct = s.count > 0 ? Math.max((s.count / max) * 100, 14) : 6;
+          return (
+            <div key={s.id}>
+              <div className="flex items-center justify-between mb-0.5">
+                <span className="text-[11px] font-medium text-gray-600 dark:text-gray-300 truncate">{s.name}</span>
+                <div className="flex items-center gap-2 flex-shrink-0 tabular-nums">
+                  <span className="text-xs font-bold text-gray-900 dark:text-white">{s.count}</span>
+                  <span className="text-[10px] text-gray-500 dark:text-gray-400 w-14 text-right">{formatBRLShort(s.total_value, hideValues)}</span>
+                </div>
+              </div>
+              <div className="flex justify-center">
+                <motion.div
+                  initial={{ width: 0, opacity: 0 }}
+                  animate={{ width: `${widthPct}%`, opacity: 1 }}
+                  transition={{ duration: 0.7, delay: 0.15 + i * 0.08, ease: [0.22, 1, 0.36, 1] }}
+                  className={cn(
+                    "h-5 rounded-md flex items-center justify-center",
+                    s.count > 0
+                      ? "bg-gradient-to-r from-gold-400/80 via-gold-500 to-gold-400/80 shadow-[0_2px_8px_-2px_rgba(212,169,74,0.5)]"
+                      : "bg-gray-100 dark:bg-gray-800"
+                  )}
+                >
+                  {s.count > 0 && (
+                    <span className="text-[10px] font-bold text-white drop-shadow-sm">{s.count}</span>
+                  )}
+                </motion.div>
+              </div>
+              {conv && conv.conversion_rate !== null && conv.entered > 0 && (
+                <div className="flex justify-center mt-0.5">
                   <span className={cn(
-                    "text-[10px] font-bold w-9 text-right",
-                    conv.conversion_rate < 40 ? "text-red-500" :
+                    "text-[9px] font-semibold tabular-nums",
+                    conv.conversion_rate < 40 ? "text-red-400" :
                     conv.conversion_rate < 70 ? "text-amber-500" : "text-emerald-500"
                   )}>
-                    {conv.conversion_rate}%
+                    ↓ {conv.conversion_rate}% avançam
                   </span>
-                )}
-              </div>
+                </div>
+              )}
             </div>
-            <div className="h-2 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-gold-400 to-gold-500 transition-all"
-                style={{ width: `${Math.max(widthPct, s.count > 0 ? 4 : 0)}%` }}
-              />
-            </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
 
-      {wonCount > 0 && (
-        <div className="pt-2 border-t border-gray-200 dark:border-gray-800">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">Fechados</span>
-            <div className="flex items-center gap-2 flex-shrink-0 tabular-nums">
-              <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400">{wonCount}</span>
-              <span className="text-[10px] text-emerald-600 dark:text-emerald-500">{formatBRLShort(wonValue, hideValues)}</span>
-            </div>
-          </div>
-          <div className="h-2 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
-            <div
-              className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-500"
-              style={{ width: `${Math.max((wonCount / max) * 100, 4)}%` }}
-            />
+      {/* Fechados NO PERÍODO — rotulado, sem misturar com a foto de agora */}
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.15 + stages.length * 0.08 }}
+        className="pt-2 mt-1 border-t border-gray-200 dark:border-gray-800 space-y-1.5"
+      >
+        <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500">Fechados no período</span>
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">🏆 Ganhos</span>
+          <div className="flex items-center gap-2 tabular-nums">
+            <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400">{wonCount}</span>
+            <span className="text-[10px] text-emerald-600 dark:text-emerald-500 w-14 text-right">{formatBRLShort(wonValue, hideValues)}</span>
           </div>
         </div>
-      )}
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-medium text-gray-500 dark:text-gray-400">Perdidos</span>
+          <span className="text-xs font-bold text-gray-500 dark:text-gray-400 tabular-nums">{lostCount}</span>
+        </div>
+        {convGeral !== null && (
+          <div className="flex items-center justify-between pt-1">
+            <span className="text-[11px] font-semibold text-gray-600 dark:text-gray-300">Conversão do período</span>
+            <span className={cn(
+              "text-sm font-bold tabular-nums",
+              convGeral >= 50 ? "text-emerald-500" : convGeral >= 25 ? "text-amber-500" : "text-red-400"
+            )}>
+              {convGeral}%
+            </span>
+          </div>
+        )}
+      </motion.div>
     </div>
   );
 }
