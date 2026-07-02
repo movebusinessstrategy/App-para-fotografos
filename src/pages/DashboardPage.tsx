@@ -141,6 +141,7 @@ export default function DashboardPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [hideValuesPref, setHideValues] = useState(() => localStorage.getItem("dashboard_hide_values") === "true");
   // Sem permissão de Financeiro: valores SEMPRE mascarados (sobra funil, hot deals).
   const hideValues = !canSeeFinance || hideValuesPref;
@@ -170,11 +171,13 @@ export default function DashboardPage() {
         authFetch("/api/clients"),
       ]);
       if (fetchSeq.current !== seq) return;
-      if (aRes.ok) setAnalytics(await aRes.json());
+      if (aRes.ok) { setAnalytics(await aRes.json()); setLoadError(false); }
+      else setLoadError(true); // API com erro → mostra retry, não spinner eterno
       if (oRes.ok) setOpportunities(await oRes.json());
       if (cRes.ok) setClients(await cRes.json());
     } catch (err) {
       console.error(err);
+      if (fetchSeq.current === seq) setLoadError(true);
     } finally {
       if (fetchSeq.current === seq) {
         setLoading(false);
@@ -221,6 +224,20 @@ export default function DashboardPage() {
     });
   };
 
+  if (!analytics && loadError) {
+    // Falha na API (deploy no meio, rede...) — retry em vez de spinner eterno
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-3">
+        <p className="text-sm text-gray-500 dark:text-gray-400">Não consegui carregar os dados agora.</p>
+        <button
+          onClick={() => { setLoadError(false); fetchAll(); }}
+          className="px-4 py-2 rounded-xl bg-gold-500 hover:bg-gold-600 text-white text-sm font-semibold"
+        >
+          Tentar de novo
+        </button>
+      </div>
+    );
+  }
   if (loading || !analytics) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -277,9 +294,9 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ── HERO: visão de diretoria em 10 segundos ── */}
-      {canSeeFinance && (
-        <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+      {/* ══ O PULSO — os 4 números que o dono olha primeiro ══ */}
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+        {canSeeFinance ? (<>
           <HeroCard
             icon={<DollarSign size={16} />}
             title="Faturamento"
@@ -293,39 +310,53 @@ export default function DashboardPage() {
             title="Lucro"
             num={lucro}
             render={(n) => formatBRL(n, hideValues)}
-            hint="Entrada − Saída no período"
+            hint={hideValues ? 'Entrada − Saída no período' : `Margem de ${margem.toFixed(0)}%`}
             negative={lucro < 0}
           />
           <HeroCard
-            icon={<PieIcon size={16} />}
-            title="Margem"
-            num={hideValues ? 0 : margem}
-            render={(n) => (hideValues ? '•••' : `${n.toFixed(1)}%`)}
-            hint={hideValues ? 'Valores ocultos' : 'Lucro / Faturamento'}
-            negative={margem < 0}
+            icon={<TrendingUp size={16} />}
+            title="A receber"
+            num={a.finance.toReceiveOpen}
+            render={(n) => formatBRL(n, hideValues)}
+            hint={`${a.finance.openJobsCount} ensaio${a.finance.openJobsCount === 1 ? '' : 's'} · sinal ${formatBRLShort(a.finance.sinalRecebidoOpen, hideValues)} já pago`}
           />
           <HeroCard
             icon={<Trophy size={16} />}
             title="Vendas fechadas"
             num={wonCount}
             render={(n) => String(Math.round(n))}
-            hint={`${formatBRLShort(wonValue, hideValues)}${convPeriodo !== null ? ` · conversão ${convPeriodo}%` : ''}`}
+            hint={`${formatBRLShort(wonValue, hideValues)}${convPeriodo !== null ? ` · ${convPeriodo}% de conversão` : ''}`}
           />
+        </>) : (<>
+          <HeroCard icon={<Camera size={16} />} title="Ensaios no período" num={a.jobs.thisMonth.total} render={(n) => String(Math.round(n))} hint={`${a.jobs.thisMonth.completed} feitos · ${a.jobs.thisMonth.scheduled} agendados`} />
+          <HeroCard icon={<Target size={16} />} title="Funil ativo" num={a.sales.activeCount} render={(n) => String(Math.round(n))} hint="leads em aberto" />
+          <HeroCard icon={<FileClock size={16} />} title="Pendências" num={a.attention} render={(n) => String(Math.round(n))} hint="atrasos, contratos e seleção" />
+          <HeroCard icon={<CalendarIcon size={16} />} title="Hoje" num={a.jobs.today.count} render={(n) => String(Math.round(n))} hint={a.jobs.today.count === 0 ? 'sem ensaios hoje' : 'ensaios agendados'} />
+        </>)}
+      </div>
+
+      {/* ══ Faixa de contexto rápido (sem virar mais quadrado) ══ */}
+      {canSeeFinance && (
+        <div className="flex flex-wrap gap-2">
+          <MiniStat label="Ensaios no período" value={String(a.jobs.thisMonth.total)} onClick={() => navigate('/jobs')} />
+          <MiniStat label="Funil ativo" value={`${a.sales.activeCount} · ${formatBRLShort(a.sales.activeValue, hideValues)}`} onClick={() => navigate('/vendas')} />
+          <MiniStat label="Hoje" value={a.jobs.today.count === 0 ? 'livre' : `${a.jobs.today.count} ensaio${a.jobs.today.count === 1 ? '' : 's'}`} onClick={() => navigate('/calendar')} />
+          <MiniStat label="Pendências" value={String(a.attention)} tone={a.attention > 0 ? 'warn' : 'ok'} onClick={() => navigate('/jobs')} />
         </div>
       )}
 
-      {/* ── Evolução do faturamento (grande) + Faturamento por tipo (donut) ── */}
-      {canSeeFinance && (
-        <div className="grid grid-cols-1 xl:grid-cols-[1fr_340px] gap-3">
+      {/* ══ Evolução do dinheiro + O que precisa de você ══ */}
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-3">
+        {canSeeFinance ? (
           <Card>
             <div className="flex items-start justify-between mb-1">
               <div>
                 <CardHeader icon={<TrendingUp size={16} />} title="Evolução do faturamento" inline />
-                <p className="text-xl font-bold text-gray-900 dark:text-white tabular-nums mt-2">
+                <p className="text-2xl font-bold text-gray-900 dark:text-white tabular-nums mt-2">
                   <AnimatedNumber value={a.finance.revenueThisMonth} format={(n) => formatBRL(n, hideValues)} />
                   {periodDelta !== null && (
                     <span className={cn("ml-2 text-xs font-bold align-middle", periodDelta >= 0 ? "text-emerald-500" : "text-red-400")}>
-                      {periodDelta >= 0 ? '↑' : '↓'} {Math.abs(periodDelta)}%
+                      {periodDelta >= 0 ? '↑' : '↓'} {Math.abs(periodDelta)}% vs anterior
                     </span>
                   )}
                 </p>
@@ -333,7 +364,7 @@ export default function DashboardPage() {
               <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mt-1">{formatRangeShort(dateRange)}</span>
             </div>
             <div className="-mx-2">
-              <ResponsiveContainer width="100%" height={210} minWidth={0}>
+              <ResponsiveContainer width="100%" height={230} minWidth={0}>
                 <AreaChart data={a.finance.dailyRevenue}>
                   <defs>
                     <linearGradient id="revGold" x1="0" y1="0" x2="0" y2="1">
@@ -341,193 +372,78 @@ export default function DashboardPage() {
                       <stop offset="100%" stopColor="#F1C665" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <XAxis
-                    dataKey="date"
-                    tick={{ fill: '#6b7280', fontSize: 10 }}
-                    axisLine={false}
-                    tickLine={false}
-                    tickFormatter={(d) => format(parseISO(String(d)), 'dd/MM')}
-                    interval="preserveStartEnd"
-                  />
-                  <YAxis
-                    tick={{ fill: '#6b7280', fontSize: 10 }}
-                    axisLine={false}
-                    tickLine={false}
-                    tickFormatter={(v) => hideValues ? '•••' : `R$ ${Number(v) >= 1000 ? `${(Number(v) / 1000).toFixed(0)}k` : Number(v).toFixed(0)}`}
-                    width={50}
-                  />
+                  <XAxis dataKey="date" tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(d) => format(parseISO(String(d)), 'dd/MM')} interval="preserveStartEnd" />
+                  <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => hideValues ? '•••' : `R$ ${Number(v) >= 1000 ? `${(Number(v) / 1000).toFixed(0)}k` : Number(v).toFixed(0)}`} width={50} />
                   <Tooltip
-                    contentStyle={{
-                      background: 'rgba(20, 20, 20, 0.95)',
-                      border: '1px solid rgba(241, 198, 101, 0.3)',
-                      borderRadius: 12,
-                      color: '#fff',
-                      fontSize: 12,
-                    }}
+                    contentStyle={{ background: 'rgba(20, 20, 20, 0.95)', border: '1px solid rgba(241, 198, 101, 0.3)', borderRadius: 12, color: '#fff', fontSize: 12 }}
                     formatter={(v: any) => hideValues ? ['•••', 'Receita'] : [`R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, 'Receita']}
                     labelFormatter={(d) => format(parseISO(String(d)), "dd 'de' MMMM", { locale: ptBR })}
                   />
-                  <Area
-                    type="monotone"
-                    dataKey="total"
-                    stroke="#F1C665"
-                    strokeWidth={2.5}
-                    fill="url(#revGold)"
-                    activeDot={{ r: 4, fill: '#F1C665', stroke: '#fff', strokeWidth: 2 }}
-                  />
+                  <Area type="monotone" dataKey="total" stroke="#F1C665" strokeWidth={2.5} fill="url(#revGold)" activeDot={{ r: 4, fill: '#F1C665', stroke: '#fff', strokeWidth: 2 }} />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
           </Card>
+        ) : (
           <Card>
-            <CardHeader icon={<PieIcon size={16} />} title="Faturamento por tipo" inline />
-            <TypeDonut byType={a.jobs.byType || []} hideValues={hideValues} />
-          </Card>
-        </div>
-      )}
-
-      {/* ── Desempenho por tipo + Insights de ação ── */}
-      <div className={cn("grid grid-cols-1 gap-3", canSeeFinance && "xl:grid-cols-[1fr_340px]")}>
-        {canSeeFinance && (
-          <Card>
-            <CardHeader icon={<Camera size={16} />} title="Desempenho por tipo de ensaio" inline />
-            <TypeTable byType={a.jobs.byType || []} hideValues={hideValues} />
-          </Card>
-        )}
-        <Card>
-          <CardHeader icon={<Lightbulb size={16} />} title="Insights de ação" inline />
-          <ActionInsights items={insights} />
-        </Card>
-      </div>
-
-      {/* ── Operação: indicadores do dia a dia + funil ── */}
-      <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-3">
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-            <Card>
-              <CardHeader icon={<Camera size={16} />} title="Ensaios no período" />
-              <CardValue num={a.jobs.thisMonth.total} />
-              <CardHint>{a.jobs.thisMonth.completed} feitos · {a.jobs.thisMonth.scheduled} agendados</CardHint>
-            </Card>
-
-            <Card onClick={() => navigate("/vendas")}>
-              <CardHeader icon={<Target size={16} />} title="Funil ativo" />
-              <CardValue num={a.sales.activeCount} />
-              <CardHint>{canSeeFinance ? `${formatBRLShort(a.sales.activeValue, hideValues)} em pipeline` : 'leads ativos'}</CardHint>
-            </Card>
-
-            {canSeeFinance && (<>
-            <Card>
-              <CardHeader icon={<Check size={16} />} title="Sinal recebido" />
-              <CardValue num={a.finance.sinalRecebidoOpen} render={(n) => formatBRL(n, hideValues)} />
-              <CardHint>Já pago em ensaios em produção</CardHint>
-            </Card>
-
-            <Card>
-              <CardHeader icon={<TrendingUp size={16} />} title="A receber" />
-              <CardValue num={a.finance.toReceiveOpen} render={(n) => formatBRL(n, hideValues)} />
-              <CardHint>
-                Saldo de {a.finance.openJobsCount} ensaio{a.finance.openJobsCount === 1 ? '' : 's'} em produção
-              </CardHint>
-            </Card>
-            </>)}
-
-            <Card>
-              <CardHeader icon={<FileClock size={16} />} title="Pendências" />
-              <CardValue num={a.attention} />
-              <CardHint>Atrasados + contratos + seleção</CardHint>
-            </Card>
-
-            <Card onClick={() => navigate("/calendar")}>
-              <CardHeader icon={<CalendarIcon size={16} />} title="Hoje" />
-              <CardValue num={a.jobs.today.count} />
-              <CardHint>{a.jobs.today.count === 0 ? 'Sem ensaios hoje' : a.jobs.today.count === 1 ? 'ensaio agendado' : 'ensaios agendados'}</CardHint>
-            </Card>
-          </div>
-        </div>
-
-        {/* Right column: Funnel */}
-        <Card>
-          <div className="flex items-center justify-between mb-4">
-            <CardHeader icon={<Target size={16} />} title="Funil de vendas" inline />
-            <button
-              onClick={() => navigate("/vendas")}
-              className="text-[10px] uppercase tracking-wider text-gold-500 hover:text-gold-400 inline-flex items-center gap-1"
-            >
-              Detalhes <ArrowRight size={10} />
-            </button>
-          </div>
-          <SalesFunnel
-            byStage={a.sales.byStage}
-            conversion={a.sales.conversion}
-            hideValues={hideValues}
-          />
-        </Card>
-      </div>
-
-      {/* Pendências (3 cards minimalistas) */}
-      {(a.jobs.late.count > 0 || a.jobs.awaitingContract.count > 0 || a.jobs.awaitingSelection.count > 0) && (
-        <Section title="Pendências">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <PendingCard
-              tone="red"
-              title="Atrasados"
-              count={a.jobs.late.count}
-              list={a.jobs.late.list}
-              onOpen={() => navigate("/jobs")}
-            />
-            <PendingCard
-              tone="amber"
-              title="Aguardando contrato"
-              count={a.jobs.awaitingContract.count}
-              list={a.jobs.awaitingContract.list}
-              onOpen={() => navigate("/contratos")}
-            />
-            <PendingCard
-              tone="blue"
-              title="Aguardando seleção"
-              count={a.jobs.awaitingSelection.count}
-              list={a.jobs.awaitingSelection.list}
-              onOpen={() => navigate("/jobs")}
-            />
-          </div>
-        </Section>
-      )}
-
-      {/* Hoje + Oportunidades lado a lado */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        {a.jobs.today.count > 0 && (
-          <Card>
-            <div className="flex items-center justify-between mb-3">
-              <CardHeader icon={<CalendarIcon size={16} />} title="Hoje" inline />
-              <button
-                onClick={() => navigate("/calendar")}
-                className="text-[10px] uppercase tracking-wider text-gold-500 hover:text-gold-400 inline-flex items-center gap-1"
-              >
-                Agenda <ArrowRight size={10} />
+            <div className="flex items-center justify-between mb-4">
+              <CardHeader icon={<Target size={16} />} title="Funil de vendas" inline />
+              <button onClick={() => navigate("/vendas")} className="text-[10px] uppercase tracking-wider text-gold-500 hover:text-gold-400 inline-flex items-center gap-1">
+                Detalhes <ArrowRight size={10} />
               </button>
             </div>
-            <div className="space-y-2">
-              {a.jobs.today.list.slice(0, 5).map(j => (
-                <div key={j.id} className="flex items-center justify-between gap-3 py-2 border-b border-gray-100 dark:border-gray-800/60 last:border-0">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{j.client_name || 'Sem cliente'}</p>
-                    <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
-                      {j.job_type}{j.job_time && ` · ${j.job_time}`}
-                    </p>
-                  </div>
-                  <span className="text-xs font-bold text-gold-500 tabular-nums flex-shrink-0">
-                    {formatBRLShort(j.amount, hideValues)}
-                  </span>
-                </div>
-              ))}
-            </div>
+            <SalesFunnel byStage={a.sales.byStage} conversion={a.sales.conversion} hideValues={hideValues} />
           </Card>
         )}
 
         <Card>
           <div className="flex items-center justify-between mb-3">
-            <CardHeader icon={<Sparkles size={16} />} title="Oportunidades internas" inline />
+            <CardHeader icon={<AlertTriangle size={16} />} title="Precisa de você" inline />
+            {a.attention > 0 && (
+              <span className="text-[10px] font-bold text-amber-500 bg-amber-500/15 px-2 py-0.5 rounded-full">{a.attention}</span>
+            )}
+          </div>
+          <AttentionList a={a} canSeeFinance={canSeeFinance} hideValues={hideValues} onNavigate={navigate} />
+        </Card>
+      </div>
+
+      {/* ══ Funil + Por tipo + Agenda ══ */}
+      <div className={cn("grid grid-cols-1 gap-3", canSeeFinance ? "lg:grid-cols-3" : "lg:grid-cols-2")}>
+        {canSeeFinance && (
+          <Card>
+            <div className="flex items-center justify-between mb-4">
+              <CardHeader icon={<Target size={16} />} title="Funil de vendas" inline />
+              <button onClick={() => navigate("/vendas")} className="text-[10px] uppercase tracking-wider text-gold-500 hover:text-gold-400 inline-flex items-center gap-1">
+                Detalhes <ArrowRight size={10} />
+              </button>
+            </div>
+            <SalesFunnel byStage={a.sales.byStage} conversion={a.sales.conversion} hideValues={hideValues} />
+          </Card>
+        )}
+
+        {canSeeFinance && (
+          <Card>
+            <CardHeader icon={<Camera size={16} />} title="Onde o dinheiro nasce" inline />
+            <TypeBars byType={a.jobs.byType || []} hideValues={hideValues} />
+          </Card>
+        )}
+
+        <Card>
+          <div className="flex items-center justify-between mb-3">
+            <CardHeader icon={<CalendarIcon size={16} />} title={a.jobs.today.count > 0 ? "Hoje" : "Próximos ensaios"} inline />
+            <button onClick={() => navigate("/calendar")} className="text-[10px] uppercase tracking-wider text-gold-500 hover:text-gold-400 inline-flex items-center gap-1">
+              Agenda <ArrowRight size={10} />
+            </button>
+          </div>
+          <AgendaList a={a} hideValues={hideValues} />
+        </Card>
+      </div>
+
+      {/* ══ Dinheiro dormindo na base: recompra ══ */}
+      {(opportunities.length > 0 || a.opportunities.total > 0) && (
+        <Card>
+          <div className="flex items-center justify-between mb-3">
+            <CardHeader icon={<Sparkles size={16} />} title="Clientes prontos pra comprar de novo" inline />
             <span className="text-[10px] font-bold text-gold-500 bg-gold-500/15 dark:bg-gold-500/20 px-2 py-0.5 rounded-full">
               {a.opportunities.total}
             </span>
@@ -539,7 +455,7 @@ export default function DashboardPage() {
             onDismiss={handleDismissOpp}
           />
         </Card>
-      </div>
+      )}
     </div>
   );
 }
@@ -1136,6 +1052,132 @@ function ActionInsights({ items }: { items: Insight[] }) {
         </motion.li>
       ))}
     </ul>
+  );
+}
+
+// Pílula de contexto — informação sem virar mais um quadrado na tela.
+function MiniStat({ label, value, tone, onClick }: { label: string; value: string; tone?: 'warn' | 'ok'; onClick?: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[12px] transition-colors",
+        tone === 'warn'
+          ? "border-amber-400/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"
+          : "border-black/10 dark:border-white/10 bg-white dark:bg-[#161616] text-gray-600 dark:text-gray-300 hover:border-gold-400/60"
+      )}
+    >
+      <span className="text-gray-400 dark:text-gray-500">{label}</span>
+      <span className="font-bold text-gray-900 dark:text-white tabular-nums">{value}</span>
+    </button>
+  );
+}
+
+// "Precisa de você": UMA lista com tudo que pede ação do dono, cada linha
+// clicável levando pro lugar certo. Substitui os cards espalhados de pendência.
+function AttentionList({ a, canSeeFinance, hideValues, onNavigate }: {
+  a: Analytics; canSeeFinance: boolean; hideValues: boolean; onNavigate: (to: string) => void;
+}) {
+  type Item = { tone: 'red' | 'amber' | 'blue' | 'gold' | 'green'; title: string; sub: string; to: string };
+  const items: Item[] = [];
+  if (a.jobs.late.count > 0) items.push({ tone: 'red', title: `${a.jobs.late.count} ensaio${a.jobs.late.count === 1 ? '' : 's'} atrasado${a.jobs.late.count === 1 ? '' : 's'} na produção`, sub: 'Passaram do prazo da etapa — destrave primeiro.', to: '/jobs' });
+  if (a.jobs.awaitingContract.count > 0) items.push({ tone: 'amber', title: `${a.jobs.awaitingContract.count} venda${a.jobs.awaitingContract.count === 1 ? '' : 's'} sem contrato assinado`, sub: 'Garanta a assinatura antes do ensaio.', to: '/contratos' });
+  if (a.jobs.awaitingSelection.count > 0) items.push({ tone: 'blue', title: `${a.jobs.awaitingSelection.count} cliente${a.jobs.awaitingSelection.count === 1 ? '' : 's'} com seleção de fotos parada`, sub: 'Um lembrete gentil acelera a entrega.', to: '/jobs' });
+  if (canSeeFinance && a.finance.toReceiveOpen > 0) items.push({ tone: 'gold', title: `${formatBRLShort(a.finance.toReceiveOpen, hideValues)} a receber em ${a.finance.openJobsCount} ensaio${a.finance.openJobsCount === 1 ? '' : 's'}`, sub: 'Combine os saldos antes das entregas.', to: '/finance' });
+  if (a.opportunities.urgent > 0) items.push({ tone: 'green', title: `${a.opportunities.urgent} cliente${a.opportunities.urgent === 1 ? '' : 's'} no momento de recomprar`, sub: 'Um oi hoje vira venda — veja a lista abaixo.', to: '/oportunidades' });
+
+  if (items.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-10 gap-2 text-center">
+        <span className="w-11 h-11 rounded-full bg-emerald-500/12 text-emerald-500 flex items-center justify-center"><Check size={20} /></span>
+        <p className="text-sm font-semibold text-gray-900 dark:text-white">Tudo em dia</p>
+        <p className="text-[12px] text-gray-500 dark:text-gray-400">Nenhuma pendência crítica — bom momento pra vender.</p>
+      </div>
+    );
+  }
+
+  const toneDot: Record<Item['tone'], string> = {
+    red: 'bg-red-500', amber: 'bg-amber-500', blue: 'bg-sky-500', gold: 'bg-gold-500', green: 'bg-emerald-500',
+  };
+  return (
+    <ul className="space-y-1">
+      {items.slice(0, 5).map((it, i) => (
+        <motion.li key={it.title} initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.35, delay: 0.1 + i * 0.07 }}>
+          <button
+            onClick={() => onNavigate(it.to)}
+            className="w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-left hover:bg-gold-500/5 dark:hover:bg-gold-500/10 transition-colors group"
+          >
+            <span className={cn("w-2 h-2 rounded-full flex-shrink-0", toneDot[it.tone])} />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] font-semibold text-gray-900 dark:text-white leading-snug">{it.title}</span>
+              <span className="block text-[11.5px] text-gray-500 dark:text-gray-400 leading-snug">{it.sub}</span>
+            </span>
+            <ChevronRight size={14} className="text-gray-300 dark:text-gray-600 group-hover:text-gold-500 flex-shrink-0" />
+          </button>
+        </motion.li>
+      ))}
+    </ul>
+  );
+}
+
+// Barras horizontais de receita por tipo de ensaio — direto, sem donut confuso.
+function TypeBars({ byType, hideValues }: { byType: Array<{ type: string; count: number; total: number }>; hideValues: boolean }) {
+  const rows = byType.slice(0, 5);
+  if (rows.length === 0) {
+    return <p className="text-sm text-gray-500 dark:text-gray-400 italic py-8 text-center">Sem ensaios com valor no período.</p>;
+  }
+  const max = Math.max(1, ...rows.map(r => r.total));
+  return (
+    <div className="mt-3 space-y-3">
+      {rows.map((r, i) => (
+        <div key={r.type}>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[12px] font-medium text-gray-700 dark:text-gray-300 truncate">{r.type}</span>
+            <span className="text-[12px] tabular-nums flex-shrink-0">
+              <b className="text-gray-900 dark:text-white">{formatBRLShort(r.total, hideValues)}</b>
+              <span className="text-gray-400 dark:text-gray-500"> · {r.count}x</span>
+            </span>
+          </div>
+          <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
+            <motion.div
+              initial={{ width: 0 }}
+              animate={{ width: `${(r.total / max) * 100}%` }}
+              transition={{ duration: 0.7, delay: 0.15 + i * 0.08, ease: [0.22, 1, 0.36, 1] }}
+              className="h-full rounded-full bg-gradient-to-r from-gold-400 to-gold-500"
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Agenda enxuta: hoje (ou os próximos), nome + tipo + hora + valor.
+function AgendaList({ a, hideValues }: { a: Analytics; hideValues: boolean }) {
+  const list = (a.jobs.today.count > 0 ? a.jobs.today.list : a.jobs.next7Days.list).slice(0, 5);
+  if (list.length === 0) {
+    return <p className="text-sm text-gray-500 dark:text-gray-400 italic py-8 text-center">Nada agendado pros próximos dias.</p>;
+  }
+  return (
+    <div className="space-y-1">
+      {list.map((j, i) => (
+        <motion.div
+          key={j.id}
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35, delay: 0.1 + i * 0.06 }}
+          className="flex items-center justify-between gap-3 px-2 py-2 rounded-xl hover:bg-gold-500/5 dark:hover:bg-gold-500/10 transition-colors"
+        >
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-semibold text-gray-900 dark:text-white truncate">{j.client_name || 'Sem cliente'}</p>
+            <p className="text-[11.5px] text-gray-500 dark:text-gray-400 truncate">
+              {a.jobs.today.count === 0 && j.job_date ? `${format(parseISO(j.job_date), 'dd/MM')} · ` : ''}{j.job_type}{j.job_time ? ` · ${j.job_time}` : ''}
+            </p>
+          </div>
+          <span className="text-[12px] font-bold text-gold-500 tabular-nums flex-shrink-0">{formatBRLShort(j.amount, hideValues)}</span>
+        </motion.div>
+      ))}
+    </div>
   );
 }
 
