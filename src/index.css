@@ -229,44 +229,50 @@
   background: #4b5563;
 }
 
-/* ===== WhatsApp theme CSS vars ===== */
+/* ===== Chat theme CSS vars — IDENTIDADE DO CRM (dourado + luxury) =====
+   Antes eram as cores do WhatsApp (verde/teal) — o chat parecia "arrancado"
+   do WhatsApp e colado no app. Os NOMES das vars não mudam (--wa-*) pra não
+   tocar nos componentes; só os VALORES viram a paleta da casa.
+   --wa-accent-green é o acento de AÇÃO do chat: agora é o dourado da marca. */
 :root {
-  --wa-bg-primary:    #0B141A;
-  --wa-bg-secondary:  #111B21;
-  --wa-bg-tertiary:   #202C33;
-  --wa-bg-hover:      #2A3942;
-  --wa-bg-input:      #2A3942;
-  --wa-bubble-sent:   #005C4B;
-  --wa-bubble-recv:   #202C33;
-  --wa-text-primary:  #E9EDEF;
-  --wa-text-secondary:#8696A0;
-  --wa-text-muted:    #667781;
-  --wa-accent-green:  #00A884;
+  --wa-bg-primary:    #0A0A0A;
+  --wa-bg-secondary:  #101010;
+  --wa-bg-tertiary:   #181816;
+  --wa-bg-hover:      #21201C;
+  --wa-bg-input:      #1D1C19;
+  --wa-bubble-sent:   #33290F;
+  --wa-bubble-recv:   #1C1C1A;
+  --wa-text-primary:  #F2EFE9;
+  --wa-text-secondary:#9A958C;
+  --wa-text-muted:    #6E6A61;
+  --wa-accent-green:  #C9992E;
   --wa-accent-read:   #53BDEB;
-  --wa-border:        rgba(134, 150, 160, 0.16);
+  --wa-border:        rgba(242, 239, 233, 0.07);
 }
 
 [data-theme="light"] {
-  --wa-bg-primary:    #EFEAE2;
+  --wa-bg-primary:    #F4F1EA;
   --wa-bg-secondary:  #FFFFFF;
-  --wa-bg-tertiary:   #F0F2F5;
-  --wa-bg-hover:      #F5F6F6;
+  --wa-bg-tertiary:   #FAF8F3;
+  --wa-bg-hover:      #F3EFE6;
   --wa-bg-input:      #FFFFFF;
-  --wa-bubble-sent:   #D9FDD3;
+  --wa-bubble-sent:   #FAF1D0;
   --wa-bubble-recv:   #FFFFFF;
-  --wa-text-primary:  #111B21;
-  --wa-text-secondary:#667781;
-  --wa-text-muted:    #8696A0;
-  --wa-accent-green:  #00A884;
+  --wa-text-primary:  #141414;
+  --wa-text-secondary:#6E6A61;
+  --wa-text-muted:    #9A958C;
+  --wa-accent-green:  #B08830;
   --wa-accent-read:   #53BDEB;
-  --wa-border:        rgba(17, 27, 33, 0.08);
+  --wa-border:        rgba(20, 20, 20, 0.08);
 }
 
 /* ===== WhatsApp chat background pattern ===== */
 /* Fundo oficial WhatsApp Web via ::before para controle de opacidade */
+/* Fundo da área de mensagens: LIMPO, na identidade do CRM — sem os doodles do
+   WhatsApp. Só um brilho dourado muito sutil nos cantos (toque premium). */
 .wa-chat-pattern {
   position: relative;
-  background-color: #0b141a;
+  background-color: var(--wa-bg-primary);
   overflow: hidden;
 }
 
@@ -274,14 +280,11 @@
   content: '';
   position: absolute;
   inset: 0;
-  background-image: url('/wa-bg-dark.png');
-  background-repeat: repeat;
-  background-size: 412px auto;
   pointer-events: none;
   z-index: 0;
-  /* Dark: doodles muito sutis — quase imperceptíveis */
-  opacity: 0.035;
-  filter: invert(1) brightness(0.5);
+  background:
+    radial-gradient(1100px 480px at 88% -8%, rgba(212, 169, 74, 0.07), transparent 62%),
+    radial-gradient(900px 420px at -5% 108%, rgba(212, 169, 74, 0.05), transparent 60%);
 }
 
 .wa-chat-pattern > * {
@@ -289,15 +292,10 @@
   z-index: 1;
 }
 
-[data-theme="light"] .wa-chat-pattern {
-  background-color: #efeae2;
-}
-
 [data-theme="light"] .wa-chat-pattern::before {
-  background-image: url('/wa-bg-light.png');
-  background-size: 366px auto;
-  opacity: 0.45;
-  filter: none;
+  background:
+    radial-gradient(1100px 480px at 88% -8%, rgba(212, 169, 74, 0.10), transparent 62%),
+    radial-gradient(900px 420px at -5% 108%, rgba(212, 169, 74, 0.07), transparent 60%);
 }
 
 /* ===== WhatsApp scrollbar ===== */

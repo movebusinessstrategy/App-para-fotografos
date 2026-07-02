@@ -176,7 +176,7 @@ export function AudioRecorder({ onSend, onCancel, className = '' }: AudioRecorde
 
       // Cor via CSS var (lida do elemento raiz)
       const accentColor = getComputedStyle(document.documentElement)
-        .getPropertyValue('--wa-accent-green').trim() || '#00A884';
+        .getPropertyValue('--wa-accent-green').trim() || '#B08830';
 
       ctx.fillStyle = accentColor;
 

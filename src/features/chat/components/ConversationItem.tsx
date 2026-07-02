@@ -23,7 +23,8 @@ function timeLabel(iso: string | null): string {
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
 }
 
-const COLORS = ['#00756A','#2C5364','#6B4226','#4B3F72','#1B6B4A','#7A3045'];
+// Avatares sem foto: paleta na identidade do CRM (terrosos + acentos sóbrios)
+const COLORS = ['#B08830','#6B4226','#4B3F72','#1B6B4A','#7A3045','#2C5364'];
 function avatarColor(phone: string) {
   let h = 0;
   for (let i = 0; i < phone.length; i++) h = phone.charCodeAt(i) + ((h << 5) - h);

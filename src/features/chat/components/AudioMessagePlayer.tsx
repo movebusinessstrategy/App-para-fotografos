@@ -36,15 +36,15 @@ function getWaveformColors(isMe: boolean) {
   const isDark = getIsDark();
   if (isMe) {
     if (isDark) {
-      // Dark: balão verde escuro (#005C4B) → barras brancas têm contraste
+      // Dark: balão dourado escuro → barras brancas têm contraste
       return { played: '#ffffff', unplayed: 'rgba(255,255,255,0.4)' };
     } else {
-      // Light: balão verde claro (#D9FDD3) → barras verde escuro para contrastar
-      return { played: '#005C4B', unplayed: 'rgba(0,92,75,0.4)' };
+      // Light: balão dourado claro (gold-100) → barras douradas escuras
+      return { played: '#8A6620', unplayed: 'rgba(138,102,32,0.4)' };
     }
   }
-  // Recebido: verde em qualquer tema (fundo branco no light, cinza escuro no dark)
-  return { played: '#00a884', unplayed: 'rgba(0,168,132,0.35)' };
+  // Recebido: dourado da marca em qualquer tema
+  return { played: '#B08830', unplayed: 'rgba(176,136,48,0.35)' };
 }
 
 export function AudioMessagePlayer({ src, isMe, contactInitial = '?', duration: durationProp, waveform }: Props) {
@@ -93,8 +93,8 @@ export function AudioMessagePlayer({ src, isMe, contactInitial = '?', duration: 
   const isDark = getIsDark();
   const { played: barPlayed, unplayed: barUnplayed } = getWaveformColors(isMe);
 
-  const playBtnBg    = isMe ? (isDark ? 'rgba(255,255,255,0.25)' : 'rgba(0,92,75,0.18)') : '#00a884';
-  const playBtnColor = isMe ? (isDark ? '#fff' : '#005C4B') : '#fff';
+  const playBtnBg    = isMe ? (isDark ? 'rgba(255,255,255,0.25)' : 'rgba(138,102,32,0.18)') : '#B08830';
+  const playBtnColor = isMe ? (isDark ? '#fff' : '#8A6620') : '#fff';
   const timeColor    = isMe ? 'rgba(255,255,255,0.75)' : (isDark ? '#8696A0' : '#667781');
   const avatarBg     = isMe ? 'rgba(255,255,255,0.2)' : (isDark ? '#2A3942' : '#F0F2F5');
   const avatarColor  = isMe ? '#fff' : (isDark ? '#8696A0' : '#667781');

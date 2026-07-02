@@ -434,7 +434,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
   }, [convPhone, messages]);
 
   return (
-    <div className="flex h-full overflow-hidden" style={{ background: 'var(--wa-bg-secondary)', fontFamily: 'Inter, system-ui, sans-serif' }}>
+    <div className="flex h-full overflow-hidden font-sans" style={{ background: 'var(--wa-bg-secondary)' }}>
 
       {/* ── SIDEBAR ── (min-h-0 permite a lista interna rolar até o fim) */}
       <div
@@ -541,7 +541,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
                 style={{
                   background: waSlot === k ? 'var(--wa-accent-green)' : 'var(--wa-bg-hover)',
                   color: waSlot === k ? '#fff' : 'var(--wa-text-secondary)',
-                  boxShadow: waSlot === k ? '0 2px 10px -4px rgba(0,168,132,0.6)' : 'none',
+                  boxShadow: waSlot === k ? '0 2px 10px -4px rgba(212,169,74,0.55)' : 'none',
                 }}
               >
                 {label}
@@ -587,7 +587,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
         {/* Aba Pós-venda sem o 2º número conectado → conexão AQUI (QR inline) */}
         {waSlot === 'posvenda' && !posvendaOn ? (
           <div className="flex-1 min-h-0 overflow-y-auto wa-scrollbar px-6 py-10 flex flex-col items-center text-center gap-3">
-            <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl" style={{ background: 'rgba(0,168,132,0.14)' }}>🤝</div>
+            <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl" style={{ background: 'rgba(212,169,74,0.16)' }}>🤝</div>
             <p className="text-sm font-bold" style={{ color: 'var(--wa-text-primary)' }}>WhatsApp do Pós-venda</p>
             <p className="text-[13px] leading-snug" style={{ color: 'var(--wa-text-secondary)' }}>
               Conecte o 2º número da conta (o do alinhamento). As conversas dele aparecem só nesta aba — separadas das vendas.
@@ -687,7 +687,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
               >
                 <div
                   className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center text-white text-sm font-semibold overflow-hidden"
-                  style={{ background: '#00756A' }}
+                  style={{ background: 'var(--wa-accent-green)' }}
                 >
                   {avatarUrl
                     ? <img src={avatarUrl} alt={displayName} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
@@ -1108,7 +1108,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
             onClick={(e) => e.stopPropagation()}
           >
             <div className="p-5 flex items-start gap-3" style={{ borderBottom: '1px solid var(--wa-border)' }}>
-              <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-xl flex-shrink-0" style={{ background: 'rgba(0,168,132,0.14)' }}>📞</div>
+              <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-xl flex-shrink-0" style={{ background: 'rgba(212,169,74,0.16)' }}>📞</div>
               <div>
                 <h3 className="text-[15px] font-bold" style={{ color: 'var(--wa-text-primary)' }}>Enviar para Vendas?</h3>
                 <p className="mt-1 text-[13px] leading-snug" style={{ color: 'var(--wa-text-secondary)' }}>
@@ -1247,7 +1247,7 @@ function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages,
         <div className="flex-1 min-h-0 overflow-y-auto wa-scrollbar">
           {/* Cabeçalho: foto + nome + telefone */}
           <div className="flex flex-col items-center gap-3 py-7 px-4" style={{ borderBottom: '8px solid var(--wa-bg-primary)' }}>
-            <div className="w-24 h-24 rounded-full flex items-center justify-center text-white text-3xl font-semibold overflow-hidden" style={{ background: '#00756A' }}>
+            <div className="w-24 h-24 rounded-full flex items-center justify-center text-white text-3xl font-semibold overflow-hidden" style={{ background: 'var(--wa-accent-green)' }}>
               {avatarUrl
                 ? <img src={avatarUrl} alt={displayName} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                 : getInitials(displayName)}
@@ -1315,7 +1315,7 @@ function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages,
                 disabled={!!busy}
                 className="w-full py-2.5 rounded-xl text-sm font-bold transition-colors disabled:opacity-60"
                 style={saved
-                  ? { background: 'rgba(0,168,132,0.15)', color: 'var(--wa-accent-green)' }
+                  ? { background: 'rgba(212,169,74,0.16)', color: 'var(--wa-accent-green)' }
                   : { background: 'var(--wa-accent-green)', color: '#fff' }}
               >
                 {busy === 'save' ? 'Salvando…' : saved ? '✓ Salvo!' : 'Salvar alterações'}
