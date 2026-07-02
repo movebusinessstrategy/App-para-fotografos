@@ -6,7 +6,8 @@ import {
 } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import {
-  Area, AreaChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart,
+  ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import {
   AlertTriangle, ArrowRight, Calendar as CalendarIcon, Camera, Check, ChevronLeft, ChevronRight,
@@ -142,6 +143,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const [vendasA, setVendasA] = useState<any | null>(null); // /api/vendas/analytics (meta + ticket 6m)
   const [hideValuesPref, setHideValues] = useState(() => localStorage.getItem("dashboard_hide_values") === "true");
   // Sem permissão de Financeiro: valores SEMPRE mascarados (sobra funil, hot deals).
   const hideValues = !canSeeFinance || hideValuesPref;
@@ -175,6 +177,13 @@ export default function DashboardPage() {
       else setLoadError(true); // API com erro → mostra retry, não spinner eterno
       if (oRes.ok) setOpportunities(await oRes.json());
       if (cRes.ok) setClients(await cRes.json());
+      // Central de vendas (meta vs realizado + ticket médio, 6 meses) — best-effort
+      if (canSeeFinance) {
+        authFetch(`/api/vendas/analytics?${qs.toString()}`)
+          .then(r => (r.ok ? r.json() : null))
+          .then(d => { if (fetchSeq.current === seq && d) setVendasA(d); })
+          .catch(() => {});
+      }
     } catch (err) {
       console.error(err);
       if (fetchSeq.current === seq) setLoadError(true);
@@ -294,65 +303,45 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ══ O PULSO — os 4 números que o dono olha primeiro ══ */}
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-        {canSeeFinance ? (<>
-          <HeroCard
-            icon={<DollarSign size={16} />}
-            title="Faturamento"
-            num={a.finance.revenueThisMonth}
-            render={(n) => formatBRL(n, hideValues)}
-            deltaPct={periodDelta}
-            spark={a.finance.dailyRevenue}
-          />
-          <HeroCard
-            icon={<Wallet size={16} />}
-            title="Lucro"
-            num={lucro}
-            render={(n) => formatBRL(n, hideValues)}
-            hint={hideValues ? 'Entrada − Saída no período' : `Margem de ${margem.toFixed(0)}%`}
-            negative={lucro < 0}
-          />
-          <HeroCard
-            icon={<TrendingUp size={16} />}
-            title="A receber"
-            num={a.finance.toReceiveOpen}
-            render={(n) => formatBRL(n, hideValues)}
-            hint={`${a.finance.openJobsCount} ensaio${a.finance.openJobsCount === 1 ? '' : 's'} · sinal ${formatBRLShort(a.finance.sinalRecebidoOpen, hideValues)} já pago`}
-          />
-          <HeroCard
-            icon={<Trophy size={16} />}
-            title="Vendas fechadas"
-            num={wonCount}
-            render={(n) => String(Math.round(n))}
-            hint={`${formatBRLShort(wonValue, hideValues)}${convPeriodo !== null ? ` · ${convPeriodo}% de conversão` : ''}`}
-          />
-        </>) : (<>
-          <HeroCard icon={<Camera size={16} />} title="Ensaios no período" num={a.jobs.thisMonth.total} render={(n) => String(Math.round(n))} hint={`${a.jobs.thisMonth.completed} feitos · ${a.jobs.thisMonth.scheduled} agendados`} />
-          <HeroCard icon={<Target size={16} />} title="Funil ativo" num={a.sales.activeCount} render={(n) => String(Math.round(n))} hint="leads em aberto" />
-          <HeroCard icon={<FileClock size={16} />} title="Pendências" num={a.attention} render={(n) => String(Math.round(n))} hint="atrasos, contratos e seleção" />
-          <HeroCard icon={<CalendarIcon size={16} />} title="Hoje" num={a.jobs.today.count} render={(n) => String(Math.round(n))} hint={a.jobs.today.count === 0 ? 'sem ensaios hoje' : 'ensaios agendados'} />
-        </>)}
-      </div>
+      {/* ══ O PULSO: uma faixa única, sem 4 caixinhas ══ */}
+      <motion.div
+        initial={{ opacity: 0, y: 14 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+        className="rounded-3xl bg-white/70 dark:bg-white/[0.045] backdrop-blur-sm shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:shadow-none overflow-hidden"
+      >
+        <div className="grid grid-cols-2 xl:grid-cols-4 divide-y xl:divide-y-0 xl:divide-x divide-black/5 dark:divide-white/[0.06]">
+          {canSeeFinance ? (<>
+            <KpiCell label="Faturamento" num={a.finance.revenueThisMonth} render={(n) => formatBRL(n, hideValues)} deltaPct={periodDelta} spark={a.finance.dailyRevenue} />
+            <KpiCell label="Lucro" num={lucro} render={(n) => formatBRL(n, hideValues)} hint={hideValues ? 'Entrada − Saída' : `Margem de ${margem.toFixed(0)}%`} negative={lucro < 0} />
+            <KpiCell label="A receber" num={a.finance.toReceiveOpen} render={(n) => formatBRL(n, hideValues)} hint={`${a.finance.openJobsCount} ensaio${a.finance.openJobsCount === 1 ? '' : 's'} · sinal ${formatBRLShort(a.finance.sinalRecebidoOpen, hideValues)} pago`} />
+            <KpiCell label="Vendas fechadas" num={wonCount} render={(n) => String(Math.round(n))} hint={`${formatBRLShort(wonValue, hideValues)}${convPeriodo !== null ? ` · ${convPeriodo}% de conversão` : ''}`} spark={vendasA?.daily} sparkKey="count" />
+          </>) : (<>
+            <KpiCell label="Ensaios no período" num={a.jobs.thisMonth.total} render={(n) => String(Math.round(n))} hint={`${a.jobs.thisMonth.completed} feitos · ${a.jobs.thisMonth.scheduled} agendados`} />
+            <KpiCell label="Funil ativo" num={a.sales.activeCount} render={(n) => String(Math.round(n))} hint="leads em aberto" />
+            <KpiCell label="Pendências" num={a.attention} render={(n) => String(Math.round(n))} hint="atrasos, contratos e seleção" />
+            <KpiCell label="Hoje" num={a.jobs.today.count} render={(n) => String(Math.round(n))} hint={a.jobs.today.count === 0 ? 'sem ensaios hoje' : 'ensaios agendados'} />
+          </>)}
+        </div>
+      </motion.div>
 
-      {/* ══ Faixa de contexto rápido (sem virar mais quadrado) ══ */}
       {canSeeFinance && (
         <div className="flex flex-wrap gap-2">
-          <MiniStat label="Ensaios no período" value={String(a.jobs.thisMonth.total)} onClick={() => navigate('/jobs')} />
+          <MiniStat label="Ensaios" value={String(a.jobs.thisMonth.total)} onClick={() => navigate('/jobs')} />
           <MiniStat label="Funil ativo" value={`${a.sales.activeCount} · ${formatBRLShort(a.sales.activeValue, hideValues)}`} onClick={() => navigate('/vendas')} />
           <MiniStat label="Hoje" value={a.jobs.today.count === 0 ? 'livre' : `${a.jobs.today.count} ensaio${a.jobs.today.count === 1 ? '' : 's'}`} onClick={() => navigate('/calendar')} />
           <MiniStat label="Pendências" value={String(a.attention)} tone={a.attention > 0 ? 'warn' : 'ok'} onClick={() => navigate('/jobs')} />
         </div>
       )}
 
-      {/* ══ Evolução do dinheiro + O que precisa de você ══ */}
+      {/* ══ Evolução (grande, com linhas-guia) + Precisa de você ══ */}
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-3">
         {canSeeFinance ? (
           <Card>
             <div className="flex items-start justify-between mb-1">
               <div>
-                <CardHeader icon={<TrendingUp size={16} />} title="Evolução do faturamento" inline />
-                <p className="text-2xl font-bold text-gray-900 dark:text-white tabular-nums mt-2">
+                <p className="text-[11px] uppercase tracking-widest text-gray-400 dark:text-gray-500 font-semibold">Evolução do faturamento</p>
+                <p className="text-2xl font-bold text-gray-900 dark:text-white tabular-nums mt-1">
                   <AnimatedNumber value={a.finance.revenueThisMonth} format={(n) => formatBRL(n, hideValues)} />
                   {periodDelta !== null && (
                     <span className={cn("ml-2 text-xs font-bold align-middle", periodDelta >= 0 ? "text-emerald-500" : "text-red-400")}>
@@ -364,14 +353,15 @@ export default function DashboardPage() {
               <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mt-1">{formatRangeShort(dateRange)}</span>
             </div>
             <div className="-mx-2">
-              <ResponsiveContainer width="100%" height={230} minWidth={0}>
+              <ResponsiveContainer width="100%" height={220} minWidth={0}>
                 <AreaChart data={a.finance.dailyRevenue}>
                   <defs>
                     <linearGradient id="revGold" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#F1C665" stopOpacity={0.5} />
+                      <stop offset="0%" stopColor="#F1C665" stopOpacity={0.45} />
                       <stop offset="100%" stopColor="#F1C665" stopOpacity={0} />
                     </linearGradient>
                   </defs>
+                  <CartesianGrid vertical={false} stroke="currentColor" strokeOpacity={0.07} />
                   <XAxis dataKey="date" tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(d) => format(parseISO(String(d)), 'dd/MM')} interval="preserveStartEnd" />
                   <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => hideValues ? '•••' : `R$ ${Number(v) >= 1000 ? `${(Number(v) / 1000).toFixed(0)}k` : Number(v).toFixed(0)}`} width={50} />
                   <Tooltip
@@ -379,7 +369,7 @@ export default function DashboardPage() {
                     formatter={(v: any) => hideValues ? ['•••', 'Receita'] : [`R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, 'Receita']}
                     labelFormatter={(d) => format(parseISO(String(d)), "dd 'de' MMMM", { locale: ptBR })}
                   />
-                  <Area type="monotone" dataKey="total" stroke="#F1C665" strokeWidth={2.5} fill="url(#revGold)" activeDot={{ r: 4, fill: '#F1C665', stroke: '#fff', strokeWidth: 2 }} />
+                  <Area type="monotone" dataKey="total" stroke="#F1C665" strokeWidth={2.5} fill="url(#revGold)" dot={false} activeDot={{ r: 4, fill: '#F1C665', stroke: '#fff', strokeWidth: 2 }} />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
@@ -407,7 +397,32 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {/* ══ Funil + Por tipo + Agenda ══ */}
+      {/* ══ Meta vs Realizado + Ticket médio (6 meses) — os gráficos da referência ══ */}
+      {canSeeFinance && vendasA?.mensal?.length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <Card>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[11px] uppercase tracking-widest text-gray-400 dark:text-gray-500 font-semibold">Meta vs realizado · 6 meses</p>
+              {Number(vendasA.metaTime) > 0 && (
+                <span className="flex items-center gap-3 text-[10px] text-gray-400 dark:text-gray-500">
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-gray-300 dark:bg-gray-600" /> Meta</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-emerald-500" /> Realizado</span>
+                </span>
+              )}
+            </div>
+            <MonthlyBars mensal={vendasA.mensal} hideValues={hideValues} />
+            {Number(vendasA.metaTime) === 0 && (
+              <p className="mt-1 text-[11px] text-gray-400 dark:text-gray-500">Defina a meta de cada vendedor em Configurações → Equipe pra comparar com o realizado.</p>
+            )}
+          </Card>
+          <Card>
+            <p className="text-[11px] uppercase tracking-widest text-gray-400 dark:text-gray-500 font-semibold mb-2">Ticket médio · 6 meses</p>
+            <TicketLine mensal={vendasA.mensal} hideValues={hideValues} />
+          </Card>
+        </div>
+      )}
+
+      {/* ══ Funil + Onde o dinheiro nasce + Agenda ══ */}
       <div className={cn("grid grid-cols-1 gap-3", canSeeFinance ? "lg:grid-cols-3" : "lg:grid-cols-2")}>
         {canSeeFinance && (
           <Card>
@@ -439,7 +454,7 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {/* ══ Dinheiro dormindo na base: recompra ══ */}
+      {/* ══ Recompra ══ */}
       {(opportunities.length > 0 || a.opportunities.total > 0) && (
         <Card>
           <div className="flex items-center justify-between mb-3">
@@ -728,14 +743,13 @@ function Card({ children, onClick }: { children: React.ReactNode; onClick?: () =
       whileHover={{ y: -2 }}
       whileTap={onClick ? { scale: 0.985 } : undefined}
       className={cn(
-        "relative overflow-hidden bg-white dark:bg-[#161616] border border-black/5 dark:border-white/5 rounded-2xl p-4 text-left w-full",
-        "transition-shadow hover:shadow-lg hover:shadow-black/5 dark:hover:shadow-black/40",
-        onClick && "hover:border-gold-300 dark:hover:border-gold-500/50 cursor-pointer"
+        "relative overflow-hidden rounded-3xl p-5 text-left w-full",
+        "bg-white/70 dark:bg-white/[0.045] backdrop-blur-sm",
+        "shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:shadow-none",
+        "transition-shadow hover:shadow-md hover:shadow-black/5 dark:hover:bg-white/[0.06]",
+        onClick && "cursor-pointer"
       )}
     >
-      {/* Subtle gold corner accent (Apple-meets-spy theme) */}
-      <span className="absolute top-0 left-0 h-px w-16 bg-gradient-to-r from-gold-500 to-transparent" aria-hidden />
-      <span className="absolute top-0 left-0 w-px h-16 bg-gradient-to-b from-gold-500 to-transparent" aria-hidden />
       <div className="relative">{children}</div>
     </Comp>
   );
@@ -1177,6 +1191,104 @@ function AgendaList({ a, hideValues }: { a: Analytics; hideValues: boolean }) {
           <span className="text-[12px] font-bold text-gold-500 tabular-nums flex-shrink-0">{formatBRLShort(j.amount, hideValues)}</span>
         </motion.div>
       ))}
+    </div>
+  );
+}
+
+// Célula da faixa de KPIs — número + variação + mini-gráfico, SEM caixa própria.
+function KpiCell({ label, num, render, deltaPct, hint, spark, sparkKey = 'total', negative }: {
+  label: string;
+  num: number;
+  render: (n: number) => string;
+  deltaPct?: number | null;
+  hint?: string;
+  spark?: Array<Record<string, any>>;
+  sparkKey?: string;
+  negative?: boolean;
+}) {
+  const gid = `kpi-${label.replace(/\W/g, '')}`;
+  return (
+    <div className="px-5 py-4 min-w-0">
+      <p className="text-[11px] uppercase tracking-widest text-gray-400 dark:text-gray-500 font-semibold truncate">{label}</p>
+      <p className={cn("mt-1.5 text-[25px] leading-8 font-bold tabular-nums tracking-tight truncate", negative ? "text-red-500" : "text-gray-900 dark:text-white")}>
+        <AnimatedNumber value={num} format={render} />
+      </p>
+      {deltaPct !== null && deltaPct !== undefined ? (
+        <p className={cn("mt-0.5 text-[11px] font-bold tabular-nums", deltaPct >= 0 ? "text-emerald-500" : "text-red-400")}>
+          {deltaPct >= 0 ? '↑' : '↓'} {Math.abs(deltaPct)}% <span className="font-medium text-gray-400 dark:text-gray-500">vs período anterior</span>
+        </p>
+      ) : hint ? (
+        <p className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400 truncate">{hint}</p>
+      ) : null}
+      {spark && spark.length > 1 && (
+        <div className="mt-2 h-9 -mb-1 pointer-events-none">
+          <ResponsiveContainer width="100%" height={36}>
+            <AreaChart data={spark} margin={{ top: 2, bottom: 0, left: 0, right: 0 }}>
+              <defs>
+                <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#F1C665" stopOpacity={0.4} />
+                  <stop offset="100%" stopColor="#F1C665" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <Area type="monotone" dataKey={sparkKey} stroke="#F1C665" strokeWidth={1.5} fill={`url(#${gid})`} dot={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Meta vs Realizado (6 meses): meta em cinza, realizado verde quando bate,
+// âmbar quando não; dourado quando a conta ainda não tem meta configurada.
+function MonthlyBars({ mensal, hideValues }: { mensal: Array<{ month: string; meta: number; realizado: number }>; hideValues: boolean }) {
+  const hasMeta = mensal.some(m => Number(m.meta) > 0);
+  const data = mensal.map(m => ({ ...m, label: format(parseISO(`${m.month}-01`), 'MMM', { locale: ptBR }) }));
+  return (
+    <ResponsiveContainer width="100%" height={190}>
+      <BarChart data={data} barGap={3}>
+        <CartesianGrid vertical={false} stroke="currentColor" strokeOpacity={0.07} />
+        <XAxis dataKey="label" tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} />
+        <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} width={44} tickFormatter={(v) => hideValues ? '•••' : `${Number(v) >= 1000 ? `${(Number(v) / 1000).toFixed(0)}k` : v}`} />
+        <Tooltip
+          cursor={{ fill: 'rgba(212,169,74,0.06)' }}
+          contentStyle={{ background: 'rgba(20,20,20,0.95)', border: '1px solid rgba(241,198,101,0.3)', borderRadius: 12, color: '#fff', fontSize: 12 }}
+          formatter={(v: any, name: any) => [hideValues ? '•••' : `R$ ${Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 0 })}`, name === 'meta' ? 'Meta' : 'Realizado']}
+        />
+        {hasMeta && <Bar dataKey="meta" fill="rgba(148,163,184,0.28)" radius={[4, 4, 0, 0]} />}
+        <Bar dataKey="realizado" radius={[4, 4, 0, 0]} animationDuration={900}>
+          {data.map((m, i) => (
+            <Cell key={i} fill={hasMeta ? (m.realizado >= m.meta ? '#10b981' : '#f59e0b') : '#D4A94A'} />
+          ))}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+// Ticket médio ao longo do tempo, com etiqueta no último ponto (ref. visual).
+function TicketLine({ mensal, hideValues }: { mensal: Array<{ month: string; ticket: number }>; hideValues: boolean }) {
+  const data = mensal.map(m => ({ label: format(parseISO(`${m.month}-01`), 'MMM', { locale: ptBR }), ticket: Math.round(Number(m.ticket) || 0) }));
+  const last = data[data.length - 1];
+  return (
+    <div className="relative">
+      <ResponsiveContainer width="100%" height={190}>
+        <LineChart data={data} margin={{ top: 14, right: 14, left: 0, bottom: 0 }}>
+          <CartesianGrid vertical={false} stroke="currentColor" strokeOpacity={0.07} />
+          <XAxis dataKey="label" tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} />
+          <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} width={44} tickFormatter={(v) => hideValues ? '•••' : `R$ ${Number(v) >= 1000 ? `${(Number(v) / 1000).toFixed(1)}k` : v}`} />
+          <Tooltip
+            contentStyle={{ background: 'rgba(20,20,20,0.95)', border: '1px solid rgba(16,185,129,0.35)', borderRadius: 12, color: '#fff', fontSize: 12 }}
+            formatter={(v: any) => [hideValues ? '•••' : `R$ ${Number(v).toLocaleString('pt-BR')}`, 'Ticket médio']}
+          />
+          <Line type="monotone" dataKey="ticket" stroke="#10b981" strokeWidth={2.5} dot={{ r: 3, fill: '#10b981', strokeWidth: 0 }} activeDot={{ r: 5 }} animationDuration={900} />
+        </LineChart>
+      </ResponsiveContainer>
+      {last && last.ticket > 0 && !hideValues && (
+        <span className="absolute top-0 right-2 px-2 py-0.5 rounded-md bg-emerald-500 text-white text-[11px] font-bold tabular-nums shadow-md">
+          R$ {last.ticket.toLocaleString('pt-BR')}
+        </span>
+      )}
     </div>
   );
 }
