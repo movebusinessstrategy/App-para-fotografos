@@ -16,7 +16,7 @@ import { AudioRecorder } from './AudioRecorder';
 import { CrmDealStrip } from './CrmDealStrip';
 import { LiaSuggestButton } from './LiaSuggestButton';
 import { BulkFollowupModal } from './BulkFollowupModal';
-import { ConnectChannelModal } from '../../../components/vendas/ConnectChannelModal';
+import { WhatsAppConnectionModal } from './WhatsAppConnectionModal';
 import { NewConversationModal } from './NewConversationModal';
 import { WhatsAppTemplatesManager } from '../../../components/settings/WhatsAppTemplatesManager';
 import { supabase } from '../../../integrations/supabase/client';
@@ -488,16 +488,15 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
               </button>
             )}
 
-            {connected && (
-              <button
-                onClick={() => setConnectOpen(true)}
-                className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
-                style={{ color: 'var(--wa-text-secondary)' }}
-                title="Gerenciar conexão"
-              >
-                <Settings size={16} />
-              </button>
-            )}
+            {/* Sempre visível: gerencia os DOIS números (Atendimento e Pós-venda) */}
+            <button
+              onClick={() => setConnectOpen(true)}
+              className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
+              style={{ color: 'var(--wa-text-secondary)' }}
+              title="Conexões do WhatsApp (Atendimento e Pós-venda)"
+            >
+              <Settings size={16} />
+            </button>
 
             <button
               onClick={handleRefresh}
@@ -1053,10 +1052,10 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
         </div>
       )}
 
-      <ConnectChannelModal
+      {/* Conexões dos DOIS números (Atendimento + Pós-venda) — mora no chat */}
+      <WhatsAppConnectionModal
         open={connectOpen}
         onClose={() => setConnectOpen(false)}
-        onStatusChange={() => {}}
       />
 
       <NewConversationModal
