@@ -1,7 +1,6 @@
 import React, { Suspense, useEffect, useMemo, useState } from "react";
 import { Outlet, useLocation, Navigate } from "react-router-dom";
 
-import { PanelLeftOpen } from "lucide-react";
 import Sidebar from "./Sidebar";
 import Header from "./Header";
 import ContactOpportunityModal from "../shared/ContactOpportunityModal";
@@ -102,16 +101,6 @@ export default function AppLayout() {
         onToggleCollapse={toggleDeskCollapsed}
       />
 
-      {/* Reabrir o menu quando recolhido (desktop) — botão flutuante discreto */}
-      {deskCollapsed && (
-        <button
-          onClick={toggleDeskCollapsed}
-          className="hidden lg:flex fixed top-3 left-3 z-[60] w-9 h-9 rounded-full items-center justify-center bg-white dark:bg-[#161616] border border-black/10 dark:border-white/10 shadow-md text-gray-600 dark:text-gray-300 hover:text-gold-600 transition-colors"
-          title="Mostrar menu"
-        >
-          <PanelLeftOpen size={18} />
-        </button>
-      )}
 
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <ImpersonationBanner />

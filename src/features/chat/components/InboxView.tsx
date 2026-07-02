@@ -69,8 +69,14 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
   // "enviar pro pós-venda" na visão de vendas.
   const waSlot = slot;
   const [posvendaOn, setPosvendaOn] = useState(false);
+  const [pvQr, setPvQr] = useState<string | null>(null);
+  const [pvQrBusy, setPvQrBusy] = useState(false);
+  // Checa o status do 2º número; enquanto desconectado, segue checando a cada
+  // 7s (pra tela virar sozinha assim que o QR for escaneado).
   useEffect(() => {
-    (async () => {
+    if (posvendaOn) return;
+    let on = true;
+    const check = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session?.access_token) return;
@@ -78,10 +84,29 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
           headers: { Authorization: `Bearer ${session.access_token}` },
         });
         const d = r.ok ? await r.json() : null;
-        setPosvendaOn(!!d?.connected);
+        if (on && d?.connected) { setPosvendaOn(true); setPvQr(null); }
       } catch { /* silencioso */ }
-    })();
-  }, []);
+    };
+    check();
+    const t = setInterval(check, 7000);
+    return () => { on = false; clearInterval(t); };
+  }, [posvendaOn]);
+
+  const fetchPvQr = async () => {
+    setPvQrBusy(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const r = await fetch('/api/whatsapp/posvenda/qrcode', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const d = await r.json().catch(() => ({} as any));
+      if (d.base64) setPvQr(d.base64);
+      else if (d.state === 'open') setPosvendaOn(true);
+    } catch { /* silencioso */ } finally {
+      setPvQrBusy(false);
+    }
+  };
   const { conversations, loading: loadingConvs, refresh } = useConversations(waSlot);
   const { connected } = useWaStatus();
   const [selectedPhone, setSelectedPhone] = useState<string | null>(initialPhone || null);
@@ -107,6 +132,29 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [confirmToVendas, setConfirmToVendas] = useState<{ phone: string; name: string } | null>(null);
   const [movingToVendas, setMovingToVendas] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [infoData, setInfoData] = useState<{ about?: string | null } | null>(null);
+
+  // Fecha o painel de infos ao trocar de conversa; busca "recado" do contato
+  useEffect(() => {
+    setInfoOpen(false);
+    setInfoData(null);
+  }, [selectedPhone]);
+  useEffect(() => {
+    if (!infoOpen || !selectedPhone) return;
+    let on = true;
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token) return;
+        const r = await fetch(`/api/inbox/contact-info/${selectedPhone.replace(/\D/g, '')}`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (on && r.ok) setInfoData(await r.json());
+      } catch { /* silencioso */ }
+    })();
+    return () => { on = false; };
+  }, [infoOpen, selectedPhone]);
 
   const doMoveToVendas = async () => {
     if (!confirmToVendas) return;
@@ -480,9 +528,10 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
           </div>
         </div>
 
-        {/* Setores (pastas): Atendimento | Pós-venda — só com 2º número conectado
-            e permissão do membro (módulo "posvenda" em Permissões) */}
-        {onSlotChange && posvendaOn && canAccess('posvenda') && (
+        {/* Setores (pastas): Atendimento | Pós-venda — SEMPRE visíveis (com
+            permissão); sem o 2º número conectado, a aba Pós-venda vira a tela
+            de conexão com QR ali mesmo (nada escondido em Configurações). */}
+        {onSlotChange && canAccess('posvenda') && (
           <div className="px-3 pt-2 pb-1 flex-shrink-0 flex items-center gap-1.5">
             {([['main', '💬 Atendimento'], ['posvenda', '🤝 Pós-venda']] as const).map(([k, label]) => (
               <button
@@ -535,8 +584,32 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
           </span>
         </div>
 
-        {/* Lista de conversas (min-h-0 = deixa o flex encolher e a lista rolar
-            até o fim; pb-4 = respiro pra última conversa não colar na borda) */}
+        {/* Aba Pós-venda sem o 2º número conectado → conexão AQUI (QR inline) */}
+        {waSlot === 'posvenda' && !posvendaOn ? (
+          <div className="flex-1 min-h-0 overflow-y-auto wa-scrollbar px-6 py-10 flex flex-col items-center text-center gap-3">
+            <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl" style={{ background: 'rgba(0,168,132,0.14)' }}>🤝</div>
+            <p className="text-sm font-bold" style={{ color: 'var(--wa-text-primary)' }}>WhatsApp do Pós-venda</p>
+            <p className="text-[13px] leading-snug" style={{ color: 'var(--wa-text-secondary)' }}>
+              Conecte o 2º número da conta (o do alinhamento). As conversas dele aparecem só nesta aba — separadas das vendas.
+            </p>
+            {pvQr && (
+              <>
+                <img src={pvQr} alt="QR Code do Pós-venda" className="w-52 h-52 rounded-2xl bg-white p-2 shadow-lg" />
+                <p className="text-[12px]" style={{ color: 'var(--wa-text-muted)' }}>
+                  No celular do pós-venda: WhatsApp → Aparelhos conectados → Conectar aparelho
+                </p>
+              </>
+            )}
+            <button
+              onClick={fetchPvQr}
+              disabled={pvQrBusy}
+              className="mt-1 px-5 py-2.5 rounded-xl text-sm font-bold text-white transition-colors disabled:opacity-60"
+              style={{ background: 'var(--wa-accent-green)' }}
+            >
+              {pvQrBusy ? 'Gerando QR…' : pvQr ? 'Gerar novo QR' : 'Conectar 2º número'}
+            </button>
+          </div>
+        ) : (
         <div className="flex-1 min-h-0 overflow-y-auto wa-scrollbar pb-4">
           {loadingConvs ? (
             <div className="flex flex-col">
@@ -568,6 +641,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
             ))
           )}
         </div>
+        )}
       </div>
 
       {/* ── ÁREA DE CHAT ── */}
@@ -605,25 +679,30 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
                 <ArrowLeft size={20} />
               </button>
 
-              {/* Avatar mini */}
-              <div
-                className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center text-white text-sm font-semibold overflow-hidden"
-                style={{ background: '#00756A' }}
+              {/* Avatar + nome CLICÁVEL → abre as informações do contato (igual WhatsApp) */}
+              <button
+                onClick={() => setInfoOpen(true)}
+                className="flex items-center gap-3 flex-1 min-w-0 text-left rounded-xl px-1 py-0.5 -mx-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+                title="Ver informações do contato"
               >
-                {avatarUrl
-                  ? <img src={avatarUrl} alt={displayName} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-                  : getInitials(displayName)
-                }
-              </div>
-
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold leading-tight truncate" style={{ color: 'var(--wa-text-primary)' }}>
-                  {displayName}
-                </p>
-                <p className="text-[12px] leading-tight truncate" style={{ color: 'var(--wa-text-muted)' }}>
-                  {selectedPhone ? formatBrazilianPhone(selectedPhone) : ''}
-                </p>
-              </div>
+                <div
+                  className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center text-white text-sm font-semibold overflow-hidden"
+                  style={{ background: '#00756A' }}
+                >
+                  {avatarUrl
+                    ? <img src={avatarUrl} alt={displayName} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                    : getInitials(displayName)
+                  }
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold leading-tight truncate" style={{ color: 'var(--wa-text-primary)' }}>
+                    {displayName}
+                  </p>
+                  <p className="text-[12px] leading-tight truncate" style={{ color: 'var(--wa-text-muted)' }}>
+                    {selectedPhone ? formatBrazilianPhone(selectedPhone) : ''}
+                  </p>
+                </div>
+              </button>
 
               {/* FEATURE 6 - botões do header */}
               <div className="flex items-center gap-1 flex-shrink-0">
@@ -1001,6 +1080,67 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
           </div>
         </div>
       )}
+
+      {/* Painel de informações do contato (abre ao clicar no nome, estilo WhatsApp) */}
+      {infoOpen && selectedPhone && (() => {
+        const digits = selectedPhone.replace(/\D/g, '');
+        const deal = deals.find(d => (d.contact_phone || '').replace(/\D/g, '').endsWith(digits.slice(-8)));
+        const stage = deal ? stages.find(s => s.id === deal.stage) : null;
+        return (
+          <div className="fixed inset-0 z-[75] flex justify-end bg-black/40 backdrop-blur-sm" onClick={() => setInfoOpen(false)}>
+            <div
+              className="w-full max-w-sm h-full flex flex-col shadow-2xl"
+              style={{ background: 'var(--wa-bg-secondary)' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3 px-4 py-3 flex-shrink-0" style={{ background: 'var(--wa-bg-tertiary)', borderBottom: '1px solid var(--wa-border)' }}>
+                <button onClick={() => setInfoOpen(false)} className="p-1 rounded-full" style={{ color: 'var(--wa-text-secondary)' }}><X size={20} /></button>
+                <span className="text-sm font-semibold" style={{ color: 'var(--wa-text-primary)' }}>Informações do contato</span>
+              </div>
+              <div className="flex-1 overflow-y-auto wa-scrollbar">
+                <div className="flex flex-col items-center gap-3 py-8 px-4" style={{ borderBottom: '8px solid var(--wa-bg-primary)' }}>
+                  <div className="w-28 h-28 rounded-full flex items-center justify-center text-white text-3xl font-semibold overflow-hidden" style={{ background: '#00756A' }}>
+                    {avatarUrl
+                      ? <img src={avatarUrl} alt={displayName} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                      : getInitials(displayName)}
+                  </div>
+                  <div className="text-center">
+                    <p className="text-lg font-semibold" style={{ color: 'var(--wa-text-primary)' }}>{displayName}</p>
+                    <p className="text-sm mt-0.5" style={{ color: 'var(--wa-text-muted)' }}>{formatBrazilianPhone(selectedPhone)}</p>
+                  </div>
+                </div>
+                {infoData?.about && (
+                  <div className="px-5 py-4" style={{ borderBottom: '8px solid var(--wa-bg-primary)' }}>
+                    <p className="text-[11px] uppercase tracking-wide font-semibold mb-1" style={{ color: 'var(--wa-text-muted)' }}>Recado</p>
+                    <p className="text-sm" style={{ color: 'var(--wa-text-primary)' }}>{infoData.about}</p>
+                  </div>
+                )}
+                <div className="px-5 py-4">
+                  <p className="text-[11px] uppercase tracking-wide font-semibold mb-2" style={{ color: 'var(--wa-text-muted)' }}>Funil</p>
+                  {deal ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm" style={{ color: 'var(--wa-text-secondary)' }}>Etapa</span>
+                        <span className="text-sm font-semibold px-2.5 py-1 rounded-full" style={{ background: 'rgba(0,168,132,0.14)', color: 'var(--wa-accent-green)' }}>{stage?.name || deal.stage}</span>
+                      </div>
+                      {typeof deal.value === 'number' && deal.value > 0 && (
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm" style={{ color: 'var(--wa-text-secondary)' }}>Valor</span>
+                          <span className="text-sm font-semibold" style={{ color: 'var(--wa-text-primary)' }}>
+                            {deal.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-sm" style={{ color: 'var(--wa-text-muted)' }}>Este contato ainda não está no funil.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Confirmação (custom, sem popup nativo) — encaminhar pro funil de Vendas */}
       {confirmToVendas && (

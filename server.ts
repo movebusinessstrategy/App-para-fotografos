@@ -3451,12 +3451,17 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.get('/api/inbox/contact-info/:phone', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const phone = normalizeBrazilianPhone(req.params.phone.replace(/\D/g, ''));
+    // FOTO EXATA: usa o phone CRU (JID) — normalizar adicionava um "9" e pedia a
+    // foto de OUTRO número real → aparecia a foto de outra pessoa no chat.
+    const raw = req.params.phone.replace(/\D/g, '');
+    const normalized = normalizeBrazilianPhone(raw) || raw;
     try {
       const [pictureUrl, about, convRow] = await Promise.all([
-        BaileysManager.getProfilePicture(userId, phone).catch(() => null),
-        BaileysManager.fetchContactAbout(userId, phone).catch(() => null),
-        supabase.from('wa_conversations').select('contact_name, last_message_at, unread_count').eq('user_id', userId).eq('phone', phone).maybeSingle(),
+        BaileysManager.getProfilePicture(userId, raw).catch(() => null),
+        BaileysManager.fetchContactAbout(userId, raw).catch(() => null),
+        supabase.from('wa_conversations').select('contact_name, last_message_at, unread_count')
+          .eq('user_id', userId).in('phone', [...new Set([raw, normalized])])
+          .order('last_message_at', { ascending: false }).limit(1).maybeSingle(),
       ]);
       return res.json({
         profile_picture_url: pictureUrl,

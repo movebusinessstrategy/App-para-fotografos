@@ -25,6 +25,7 @@ import {
   BookOpen,
   Bot,
   PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 
 import { cn } from "../../utils/cn";
@@ -87,6 +88,10 @@ export default function Sidebar({ isOpen, onClose, collapsed = false, onToggleCo
 
   const currentAba = new URLSearchParams(location.search).get("aba") ?? "produtos";
 
+  // Classes do modo RAIL (só desktop): esconde textos e centraliza os ícones.
+  const railText = collapsed ? "lg:hidden" : "";
+  const railRow = collapsed ? "lg:justify-center lg:px-0 lg:gap-0" : "";
+
   return (
     <>
       {/* Overlay - apenas mobile */}
@@ -100,24 +105,32 @@ export default function Sidebar({ isOpen, onClose, collapsed = false, onToggleCo
       <aside
         className={cn(
           "fixed lg:static inset-y-0 left-0 z-50",
-          "w-64 bg-white dark:bg-[#0d0d0d] border-r border-black/5 dark:border-white/5 flex flex-col",
+          "bg-white dark:bg-[#0d0d0d] border-r border-black/5 dark:border-white/5 flex flex-col",
           "transform transition-all duration-300 ease-in-out",
           isOpen ? "translate-x-0" : "-translate-x-full",
-          // Desktop: recolhido → some (largura 0) pra liberar a tela inteira
-          collapsed ? "lg:-translate-x-full lg:w-0 lg:border-0 lg:overflow-hidden" : "lg:translate-x-0"
+          "lg:translate-x-0",
+          // Desktop recolhido → RAIL de ícones (w-20); mobile sempre completo (w-64)
+          collapsed ? "w-64 lg:w-20" : "w-64"
         )}
       >
         {/* Header */}
-        <div className="p-6 flex items-center justify-between">
-          <div className="flex items-center">
+        <div className={cn("p-6 flex items-center justify-between", collapsed && "lg:px-0 lg:justify-center")}>
+          <div className={cn("flex items-center", collapsed && "lg:hidden")}>
             <img src="/logo-light.png" alt="CRM Trilha" className="h-9 w-auto dark:hidden" />
             <img src="/logo-dark.png" alt="CRM Trilha" className="h-9 w-auto hidden dark:block" />
           </div>
-          {/* Desktop: recolher o menu (mais espaço, tela cheia). Mobile: fechar drawer. */}
+          {/* Logo compacta (favicon) só no modo rail */}
+          {collapsed && (
+            <img src="/favicon.png" alt="CRM Trilha" className="hidden lg:block h-8 w-8 rounded-lg" />
+          )}
+          {/* Desktop: recolher/expandir o menu. Mobile: fechar drawer. */}
           {onToggleCollapse && (
             <button
               onClick={onToggleCollapse}
-              className="hidden lg:flex p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 dark:text-gray-400"
+              className={cn(
+                "hidden lg:flex p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 dark:text-gray-400",
+                collapsed && "lg:hidden"
+              )}
               title="Recolher menu"
             >
               <PanelLeftClose size={18} />
@@ -131,9 +144,20 @@ export default function Sidebar({ isOpen, onClose, collapsed = false, onToggleCo
           </button>
         </div>
 
+        {/* Botão EXPANDIR — aparece só no modo rail, abaixo da logo compacta */}
+        {collapsed && onToggleCollapse && (
+          <button
+            onClick={onToggleCollapse}
+            className="hidden lg:flex mx-auto mb-1 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 dark:text-gray-400"
+            title="Expandir menu"
+          >
+            <PanelLeftOpen size={18} />
+          </button>
+        )}
+
         {/* Badge de membro */}
         {isMember && (
-          <div className="mx-4 mb-2 px-3 py-1.5 bg-gold-50 dark:bg-gold-900/30 rounded-lg flex items-center gap-2">
+          <div className={cn("mx-4 mb-2 px-3 py-1.5 bg-gold-50 dark:bg-gold-900/30 rounded-lg flex items-center gap-2", collapsed && "lg:hidden")}>
             <Shield size={13} className="text-gold-500 flex-shrink-0" />
             <span className="text-xs font-medium text-gold-600 dark:text-gold-400">Acesso de membro</span>
           </div>
@@ -147,17 +171,19 @@ export default function Sidebar({ isOpen, onClose, collapsed = false, onToggleCo
               to={item.to}
               end={item.end}
               onClick={onClose}
+              title={collapsed ? item.label : undefined}
               className={({ isActive }) =>
                 cn(
                   "flex items-center gap-3 w-full px-4 py-3.5 rounded-xl transition-all duration-200",
+                  railRow,
                   isActive
                     ? "bg-gold-50 dark:bg-gold-500/20 text-gold-700 dark:text-gold-300 font-semibold"
                     : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white"
                 )
               }
             >
-              <item.icon size={22} />
-              <span className="text-[15px]">{item.label}</span>
+              <item.icon size={22} className="flex-shrink-0" />
+              <span className={cn("text-[15px]", railText)}>{item.label}</span>
             </NavLink>
           ))}
 
@@ -166,23 +192,27 @@ export default function Sidebar({ isOpen, onClose, collapsed = false, onToggleCo
             <div>
               <button
                 onClick={() => setCatalogoOpen((v) => !v)}
+                title={collapsed ? "Catálogo" : undefined}
                 className={cn(
                   "flex items-center gap-3 w-full px-4 py-3.5 rounded-xl transition-all duration-200",
+                  railRow,
                   isCatalogo
                     ? "bg-gold-50 dark:bg-gold-500/20 text-gold-700 dark:text-gold-300 font-semibold"
                     : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white"
                 )}
               >
-                <BookOpen size={22} />
-                <span className="text-[15px] flex-1 text-left">Catálogo</span>
-                {catalogoOpen
-                  ? <ChevronDown size={15} className="opacity-50" />
-                  : <ChevronRight size={15} className="opacity-50" />
-                }
+                <BookOpen size={22} className="flex-shrink-0" />
+                <span className={cn("text-[15px] flex-1 text-left", railText)}>Catálogo</span>
+                <span className={railText}>
+                  {catalogoOpen
+                    ? <ChevronDown size={15} className="opacity-50" />
+                    : <ChevronRight size={15} className="opacity-50" />
+                  }
+                </span>
               </button>
 
               {catalogoOpen && (
-                <div className="ml-5 mt-0.5 space-y-0.5 border-l-2 border-black/5 dark:border-white/10 pl-3">
+                <div className={cn("ml-5 mt-0.5 space-y-0.5 border-l-2 border-black/5 dark:border-white/10 pl-3", collapsed && "lg:hidden")}>
                   {CATALOGO_SUBITEMS.map((sub) => {
                     const isActive = isCatalogo && currentAba === sub.aba;
                     return (
@@ -214,17 +244,19 @@ export default function Sidebar({ isOpen, onClose, collapsed = false, onToggleCo
             <NavLink
               to="/platform-admin"
               onClick={onClose}
+              title={collapsed ? "Platform Admin" : undefined}
               className={({ isActive }) =>
                 cn(
                   "flex items-center gap-3 w-full px-4 py-3.5 rounded-xl transition-all duration-200",
+                  railRow,
                   isActive
                     ? "bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 font-semibold"
                     : "text-purple-600 dark:text-purple-400 hover:bg-purple-50/50 dark:hover:bg-purple-900/20"
                 )
               }
             >
-              <ShieldCheck size={22} />
-              <span className="text-[15px] font-medium">Platform Admin</span>
+              <ShieldCheck size={22} className="flex-shrink-0" />
+              <span className={cn("text-[15px] font-medium", railText)}>Platform Admin</span>
             </NavLink>
           )}
           {bottomItems.map(item => (
@@ -232,17 +264,19 @@ export default function Sidebar({ isOpen, onClose, collapsed = false, onToggleCo
               key={item.to}
               to={item.to}
               onClick={onClose}
+              title={collapsed ? item.label : undefined}
               className={({ isActive }) =>
                 cn(
                   "flex items-center gap-3 w-full px-4 py-3.5 rounded-xl transition-all duration-200",
+                  railRow,
                   isActive
                     ? "bg-gold-50 dark:bg-gold-500/20 text-gold-700 dark:text-gold-300 font-semibold"
                     : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white"
                 )
               }
             >
-              <item.icon size={22} />
-              <span className="text-[15px] font-medium">{item.label}</span>
+              <item.icon size={22} className="flex-shrink-0" />
+              <span className={cn("text-[15px] font-medium", railText)}>{item.label}</span>
             </NavLink>
           ))}
         </div>

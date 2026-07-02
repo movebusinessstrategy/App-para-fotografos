@@ -1,7 +1,7 @@
 // src/components/layout/Header.tsx
 import React, { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Menu, Search, X, Sun, Moon, LogOut, Settings } from "lucide-react";
+import { Menu, Sun, Moon, LogOut, Settings } from "lucide-react";
 import { useTheme } from "../../contexts/ThemeContext";
 
 interface HeaderProps {
@@ -13,7 +13,6 @@ interface HeaderProps {
 }
 
 export default function Header({ title, userInitial, userEmail, onSignOut, onMenuClick }: HeaderProps) {
-  const [showMobileSearch, setShowMobileSearch] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const { theme, toggleTheme } = useTheme();
   const menuRef = useRef<HTMLDivElement>(null);
@@ -44,27 +43,8 @@ export default function Header({ title, userInitial, userEmail, onSignOut, onMen
         <h2 className="text-lg font-bold tracking-tight capitalize truncate text-luxury-black dark:text-white">{title}</h2>
       </div>
 
-      {/* Lado direito */}
+      {/* Lado direito (busca global removida — não buscava nada e roubava espaço) */}
       <div className="flex items-center gap-2 md:gap-4">
-        {/* Busca - Desktop */}
-        <div className="relative hidden md:block">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-          <input
-            type="text"
-            placeholder="Buscar..."
-            className="pl-10 pr-4 py-2 bg-black/[0.04] dark:bg-white/5 border-none rounded-full text-sm text-luxury-black dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-gold-400/50 w-48 lg:w-64"
-          />
-        </div>
-
-        {/* Busca - Mobile (toggle) */}
-        <button
-          onClick={() => setShowMobileSearch(!showMobileSearch)}
-          className="md:hidden p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-300"
-          aria-label="Buscar"
-        >
-          {showMobileSearch ? <X size={20} /> : <Search size={20} />}
-        </button>
-
         {/* Botão de Tema */}
         <button
           onClick={toggleTheme}
@@ -120,20 +100,6 @@ export default function Header({ title, userInitial, userEmail, onSignOut, onMen
         </div>
       </div>
 
-      {/* Busca Mobile - Expandida */}
-      {showMobileSearch && (
-        <div className="absolute top-full left-0 right-0 p-4 bg-luxury-paper/95 dark:bg-[#070707]/95 backdrop-blur-xl border-b border-black/5 dark:border-white/5 md:hidden">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-            <input
-              type="text"
-              placeholder="Buscar..."
-              autoFocus
-              className="w-full pl-10 pr-4 py-2 bg-black/[0.04] dark:bg-white/5 border-none rounded-full text-sm text-luxury-black dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-gold-400/50"
-            />
-          </div>
-        </div>
-      )}
     </header>
   );
 }
