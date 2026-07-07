@@ -52,9 +52,10 @@ export interface Job {
   amount_paid?: number;
   payment_method: string;
   payment_status: string;
-  status: 'scheduled' | 'completed' | 'cancelled';
+  status: 'scheduled' | 'completed' | 'cancelled' | 'pre_reserved';
   notes: string;
   google_event_id?: string;
+  deal_id?: number | null;
   created_at: string;
   production_stage?: string | null;
   production_stage_entered_at?: string | null;

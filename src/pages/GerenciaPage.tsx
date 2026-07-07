@@ -482,7 +482,7 @@ function TaskModal({ task, teamMembers, jobs, stages, processes, onSave, onClose
   );
 
   const isEdit = !!task?.id;
-  const activeJobs = useMemo(() => jobs.filter((j) => j.status !== "cancelled"), [jobs]);
+  const activeJobs = useMemo(() => jobs.filter((j) => j.status !== "cancelled" && j.status !== "pre_reserved"), [jobs]);
 
   // Stages grouped by process for the select options
   const stageOptions = useMemo(() => {
@@ -670,7 +670,7 @@ export default function GerenciaPage() {
 
   // ── Performance data ───────────────────────────────────────────────────────
 
-  const activeJobs = useMemo(() => jobs.filter((j) => j.status !== "cancelled"), [jobs]);
+  const activeJobs = useMemo(() => jobs.filter((j) => j.status !== "cancelled" && j.status !== "pre_reserved"), [jobs]);
 
   const stageStats = useMemo(() => {
     return stages

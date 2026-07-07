@@ -158,13 +158,20 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
                 </div>
                 <div className="space-y-1 overflow-y-auto max-h-20 scrollbar-hide">
                   {dayJobs.map(job => (
-                    <button 
-                      key={job.id} 
+                    <button
+                      key={job.id}
                       draggable
                       onDragStart={(e) => handleDragStart(e, job)}
                       onClick={(e) => handleJobClick(job, e)}
-                      className="w-full text-left text-[10px] p-1 bg-gold-50 dark:bg-gold-500/20 text-gold-700 dark:text-gold-300 rounded border border-gold-100 dark:border-gold-500/30 truncate font-medium flex items-center gap-1 hover:bg-gold-100 dark:hover:bg-gold-500/30 transition-colors cursor-move"
+                      className={cn(
+                        "w-full text-left text-[10px] p-1 rounded border truncate font-medium flex items-center gap-1 transition-colors cursor-move",
+                        job.status === 'pre_reserved'
+                          // Pré-reserva: âmbar + 🔒 — data segurada durante a negociação, ainda não confirmada
+                          ? "bg-amber-50 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30 border-dashed hover:bg-amber-100 dark:hover:bg-amber-500/25"
+                          : "bg-gold-50 dark:bg-gold-500/20 text-gold-700 dark:text-gold-300 border-gold-100 dark:border-gold-500/30 hover:bg-gold-100 dark:hover:bg-gold-500/30"
+                      )}
                     >
+                      {job.status === 'pre_reserved' && <span className="shrink-0">🔒</span>}
                       {job.google_event_id && <CalendarIcon size={10} className="text-gold-400 dark:text-gold-400 shrink-0" />}
                       {job.job_time && (
                         <span className="font-bold shrink-0">
@@ -232,14 +239,22 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
                     className="w-full text-left p-3 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-xl shadow-sm hover:border-gold-200 dark:hover:border-gold-500/30 hover:shadow-md transition-all group cursor-move"
                   >
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-[10px] font-bold text-gold-600 dark:text-gold-400 bg-gold-50 dark:bg-gold-500/20 px-2 py-0.5 rounded-full uppercase">
-                        {job.job_time || '00:00'}{job.job_end_time ? ` - ${job.job_end_time}` : ''}
+                      <span className={cn(
+                        "text-[10px] font-bold px-2 py-0.5 rounded-full uppercase",
+                        job.status === 'pre_reserved'
+                          ? "text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/20"
+                          : "text-gold-600 dark:text-gold-400 bg-gold-50 dark:bg-gold-500/20"
+                      )}>
+                        {job.status === 'pre_reserved' ? '🔒 ' : ''}{job.job_time || '00:00'}{job.job_end_time ? ` - ${job.job_end_time}` : ''}
                       </span>
                       {job.google_event_id && <CalendarIcon size={12} className="text-gold-400" />}
                     </div>
                     <div className="font-bold text-gray-900 dark:text-white text-sm mb-1 group-hover:text-gold-600 dark:group-hover:text-gold-400 transition-colors">
                       {job.client_name || job.job_name || 'Tarefa'}
                     </div>
+                    {job.status === 'pre_reserved' && (
+                      <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 mb-1">Pré-reserva (negociando)</div>
+                    )}
                     <div className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1">
                       <Camera size={12} />
                       {job.job_type}
@@ -304,6 +319,9 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
                   <h4 className="text-lg font-bold text-gray-900 dark:text-white group-hover:text-gold-600 dark:group-hover:text-gold-400 transition-colors">
                     {job.client_name || job.job_name || 'Tarefa'}
                   </h4>
+                  {job.status === 'pre_reserved' && (
+                    <span className="text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/20 px-2 py-0.5 rounded-full uppercase">🔒 Pré-reserva</span>
+                  )}
                   {job.google_event_id && <CalendarIcon size={16} className="text-gold-400" />}
                 </div>
                 <div className="flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400">

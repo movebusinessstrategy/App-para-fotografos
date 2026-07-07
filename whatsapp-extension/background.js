@@ -141,6 +141,23 @@ async function handleMessage(message) {
         body: JSON.stringify(message.data),
       });
     }
+    case 'GET_PRE_RESERVE': {
+      // Data pré-reservada do lead (job status pre_reserved), se houver
+      return apiFetch(`/api/deals/${message.dealId}/pre-reserve`);
+    }
+    case 'SAVE_PRE_RESERVE': {
+      // Cria a pré-reserva ou troca a data da existente
+      return apiFetch(`/api/deals/${message.dealId}/pre-reserve`, {
+        method: 'POST',
+        body: JSON.stringify(message.data),
+      });
+    }
+    case 'DELETE_PRE_RESERVE': {
+      // Libera a data (lead esfriou / mudou de ideia)
+      return apiFetch(`/api/deals/${message.dealId}/pre-reserve`, {
+        method: 'DELETE',
+      });
+    }
     case 'LOST_DEAL': {
       return apiFetch(`/api/deals/${message.dealId}/lost`, {
         method: 'POST',

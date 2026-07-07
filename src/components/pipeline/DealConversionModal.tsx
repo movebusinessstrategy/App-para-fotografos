@@ -8,6 +8,7 @@ import { authFetch } from "../../utils/authFetch";
 import { useApi } from "../../utils/useApi";
 import { normalizeText } from "../../utils/normalizeText";
 import { useTiposEnsaio, tiposComValorAtual } from "../../hooks/useTiposEnsaio";
+import { SearchableSelect } from "../ui/SearchableSelect";
 
 type CatalogType = "combo" | "produto" | "servico";
 
@@ -93,7 +94,7 @@ export function DealConversionModal({
   const newItemsTotal = newItems.reduce((s, i) => s + i.catalog_value * i.quantidade, 0);
   const allItemsCount = existingItems.length + newItems.length;
 
-  // Dados completos do cliente
+  // Dados completos do cliente — mesmos campos da aba Clientes
   const [clientData, setClientData] = useState({
     name: "",
     phone: "",
@@ -101,6 +102,9 @@ export function DealConversionModal({
     document: "",
     birth_date: "",
     address: "",
+    address_number: "",
+    address_complement: "",
+    neighborhood: "",
     city: "",
     state: "",
     zip_code: "",
@@ -150,7 +154,11 @@ export function DealConversionModal({
       setSoldDate(new Date().toISOString().slice(0, 10));
       setCampaignId(deal.campaign_id || "");
     }
-  }, [deal]);
+    // Depende do ID, não do objeto: o polling de 12s do Vendas recria o objeto
+    // `deal` a cada ciclo (mesmo dado, identidade nova) e este reset apagava
+    // tudo que o usuário estava digitando no meio da conversão.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deal?.id]);
 
   // Carrega campanhas/vendas especiais (seeds os 6 defaults na 1ª chamada do usuário)
   useEffect(() => {
@@ -607,20 +615,24 @@ export function DealConversionModal({
                 <Link2 size={12} className="inline mr-1" />
                 Selecione o Cliente
               </label>
-              <select
-                value={selectedClientId || ""}
-                onChange={(e) => setSelectedClientId(e.target.value ? Number(e.target.value) : null)}
-                className={selectClasses}
-              >
-                <option value="" className="bg-white dark:bg-gray-800">
-                  -- Selecione um cliente --
-                </option>
-                {clients.map((client) => (
-                  <option key={client.id} value={client.id} className="bg-white dark:bg-gray-800">
-                    {client.name} {client.phone ? `- ${client.phone}` : ""} {client.email ? `(${client.email})` : ""}
-                  </option>
-                ))}
-              </select>
+              {/* Dropdown com busca (portal): o <select> nativo fechava sozinho
+                  quando o polling re-renderizava as <option> no meio da digitação. */}
+              <SearchableSelect
+                value={selectedClientId ? String(selectedClientId) : ""}
+                onChange={(v) => setSelectedClientId(v ? Number(v) : null)}
+                showSearchIcon
+                placeholder="Buscar cliente..."
+                searchPlaceholder="Nome, telefone ou e-mail..."
+                emptyMessage="Nenhum cliente encontrado"
+                triggerClassName="py-2"
+                options={[
+                  { value: "", label: "-- Selecione um cliente --" },
+                  ...clients.map((client) => ({
+                    value: String(client.id),
+                    label: `${client.name}${client.phone ? ` - ${client.phone}` : ""}${client.email ? ` (${client.email})` : ""}`,
+                  })),
+                ]}
+              />
               {selectedClientId && (
                 <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-2">
                   ✓ O deal será vinculado a este cliente
@@ -736,15 +748,48 @@ export function DealConversionModal({
                     </div>
                   </div>
 
-                  {/* Linha 3: Endereço */}
-                  <div>
-                    <label className={labelClasses}>Endereço</label>
-                    <input
-                      value={clientData.address}
-                      onChange={(e) => setClientData((p) => ({ ...p, address: e.target.value }))}
-                      className={inputClasses}
-                      placeholder="Rua, número, complemento"
-                    />
+                  {/* Linha 3: Endereço (rua + número) */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="md:col-span-2">
+                      <label className={labelClasses}>Endereço</label>
+                      <input
+                        value={clientData.address}
+                        onChange={(e) => setClientData((p) => ({ ...p, address: e.target.value }))}
+                        className={inputClasses}
+                        placeholder="Rua / Avenida"
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClasses}>Número</label>
+                      <input
+                        value={clientData.address_number}
+                        onChange={(e) => setClientData((p) => ({ ...p, address_number: e.target.value }))}
+                        className={inputClasses}
+                        placeholder="Nº"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Linha 3b: Complemento + Bairro */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className={labelClasses}>Complemento</label>
+                      <input
+                        value={clientData.address_complement}
+                        onChange={(e) => setClientData((p) => ({ ...p, address_complement: e.target.value }))}
+                        className={inputClasses}
+                        placeholder="Apto, bloco..."
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClasses}>Bairro</label>
+                      <input
+                        value={clientData.neighborhood}
+                        onChange={(e) => setClientData((p) => ({ ...p, neighborhood: e.target.value }))}
+                        className={inputClasses}
+                        placeholder="Bairro"
+                      />
+                    </div>
                   </div>
 
                   {/* Linha 4: Cidade, Estado, CEP */}

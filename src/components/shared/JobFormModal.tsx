@@ -143,6 +143,11 @@ export default function JobFormModal({
                   onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
                   className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400"
                 >
+                  {/* Pré-reserva só aparece quando o ensaio JÁ está nesse estado —
+                      trocar pra "Agendado" confirma a data manualmente. */}
+                  {formData.status === 'pre_reserved' && (
+                    <option value="pre_reserved" className="dark:bg-gray-800">🔒 Pré-reserva</option>
+                  )}
                   <option value="scheduled" className="dark:bg-gray-800">Agendado</option>
                   <option value="completed" className="dark:bg-gray-800">Concluído</option>
                   <option value="cancelled" className="dark:bg-gray-800">Cancelado</option>

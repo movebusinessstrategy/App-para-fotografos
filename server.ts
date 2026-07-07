@@ -4006,6 +4006,115 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ id: data.id });
   });
 
+  // ============ PRÉ-RESERVA DE DATA (extensão) ============
+  // Segura uma data de ensaio enquanto o lead ainda negocia: cria um job
+  // "fantasma" (status pre_reserved, valor 0, fora da produção) vinculado ao
+  // deal. Na conversão a linha vira ensaio de verdade (ou é liberada); marcar
+  // o lead como perdido também libera. Requer migration 060 (jobs.deal_id).
+
+  app.get('/api/deals/:id/pre-reserve', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    try {
+      const { data: job, error } = await supabase
+        .from('jobs')
+        .select('id, job_date, job_time, job_end_time, job_type, job_name')
+        .eq('user_id', userId)
+        .eq('deal_id', req.params.id)
+        .eq('status', 'pre_reserved')
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      res.json({ job: job || null });
+    } catch {
+      // Sem a migration 060 a coluna deal_id não existe — trata como "sem pré-reserva"
+      res.json({ job: null });
+    }
+  });
+
+  app.post('/api/deals/:id/pre-reserve', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { job_date, job_time, job_end_time, job_type } = req.body || {};
+
+    const dateStr = String(job_date || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      return res.status(400).json({ error: 'Escolha a data que será pré-reservada.' });
+    }
+
+    const { data: deal } = await supabase
+      .from('deals')
+      .select('id, title, contact_name')
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .single();
+    if (!deal) return res.status(404).json({ error: 'Deal not found' });
+
+    const leadName = deal.contact_name || deal.title || 'Lead';
+    const payload: any = {
+      job_type: job_type || 'Ensaio',
+      job_date: dateStr,
+      job_time: job_time || null,
+      job_end_time: job_end_time || null,
+      job_name: `Pré-reserva — ${leadName}`,
+      amount: 0,
+      payment_method: 'Pix',
+      payment_status: 'pending',
+      status: 'pre_reserved',
+      notes: `Data pré-reservada durante a negociação (lead: ${leadName}).`,
+    };
+
+    try {
+      // Já existe pré-reserva desse lead? Então é TROCA de data (atualiza a linha).
+      const { data: existing } = await supabase
+        .from('jobs')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('deal_id', deal.id)
+        .eq('status', 'pre_reserved')
+        .limit(1)
+        .maybeSingle();
+
+      if (existing) {
+        const { error } = await supabase
+          .from('jobs')
+          .update({ job_date: payload.job_date, job_time: payload.job_time, job_end_time: payload.job_end_time, job_type: payload.job_type })
+          .eq('id', existing.id)
+          .eq('user_id', userId);
+        if (error) throw error;
+        return res.json({ id: existing.id, moved: true });
+      }
+
+      const { data: created, error } = await supabase
+        .from('jobs')
+        .insert({ ...payload, deal_id: deal.id, client_id: null, user_id: userId })
+        .select('id')
+        .single();
+      if (error) throw error;
+      res.json({ id: created.id, moved: false });
+    } catch (err: any) {
+      const msg = String(err?.message || '');
+      if (/deal_id/i.test(msg)) {
+        return res.status(500).json({ error: 'Pré-reserva precisa da migration 060 (coluna deal_id em jobs) — rode no Supabase.' });
+      }
+      res.status(500).json({ error: msg || 'Falha ao pré-reservar' });
+    }
+  });
+
+  app.delete('/api/deals/:id/pre-reserve', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    try {
+      await supabase
+        .from('jobs')
+        .delete()
+        .eq('user_id', userId)
+        .eq('deal_id', req.params.id)
+        .eq('status', 'pre_reserved');
+    } catch { /* sem migration 060 não há o que liberar */ }
+    res.json({ success: true });
+  });
+
   // POST /api/jobs/:id/to-production — manda um trabalho EXISTENTE pra produção,
   // achando a etapa de entrada (1ª etapa do 1º processo não-especial). Usado pra
   // "puxar" um cliente já vendido pra produção sem registrar nova venda.
@@ -13965,6 +14074,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     if (!existing) return res.status(404).json({ error: 'Deal not found' });
 
+    // Excluir o lead libera a data pré-reservada (senão fica um 🔒 órfão na agenda)
+    try {
+      await supabase.from('jobs').delete()
+        .eq('user_id', userId)
+        .eq('deal_id', req.params.id)
+        .eq('status', 'pre_reserved');
+    } catch { /* sem migration 060 não há pré-reserva */ }
+
     await supabase.from('deals').delete().eq('id', req.params.id).eq('user_id', userId);
     res.json({ success: true });
   });
@@ -14084,24 +14201,25 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     if (createClient) {
       const c = client || {};
-      // "Como conheceu" não tem coluna própria — concatena nas notas
-      const notes = [
-        c.notes || '',
-        c.how_found ? `Como conheceu: ${c.how_found}` : '',
-      ].filter(Boolean).join('\n').trim();
-
+      // Grava 1:1 nas MESMAS colunas da aba Clientes — inclusive número da
+      // casa, complemento, bairro e a origem ("como conheceu") em lead_source
+      // (antes ia pras notas e o cadastro ficava parcial).
       const clientPayload = {
         name: c.name || deal.title,
         phone: c.phone || deal.contact_phone || null,
         email: c.email || deal.contact_email || null,
-        cpf: c.document || null,
+        cpf: c.document || c.cpf || null,
         birth_date: c.birth_date || null,
         address: c.address || null,
+        address_number: c.address_number || null,
+        address_complement: c.address_complement || null,
+        neighborhood: c.neighborhood || null,
         city: c.city || null,
         state: c.state || null,
-        cep: c.zip_code || null,
+        cep: c.zip_code || c.cep || null,
         instagram: c.instagram || deal.contact_instagram || null,
-        notes: notes || null,
+        lead_source: c.lead_source || c.how_found || deal.lead_source || null,
+        notes: (c.notes || '').trim() || null,
         status: 'active',
         user_id: userId,
       } as any;
@@ -14109,6 +14227,24 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       if (error) return res.status(500).json({ error: error.message });
       clientId = newClient?.id || clientId;
     }
+
+    // Pré-reserva de data: se o lead segurou uma data durante a negociação
+    // (extensão), a conversão CONFIRMA essa linha (vira ensaio de verdade,
+    // com a data que estiver no formulário — confirmar ou trocar dá no mesmo)
+    // ou, se converter sem criar trabalho, LIBERA a data.
+    // try/catch: contas sem a migration 060 (coluna deal_id) seguem no fluxo normal.
+    let preReservedJob: { id: number } | null = null;
+    try {
+      const { data: pr } = await supabase
+        .from('jobs')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('deal_id', deal.id)
+        .eq('status', 'pre_reserved')
+        .limit(1)
+        .maybeSingle();
+      preReservedJob = pr || null;
+    } catch { /* coluna deal_id ainda não existe */ }
 
     let jobId: number | null = null;
     if (createJob && job) {
@@ -14161,9 +14297,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         production_stage_entered_at: entryProductionStage ? nowIso : null,
         user_id: userId,
       } as any;
-      const { data: newJob, error } = await supabase.from('jobs').insert(jobPayload).select().single();
-      if (error) return res.status(500).json({ error: error.message });
-      jobId = newJob?.id || null;
+      if (preReservedJob) {
+        // Confirma a pré-reserva: a MESMA linha vira o ensaio agendado, com a
+        // data/hora que veio do formulário (o usuário pôde manter ou trocar).
+        const { error } = await supabase
+          .from('jobs')
+          .update(jobPayload)
+          .eq('id', preReservedJob.id)
+          .eq('user_id', userId);
+        if (error) return res.status(500).json({ error: error.message });
+        jobId = preReservedJob.id;
+      } else {
+        const { data: newJob, error } = await supabase.from('jobs').insert(jobPayload).select().single();
+        if (error) return res.status(500).json({ error: error.message });
+        jobId = newJob?.id || null;
+      }
 
       // Registra o sinal como pagamento na tabela job_payments.
       // Venda retroativa: o sinal entra com a data real da venda.
@@ -14183,6 +14331,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       // NÃO agendava — só agendava quem editava o job depois; por isso "uns sim,
       // outros não". Fire-and-forget, igual ao POST /api/jobs (não atrasa a resposta).
       if (jobId) syncJobToGoogleCalendar(supabase, jobId, userId);
+    } else if (preReservedJob) {
+      // Converteu sem criar trabalho: libera a data que estava pré-reservada.
+      await supabase.from('jobs').delete().eq('id', preReservedJob.id).eq('user_id', userId);
     }
 
     const stageId = wonStage?.id || 'won';
@@ -14278,6 +14429,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       updates.stage,
       deal.current_stage_entered_at || deal.stage_entered_at
     );
+    // Lead perdido: libera a data que estava pré-reservada na agenda.
+    try {
+      await supabase.from('jobs').delete()
+        .eq('user_id', userId)
+        .eq('deal_id', req.params.id)
+        .eq('status', 'pre_reserved');
+    } catch { /* sem migration 060 não há pré-reserva */ }
     // Espelha a etapa (perdido) como etiqueta no WhatsApp (fire-and-forget)
     syncWhatsAppStageLabel(userId, deal.contact_phone, deal.stage, updates.stage, stages);
     res.json({ success: true });
@@ -15847,6 +16005,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (error) return res.status(500).json({ error: error.message });
 
     await recordStageEvent(supabase, userId, Number(req.params.id), deal.stage, stageId, deal.current_stage_entered_at || deal.stage_entered_at);
+    // Moveu pra etapa de PERDA: libera a data que estava pré-reservada.
+    if (targetStage.is_final && !targetStage.is_won) {
+      try {
+        await supabase.from('jobs').delete()
+          .eq('user_id', userId)
+          .eq('deal_id', req.params.id)
+          .eq('status', 'pre_reserved');
+      } catch { /* sem migration 060 não há pré-reserva */ }
+    }
     // Espelha a etapa como etiqueta no WhatsApp (fire-and-forget, best-effort)
     syncWhatsAppStageLabel(userId, deal.contact_phone, deal.stage, stageId, stages);
 
@@ -15892,7 +16059,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const [clientsRes, jobsRes, leadsRes] = await Promise.all([
       supabase.from('clients').select('id, created_at').eq('user_id', userId),
-      supabase.from('jobs').select('job_type, amount, job_date').eq('user_id', userId),
+      // Pré-reservas são datas SEGURADAS (não vendas): não entram na contagem
+      // de ensaios do mês nem no faturamento. neq tolera contas sem a coluna.
+      supabase.from('jobs').select('job_type, amount, job_date, status').eq('user_id', userId).neq('status', 'pre_reserved'),
       supabase.from('leads').select('status').eq('user_id', userId),
     ]);
 
@@ -19885,7 +20054,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         supabase.from('clients').select('id, name').eq('user_id', userId),
       ]);
 
-      const jobs = (jobsRes.data || []).map((j: any) => ({ ...j, client_name: (j.clients as any)?.name || null }));
+      // Pré-reservas são datas SEGURADAS na agenda, não ensaios de verdade —
+      // ficam FORA de todas as métricas do dashboard (contagem, "feitos",
+      // "hoje", próximos 7 dias, sem contrato...). Só aparecem na Agenda.
+      const jobs = (jobsRes.data || [])
+        .filter((j: any) => j.status !== 'pre_reserved')
+        .map((j: any) => ({ ...j, client_name: (j.clients as any)?.name || null }));
       const deals = dealsRes.data || [];
       const dealStages = dealStagesRes.data || [];
       const prodStages = prodStagesRes.data || [];

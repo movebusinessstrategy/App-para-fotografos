@@ -146,6 +146,7 @@
     completed:   'Concluído',
     delivered:   'Entregue',
     cancelled:   'Cancelado',
+    pre_reserved: '🔒 Pré-reserva',
     paid:        'Pago',
     pending:     'Pendente',
     partial:     'Parcial',
@@ -392,7 +393,19 @@
   }
 
   function chatNameKey(name) {
-    return String(name || '').trim().toLowerCase();
+    // Chave DETERMINÍSTICA mesmo quando o header varia entre aberturas —
+    // perfis comerciais (WhatsApp Business) ora mostram "~ Nome", ora colam
+    // labels tipo "Conta comercial", e a variação virava cache-miss →
+    // a extensão "esquecia" o telefone e desvinculava o lead.
+    return String(name || '')
+      .replace(/[\u200e\u200f]/g, ' ')
+      .trim()
+      .toLowerCase()
+      .replace(/^~+\s*/, '')
+      .replace(/\b(conta\s+(comercial|business|verificada)|verified\s+business|business\s+account)\b/gi, ' ')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   function rememberChatPhoneByName(name, phone) {
@@ -1128,6 +1141,27 @@
     const exact = matches.filter((d) => normalizeNameForMatch(d.contact_name || d.title || '') === wanted);
     const candidates = exact.length ? exact : matches;
     return candidates.length === 1 ? candidates[0] : null;
+  }
+
+  // Match FORTE de nome (igualdade normalizada ou um contém o outro) — usado
+  // pra MANTER um vínculo já feito quando o header da MESMA conversa
+  // re-renderiza com variação (perfil comercial: "~ Nome", "Conta comercial",
+  // nome verificado). Mais rígido que namesMatch: token compartilhado sozinho
+  // ("Maria" em "Maria Silva" vs "Maria Santos") NÃO segura o vínculo.
+  function nameStrongMatch(a, b) {
+    const na = normalizeNameForMatch(a);
+    const nb = normalizeNameForMatch(b);
+    if (!na || !nb || na.length < 3 || nb.length < 3) return false;
+    return na === nb || na.includes(nb) || nb.includes(na);
+  }
+
+  // Deal ABERTO (fora de ganho/perda) com esse telefone — guarda anti-duplicado
+  // na criação: se o lead já está no funil, vincula em vez de criar outro card.
+  function findOpenDealByPhoneLocal(phone) {
+    const clean = digits(phone || '');
+    if (!clean) return null;
+    const finals = new Set((stages || []).filter((s) => s.is_final).map((s) => s.id));
+    return deals.find((d) => d.contact_phone && phonesMatch(d.contact_phone, clean) && !finals.has(d.stage)) || null;
   }
 
   function chatListItems() {
@@ -3042,6 +3076,13 @@
     return AGENDA_COLORS[type] || AGENDA_COLORS.default;
   }
 
+  // Pré-reserva tem cor própria (âmbar) independente do tipo de ensaio —
+  // precisa saltar aos olhos que a data está SEGURADA, não confirmada.
+  const PRE_RESERVE_COLOR = { bg: '#fef3c7', text: '#92400e', dot: '#f59e0b' };
+  function agendaEventColor(ev) {
+    return ev && ev.status === 'pre_reserved' ? PRE_RESERVE_COLOR : agendaColor(ev && ev.type);
+  }
+
   function renderAgendaGrid() {
     const content = document.getElementById('fp-ag-content');
     if (!content) return;
@@ -3100,7 +3141,7 @@
           <span class="fp-ag-day-num">${d}</span>
           <div class="fp-ag-chips">
             ${visible.map((e) => {
-              const c = agendaColor(e.type);
+              const c = agendaEventColor(e);
               const time = e.time ? e.time.slice(0, 5) : '';
               return `<span class="fp-ag-chip" style="background:${c.bg};color:${c.text}" title="${esc((time ? time + ' · ' : '') + (e.title || ''))}">
                 ${time ? `<span class="fp-ag-chip-time">${time}</span>` : ''}
@@ -3174,7 +3215,7 @@
       .sort((a, b) => a.startMin - b.startMin);
 
     const events = blocks.map(({ ev, top, height }) => {
-      const c = agendaColor(ev.type);
+      const c = agendaEventColor(ev);
       const timeStr = ev.time
         ? (ev.end_time ? `${ev.time.slice(0, 5)}–${ev.end_time.slice(0, 5)}` : ev.time.slice(0, 5))
         : '';
@@ -3420,6 +3461,9 @@
     if (isEdit) {
       statusSelect = fpSelect({
         items: [
+          // Pré-reserva só aparece quando o evento JÁ está nesse estado —
+          // mudar pra "Agendado" confirma a data manualmente pela agenda.
+          ...(initStatus === 'pre_reserved' ? [{ value: 'pre_reserved', label: '🔒 Pré-reserva' }] : []),
           { value: 'scheduled',   label: 'Agendado' },
           { value: 'in_progress', label: 'Em andamento' },
           { value: 'completed',   label: 'Concluído' },
@@ -3636,7 +3680,7 @@
     list.innerHTML = `
       <div class="fp-ag-day-header">${dateStr} <span class="fp-ag-day-count">${items.length}</span></div>
       ${items.map((e) => {
-        const c = agendaColor(e.type);
+        const c = agendaEventColor(e);
         const timeStr = e.time
           ? (e.end_time ? `${e.time.slice(0, 5)} – ${e.end_time.slice(0, 5)}` : e.time.slice(0, 5))
           : 'Dia inteiro';
@@ -4833,6 +4877,12 @@
         ✎ Editar
       </button>
 
+      ${(!isAtWon && !isAtLost) ? `
+        <button class="fp-strip-stage-btn" id="fp-strip-prereserve"
+                title="Segurar uma data de ensaio na agenda enquanto negocia">
+          📅 Pré-reservar
+        </button>` : ''}
+
       ${wonStage ? `
         <button class="fp-strip-stage-btn fp-btn-won ${isAtWon ? 'fp-active-won' : ''}"
                 id="fp-strip-won" data-sid="${wonStage.id}" title="Marcar como ${esc(wonStage.name)}">
@@ -4886,6 +4936,17 @@
     });
     bindPress(strip.querySelector('#fp-strip-won'), () => moveTo(wonStage.id, wonStage.name));
     bindPress(strip.querySelector('#fp-strip-lost'), () => moveTo(lostStage.id, lostStage.name));
+    bindPress(strip.querySelector('#fp-strip-prereserve'), () => {
+      if (!dealMatchesOpenChat(deal)) {
+        toast('A conversa mudou — reabra o lead pra pré-reservar.', true);
+        removeChatStrip();
+        fastDetect();
+        return;
+      }
+      openPreReserveModal(deal);
+    });
+    // Best-effort: se o lead já tem data segurada, o botão mostra 🔒 dd/mm
+    refreshPreReserveButton(strip, deal);
 
     bindPress(strip.querySelector('#fp-strip-info'), () => {
       if (!dealMatchesOpenChat(deal)) { toast('A conversa mudou — reabra o lead.', true); removeChatStrip(); fastDetect(); return; }
@@ -4975,6 +5036,10 @@
 
     chatKey = nextKey;
     chatPhone = cleanPhone || null;
+    // Guarda o lead que estava vinculado ANTES de limpar: se o header desta
+    // MESMA conversa só re-renderizou com variação (perfil comercial), o
+    // vínculo é mantido em vez de derrubado.
+    const prevDeal = chatDeal;
     chatDeal = null;
     // Trocou de conversa: remove a faixa do lead ANTERIOR na hora. Sem isso ela
     // fica mostrando o lead/etapa errados até o novo resolver — e um clique nela
@@ -5002,9 +5067,29 @@
     };
 
     if (!cleanPhone) {
+      // CONTINUIDADE: o header da MESMA conversa muda enquanto o WhatsApp
+      // termina de carregar (perfil comercial: aparece "~", label "Conta
+      // comercial", nome verificado). Se o lead que já estava vinculado ainda
+      // bate FORTE com o novo header, mantém o vínculo — antes ele era
+      // derrubado pra "Não está no pipeline" e induzia a criar card duplicado.
+      if (prevDeal && nameStrongMatch(prevDeal.contact_name || prevDeal.title || '', chatName)) {
+        chatDeal = prevDeal;
+        chatPhone = digits(prevDeal.contact_phone || '') || null;
+        if (chatPhone) rememberChatPhoneByName(chatName, chatPhone);
+        chatStages = chatStages.length ? chatStages : stages;
+        injectChatStrip(chatDeal, chatStages);
+        return;
+      }
+
       const cachedByName = findDealByNameLocal(chatName);
       if (cachedByName && nameMatchesHeader(cachedByName)) {
         chatDeal = cachedByName;
+        // Aproveita o telefone do próprio deal pra popular o cache nome→telefone
+        // (próximas aberturas resolvem na hora, mesmo sem número no DOM).
+        if (cachedByName.contact_phone) {
+          chatPhone = digits(cachedByName.contact_phone);
+          rememberChatPhoneByName(chatName, chatPhone);
+        }
         chatStages = chatStages.length ? chatStages : stages;
         injectChatStrip(chatDeal, chatStages);
         return;
@@ -5067,6 +5152,20 @@
       } catch (err) {
         console.warn('[fp-extension] lookup por nome falhou:', err);
       }
+
+      // ÚLTIMO recurso antes de declarar "não está no pipeline": abre o painel
+      // de dados do contato e lê o telefone REAL de lá. Perfis COMERCIAIS
+      // escondem o número do DOM — sem isso o lead certo existia no funil mas
+      // nunca era encontrado, e o "+ Adicionar" acabava criando card duplicado.
+      try {
+        const drawerPhone = await readPhoneFromContactDrawer(1500);
+        if (chatKey !== startedKey) return;
+        if (drawerPhone) {
+          chatKey = null; // força re-detect agora com o telefone real
+          onChatOpened(drawerPhone);
+          return;
+        }
+      } catch { /* segue pro strip de adicionar */ }
 
       if (!chatStages.length && !stages.length) {
         try { chatStages = await ensureStagesForUi(); } catch { /* sem etapas, o modal ainda permite tentar */ }
@@ -5207,6 +5306,20 @@
     if (!cleanPhone) {
       openModal('', name, stageId, true);
       toast('Preencha o telefone para adicionar ao pipeline', true);
+      return;
+    }
+
+    // ANTI-DUPLICADO: se já existe um lead ABERTO com esse telefone (o match
+    // automático só não achou por leitura ruim do DOM — comum em perfil
+    // comercial), vincula a conversa a ele em vez de criar outro card.
+    const dup = findOpenDealByPhoneLocal(cleanPhone);
+    if (dup) {
+      rememberChatPhoneByName(name, cleanPhone);
+      chatDeal = dup;
+      chatPhone = digits(cleanPhone);
+      chatStages = chatStages.length ? chatStages : stages;
+      injectChatStrip(chatDeal, chatStages);
+      toast(`"${dup.contact_name || dup.title || 'Lead'}" já estava no funil — conversa vinculada.`);
       return;
     }
 
@@ -5354,6 +5467,127 @@
     } catch (err) {
       toast(err.message || 'Falha ao vincular', true);
     }
+  }
+
+  // ===== PRÉ-RESERVA DE DATA =====
+  // Segura uma data de ensaio na agenda enquanto o lead ainda negocia. Na
+  // conversão a data é confirmada (ou trocada); perder o lead libera a data.
+
+  async function refreshPreReserveButton(strip, deal) {
+    try {
+      const r = await bg({ type: 'GET_PRE_RESERVE', dealId: deal.id });
+      const btn = strip.querySelector('#fp-strip-prereserve');
+      if (!btn || !strip.isConnected) return;
+      const pr = r?.job;
+      if (pr?.job_date) {
+        const [, m, d] = String(pr.job_date).slice(0, 10).split('-');
+        btn.textContent = `🔒 Data ${d}/${m}`;
+        btn.title = 'Data pré-reservada — clique pra trocar ou liberar';
+        btn.classList.add('fp-prereserve-active');
+      }
+    } catch { /* best-effort: botão fica no estado padrão */ }
+  }
+
+  async function openPreReserveModal(deal) {
+    document.getElementById('fp-prereserve-modal')?.remove();
+
+    let existing = null;
+    try { existing = (await bg({ type: 'GET_PRE_RESERVE', dealId: deal.id }))?.job || null; } catch { /* sem reserva */ }
+
+    const leadName = deal.contact_name || deal.title || 'Lead';
+    const modal = document.createElement('div');
+    modal.id = 'fp-prereserve-modal';
+    modal.className = 'fp-info-overlay';
+    modal.innerHTML = `
+      <div class="fp-deal-edit-box">
+        <div class="fp-deal-edit-header">
+          <div>
+            <div class="fp-deal-edit-title">${existing ? '🔒 Data pré-reservada' : '📅 Pré-reservar data'}</div>
+            <div class="fp-deal-edit-sub">${esc(leadName)}</div>
+          </div>
+          <button class="fp-info-close" id="fp-pr-close">✕</button>
+        </div>
+        <div class="fp-deal-edit-body">
+          <div class="fp-mf"><label class="fp-ml">Data do ensaio *</label>
+            <input class="fp-mi" id="fp-pr-date" type="date" min="${todayISO()}"
+                   value="${esc(String(existing?.job_date || '').slice(0, 10))}" /></div>
+          <div class="fp-mf"><label class="fp-ml">Início</label>
+            <input class="fp-mi" id="fp-pr-time" type="time" value="${esc(String(existing?.job_time || '').slice(0, 5))}" /></div>
+          <div class="fp-mf"><label class="fp-ml">Término</label>
+            <input class="fp-mi" id="fp-pr-end" type="time" value="${esc(String(existing?.job_end_time || '').slice(0, 5))}" /></div>
+          <div class="fp-mf"><label class="fp-ml">Tipo de ensaio</label><div id="fp-pr-type-slot"></div></div>
+          <div class="fp-mf"><label class="fp-ml" style="opacity:.65;text-transform:none;font-weight:500">
+            A data fica bloqueada na agenda com 🔒. Ao converter a venda ela é confirmada
+            (ou você troca na hora); se o lead não fechar, é só liberar.
+          </label></div>
+        </div>
+        <div class="fp-mrow fp-deal-edit-actions">
+          ${existing ? '<button class="fp-btn-w" id="fp-pr-release" style="color:#b91c1c">Liberar data</button>' : ''}
+          <button class="fp-btn-w" id="fp-pr-cancel">Cancelar</button>
+          <button class="fp-btn-g" id="fp-pr-save">${existing ? 'Trocar data' : 'Pré-reservar'}</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    const typeSlot = modal.querySelector('#fp-pr-type-slot');
+    buildTipoEnsaioSelect(typeSlot, {
+      value: existing?.job_type || getDealShootType(deal) || '',
+      placeholder: 'Tipo de ensaio',
+      extraFirst: [{ value: '', label: 'Selecione (opcional)' }],
+    });
+
+    const close = () => modal.remove();
+    bindOverlayClose(modal, close);
+    modal.querySelector('#fp-pr-close')?.addEventListener('click', close);
+    modal.querySelector('#fp-pr-cancel')?.addEventListener('click', close);
+
+    modal.querySelector('#fp-pr-release')?.addEventListener('click', async () => {
+      const btn = modal.querySelector('#fp-pr-release');
+      btn.disabled = true; btn.textContent = 'Liberando...';
+      try {
+        await bg({ type: 'DELETE_PRE_RESERVE', dealId: deal.id });
+        toast('Data liberada — saiu da agenda.');
+        close();
+        const strip = document.getElementById('fp-chat-strip');
+        const stripBtn = strip?.querySelector('#fp-strip-prereserve');
+        if (stripBtn) {
+          stripBtn.textContent = '📅 Pré-reservar';
+          stripBtn.title = 'Segurar uma data de ensaio na agenda enquanto negocia';
+          stripBtn.classList.remove('fp-prereserve-active');
+        }
+      } catch (err) {
+        toast(err.message || 'Falha ao liberar', true);
+        btn.disabled = false; btn.textContent = 'Liberar data';
+      }
+    });
+
+    modal.querySelector('#fp-pr-save')?.addEventListener('click', async () => {
+      const dateVal = modal.querySelector('#fp-pr-date')?.value || '';
+      if (!dateVal) return toast('Escolha a data que será pré-reservada', true);
+      const btn = modal.querySelector('#fp-pr-save');
+      btn.disabled = true; btn.textContent = 'Reservando...';
+      try {
+        await bg({
+          type: 'SAVE_PRE_RESERVE',
+          dealId: deal.id,
+          data: {
+            job_date: dateVal,
+            job_time: modal.querySelector('#fp-pr-time')?.value || null,
+            job_end_time: modal.querySelector('#fp-pr-end')?.value || null,
+            job_type: (typeSlot._fpSel ? typeSlot._fpSel.getValue() : '') || 'Ensaio',
+          },
+        });
+        const [y, m, d] = dateVal.split('-');
+        toast(`Data ${d}/${m}/${y} pré-reservada 🔒 — bloqueada na agenda.`);
+        close();
+        const strip = document.getElementById('fp-chat-strip');
+        if (strip) refreshPreReserveButton(strip, deal);
+      } catch (err) {
+        toast(err.message || 'Falha ao pré-reservar', true);
+        btn.disabled = false; btn.textContent = existing ? 'Trocar data' : 'Pré-reservar';
+      }
+    });
   }
 
   function openDealEditModal(deal) {
@@ -5609,7 +5843,7 @@
     return 'partial';
   }
 
-  async function loadClientsForConversion(modal) {
+  async function loadClientsForConversion(modal, deal) {
     const slot = modal.querySelector('#fp-win-client-select-slot');
     if (!slot) return;
 
@@ -5622,6 +5856,11 @@
 
     try {
       const clients = await bg({ type: 'GET_CLIENTS' });
+      // Cliente já conhecido? Pelo vínculo do lead (client_id) ou pelo telefone.
+      const dealPhone = digits(deal?.contact_phone || '');
+      const known = (clients || []).find((c) => deal?.client_id && Number(c.id) === Number(deal.client_id))
+        || (dealPhone ? (clients || []).find((c) => c.phone && phonesMatch(c.phone, dealPhone)) : null);
+
       const items = [{ value: '', label: 'Selecione um cliente' }]
         .concat((clients || []).map((c) => ({
           value: String(c.id),
@@ -5629,15 +5868,57 @@
         })));
       const sel = fpSelect({
         items,
-        value: '',
+        value: known ? String(known.id) : '',
         placeholder: 'Buscar cliente…',
         searchable: true,
       });
       slot.innerHTML = '';
       slot.appendChild(sel.element);
       slot._fpSel = sel;
+
+      if (known && modal.isConnected) {
+        // Já é cliente da base: começa em "Cliente existente" com ele
+        // selecionado (evita cadastro duplicado) e espelha os dados da aba
+        // Clientes nos campos de "novo cliente" — se o usuário trocar o modo,
+        // tudo vem EXATAMENTE como está no cadastro (endereço, número, bairro,
+        // CEP, origem...).
+        const existingRadio = modal.querySelector('input[name="fp-win-mode"][value="existing"]');
+        if (existingRadio && !existingRadio.checked) {
+          existingRadio.checked = true;
+          existingRadio.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        prefillWonModalFromClient(modal, known);
+      }
     } catch {
       placeholder('Não foi possível carregar clientes');
+    }
+  }
+
+  // Espelha o cadastro da aba Clientes nos campos do modal de conversão —
+  // só preenche campo VAZIO (o que o usuário já digitou tem prioridade).
+  function prefillWonModalFromClient(modal, c) {
+    const setIfEmpty = (sel, v) => {
+      if (v == null || v === '') return;
+      const el = modal.querySelector(sel);
+      if (!el || (el.value || '').trim()) return;
+      el.value = String(v);
+    };
+    setIfEmpty('#fp-win-client-name', c.name);
+    setIfEmpty('#fp-win-client-phone', digits(c.phone || ''));
+    setIfEmpty('#fp-win-client-email', c.email);
+    setIfEmpty('#fp-win-client-doc', c.cpf);
+    setIfEmpty('#fp-win-client-birth', String(c.birth_date || '').slice(0, 10));
+    setIfEmpty('#fp-win-client-instagram', c.instagram);
+    setIfEmpty('#fp-win-client-address', c.address);
+    setIfEmpty('#fp-win-client-number', c.address_number);
+    setIfEmpty('#fp-win-client-complement', c.address_complement);
+    setIfEmpty('#fp-win-client-neighborhood', c.neighborhood);
+    setIfEmpty('#fp-win-client-city', c.city);
+    setIfEmpty('#fp-win-client-state', c.state);
+    setIfEmpty('#fp-win-client-zip', c.cep);
+    const foundSlot = modal.querySelector('#fp-win-client-found-slot');
+    if (c.lead_source && foundSlot?._fpSel && !foundSlot._fpSel.getValue()) {
+      setSelectByText(foundSlot, c.lead_source);
     }
   }
 
@@ -5975,9 +6256,22 @@
   }
 
   function updateWonSummary(modal) {
-    const amount = selectedCatalogTotal(modal);
+    // Com itens do catálogo o total é a soma deles (campo travado).
+    // Sem itens, o campo fica LIVRE pro valor manual — permite converter e
+    // agendar o ensaio mesmo sem catálogo cadastrado.
+    const hasItems = selectedCatalogItems(modal).length > 0;
     const amountInput = modal.querySelector('#fp-win-job-amount');
-    if (amountInput) amountInput.value = amount ? amount.toFixed(2) : '0';
+    let amount;
+    if (hasItems) {
+      amount = selectedCatalogTotal(modal);
+      if (amountInput) {
+        amountInput.value = amount.toFixed(2);
+        amountInput.readOnly = true;
+      }
+    } else {
+      if (amountInput) amountInput.readOnly = false;
+      amount = Number(amountInput?.value) || 0;
+    }
 
     const sinal = Number(modal.querySelector('#fp-win-sinal')?.value) || 0;
     const rest = Math.max(0, amount - sinal);
@@ -6219,7 +6513,12 @@
               <div class="fp-mf"><label class="fp-ml">Nascimento</label><input class="fp-mi" id="fp-win-client-birth" type="date" /></div>
               <div class="fp-mf"><label class="fp-ml">Instagram</label><input class="fp-mi" id="fp-win-client-instagram" value="${esc(deal.contact_instagram || '')}" /></div>
             </div>
-            <div class="fp-mf"><label class="fp-ml">Endereço</label><input class="fp-mi" id="fp-win-client-address" /></div>
+            <div class="fp-mf"><label class="fp-ml">Endereço (rua)</label><input class="fp-mi" id="fp-win-client-address" /></div>
+            <div class="fp-won-grid fp-won-grid-3">
+              <div class="fp-mf"><label class="fp-ml">Número</label><input class="fp-mi" id="fp-win-client-number" /></div>
+              <div class="fp-mf"><label class="fp-ml">Complemento</label><input class="fp-mi" id="fp-win-client-complement" /></div>
+              <div class="fp-mf"><label class="fp-ml">Bairro</label><input class="fp-mi" id="fp-win-client-neighborhood" /></div>
+            </div>
             <div class="fp-won-grid fp-won-grid-3">
               <div class="fp-mf"><label class="fp-ml">Cidade</label><input class="fp-mi" id="fp-win-client-city" /></div>
               <div class="fp-mf"><label class="fp-ml">Estado</label><input class="fp-mi" id="fp-win-client-state" maxlength="2" /></div>
@@ -6263,7 +6562,7 @@
               <div class="fp-catalog-list" id="fp-win-catalog-list"></div>
             </div>
             <div class="fp-won-grid fp-won-grid-4">
-              <div class="fp-mf"><label class="fp-ml">Valor total</label><input class="fp-mi" id="fp-win-job-amount" type="number" value="0" readonly /></div>
+              <div class="fp-mf"><label class="fp-ml">Valor total</label><input class="fp-mi" id="fp-win-job-amount" type="number" value="${Number(deal.value) || 0}" /></div>
               <div class="fp-mf"><label class="fp-ml">Sinal pago</label><input class="fp-mi" id="fp-win-sinal" type="number" value="0" /></div>
               <div class="fp-mf"><label class="fp-ml">Forma de pagamento</label>
                 <div id="fp-win-payment-method-slot"></div>
@@ -6346,9 +6645,28 @@
     // IA lê a conversa e completa os campos vazios. Silencioso: se a conversa
     // aberta não for a do lead, simplesmente não roda (trava anti-mistura).
     if (prefilled < 2) runAICadastroExtraction(modal, deal, { silent: true });
-    loadClientsForConversion(modal);
+    loadClientsForConversion(modal, deal);
     loadCatalogForConversion(modal);
     loadCampaignsForConversion(modal);
+    // Origem do lead já registrada no card? Pré-seleciona no "Como conheceu".
+    if (deal.lead_source) setSelectByText(foundSlot, deal.lead_source);
+    // Pré-reserva de data: se o lead segurou uma data durante a negociação,
+    // carrega no formulário do trabalho — confirmar é só salvar; trocar é
+    // editar a data antes de salvar (a MESMA linha da agenda é atualizada).
+    bg({ type: 'GET_PRE_RESERVE', dealId: deal.id }).then((r) => {
+      const pr = r?.job;
+      if (!pr || !modal.isConnected) return;
+      const dateEl = modal.querySelector('#fp-win-job-date');
+      if (dateEl && pr.job_date) dateEl.value = String(pr.job_date).slice(0, 10);
+      const timeEl = modal.querySelector('#fp-win-job-time');
+      if (timeEl && pr.job_time) timeEl.value = String(pr.job_time).slice(0, 5);
+      const endEl = modal.querySelector('#fp-win-job-end');
+      if (endEl && pr.job_end_time) endEl.value = String(pr.job_end_time).slice(0, 5);
+      if (pr.job_type) setSelectByText(modal.querySelector('#fp-win-job-type-slot'), pr.job_type);
+      const dateLabel = dateEl?.closest('.fp-mf')?.querySelector('.fp-ml');
+      if (dateLabel) dateLabel.textContent = 'Data * (🔒 pré-reservada)';
+      toast('Data pré-reservada carregada — confirme ou troque antes de salvar 🔒');
+    }).catch(() => {});
 
     const close = () => modal.remove();
     const updateMode = () => {
@@ -6369,6 +6687,7 @@
     modal.querySelector('#fp-win-catalog-add')?.addEventListener('click', () => addCatalogItemToWonModal(modal));
     modal.querySelector('#fp-win-ai-read')?.addEventListener('click', () => runAICadastroExtraction(modal, deal));
     modal.querySelector('#fp-win-sinal')?.addEventListener('input', () => updateWonSummary(modal));
+    modal.querySelector('#fp-win-job-amount')?.addEventListener('input', () => updateWonSummary(modal));
     modal.querySelector('#fp-won-save')?.addEventListener('click', () => saveWonConversion(deal, modal));
     updateMode();
     updateJobVisibility();
@@ -6396,10 +6715,15 @@
       document: val(modal, '#fp-win-client-doc'),
       birth_date: val(modal, '#fp-win-client-birth'),
       address: val(modal, '#fp-win-client-address'),
+      address_number: val(modal, '#fp-win-client-number'),
+      address_complement: val(modal, '#fp-win-client-complement'),
+      neighborhood: val(modal, '#fp-win-client-neighborhood'),
       city: val(modal, '#fp-win-client-city'),
       state: val(modal, '#fp-win-client-state').toUpperCase(),
       zip_code: val(modal, '#fp-win-client-zip'),
       instagram: val(modal, '#fp-win-client-instagram'),
+      // "Como conheceu" vai pra coluna lead_source — MESMO campo da aba Clientes
+      lead_source: val(modal, '#fp-win-client-found-slot'),
       how_found: val(modal, '#fp-win-client-found-slot'),
       notes: val(modal, '#fp-win-client-notes'),
     } : undefined;
@@ -6414,11 +6738,13 @@
     }
 
     const catalogItems = selectedCatalogItems(modal);
-    const amount = selectedCatalogTotal(modal);
-    if (createJob && !catalogItems.length) {
-      toast('Adicione pelo menos um produto, serviço ou combo', true);
-      return;
-    }
+    // Sem itens de catálogo a conversão SEGUE valendo (igual ao app): o valor
+    // vem do campo manual. Antes isso BLOQUEAVA a conversão — o usuário
+    // desmarcava "criar trabalho" pra conseguir converter e o ensaio nunca
+    // aparecia na Agenda.
+    const amount = catalogItems.length
+      ? selectedCatalogTotal(modal)
+      : (Number(val(modal, '#fp-win-job-amount')) || Number(deal.value) || 0);
 
     const sinalAmount = Number(val(modal, '#fp-win-sinal')) || 0;
     const catalogNotes = catalogItems.length
@@ -7274,6 +7600,20 @@
     if (!name && phone) name = phone;
     if (!name) return toast('Nome é obrigatório', true);
     if (!phone) return toast('Telefone é obrigatório', true);
+
+    // ANTI-DUPLICADO: telefone já tem lead aberto no funil → não cria outro.
+    const dupDeal = findOpenDealByPhoneLocal(phone);
+    if (dupDeal) {
+      toast(`Já existe o lead "${dupDeal.contact_name || dupDeal.title || 'sem nome'}" com esse telefone — vinculei a conversa a ele.`);
+      closeModal();
+      rememberChatPhoneByName(name, phone);
+      chatDeal = dupDeal;
+      chatPhone = digits(phone);
+      chatStages = chatStages.length ? chatStages : stages;
+      injectChatStrip(chatDeal, chatStages);
+      return;
+    }
+
     const btn = document.getElementById('fp-ms');
     btn.textContent = 'Criando...'; btn.disabled = true;
     try {

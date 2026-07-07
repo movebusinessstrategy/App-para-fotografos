@@ -1298,6 +1298,9 @@ body.fp-kanban-open #pane-side { display: none !important; }
   transform: translateY(-1px);
 }
 .fp-strip-stage-btn.fp-active { border-color: #00a884; background: rgba(0, 168, 132, 0.12); color: #008069; }
+/* Pré-reserva ativa: âmbar, sinaliza data segurada na agenda */
+.fp-strip-stage-btn.fp-prereserve-active { border-color: #f59e0b; background: #fef3c7; color: #92400e; }
+.fp-strip-stage-btn.fp-prereserve-active:hover { border-color: #d97706; background: #fde68a; color: #78350f; }
 .fp-strip-primary-add {
   border-color: rgba(0, 168, 132, 0.55);
   background: rgba(0, 168, 132, 0.12);

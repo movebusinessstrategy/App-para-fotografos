@@ -65,9 +65,14 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
 
   useEffect(() => {
     // Mantém o drawer (selectedDeal) sempre sincronizado com o dado novo.
+    // Só troca a REFERÊNCIA se o dado mudou de verdade: o poll de 12s cria
+    // objetos novos idênticos e a troca de identidade resetava formulários
+    // abertos (drawer/modal de conversão) no meio da digitação.
     setSelectedDeal((prev) => {
       if (!prev) return prev;
-      return deals.find((d) => d.id === prev.id) ?? prev;
+      const fresh = deals.find((d) => d.id === prev.id);
+      if (!fresh) return prev;
+      return JSON.stringify(fresh) === JSON.stringify(prev) ? prev : fresh;
     });
     // Não sobrescreve o board no meio de um arraste, nem por ~2s após um
     // movimento local (janela pra o PUT confirmar e o poll trazer o estado certo).

@@ -416,7 +416,10 @@ export function DealDetailDrawer({
       loadActivities();
       loadHistory();
     }
-  }, [deal]);
+    // Depende do ID, não do objeto: o polling de 12s recria o objeto `deal`
+    // (mesmo dado, identidade nova) e este reset apagava notas/campos em edição.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deal?.id]);
 
   const loadActivities = async () => {
     if (!deal) return;
