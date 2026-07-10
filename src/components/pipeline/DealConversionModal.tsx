@@ -7,6 +7,7 @@ import { Deal, Client, SaleCampaign } from "../../types";
 import { authFetch } from "../../utils/authFetch";
 import { useApi } from "../../utils/useApi";
 import { normalizeText } from "../../utils/normalizeText";
+import { todayLocalISO } from "../../utils/date";
 import { useTiposEnsaio, tiposComValorAtual } from "../../hooks/useTiposEnsaio";
 import { SearchableSelect } from "../ui/SearchableSelect";
 
@@ -55,7 +56,7 @@ export function DealConversionModal({
   const [campaignId, setCampaignId] = useState<string>("");
   const [campaigns, setCampaigns] = useState<SaleCampaign[]>([]);
   // Data da venda: default hoje; permite registrar vendas antigas (retroativas)
-  const [soldDate, setSoldDate] = useState(new Date().toISOString().slice(0, 10));
+  const [soldDate, setSoldDate] = useState(todayLocalISO());
   const [expandedSections, setExpandedSections] = useState({
     client: true,
     job: true,
@@ -116,7 +117,7 @@ export function DealConversionModal({
   // Dados do Job
   const [jobData, setJobData] = useState({
     job_type: "Gestante",
-    job_date: new Date().toISOString().slice(0, 10),
+    job_date: todayLocalISO(),
     job_time: "09:00",
     job_end_time: "",
     job_name: "",
@@ -151,7 +152,7 @@ export function DealConversionModal({
       }));
       setSinalAmount(0);
       setNewItems([]);
-      setSoldDate(new Date().toISOString().slice(0, 10));
+      setSoldDate(todayLocalISO());
       setCampaignId(deal.campaign_id || "");
     }
     // Depende do ID, não do objeto: o polling de 12s do Vendas recria o objeto
@@ -380,7 +381,7 @@ export function DealConversionModal({
             <input
               type="date"
               value={soldDate}
-              max={new Date().toISOString().slice(0, 10)}
+              max={todayLocalISO()}
               onChange={(e) => setSoldDate(e.target.value)}
               className={`${inputClasses} !w-auto [color-scheme:light] dark:[color-scheme:dark]`}
             />

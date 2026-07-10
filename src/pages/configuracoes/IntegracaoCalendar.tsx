@@ -97,14 +97,20 @@ export default function IntegracaoCalendar() {
         {loading ? (
           <div className="flex justify-center py-4"><RefreshCw className="animate-spin text-gray-400" /></div>
         ) : !connected ? (
-          <div className="flex flex-col sm:flex-row gap-3">
-            <button
-              onClick={connect}
-              className="flex items-center justify-center gap-2 px-5 py-2.5 bg-gold-600 hover:bg-gold-700 text-white font-semibold rounded-lg"
-            >
-              Conectar Google Calendar
-            </button>
-          </div>
+          isOwner ? (
+            <div className="flex flex-col sm:flex-row gap-3">
+              <button
+                onClick={connect}
+                className="flex items-center justify-center gap-2 px-5 py-2.5 bg-gold-600 hover:bg-gold-700 text-white font-semibold rounded-lg"
+              >
+                Conectar Google Calendar
+              </button>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500 dark:text-gray-400 italic">
+              Só o dono da conta pode conectar o Google Calendar.
+            </p>
+          )
         ) : (
           <div className="flex flex-col sm:flex-row gap-3">
             <button

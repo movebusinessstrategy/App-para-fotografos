@@ -36,7 +36,7 @@ import { LayoutOutletContext } from "../components/layout/AppLayout";
 import { authFetch } from "../utils/authFetch";
 import { useApi } from "../utils/useApi";
 import { cn } from "../utils/cn";
-import { parseDate } from "../utils/date";
+import { parseDate, toLocalISO } from "../utils/date";
 import { cleanPhone, parseCSV, parseDateBR, parseValueBR } from "../utils/csvParser";
 import { buildMetaCustomerListCSV, buildMetaOfflineEventsCSV, countMatchable, downloadCSV, MetaContact } from "../utils/metaExport";
 import { supabase } from "../integrations/supabase/client";
@@ -797,9 +797,11 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
 
                 if (rules && rules.length > 0) {
                   for (const rule of rules) {
-                    const baseDate = new Date(insertedJob.job_date);
+                    // parseDate lê YYYY-MM-DD no fuso LOCAL; toLocalISO grava sem
+                    // passar por UTC (evitava off-by-one na data sugerida).
+                    const baseDate = parseDate(insertedJob.job_date) || new Date();
                     baseDate.setDate(baseDate.getDate() + rule.days_offset);
-                    const suggestedDate = baseDate.toISOString().split('T')[0];
+                    const suggestedDate = toLocalISO(baseDate);
 
                     const { data: existing } = await supabase
                       .from('opportunities')
@@ -1952,8 +1954,8 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
                       </div>
                       <div>
                         <div className="font-bold text-gray-900 dark:text-white">{job.job_name}</div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400">{job.job_type} • {job.job_date && !isNaN(new Date(job.job_date).getTime())
-                          ? format(new Date(job.job_date), 'dd/MM/yyyy')
+                        <div className="text-xs text-gray-500 dark:text-gray-400">{job.job_type} • {parseDate(job.job_date)
+                          ? format(parseDate(job.job_date) as Date, 'dd/MM/yyyy')
                           : '-'}</div>
                       </div>
                     </div>

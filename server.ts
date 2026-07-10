@@ -725,11 +725,17 @@ const getOAuth2Client = (redirectUri?: string) => {
 };
 
 const getGoogleAuth = async (supabase: SupabaseClient, userId: string) => {
-  const { data: auth } = await supabase
+  // NÃO usar .single() aqui: a PK da google_auth é `id` (user_id sem UNIQUE até
+  // a migration 061) e o upsert antigo do callback INSERIA linha nova a cada
+  // "Conectar" — com 2+ linhas o .single() erra e o sync morria em silêncio,
+  // com a tela mostrando "Desconectado". Pega a conexão mais recente.
+  const { data: rows } = await supabase
     .from('google_auth')
     .select('*')
     .eq('user_id', userId)
-    .single();
+    .order('id', { ascending: false })
+    .limit(1);
+  const auth = rows?.[0];
 
   if (!auth || !auth.access_token) return null;
 
@@ -886,6 +892,13 @@ const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) 
       timeMax,
       singleEvents: true,
       orderBy: 'startTime',
+      // CRÍTICO: sem isso o dateTime volta no fuso do EVENTO/calendário (que
+      // pode ser UTC ou outro em conta mal configurada) e o parse por substring
+      // abaixo gravaria wall-clock errado em job_time — foi assim que uma
+      // sincronização "mudou todos os horários" no passado (push pré-907a7d7
+      // gravava -3h no Google e o update do pull puxava o erro de volta).
+      // Com timeZone fixo, o Google converte TUDO pra BRT antes de responder.
+      timeZone: 'America/Sao_Paulo',
     });
 
     const events = response.data.items || [];
@@ -913,8 +926,10 @@ const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) 
 
         const changes: Record<string, string | null> = {};
         if (newDate !== existingJob.job_date) changes.job_date = newDate;
-        if (newTime !== existingJob.job_time) changes.job_time = newTime;
-        if (newEnd !== existingJob.job_end_time) changes.job_end_time = newEnd;
+        // Evento all-day (sem horário) NÃO apaga o horário do job — antes
+        // newTime=null sobrescrevia job_time e o ensaio "perdia" a hora.
+        if (newTime && newTime !== existingJob.job_time) changes.job_time = newTime;
+        if (newEnd && newEnd !== existingJob.job_end_time) changes.job_end_time = newEnd;
 
         if (Object.keys(changes).length > 0) {
           await supabase.from('jobs').update(changes).eq('id', existingJob.id);
@@ -3596,10 +3611,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   app.get('/api/auth/google/url', requireAuth, (req, res) => {
+    // Owner-only: um MEMBRO opera sob o userId do DONO. Se ele "Conectar
+    // Google", o state=userId aponta pro dono e o callback grava o Google
+    // PESSOAL do funcionário por cima da conexão do estúdio — a agenda do dono
+    // passaria a empurrar ensaios pro calendário particular do funcionário.
+    // É exatamente o "conectar numa conta desconecta a outra". Só o dono conecta.
+    if ((req as any).isMember && !(req as any).isPlatformAdmin) {
+      return res.status(403).json({ error: 'Só o dono da conta pode conectar o Google Calendar.' });
+    }
     const redirectUri = getRedirectUri(req);
     const client = getOAuth2Client(redirectUri);
     const userId = (req as any).userId;
-    
+
     const url = client.generateAuthUrl({
       access_type: 'offline',
       scope: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar.readonly'],
@@ -3625,8 +3648,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const client = getOAuth2Client(redirectUri);
       const { tokens } = await client.getToken({ code: code as string, redirect_uri: redirectUri });
 
-      // Usa supabaseAdmin (service_role) pra bypassar RLS — callback é anônimo
-      const { error: upsertError } = await supabaseAdmin.from('google_auth').upsert({
+      // Usa supabaseAdmin (service_role) pra bypassar RLS — callback é anônimo.
+      // delete+insert em vez de upsert: a PK da google_auth é `id` e user_id NÃO
+      // tem UNIQUE, então o upsert antigo (onConflict implícito na PK) inseria
+      // uma linha NOVA a cada "Conectar" — a conta ficava com 2+ linhas, o
+      // .single() das leituras erra e o sync inteiro morria em silêncio.
+      await supabaseAdmin.from('google_auth').delete().eq('user_id', userId);
+      const { error: upsertError } = await supabaseAdmin.from('google_auth').insert({
         user_id: userId,
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
@@ -3656,8 +3684,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.get('/api/auth/google/status', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { data } = await supabase.from('google_auth').select('user_id').eq('user_id', userId).single();
-    res.json({ connected: !!data });
+    // count em vez de .single(): com linha duplicada (bug do upsert antigo) o
+    // .single() errava e mostrava "Desconectado" MESMO com tokens salvos.
+    const { count } = await supabase
+      .from('google_auth')
+      .select('user_id', { count: 'exact', head: true })
+      .eq('user_id', userId);
+    res.json({ connected: (count ?? 0) > 0 });
   });
 
   app.post('/api/auth/google/disconnect', requireAuth, async (req, res) => {
@@ -7581,6 +7614,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('id', req.params.id)
       .eq('owner_user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
+    // Invalida o cache de auth do tenant: sem isso o membro desativado seguia
+    // com acesso total (userId do dono + permissões) até o cache expirar.
+    await invalidateAuthCacheForTenant(userId);
     res.json({ success: true });
   });
 
@@ -13102,7 +13138,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         supabaseAdmin.from('jobs').select('id, job_name, job_date, status, created_at, client_id').eq('user_id', ownerId).order('created_at', { ascending: false }).limit(5),
         supabaseAdmin.from('deals').select('id, title, value, stage, created_at').eq('user_id', ownerId).order('created_at', { ascending: false }).limit(5),
         supabaseAdmin.from('contracts').select('id, status, created_at, signed_at, client_id').eq('user_id', ownerId).order('created_at', { ascending: false }).limit(5),
-        supabaseAdmin.from('google_auth').select('user_id, expiry_date').eq('user_id', ownerId).maybeSingle(),
+        // limit(1) sem maybeSingle: linha duplicada (bug do upsert antigo) fazia
+        // o maybeSingle errar e o painel mostrar Google "desconectado" à toa
+        supabaseAdmin.from('google_auth').select('user_id, expiry_date').eq('user_id', ownerId).limit(1),
         supabaseAdmin.from('studio_settings').select('studio_name, autentique_api_key, asaas_customer_id').eq('user_id', ownerId).maybeSingle(),
         supabaseAdmin.from('whatsapp_instances').select('phone_number_id, status, display_phone_number').eq('user_id', ownerId).maybeSingle(),
       ]);
@@ -13114,10 +13152,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const { data: plans } = await supabaseAdmin.from('platform_plans').select('id, slug, name');
       const plan = acct?.plan_id ? plans?.find((p) => p.id === acct.plan_id) : null;
 
+      // googleAuth agora vem como array (limit(1)) — ver comentário no select
+      const googleAuthRow = Array.isArray(googleAuth) ? googleAuth[0] : googleAuth;
       const integrations = {
         google_calendar: {
-          connected: !!googleAuth,
-          expires_at: googleAuth?.expiry_date ? new Date(Number(googleAuth.expiry_date)).toISOString() : null,
+          connected: !!googleAuthRow,
+          expires_at: googleAuthRow?.expiry_date ? new Date(Number(googleAuthRow.expiry_date)).toISOString() : null,
         },
         autentique: {
           connected: !!(studioSettings as any)?.autentique_api_key,

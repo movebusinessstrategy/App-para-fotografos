@@ -358,13 +358,15 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
                 )}
               </div>
             </div>
-          ) : (
-            <button 
+          ) : isOwner ? (
+            <button
               onClick={handleConnectGoogle}
               className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 px-4 py-2 rounded-xl font-bold hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors flex items-center gap-2"
             >
               Conectar Google Calendar
             </button>
+          ) : (
+            <p className="text-sm text-gray-500 dark:text-gray-400 italic">Só o dono da conta pode conectar o Google Calendar.</p>
           )}
         </div>
       </div>

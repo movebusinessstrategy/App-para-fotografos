@@ -1659,7 +1659,7 @@
     const btn = document.querySelector('.fp-kpi-chip-custom');
     if (!btn) return;
     const rect = btn.getBoundingClientRect();
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayISO();
     const monthAgo = new Date(); monthAgo.setDate(monthAgo.getDate() - 30);
     const from = kanbanCustomRange?.from || monthAgo.toISOString().slice(0, 10);
     const to = kanbanCustomRange?.to || today;
@@ -3811,7 +3811,7 @@
     const meId = tasksState.me?.currentMember?.id || null;
     const memberById = new Map(tasksState.members.map((m) => [m.id, m]));
     const clientById = new Map((tasksState.clients || []).map((c) => [c.id, c]));
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = todayISO();
 
     // Esconde concluídas por padrão; só aparecem se o filtro for "completed"
     let items = tasksState.tasks.slice();
@@ -5233,7 +5233,7 @@
 
     const row = document.createElement('div');
     row.id = 'fp-chat-tasks';
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = todayISO();
     row.innerHTML = `
       <span class="fp-chat-tasks-label">📋 ${tasks.length} ${tasks.length === 1 ? 'tarefa' : 'tarefas'} pendentes:</span>
       ${tasks.map((t) => {
@@ -5832,7 +5832,11 @@
   }
 
   function todayISO() {
-    return new Date().toISOString().slice(0, 10);
+    // Data LOCAL (fuso do navegador). NÃO usar toISOString(): converte pra UTC
+    // e entre 21h e 23:59 BRT a data "de hoje" pulava pro dia seguinte — a venda
+    // era gravada (e a data era pré-reservada) com +1 dia.
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
 
   function autoPaymentStatus(total, sinal) {
