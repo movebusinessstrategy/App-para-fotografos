@@ -6807,7 +6807,7 @@
       if (btn) btn.textContent = 'Convertendo...';
       const soldDate = val(modal, '#fp-win-sold-date');
       const campaignId = val(modal, '#fp-win-campaign-slot') || undefined;
-      await bg({
+      const convRes = await bg({
         type: 'CONVERT_DEAL',
         dealId: deal.id,
         data: { existingClientId, createClient, createJob, client, job, campaign_id: campaignId, sinalAmount: sinalAmount > 0 ? sinalAmount : undefined, converted_at: soldDate || undefined },
@@ -6825,6 +6825,11 @@
       // "não converteu", levando o usuário a converter DE NOVO.
       celebrateSale();
       toast('Venda convertida com sucesso!');
+      // Google Calendar desconectado = o ensaio ficou SÓ na agenda do sistema.
+      // Aviso atrasado pra não atropelar o toast de sucesso (toast é único).
+      if (createJob && convRes?.google_calendar_connected === false) {
+        setTimeout(() => toast('Google Calendar não conectado — o ensaio ficou só na agenda do sistema. Conecte no app: Configurações → Integrações → Google Calendar.', true), 2800);
+      }
       try {
         await loadKanban();
         if (chatDeal && Number(chatDeal.id) === Number(deal.id)) {

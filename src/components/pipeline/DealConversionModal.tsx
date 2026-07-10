@@ -233,7 +233,7 @@ export function DealConversionModal({
       } : undefined;
 
       // 2. Converte (converted_at permite registrar venda retroativa)
-      await authFetch(`/api/deals/${deal.id}/convert`, {
+      const convRes = await authFetch(`/api/deals/${deal.id}/convert`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -247,6 +247,17 @@ export function DealConversionModal({
           converted_at: soldDate || undefined,
         }),
       });
+      const convData: { google_calendar_connected?: boolean | null } = await convRes.json().catch(() => ({}));
+      // Google desconectado = o ensaio ficou SÓ na agenda do sistema. Sem esse
+      // aviso a falha era silenciosa e o usuário só descobria depois.
+      if (createJob && convData.google_calendar_connected === false) {
+        alert(
+          "Venda convertida! Mas o Google Calendar NÃO está conectado nesta conta — " +
+          "o ensaio ficou só na agenda do sistema.\n\n" +
+          "Conecte em Configurações → Integrações → Google Calendar e use " +
+          "\"Sincronizar agora\" pra enviar os ensaios pendentes."
+        );
+      }
       onConverted();
     } catch (error) {
       console.error("Erro ao converter deal:", error);

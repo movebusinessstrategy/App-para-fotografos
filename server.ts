@@ -3670,12 +3670,37 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!auth) return res.status(401).json({ error: 'Google account not connected' });
 
     try {
-      // SÓ pull (Google → CRM). Push em massa removido em 2026-05-31 porque
-      // criava centenas de eventos duplicados no Calendar do usuário. Push
-      // individual continua nas rotas POST/PATCH de jobs (push só quando user
-      // explicitamente cria/edita 1 job no CRM).
+      // Push seguro (CRM → Google): SÓ ensaios futuros que nunca foram pro
+      // Google (google_event_id null). O push em massa antigo (removido
+      // 2026-05-31) reenviava tudo e duplicava; este é idempotente — depois do
+      // primeiro envio o event_id fica salvo e o job sai do filtro. Recupera
+      // vendas lançadas com o Google desconectado: reconectou → Sincronizar.
+      const today = new Date().toISOString().slice(0, 10);
+      const { data: pendentes } = await supabase
+        .from('jobs')
+        .select('id')
+        .eq('user_id', userId)
+        .is('google_event_id', null)
+        .not('job_date', 'is', null)
+        .gte('job_date', today)
+        .not('status', 'in', '(cancelled,pre_reserved)')
+        .limit(100);
+      const ids = (pendentes || []).map((j: any) => j.id);
+      for (const id of ids) {
+        await syncJobToGoogleCalendar(supabase, id, userId);
+      }
+      // Conta o que REALMENTE entrou no Google (o sync engole erro por design)
+      let pushed = 0;
+      if (ids.length) {
+        const { data: ok } = await supabase
+          .from('jobs')
+          .select('id')
+          .in('id', ids)
+          .not('google_event_id', 'is', null);
+        pushed = ok?.length || 0;
+      }
       const pullResult = await pullFromGoogleCalendar(supabase, userId);
-      res.json({ success: true, ...pullResult });
+      res.json({ success: true, pushed, ...pullResult });
     } catch (error) {
       console.error('Error syncing all jobs:', error);
       res.status(500).json({ error: 'Internal server error' });
@@ -14383,7 +14408,20 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     generateAlignmentDossier(userId, Number(req.params.id)).catch((e: any) =>
       console.warn('[dossie] geração no convert falhou:', e?.message || e));
 
-    res.json({ success: true, client_id: clientId, job_id: jobId });
+    // Se criou ensaio mas o Google Calendar não está conectado, o push acima
+    // vira no-op SILENCIOSO — a venda ia só pra agenda do sistema e o usuário
+    // achava que tinha ido pro Google. O front usa esse flag pra avisar na hora.
+    let googleCalendarConnected: boolean | null = null;
+    if (jobId) {
+      const { data: ga } = await supabase
+        .from('google_auth')
+        .select('user_id')
+        .eq('user_id', userId)
+        .maybeSingle();
+      googleCalendarConnected = !!ga;
+    }
+
+    res.json({ success: true, client_id: clientId, job_id: jobId, google_calendar_connected: googleCalendarConnected });
   });
 
   app.post('/api/deals/:id/lost', requireAuth, async (req, res) => {
