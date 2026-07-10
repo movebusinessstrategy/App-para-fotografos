@@ -61,8 +61,12 @@ export default function IntegracaoCalendar() {
     try {
       const res = await authFetch("/api/auth/google/sync-all", { method: "POST" });
       const data = await res.json();
-      if (data.success) alert(`${data.pushed ?? 0} ensaios enviados pro Google Calendar e ${data.imported ?? 0} eventos importados de lá.`);
-      else alert("Erro ao sincronizar.");
+      if (data.success) {
+        const base = `${data.pushed ?? 0} ensaios enviados pro Google Calendar e ${data.imported ?? 0} eventos importados de lá.`;
+        alert(data.remaining > 0
+          ? `${base}\n\nAinda faltam ${data.remaining} ensaios — clique em "Sincronizar agora" de novo pra enviar o restante.`
+          : base);
+      } else alert("Erro ao sincronizar.");
     } finally {
       setSyncing(false);
     }

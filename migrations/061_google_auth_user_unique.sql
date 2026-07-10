@@ -1,16 +1,15 @@
--- 061: google_auth — 1 linha por conta (UNIQUE em user_id)
+-- 061: google_auth — trava de 1 linha por conta (UNIQUE em user_id)
 --
--- A PK da tabela é `id` e user_id NÃO tinha UNIQUE. O upsert do callback do
--- OAuth (sem onConflict) conflitava na PK — que nunca conflita — então cada
--- clique em "Conectar" INSERIA uma linha nova. Com 2+ linhas, as leituras com
--- .single()/.maybeSingle() erravam e a sincronização do Google Calendar morria
--- em silêncio, com a tela mostrando "Desconectado" mesmo com tokens salvos.
+-- A PK da tabela é `id` e user_id NÃO tinha UNIQUE. Na prática o upsert do
+-- callback atualiza a linha existente (verificado ao vivo — não acumulava
+-- duplicata), mas isso depende do comportamento do PostgREST e não estava
+-- garantido no banco. Esta constraint torna o invariante explícito: uma única
+-- conexão Google por conta, sem depender do driver.
 --
--- O servidor já foi corrigido (delete+insert no callback e leituras com
--- limit(1)), então NADA quebra antes ou depois desta migration — ela é a trava
--- de banco pra garantir que duplicata nunca mais entre.
+-- O servidor já lê com limit(1)/count e o callback já grava com delete+insert,
+-- então nada quebra antes ou depois desta migration.
 
--- 1) Remove duplicatas existentes, preservando a conexão mais recente (maior id)
+-- 1) Se por acaso existir duplicata, preserva a conexão mais recente (maior id)
 DELETE FROM google_auth a
 USING google_auth b
 WHERE a.user_id = b.user_id

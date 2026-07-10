@@ -1,6 +1,7 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
 import dotenv from 'dotenv';
@@ -724,11 +725,47 @@ const getOAuth2Client = (redirectUri?: string) => {
   );
 };
 
+// ── OAuth state assinado (anti-CSRF / anti-popup-fantasma) ──────────────────
+// O callback do Google é anônimo e antes confiava 100% no state=userId cru:
+// quem soubesse o UUID de uma conta podia gravar OS PRÓPRIOS tokens Google sob
+// aquela conta (sequestro da agenda) — e um popup abandonado completava sob o
+// userId de quem clicou, não de quem está logado agora. O state passa a ser
+// `userId.exp.hmac`, assinado com um segredo do servidor e válido por 15 min.
+const GOOGLE_STATE_SECRET =
+  process.env.GOOGLE_OAUTH_STATE_SECRET ||
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.WA_TOKEN_ENCRYPTION_KEY ||
+  'fallback-state-secret-troque-em-producao';
+const GOOGLE_STATE_TTL_MS = 15 * 60 * 1000;
+
+const signGoogleState = (userId: string): string => {
+  const exp = Date.now() + GOOGLE_STATE_TTL_MS;
+  const payload = `${userId}.${exp}`;
+  const sig = crypto.createHmac('sha256', GOOGLE_STATE_SECRET).update(payload).digest('base64url');
+  return `${payload}.${sig}`;
+};
+
+// Retorna o userId só se a assinatura confere E não expirou. Caso contrário null.
+const verifyGoogleState = (state: unknown): string | null => {
+  if (typeof state !== 'string') return null;
+  const parts = state.split('.');
+  if (parts.length !== 3) return null;
+  const [userId, expStr, sig] = parts;
+  const expected = crypto.createHmac('sha256', GOOGLE_STATE_SECRET).update(`${userId}.${expStr}`).digest('base64url');
+  // timingSafeEqual exige buffers do mesmo tamanho
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  const exp = Number(expStr);
+  if (!Number.isFinite(exp) || Date.now() > exp) return null;
+  return userId || null;
+};
+
 const getGoogleAuth = async (supabase: SupabaseClient, userId: string) => {
-  // NÃO usar .single() aqui: a PK da google_auth é `id` (user_id sem UNIQUE até
-  // a migration 061) e o upsert antigo do callback INSERIA linha nova a cada
-  // "Conectar" — com 2+ linhas o .single() erra e o sync morria em silêncio,
-  // com a tela mostrando "Desconectado". Pega a conexão mais recente.
+  // limit(1) em vez de .single(): a PK é `id` e user_id só ganha UNIQUE na
+  // migration 061. Defensivo — se por qualquer motivo houver 2 linhas, o
+  // .single() erraria e o sync morreria em silêncio ("Desconectado" com token
+  // salvo). Pega a conexão mais recente.
   const { data: rows } = await supabase
     .from('google_auth')
     .select('*')
@@ -3628,17 +3665,22 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       scope: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar.readonly'],
       prompt: 'consent',
       redirect_uri: redirectUri,
-      state: userId
+      // state assinado (userId.exp.hmac) em vez do userId cru — ver helpers
+      state: signGoogleState(userId)
     });
     res.json({ url });
   });
 
   app.get('/api/auth/google/callback', async (req, res) => {
-    const { code, state: userId } = req.query;
+    const { code, state } = req.query;
     const redirectUri = getRedirectUri(req);
 
-    if (!userId || typeof userId !== 'string') {
-      return res.status(400).send('User ID não encontrado.');
+    // Valida a assinatura+validade do state ANTES de qualquer coisa. Sem isso,
+    // qualquer um que soubesse o UUID de uma conta gravava os próprios tokens
+    // Google nela (sequestro de agenda), e popup abandonado vazava tokens.
+    const userId = verifyGoogleState(state);
+    if (!userId) {
+      return res.status(400).send('Link de autorização inválido ou expirado. Tente conectar novamente pelo app.');
     }
     if (!supabaseAdmin) {
       return res.status(500).send('Service role indisponível no servidor.');
@@ -3649,10 +3691,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const { tokens } = await client.getToken({ code: code as string, redirect_uri: redirectUri });
 
       // Usa supabaseAdmin (service_role) pra bypassar RLS — callback é anônimo.
-      // delete+insert em vez de upsert: a PK da google_auth é `id` e user_id NÃO
-      // tem UNIQUE, então o upsert antigo (onConflict implícito na PK) inseria
-      // uma linha NOVA a cada "Conectar" — a conta ficava com 2+ linhas, o
-      // .single() das leituras erra e o sync inteiro morria em silêncio.
+      // delete+insert garante 1 linha por conta SEM depender da constraint da
+      // migration 061 (que pode ainda não ter rodado) nem do comportamento de
+      // conflito do upsert. Idempotente: reconectar substitui a conexão.
       await supabaseAdmin.from('google_auth').delete().eq('user_id', userId);
       const { error: upsertError } = await supabaseAdmin.from('google_auth').insert({
         user_id: userId,
@@ -3684,8 +3725,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.get('/api/auth/google/status', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    // count em vez de .single(): com linha duplicada (bug do upsert antigo) o
-    // .single() errava e mostrava "Desconectado" MESMO com tokens salvos.
+    // count em vez de .single(): defensivo contra 2+ linhas (antes da UNIQUE da
+    // 061), que fariam o .single() errar e mostrar "Desconectado" com token salvo.
     const { count } = await supabase
       .from('google_auth')
       .select('user_id', { count: 'exact', head: true })
@@ -3727,7 +3768,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       // 2026-05-31) reenviava tudo e duplicava; este é idempotente — depois do
       // primeiro envio o event_id fica salvo e o job sai do filtro. Recupera
       // vendas lançadas com o Google desconectado: reconectou → Sincronizar.
-      const today = new Date().toISOString().slice(0, 10);
+      // Data de HOJE em BRT (servidor roda em UTC; sem o -3h, das 21h às 23:59
+      // BRT o filtro pularia os ensaios de hoje ainda por acontecer).
+      const today = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      // Teto BAIXO por request: cada push é uma chamada à API do Google
+      // (~0,3-0,8s) e o proxy do Render corta em ~100s. Com 100 num loop
+      // sequencial dava pra estourar; 25 fica folgado. O que sobra o usuário
+      // envia clicando "Sincronizar" de novo (retorna `remaining`).
+      const PUSH_BATCH = 25;
       const { data: pendentes } = await supabase
         .from('jobs')
         .select('id')
@@ -3736,8 +3784,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         .not('job_date', 'is', null)
         .gte('job_date', today)
         .not('status', 'in', '(cancelled,pre_reserved)')
-        .limit(100);
-      const ids = (pendentes || []).map((j: any) => j.id);
+        .order('job_date', { ascending: true })
+        .limit(PUSH_BATCH + 1);
+      const allPending = (pendentes || []).map((j: any) => j.id);
+      const ids = allPending.slice(0, PUSH_BATCH);
+      const remaining = Math.max(0, allPending.length - ids.length);
       for (const id of ids) {
         await syncJobToGoogleCalendar(supabase, id, userId);
       }
@@ -3752,7 +3803,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         pushed = ok?.length || 0;
       }
       const pullResult = await pullFromGoogleCalendar(supabase, userId);
-      res.json({ success: true, pushed, ...pullResult });
+      res.json({ success: true, pushed, remaining, ...pullResult });
     } catch (error) {
       console.error('Error syncing all jobs:', error);
       res.status(500).json({ error: 'Internal server error' });
