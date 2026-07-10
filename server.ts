@@ -3637,6 +3637,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         return res.status(500).send('Erro ao salvar credenciais Google.');
       }
 
+      // Rastro simétrico ao google_disconnect (callback é anônimo — o "autor"
+      // registrado é a própria conta que conectou, vinda do state do OAuth).
+      await logAdminAction(userId, 'google_connect', userId, {}, req.ip ?? null);
+
       res.send(`
         <html><body><script>
           window.opener.postMessage({ type: 'GOOGLE_AUTH_SUCCESS' }, '*');
@@ -3659,6 +3663,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.post('/api/auth/google/disconnect', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
+    // Só o DONO desconecta: membro de equipe opera com o userId do dono, então
+    // qualquer funcionário conseguia apagar a conexão Google da conta INTEIRA
+    // (as telas /settings e /configuracoes/integracoes/calendar nem eram
+    // bloqueadas por URL). Provável causa do sumiço da conexão da Pitori.
+    if ((req as any).isMember && !(req as any).isPlatformAdmin) {
+      return res.status(403).json({ error: 'Só o dono da conta pode desconectar o Google Calendar.' });
+    }
+    // Rastro de QUEM desconectou — a ausência disso impediu a perícia de 07/2026.
+    await logAdminAction(
+      ((req as any).realUserId as string) || userId,
+      'google_disconnect',
+      userId,
+      { isMember: !!(req as any).isMember, isImpersonating: !!(req as any).isImpersonating },
+      req.ip ?? null,
+    );
     await supabase.from('google_auth').delete().eq('user_id', userId);
     res.json({ success: true });
   });

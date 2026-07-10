@@ -3,8 +3,13 @@ import { Link } from "react-router-dom";
 import { ChevronLeft, Calendar, CheckCircle2, RefreshCw, AlertCircle } from "lucide-react";
 import { authFetch } from "../../utils/authFetch";
 import { ConfirmModal } from "../../components/ui/ConfirmModal";
+import { useAuth } from "../../contexts/AuthContext";
 
 export default function IntegracaoCalendar() {
+  // Desconectar é ação do DONO — funcionário operava com o userId do dono e
+  // conseguia apagar a conexão da conta inteira (o backend agora também barra).
+  const { isMember, isPlatformAdmin } = useAuth();
+  const isOwner = !isMember || isPlatformAdmin;
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -110,12 +115,14 @@ export default function IntegracaoCalendar() {
               <RefreshCw size={14} className={syncing ? "animate-spin" : ""} />
               {syncing ? "Sincronizando…" : "Sincronizar agora"}
             </button>
-            <button
-              onClick={() => setConfirmDisconnect(true)}
-              className="px-4 py-2 border border-gray-200 dark:border-gray-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/10 rounded-lg font-semibold text-sm"
-            >
-              Desconectar
-            </button>
+            {isOwner && (
+              <button
+                onClick={() => setConfirmDisconnect(true)}
+                className="px-4 py-2 border border-gray-200 dark:border-gray-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/10 rounded-lg font-semibold text-sm"
+              >
+                Desconectar
+              </button>
+            )}
           </div>
         )}
 

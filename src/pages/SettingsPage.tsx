@@ -4,6 +4,7 @@ import { AlertCircle, Calendar, CheckCircle2, Edit2, MessageCircle, Phone, Plus,
 
 import { ConfirmModal } from "../components/ui/ConfirmModal";
 import { WhatsAppTemplatesManager } from "../components/settings/WhatsAppTemplatesManager";
+import { useAuth } from "../contexts/AuthContext";
 import { authFetch } from "../utils/authFetch";
 import { cn } from "../utils/cn";
 import { OpportunityRule } from "../types";
@@ -41,6 +42,11 @@ export default function SettingsPage() {
 
 // --- Settings Page Component ---
 function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], onUpdate: () => void }) {
+  // Desconectar Google é ação do DONO — esta rota (/settings, legada) não tem
+  // PermissionRoute, então funcionário chegava aqui por URL e desconectava a
+  // conta inteira (o backend agora também barra com 403).
+  const { isMember, isPlatformAdmin } = useAuth();
+  const isOwner = !isMember || isPlatformAdmin;
   const [editingRule, setEditingRule] = useState<OpportunityRule | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [googleConnected, setGoogleConnected] = useState(false);
@@ -342,12 +348,14 @@ function SettingsPageContent({ rules, onUpdate }: { rules: OpportunityRule[], on
                 <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 text-sm font-bold bg-emerald-50 dark:bg-emerald-500/20 px-3 py-1 rounded-full">
                   <CheckCircle2 size={16} /> Conectado
                 </span>
-                <button 
-                  onClick={handleDisconnectGoogle}
-                  className="text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 text-sm font-bold transition-colors"
-                >
-                  Desconectar
-                </button>
+                {isOwner && (
+                  <button
+                    onClick={handleDisconnectGoogle}
+                    className="text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 text-sm font-bold transition-colors"
+                  >
+                    Desconectar
+                  </button>
+                )}
               </div>
             </div>
           ) : (
