@@ -377,9 +377,13 @@
   // Cache nome → telefone. Necessário porque o WhatsApp Web parou de expor o JID
   // no DOM da sidebar para contatos salvos — a única forma de obter o número
   // é abrindo o drawer de info do contato, então cacheamos o resultado.
+  // Chave BUMPADA v1→v2: descarta de uma vez os caches nome→telefone antigos
+  // que podiam estar envenenados (par gravado a partir de match por nome). A
+  // partir daqui só entram telefones lidos do chat real. Limpa o v1 legado.
   function loadChatPhoneByName() {
     try {
-      const raw = JSON.parse(localStorage.getItem('fp_chat_phones_v1') || '{}') || {};
+      try { localStorage.removeItem('fp_chat_phones_v1'); } catch { /* ok */ }
+      const raw = JSON.parse(localStorage.getItem('fp_chat_phones_v2') || '{}') || {};
       return new Map(Object.entries(raw));
     } catch {
       return new Map();
@@ -388,7 +392,7 @@
 
   function saveChatPhoneByName() {
     try {
-      localStorage.setItem('fp_chat_phones_v1', JSON.stringify(Object.fromEntries(chatPhoneByName)));
+      localStorage.setItem('fp_chat_phones_v2', JSON.stringify(Object.fromEntries(chatPhoneByName)));
     } catch { /* ignora cache cheio */ }
   }
 
@@ -1152,7 +1156,18 @@
     const na = normalizeNameForMatch(a);
     const nb = normalizeNameForMatch(b);
     if (!na || !nb || na.length < 3 || nb.length < 3) return false;
-    return na === nb || na.includes(nb) || nb.includes(na);
+    if (na === nb) return true;
+    // Por PALAVRA INTEIRA, nunca char-substring: o antigo na.includes(nb)
+    // fazia "Ana" casar com "Mari-ANA" e "João" com "João-zinho" — mantinha o
+    // card da conversa ANTERIOR ao abrir outra pessoa (o "fica trocando de
+    // card"). "João Pedro" ainda casa com "João Pedro Fotografia" (perfil
+    // comercial só ganha palavras): todos os tokens do nome mais curto têm que
+    // existir como palavra inteira no mais longo.
+    const ta = na.split(' ').filter(Boolean);
+    const tb = nb.split(' ').filter(Boolean);
+    const [shortT, longT] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
+    const longSet = new Set(longT);
+    return shortT.length > 0 && shortT.every((t) => longSet.has(t));
   }
 
   // Deal ABERTO (fora de ganho/perda) com esse telefone — guarda anti-duplicado
@@ -4660,6 +4675,17 @@
       danger: true,
     });
     if (!ok) return;
+    // Limpa o cache nome→telefone e as fotos ao sair: são dados de leads da
+    // conta que estava logada — não podem vazar/persistir pra próxima conta que
+    // logar neste mesmo navegador. Zera também o estado em memória.
+    try {
+      localStorage.removeItem('fp_chat_phones_v2');
+      localStorage.removeItem('fp_chat_phones_v1');
+      localStorage.removeItem('fp_contact_photos_v2');
+      localStorage.removeItem('fp_contact_photos_v1');
+    } catch { /* ok */ }
+    chatPhoneByName = new Map();
+    contactPhotos = {};
     chrome.storage.local.remove(
       ['fp_token', 'fp_refresh_token', 'fp_user_name', 'fp_user_email', 'fp_token_expires'],
       () => {
@@ -5075,7 +5101,11 @@
       if (prevDeal && nameStrongMatch(prevDeal.contact_name || prevDeal.title || '', chatName)) {
         chatDeal = prevDeal;
         chatPhone = digits(prevDeal.contact_phone || '') || null;
-        if (chatPhone) rememberChatPhoneByName(chatName, chatPhone);
+        // NÃO grava o cache nome→telefone aqui: o telefone veio de um match por
+        // NOME (prevDeal), não do chat. Se o match estava errado, o par
+        // nome→telefone errado ficava preso no localStorage e resolvia pro card
+        // errado em TODA reabertura ("fica trocando de card"). O cache só é
+        // populado quando o telefone é lido do chat de verdade (drawer/DOM).
         chatStages = chatStages.length ? chatStages : stages;
         injectChatStrip(chatDeal, chatStages);
         return;
@@ -5084,12 +5114,9 @@
       const cachedByName = findDealByNameLocal(chatName);
       if (cachedByName && nameMatchesHeader(cachedByName)) {
         chatDeal = cachedByName;
-        // Aproveita o telefone do próprio deal pra popular o cache nome→telefone
-        // (próximas aberturas resolvem na hora, mesmo sem número no DOM).
-        if (cachedByName.contact_phone) {
-          chatPhone = digits(cachedByName.contact_phone);
-          rememberChatPhoneByName(chatName, chatPhone);
-        }
+        // Idem: telefone vindo de match por nome NÃO alimenta o cache
+        // persistente (evita envenenar). Só serve pras ações desta abertura.
+        if (cachedByName.contact_phone) chatPhone = digits(cachedByName.contact_phone);
         chatStages = chatStages.length ? chatStages : stages;
         injectChatStrip(chatDeal, chatStages);
         return;
@@ -5144,7 +5171,9 @@
         if (result.deal && nameMatchesHeader(result.deal)) {
           chatDeal = result.deal;
           chatPhone = digits(result.deal.contact_phone || '') || null;
-          rememberChatPhoneByName(chatName, chatPhone);
+          // Resultado veio de lookup por NOME no servidor — não persiste no
+          // cache local (mesma proteção anti-envenenamento). O cache aprende só
+          // com telefone lido do chat real.
           injectChatStrip(chatDeal, chatStages);
           injectPendingTasksRow(chatDeal);
           return;

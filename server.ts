@@ -404,6 +404,45 @@ const brazilianPhonesMatch = (a: unknown, b: unknown): boolean => {
   return brazilianPhoneVariants(b).some((variant) => av.has(variant));
 };
 
+// Dedup na CRIAÇÃO de deal: acha um lead JÁ EXISTENTE e ABERTO (fora de etapa
+// final) com o mesmo telefone, por variantes BR (com/sem 55 e 9º dígito).
+// É a trava server-side contra a enxurrada de cards duplicados: o anti-dup do
+// cliente (extensão) roda contra um cache que NÃO enxerga o lead em vários
+// casos reais (contato comercial sem número no DOM, lead de outro responsável
+// fora do funil carregado, clique duplo, cache defasado de 12s). Retorna
+// sempre o card MAIS ANTIGO (canônico) pra não "alternar" entre duplicatas.
+const findOpenDealByPhone = async (
+  supabase: SupabaseClient,
+  userId: string,
+  phone: unknown,
+  stages: any[],
+): Promise<any | null> => {
+  const variants = brazilianPhoneVariants(phone);
+  if (!variants.length) return null;
+  const finalIds = new Set((stages || []).filter((s: any) => s.is_final).map((s: any) => s.id));
+
+  const { data: exact } = await supabase
+    .from('deals')
+    .select('*')
+    .eq('user_id', userId)
+    .in('contact_phone', variants)
+    .order('created_at', { ascending: true });
+  const openExact = (exact || []).find((d: any) => !finalIds.has(d.stage) && !d.converted);
+  if (openExact) return openExact;
+
+  // Fallback: telefone salvo em formato que o .in() não pegou (sync antiga).
+  const { data: all } = await supabase
+    .from('deals')
+    .select('*')
+    .eq('user_id', userId)
+    .not('contact_phone', 'is', null)
+    .order('created_at', { ascending: true })
+    .limit(3000);
+  return (all || []).find((d: any) => (
+    !finalIds.has(d.stage) && !d.converted && brazilianPhonesMatch(d.contact_phone, phone)
+  )) || null;
+};
+
 const normalizeContactNameForMatch = (value: unknown): string => (
   String(value || '')
     .normalize('NFD')
@@ -13765,11 +13804,19 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const stageId = stageIdOrDefault(stages, stage);
     const stageName = stages.find((s) => s.id === stageId)?.name || stageId;
 
+    // DEDUP: telefone já tem um lead aberto? Vincula a ele em vez de criar
+    // outro card (mata a duplicação na raiz, independente do cliente).
+    const canonicalPhone = normalizeBrazilianPhone(normalizePhone(contact_phone)) || null;
+    if (canonicalPhone) {
+      const existing = await findOpenDealByPhone(supabase, userId, canonicalPhone, stages);
+      if (existing) return res.json({ id: existing.id, deduped: true });
+    }
+
     const payload: any = {
       client_id: client_id || null,
       title,
       contact_name: contact_name || title || null,
-      contact_phone: normalizePhone(contact_phone) || null,
+      contact_phone: canonicalPhone,
       contact_email: contact_email || null,
       lead_source: lead_source || null,
       value: value || 0,
@@ -13797,6 +13844,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const { data, error } = await supabase.from('deals').insert(payload).select().single();
     if (error) {
       console.warn('Falha ao inserir com campos estendidos, tentando fallback', error.message);
+      // Guard anti-duplicata: o 1º insert pode ter GRAVADO no banco e só a
+      // resposta ter falhado (timeout do Render). Antes de re-inserir, confere
+      // se o lead já existe pelo telefone — senão o fallback cria um 2º card.
+      if (canonicalPhone) {
+        const landed = await findOpenDealByPhone(supabase, userId, canonicalPhone, stages);
+        if (landed) return res.json({ id: landed.id, deduped: true });
+      }
       const minimal = {
         client_id: payload.client_id,
         title: payload.title,
@@ -13829,11 +13883,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Stage solicitado (drag direto pra coluna específica) > primeira stage
     const targetStage = (requestedStage && stages.find((s) => s.id === requestedStage)) || firstStage;
 
+    // DEDUP: telefone já tem um lead aberto? Vincula em vez de criar outro card.
+    const canonicalPhone = normalizeBrazilianPhone(normalizePhone(phone)) || null;
+    if (canonicalPhone) {
+      const existing = await findOpenDealByPhone(supabase, userId, canonicalPhone, stages);
+      if (existing) return res.json({ id: existing.id, deduped: true });
+    }
+
     const nowIso = new Date().toISOString();
     const payload: any = {
       title: name,
       contact_name: name,
-      contact_phone: normalizePhone(phone) || null,
+      contact_phone: canonicalPhone,
       contact_email: email || null,
       lead_source: source || null,
       notes: notes || null,
@@ -13858,6 +13919,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const { data, error } = await supabase.from('deals').insert(payload).select().single();
     if (error) {
+      // Guard anti-duplicata: o 1º insert pode ter gravado e só a resposta ter
+      // falhado (timeout). Confere pelo telefone antes de re-inserir.
+      if (canonicalPhone) {
+        const landed = await findOpenDealByPhone(supabase, userId, canonicalPhone, stages);
+        if (landed) return res.json({ id: landed.id, deduped: true });
+      }
       const retryPayload = {
         title: name,
         value: Number(value) || 0,
@@ -16042,15 +16109,19 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (resolvedPhone) {
       const variants = brazilianPhoneVariants(resolvedPhone);
 
-      const { data: exactDeal } = await supabase
+      // Ordena pelo MAIS ANTIGO (card canônico) e prefere um deal ABERTO —
+      // com duplicata no banco, devolver "o mais novo" fazia a faixa ALTERNAR
+      // entre os cards a cada abertura. Determinístico = sempre o mesmo card.
+      const { data: exactDeals } = await supabase
         .from('deals')
         .select('*')
         .eq('user_id', userId)
         .in('contact_phone', variants)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      deal = exactDeal;
+        .order('created_at', { ascending: true });
+      const finalIdsBP = new Set(stages.filter((s: any) => s.is_final).map((s: any) => s.id));
+      deal = (exactDeals || []).find((d: any) => !finalIdsBP.has(d.stage) && !d.converted)
+        || (exactDeals || [])[0]
+        || null;
 
       if (!deal) {
         const { data: candidates } = await supabase
