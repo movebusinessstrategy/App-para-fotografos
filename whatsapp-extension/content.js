@@ -5100,9 +5100,50 @@
     removeStageMenu();
   }
 
+  // Âncora do número confirmado no drawer, por nome de conversa. O DOM pode
+  // continuar entregando um telefone VELHO (data-id da conversa anterior ainda
+  // na tela) mesmo depois do drawer dizer o número real — sem a âncora, cada
+  // leitura divergente re-rodava o pipeline e o drawer abria/fechava em LOOP.
+  // rejected = telefones que o drawer já desmentiu pra esse nome.
+  const drawerPhoneAnchor = new Map(); // nameKey -> { phone, at, rejected:Set }
+  const DRAWER_ANCHOR_TTL = 10 * 60 * 1000;
+
+  // Drawer que NÃO respondeu entra em cooldown: sem isso, DOM instável
+  // (número oscilando entre dois formatos) reabria o painel sem parar.
+  const drawerCooldownByName = new Map(); // nameKey -> timestamp de liberação
+  const DRAWER_COOLDOWN_MS = 45 * 1000;
+
+  function freshAnchor(nameKey) {
+    const a = drawerPhoneAnchor.get(nameKey);
+    return a && Date.now() - a.at < DRAWER_ANCHOR_TTL ? a : null;
+  }
+
   async function onChatOpened(phone) {
-    const cleanPhone = digits(phone || '');
+    let cleanPhone = digits(phone || '');
     const chatName = getWAChatName();
+
+    // Conversa "Eu" (mensagens pra si mesmo) não é lead: sem faixa, sem
+    // matching — evita casar o próprio número com card de cliente. Cobre
+    // também o header "Nome (você)". IMPORTANTE: marca a chave com um
+    // sentinela — sem isso, voltar pra conversa anterior batia na chave velha
+    // e a faixa dela nunca era remontada.
+    const nomeTrim = (chatName || '').trim();
+    if (/^(eu|voc[eê]|you|message yourself)$/i.test(nomeTrim) || /\(voc[eê]\)\s*$/i.test(nomeTrim)) {
+      chatKey = 'self';
+      chatPhone = null;
+      chatDeal = null;
+      removeChatStrip();
+      return;
+    }
+
+    // Anti-ping-pong: se o drawer já desmentiu ESTE telefone pra ESTA conversa,
+    // usa o número confirmado no lugar — assim a chave abaixo fica estável e o
+    // pipeline não re-roda a cada leitura suja do DOM. Só com nome presente:
+    // header vazio é transitório e viraria uma âncora "global" errada.
+    const anchor = chatName ? freshAnchor(chatNameKey(chatName)) : null;
+    if (anchor && cleanPhone && anchor.rejected.has(cleanPhone)) {
+      cleanPhone = digits(anchor.phone);
+    }
     // A chave inclui o NOME do header (atualiza rápido e é a identidade VISÍVEL da
     // conversa) + telefone. Assim, trocar de conversa SEMPRE re-detecta. Antes a
     // chave era só o telefone; se ele fosse lido "atrasado" (mensagens da conversa
@@ -5288,17 +5329,39 @@
         // Nome não bate com o header. Em perfil COMERCIAL isso é NORMAL: o
         // header mostra o nome verificado da EMPRESA e o card tem o nome da
         // PESSOA. Telefone é a identidade forte — antes de derrubar um match
-        // EXATO por telefone, confirma no drawer qual é o número real do chat.
-        const confirmed = await readPhoneFromContactDrawer(1500).catch(() => null);
+        // EXATO por telefone, confirma qual é o número real do chat. Usa a
+        // âncora se o drawer já respondeu há pouco: reabrir o painel a cada
+        // detecção era o loop de abre-e-fecha.
+        const nk = chatName ? chatNameKey(chatName) : '';
+        const anchored = nk ? freshAnchor(nk) : null;
+        const emCooldown = nk && Date.now() < (drawerCooldownByName.get(nk) || 0);
+        const confirmed = anchored
+          ? anchored.phone
+          : (emCooldown ? null : await readPhoneFromContactDrawer(1500).catch(() => null));
         if (chatKey !== requestKey) return; // trocou de conversa no meio
+        if (!confirmed && nk && !emCooldown) {
+          drawerCooldownByName.set(nk, Date.now() + DRAWER_COOLDOWN_MS);
+        }
         if (confirmed && !phonesMatch(confirmed, pd)) {
-          // Telefone atrasado DE VERDADE: o chat tem outro número. Recomeça a
-          // detecção com o número certo em vez de oferecer "Adicionar" com o
-          // telefone errado (era assim que nascia card com fone de outra pessoa).
+          // Telefone atrasado DE VERDADE: o chat tem outro número. Grava na
+          // âncora que ESTE telefone foi desmentido pra ESTA conversa (as
+          // próximas leituras sujas do DOM são corrigidas na entrada, sem
+          // reabrir o drawer) e recomeça a detecção com o número certo.
+          if (nk) {
+            const rejected = anchored?.rejected || drawerPhoneAnchor.get(nk)?.rejected || new Set();
+            rejected.add(pd);
+            drawerPhoneAnchor.set(nk, { phone: digits(confirmed), at: Date.now(), rejected });
+          }
           console.warn('[fp-extension] telefone do chat difere do buscado — redetectando');
           chatKey = null;
           onChatOpened(confirmed);
           return;
+        }
+        if (confirmed && nk) {
+          // Drawer confirmou o MESMO número: ancora pra não reabrir o painel
+          // nas próximas detecções desta conversa.
+          const prev = drawerPhoneAnchor.get(nk);
+          drawerPhoneAnchor.set(nk, { phone: digits(confirmed), at: Date.now(), rejected: prev?.rejected || new Set() });
         }
         chatDeal = result.deal; // número confirmado (ou drawer indisponível)
       } else {
@@ -7145,7 +7208,22 @@
 
   // Abre o drawer do contato (clicando no header), lê o telefone, fecha.
   // Cacheia por nome para que abertura subsequentes sejam instantâneas.
+  // Trava de reentrada CHAVEADA pela conversa: detecções simultâneas da MESMA
+  // conversa compartilham uma leitura; conversa diferente NÃO herda a promise
+  // (leitura nascida no chat A entregava o telefone de A pro consumidor de B).
+  let drawerReadInFlight = null; // { key, promise }
+
   async function readPhoneFromContactDrawer(maxMs = 1500) {
+    const key = chatNameKey(getWAChatName() || '');
+    if (drawerReadInFlight && drawerReadInFlight.key === key) return drawerReadInFlight.promise;
+    const promise = readPhoneFromContactDrawerNow(maxMs).finally(() => {
+      if (drawerReadInFlight && drawerReadInFlight.promise === promise) drawerReadInFlight = null;
+    });
+    drawerReadInFlight = { key, promise };
+    return promise;
+  }
+
+  async function readPhoneFromContactDrawerNow(maxMs = 1500) {
     const header = getChatHeaderEl();
     if (!header) return null;
 
