@@ -211,6 +211,10 @@ async function handleMessage(message) {
         body: JSON.stringify(message.data),
       });
     }
+    case 'DELETE_DEAL_ITEM': {
+      // Desvincula um item já salvo no card (pacote errado grudado no lead).
+      return apiFetch(`/api/deal-items/${message.itemId}`, { method: 'DELETE' });
+    }
     case 'ADD_NOTE': {
       return apiFetch(`/api/extension/deals/${message.dealId}/notes`, {
         method: 'POST',

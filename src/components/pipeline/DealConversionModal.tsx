@@ -90,7 +90,29 @@ export function DealConversionModal({
     return catalogList.filter(i => normalizeText(i.nome).includes(q));
   }, [catalogList, adderSearch]);
 
-  const existingItems = deal?.items || [];
+  // Itens já salvos no card. Em estado (não direto do prop) porque agora dá pra
+  // DESVINCULAR: pacote errado grudado no lead não tinha como sair daqui.
+  const [linkedItems, setLinkedItems] = useState<any[]>(deal?.items || []);
+  const [unlinkingId, setUnlinkingId] = useState<string | null>(null);
+  useEffect(() => { setLinkedItems(deal?.items || []); }, [deal?.id, deal?.items]);
+
+  const unlinkItem = async (itemId: string) => {
+    setUnlinkingId(itemId);
+    try {
+      const res = await authFetch(`/api/deal-items/${itemId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error || `Erro ao remover item (HTTP ${res.status})`);
+      }
+      setLinkedItems((prev) => prev.filter((i) => i.id !== itemId));
+    } catch (e) {
+      alert(`Não deu pra remover o item: ${e instanceof Error ? e.message : "erro desconhecido"}`);
+    } finally {
+      setUnlinkingId(null);
+    }
+  };
+
+  const existingItems = linkedItems;
   const existingTotal = existingItems.reduce((s, i) => s + (Number(i.catalog_value) || 0) * (Number(i.quantidade) || 1), 0);
   const newItemsTotal = newItems.reduce((s, i) => s + i.catalog_value * i.quantidade, 0);
   const allItemsCount = existingItems.length + newItems.length;
@@ -211,15 +233,6 @@ export function DealConversionModal({
   const submit = async () => {
     setIsSubmitting(true);
     try {
-      // 1. Vincula os itens novos do catálogo ao deal (mesmo fluxo da extensão)
-      for (const it of newItems) {
-        await authFetch(`/api/deals/${deal.id}/items`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(it),
-        });
-      }
-
       const itemsNote = newItems.length
         ? `Itens do catálogo:\n${newItems.map(i => `- ${CATALOG_LABELS[i.catalog_type]}: ${i.catalog_name} (${i.quantidade}x R$ ${i.catalog_value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })})`).join('\n')}`
         : '';
@@ -233,7 +246,7 @@ export function DealConversionModal({
         ].filter(Boolean).join('\n').trim(),
       } : undefined;
 
-      // 2. Converte (converted_at permite registrar venda retroativa)
+      // 1. Converte PRIMEIRO (converted_at permite registrar venda retroativa)
       const convRes = await authFetch(`/api/deals/${deal.id}/convert`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -248,7 +261,26 @@ export function DealConversionModal({
           converted_at: soldDate || undefined,
         }),
       });
+      if (!convRes.ok) {
+        const err = await convRes.json().catch(() => null);
+        throw new Error(err?.error || `Erro ao converter (HTTP ${convRes.status})`);
+      }
       const convData: { google_calendar_connected?: boolean | null } = await convRes.json().catch(() => ({}));
+
+      // 2. Só DEPOIS grava os itens no card. Antes era o contrário: se a conversão
+      // falhasse, o pacote ficava grudado no lead e não tinha como desvincular.
+      // O valor do ensaio não depende disso, já foi no payload do job.
+      for (const it of newItems) {
+        const itemRes = await authFetch(`/api/deals/${deal.id}/items`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(it),
+        });
+        if (!itemRes.ok) {
+          alert(`Venda convertida, mas o item "${it.catalog_name}" não entrou no pacote. Dá pra adicionar depois no Financeiro.`);
+        }
+      }
+
       // Google desconectado = o ensaio ficou SÓ na agenda do sistema. Sem esse
       // aviso a falha era silenciosa e o usuário só descobria depois.
       if (createJob && convData.google_calendar_connected === false) {
@@ -261,7 +293,10 @@ export function DealConversionModal({
       }
       onConverted();
     } catch (error) {
+      // Converter não pode falhar em silêncio: antes só caía no console e o
+      // usuário achava que tinha dado certo.
       console.error("Erro ao converter deal:", error);
+      alert(`Não deu pra converter a venda: ${error instanceof Error ? error.message : "erro desconhecido"}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -430,6 +465,15 @@ export function DealConversionModal({
                     <span className="text-sm font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap">
                       R$ {((Number(it.catalog_value) || 0) * (Number(it.quantidade) || 1)).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                     </span>
+                    <button
+                      type="button"
+                      title="Desvincular este item do negócio"
+                      disabled={unlinkingId === it.id}
+                      onClick={() => unlinkItem(it.id)}
+                      className="p-1 text-gray-400 hover:text-red-600 disabled:opacity-40 flex-shrink-0"
+                    >
+                      <Trash2 size={13} />
+                    </button>
                   </div>
                 ))}
               </div>

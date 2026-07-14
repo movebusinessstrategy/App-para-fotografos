@@ -6327,6 +6327,8 @@
       listEl.innerHTML = items.map((item, index) => {
         const qty = Number(item.quantity) || 1;
         const total = (Number(item.value) || 0) * qty;
+        // Item vinculado TAMBÉM pode ser removido: pacote errado grudado no card
+        // (de uma conversão que não completou) não tinha como sair daqui.
         return `
           <div class="fp-catalog-item">
             <div class="fp-catalog-item-main">
@@ -6334,15 +6336,35 @@
               <strong>${esc(item.name)}</strong>
               <small>${qty}x ${brl.format(Number(item.value) || 0)} = ${brl.format(total)}</small>
             </div>
-            ${item.existing
-              ? '<span class="fp-catalog-linked">Vinculado</span>'
-              : `<button type="button" class="fp-catalog-remove" data-remove-catalog-index="${index}">Remover</button>`}
+            <div class="fp-catalog-item-actions">
+              ${item.existing ? '<span class="fp-catalog-linked">Vinculado</span>' : ''}
+              ${item.autoMatched ? '<span class="fp-catalog-guess" title="Achado pelo pacote citado na conversa — confira">sugerido</span>' : ''}
+              <button type="button" class="fp-catalog-remove" data-remove-catalog-index="${index}">Remover</button>
+            </div>
           </div>
         `;
       }).join('');
       listEl.querySelectorAll('[data-remove-catalog-index]').forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', async () => {
           const index = Number(btn.dataset.removeCatalogIndex);
+          const item = selectedCatalogItems(modal)[index];
+          if (!item) return;
+
+          // Já está salvo no card? Precisa apagar no servidor, senão volta na
+          // próxima abertura do modal.
+          if (item.existing && item.serverId) {
+            btn.disabled = true;
+            btn.textContent = 'Removendo...';
+            try {
+              await bg({ type: 'DELETE_DEAL_ITEM', itemId: item.serverId });
+            } catch (err) {
+              toast(`Não deu pra remover "${item.name}": ${err.message}`, true);
+              btn.disabled = false;
+              btn.textContent = 'Remover';
+              return;
+            }
+          }
+
           modal.__fpSelectedCatalogItems = selectedCatalogItems(modal).filter((_, i) => i !== index);
           renderSelectedCatalogItems(modal);
         });
@@ -6428,6 +6450,7 @@
     const items = Array.isArray(deal.items) ? deal.items : [];
     modal.__fpSelectedCatalogItems = items
       .map(item => ({
+        serverId: item.id, // id da linha em deal_items — é o que o Remover apaga
         type: item.catalog_type,
         id: String(item.catalog_id || ''),
         name: item.catalog_name || 'Item do catálogo',
@@ -6488,12 +6511,18 @@
       .map(item => ({ item, score: packageMatchScore(item, packageChoice) }))
       .filter(entry => entry.score >= 40)
       .sort((a, b) => b.score - a.score);
-    const match = ranked[0]?.item;
+    const match = ranked[0];
     if (!match) return;
+
+    // EMPATE = chute. A cliente escrevendo só "Premium" casa com 13 combos e a
+    // gente escolhia o primeiro da lista, vinculando um pacote sem nada a ver.
+    // Na dúvida, não vincula nada: o usuário escolhe no seletor.
+    const empatado = ranked.length > 1 && ranked[1].score === match.score;
+    if (empatado) return;
 
     modal.__fpSelectedCatalogItems = [
       ...selectedCatalogItems(modal),
-      { ...match, quantity: 1, existing: false, autoMatched: true },
+      { ...match.item, quantity: 1, existing: false, autoMatched: true },
     ];
     renderSelectedCatalogItems(modal);
   }
@@ -6810,12 +6839,23 @@
     }
 
     try {
+      const soldDate = val(modal, '#fp-win-sold-date');
+      const campaignId = val(modal, '#fp-win-campaign-slot') || undefined;
+      const convRes = await bg({
+        type: 'CONVERT_DEAL',
+        dealId: deal.id,
+        data: { existingClientId, createClient, createJob, client, job, campaign_id: campaignId, sinalAmount: sinalAmount > 0 ? sinalAmount : undefined, converted_at: soldDate || undefined },
+      });
+
+      // Os itens entram DEPOIS da conversão dar certo. Antes eram gravados no
+      // card ANTES de converter: se a conversão falhasse (ou o usuário fechasse
+      // o modal), o pacote ficava grudado no lead sem jeito de tirar. O valor do
+      // ensaio não depende disso — já foi enviado no job.
       const pendingItems = createJob ? catalogItems.filter(item => !item.existing) : [];
       if (pendingItems.length && btn) btn.textContent = 'Salvando itens...';
       for (const item of pendingItems) {
-        let result;
         try {
-          result = await bg({
+          const result = await bg({
             type: 'ADD_DEAL_ITEM',
             dealId: deal.id,
             data: {
@@ -6826,25 +6866,14 @@
               quantidade: Number(item.quantity) || 1,
             },
           });
+          item.existing = true;
+          if (result?.item?.id) item.serverId = result.item.id;
         } catch (itemErr) {
-          // Nomeia o item que falhou e ABORTA antes do convert — senão o pacote
-          // fica pela metade e o usuário não sabe o que deu errado.
-          throw new Error(`Falha ao salvar o item "${item.name}": ${itemErr.message}`);
+          // A venda JÁ foi convertida: item que falha vira aviso, não desfaz a
+          // venda. Dá pra adicionar depois pelo app.
+          toast(`Venda convertida, mas o item "${item.name}" não entrou no pacote: ${itemErr.message}`, true);
         }
-        // Só marca como salvo DEPOIS do sucesso (antes marcava sempre — item
-        // perdido em falha silenciosa nunca era reenviado na nova tentativa).
-        item.existing = true;
-        if (result?.item?.id) item.serverId = result.item.id;
       }
-
-      if (btn) btn.textContent = 'Convertendo...';
-      const soldDate = val(modal, '#fp-win-sold-date');
-      const campaignId = val(modal, '#fp-win-campaign-slot') || undefined;
-      const convRes = await bg({
-        type: 'CONVERT_DEAL',
-        dealId: deal.id,
-        data: { existingClientId, createClient, createJob, client, job, campaign_id: campaignId, sinalAmount: sinalAmount > 0 ? sinalAmount : undefined, converted_at: soldDate || undefined },
-      });
       deal.stage = (stages.find(isWonStage) || stages.find(s => s.id === 'won'))?.id || deal.stage;
       deal.converted = true;
       deal.converted_at = soldDate ? `${soldDate}T12:00:00.000Z` : new Date().toISOString();

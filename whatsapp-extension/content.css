@@ -1815,7 +1815,14 @@ body.fp-kanban-open #pane-side { display: none !important; }
   font-weight: 800;
   padding: 2px 7px;
 }
+.fp-catalog-item-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
 .fp-catalog-linked,
+.fp-catalog-guess,
 .fp-catalog-remove {
   border: none;
   border-radius: 999px;
@@ -1828,6 +1835,12 @@ body.fp-kanban-open #pane-side { display: none !important; }
 .fp-catalog-linked {
   background: #e0f2fe;
   color: #0369a1;
+}
+/* Item que o sistema adivinhou pelo pacote citado na conversa: fica visível que
+   foi chute, pra ninguém converter com o pacote errado sem perceber. */
+.fp-catalog-guess {
+  background: #fef3c7;
+  color: #92400e;
 }
 .fp-catalog-remove {
   background: #fee2e2;
