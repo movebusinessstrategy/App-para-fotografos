@@ -215,6 +215,10 @@ async function handleMessage(message) {
       // Desvincula um item já salvo no card (pacote errado grudado no lead).
       return apiFetch(`/api/deal-items/${message.itemId}`, { method: 'DELETE' });
     }
+    case 'DELETE_DEAL': {
+      // Tira o lead do funil (mensagem que não é venda: engano, spam, fornecedor).
+      return apiFetch(`/api/deals/${message.dealId}`, { method: 'DELETE' });
+    }
     case 'ADD_NOTE': {
       return apiFetch(`/api/extension/deals/${message.dealId}/notes`, {
         method: 'POST',

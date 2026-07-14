@@ -4864,6 +4864,36 @@
   // clique). Trava as ações da faixa (trocar etapa, editar) contra cruzamento:
   // se você trocou de conversa e a faixa antiga ficou na tela, um clique nela
   // NÃO pode agir no lead anterior.
+  // Tira o lead do funil de vez (mensagem que não é venda: engano, spam,
+  // fornecedor). Exclui o card no servidor — a conversa segue normal no
+  // WhatsApp e o contato pode ser adicionado de novo depois, se quiser.
+  async function removeDealFromPipeline(deal) {
+    const nome = deal.contact_name || deal.title || 'este contato';
+    const ok = await fpConfirm({
+      title: 'Tirar do funil?',
+      message: `O card de "${nome}" será excluído do pipeline. A conversa continua no WhatsApp — use pra quem não é venda (engano, spam, fornecedor).`,
+      confirmLabel: 'Tirar do funil',
+      danger: true,
+    });
+    if (!ok) return false;
+    try {
+      await bg({ type: 'DELETE_DEAL', dealId: deal.id });
+      deals = deals.filter((d) => Number(d.id) !== Number(deal.id));
+      if (chatDeal && Number(chatDeal.id) === Number(deal.id)) {
+        chatDeal = null;
+        chatKey = null;
+        removeChatStrip();
+        fastDetect();
+      }
+      loadKanban().catch(() => {});
+      toast('Tirado do funil.');
+      return true;
+    } catch (err) {
+      toast(err?.message || 'Erro ao tirar do funil', true);
+      return false;
+    }
+  }
+
   function dealMatchesOpenChat(deal) {
     if (!deal) return false;
     const dealPhone = digits(deal.contact_phone || '');
@@ -4933,6 +4963,11 @@
           ✕ Perda
         </button>` : ''}
 
+      <button class="fp-strip-stage-btn" id="fp-strip-remove"
+              title="Tirar do funil — mensagem que não é venda (engano, spam, fornecedor)">
+        🗑
+      </button>
+
       <button class="fp-strip-stage-btn" id="fp-strip-funil"
               style="background:#111b21;color:#fff;border-color:#111b21">
         ⬡ Voltar ao Funil
@@ -4993,6 +5028,10 @@
     bindPress(strip.querySelector('#fp-strip-edit'), () => {
       if (!dealMatchesOpenChat(deal)) { toast('A conversa mudou — reabra o lead.', true); removeChatStrip(); fastDetect(); return; }
       openDealEditModal(deal);
+    });
+    bindPress(strip.querySelector('#fp-strip-remove'), () => {
+      if (!dealMatchesOpenChat(deal)) { toast('A conversa mudou — reabra o lead.', true); removeChatStrip(); fastDetect(); return; }
+      removeDealFromPipeline(deal);
     });
     bindPress(strip.querySelector('#fp-strip-funil'), showKanban);
 
@@ -5697,6 +5736,8 @@
           <div class="fp-mf"><label class="fp-ml">Observações</label><textarea class="fp-mi fp-edit-notes" id="fp-ed-notes" placeholder="Detalhes do atendimento, pacote, data provável...">${esc(notes)}</textarea></div>
         </div>
         <div class="fp-mrow fp-deal-edit-actions">
+          <button class="fp-btn-w fp-qj-delete" id="fp-deal-edit-remove"
+                  title="Excluir o card do pipeline — mensagem que não é venda">🗑 Tirar do funil</button>
           <button class="fp-btn-w" id="fp-deal-edit-cancel">Cancelar</button>
           <button class="fp-btn-g" id="fp-deal-edit-save">Salvar</button>
         </div>
@@ -5742,6 +5783,10 @@
     modal.querySelector('#fp-deal-edit-close')?.addEventListener('click', close);
     modal.querySelector('#fp-deal-edit-cancel')?.addEventListener('click', close);
     modal.querySelector('#fp-deal-edit-save')?.addEventListener('click', () => saveDealEdit(deal, modal));
+    modal.querySelector('#fp-deal-edit-remove')?.addEventListener('click', async () => {
+      const removed = await removeDealFromPipeline(deal);
+      if (removed) close();
+    });
   }
 
   async function saveDealEdit(deal, modal) {
