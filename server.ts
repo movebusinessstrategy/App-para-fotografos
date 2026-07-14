@@ -3880,6 +3880,34 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     app.use(prefix, requireAuth, denyProductionOnly);
   }
 
+  // Colunas reais da tabela `clients`. O corpo que chega do formulário é filtrado
+  // por essa lista: o Postgres recusa a requisição INTEIRA se receber uma coluna
+  // que não existe (o perfil vindo do GET traz jobs/opportunities/tier junto).
+  const CLIENT_COLUMNS = [
+    'name', 'phone', 'email', 'birth_date', 'cpf', 'cep', 'address',
+    'address_number', 'address_complement', 'neighborhood', 'city', 'state',
+    'age', 'child_name', 'instagram', 'closing_date', 'first_contact_date',
+    'last_contact_date', 'notes', 'lead_source', 'status', 'custom_fields_data',
+  ];
+
+  // `age` é INTEGER no banco, mas o formulário manda '' quando o cliente não tem
+  // idade preenchida. Postgres recusa '' em coluna integer e derruba o UPDATE
+  // inteiro — nenhum campo era salvo. Vazio vira null.
+  const toAge = (v: any): number | null => {
+    if (v === '' || v === null || v === undefined) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const sanitizeClientPayload = (body: any): Record<string, any> => {
+    const payload: Record<string, any> = {};
+    for (const col of CLIENT_COLUMNS) {
+      if (body && col in body) payload[col] = body[col];
+    }
+    if ('age' in payload) payload.age = toAge(payload.age);
+    return payload;
+  };
+
   app.get('/api/clients', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
@@ -4021,11 +4049,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const { data, error } = await supabase
       .from('clients')
-      .insert({ ...req.body, user_id: userId })
+      .insert({ ...sanitizeClientPayload(req.body), user_id: userId })
       .select()
       .single();
 
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) {
+      console.error('Erro ao criar cliente:', error);
+      return res.status(500).json({ error: error.message });
+    }
     res.json({ id: data.id });
   });
 
@@ -4033,16 +4064,30 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
 
-    const { data: existing } = await supabase
+    const payload = sanitizeClientPayload(req.body);
+    if (Object.keys(payload).length === 0) {
+      return res.status(400).json({ error: 'Nada pra atualizar' });
+    }
+
+    // .select() devolve as linhas que REALMENTE mudaram: se vier vazio, o
+    // cliente não existe ou não é desta conta. Antes a rota respondia
+    // success:true sem olhar erro nem linhas afetadas, então qualquer falha do
+    // banco (ex: age vazio numa coluna integer) sumia e a edição não salvava.
+    const { data, error } = await supabase
       .from('clients')
-      .select('id')
+      .update(payload)
       .eq('id', req.params.id)
       .eq('user_id', userId)
-      .single();
+      .select('id');
 
-    if (!existing) return res.status(404).json({ error: 'Client not found' });
+    if (error) {
+      console.error('Erro ao atualizar cliente', req.params.id, error);
+      return res.status(500).json({ error: error.message });
+    }
+    if (!data || data.length === 0) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
 
-    await supabase.from('clients').update(req.body).eq('id', req.params.id);
     res.json({ success: true });
   });
 

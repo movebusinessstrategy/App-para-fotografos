@@ -1633,13 +1633,16 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
       });
       
       if (!response.ok) {
-        throw new Error('Erro ao salvar cliente');
+        // Mostra o motivo real que veio do servidor: salvar cliente não pode
+        // falhar em silêncio.
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error || `Erro ao salvar cliente (HTTP ${response.status})`);
       }
-      
+
       onSave();
     } catch (error) {
       console.error('Erro ao salvar:', error);
-      alert('Ocorreu um erro ao salvar o cliente. Por favor, tente novamente.');
+      alert(`Não deu pra salvar o cliente: ${error instanceof Error ? error.message : 'erro desconhecido'}`);
     }
   };
 
