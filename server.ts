@@ -13851,7 +13851,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     // DEDUP: telefone já tem um lead aberto? Vincula a ele em vez de criar
     // outro card (mata a duplicação na raiz, independente do cliente).
-    const canonicalPhone = normalizeBrazilianPhone(normalizePhone(contact_phone)) || null;
+    // 14+ dígitos = LID do WhatsApp/lixo, não telefone: grava sem phone em vez
+    // de criar card com contact_phone falso que nunca casa em lookup nenhum.
+    const rawCanonical = normalizeBrazilianPhone(normalizePhone(contact_phone)) || null;
+    const canonicalPhone = rawCanonical && rawCanonical.length >= 14 ? null : rawCanonical;
     if (canonicalPhone) {
       const existing = await findOpenDealByPhone(supabase, userId, canonicalPhone, stages);
       if (existing) return res.json({ id: existing.id, deduped: true });
@@ -13929,7 +13932,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const targetStage = (requestedStage && stages.find((s) => s.id === requestedStage)) || firstStage;
 
     // DEDUP: telefone já tem um lead aberto? Vincula em vez de criar outro card.
-    const canonicalPhone = normalizeBrazilianPhone(normalizePhone(phone)) || null;
+    // 14+ dígitos = LID do WhatsApp/lixo, não telefone (mesma guarda da rota acima).
+    const rawCanonical2 = normalizeBrazilianPhone(normalizePhone(phone)) || null;
+    const canonicalPhone = rawCanonical2 && rawCanonical2.length >= 14 ? null : rawCanonical2;
     if (canonicalPhone) {
       const existing = await findOpenDealByPhone(supabase, userId, canonicalPhone, stages);
       if (existing) return res.json({ id: existing.id, deduped: true });
@@ -16103,7 +16108,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
-    const phone = String(req.query.phone || '').replace(/\D/g, '');
+    const rawPhoneParam = String(req.query.phone || '').replace(/\D/g, '');
+    // LID do WhatsApp (@lid) tem 13-15 dígitos e NÃO é telefone. Extensão
+    // antiga pode mandar um: ignora e cai na resolução segura por NOME, em vez
+    // de buscar por um número que não existe e devolver deal nenhum.
+    const phone = rawPhoneParam.length >= 14 ? '' : rawPhoneParam;
     const contactName = String(req.query.name || '').trim();
     if (!phone && !contactName) return res.status(400).json({ error: 'phone ou name é obrigatório' });
 
@@ -16126,7 +16135,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         .select('phone, contact_name')
         .eq('user_id', userId)
         .not('contact_name', 'is', null)
-        .limit(2000);
+        // PostgREST capa a resposta em 1000 linhas mesmo pedindo mais — sem o
+        // order, conta com 1000+ conversas deixava contatos RECENTES fora da
+        // janela e a resolução nome→telefone falhava aleatoriamente.
+        .order('last_message_at', { ascending: false })
+        .limit(1000);
       const normalizedWantedConv = normalizeContactNameForMatch(contactName);
       const convMatches = (waConvs || []).filter((c: any) => (
         normalizeContactNameForMatch(c.contact_name) === normalizedWantedConv ||
@@ -20816,10 +20829,20 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const { userId } = BaileysManager.parseSlotKey(sessionKey);
     // Registrado (creds em disco): histórico pode chegar antes do status 'open'
     const waNumber = BaileysManager.getRegisteredPhone(sessionKey) || '';
-    // Filtra apenas conversas individuais (não grupos)
-    const individual = chats.filter((c: any) =>
-      typeof c.id === 'string' && c.id.endsWith('@s.whatsapp.net')
-    );
+    // Filtra apenas conversas individuais (não grupos). Chats @lid (padrão pra
+    // conta Business) trazem o telefone real em pnJid (Baileys 7): sem isso o
+    // contato Business nunca entrava em wa_conversations e a resolução
+    // nome→telefone do deal-by-phone falhava justo pra ele.
+    const individual = chats
+      .map((c: any) => {
+        if (typeof c.id !== 'string') return null;
+        if (c.id.endsWith('@s.whatsapp.net')) return c;
+        if (c.id.endsWith('@lid') && typeof (c as any).pnJid === 'string' && (c as any).pnJid.endsWith('@s.whatsapp.net')) {
+          return { ...c, id: (c as any).pnJid };
+        }
+        return null; // @lid sem pnJid: descarta — dígitos de LID nunca viram phone
+      })
+      .filter(Boolean);
     console.log(`[Baileys] ChatsSet: ${individual.length} individuais / ${chats.length} total | userId=${userId} | waNumber=${waNumber}`);
     let saved = 0, errors = 0;
     for (const chat of individual) {
@@ -21137,10 +21160,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // conta com o wa_number do slot. Lia autônoma responde SÓ pelo principal.
     const { userId, slot } = BaileysManager.parseSlotKey(sessionKey);
     const rawRemoteJid = msg.key.remoteJid || '';
-    // WhatsApp @lid addressing: remoteJid vem como "12345@lid" — usar remoteJidAlt que tem o JID padrão
-    const remoteJid = rawRemoteJid.endsWith('@lid')
-      ? ((msg.key as any).remoteJidAlt || rawRemoteJid)
-      : rawRemoteJid;
+    // WhatsApp @lid addressing: remoteJid vem como "12345@lid" — usa
+    // remoteJidAlt e, se vier vazio, o mapa LID→PN do Baileys. Antes a
+    // mensagem era descartada em silêncio e o contato Business ficava
+    // invisível pra resolução nome→telefone do deal-by-phone.
+    let remoteJid = rawRemoteJid;
+    if (rawRemoteJid.endsWith('@lid')) {
+      remoteJid = String((msg.key as any).remoteJidAlt || '');
+      if (!remoteJid.endsWith('@s.whatsapp.net')) {
+        try {
+          const pn = await (sock as any)?.signalRepository?.lidMapping?.getPNForLID?.(rawRemoteJid);
+          remoteJid = (typeof pn === 'string' && pn.endsWith('@s.whatsapp.net')) ? pn : '';
+        } catch { remoteJid = ''; }
+      }
+      if (!remoteJid) return; // sem mapeamento: dígitos de LID nunca viram phone
+    }
     if (!remoteJid.endsWith('@s.whatsapp.net')) return; // ignora grupos e status
     // Nota: NÃO ignoramos fromMe em tempo real — pode ser mensagem enviada do celular físico.
     // O insert em wa_messages usa message_id único, então duplicatas do app são tratadas via erro ignorado.

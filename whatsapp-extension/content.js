@@ -382,8 +382,11 @@
   // partir daqui só entram telefones lidos do chat real. Limpa o v1 legado.
   function loadChatPhoneByName() {
     try {
+      // v3: descarta pares nome→LID gravados pelas versões antigas (o bug do
+      // Business). O bump limpa o veneno de todos os navegadores de uma vez.
       try { localStorage.removeItem('fp_chat_phones_v1'); } catch { /* ok */ }
-      const raw = JSON.parse(localStorage.getItem('fp_chat_phones_v2') || '{}') || {};
+      try { localStorage.removeItem('fp_chat_phones_v2'); } catch { /* ok */ }
+      const raw = JSON.parse(localStorage.getItem('fp_chat_phones_v3') || '{}') || {};
       return new Map(Object.entries(raw));
     } catch {
       return new Map();
@@ -392,7 +395,7 @@
 
   function saveChatPhoneByName() {
     try {
-      localStorage.setItem('fp_chat_phones_v2', JSON.stringify(Object.fromEntries(chatPhoneByName)));
+      localStorage.setItem('fp_chat_phones_v3', JSON.stringify(Object.fromEntries(chatPhoneByName)));
     } catch { /* ignora cache cheio */ }
   }
 
@@ -416,7 +419,12 @@
     const key = chatNameKey(name);
     if (!key) return;
     const normalized = digits(phone || '');
-    if (normalized.length < 8) return;
+    // Só telefone PLAUSÍVEL entra no cache persistente. LID do WhatsApp tem
+    // 13-15 dígitos que não são número: gravado aqui, o nome resolvia pro
+    // "telefone" errado em toda reabertura (o desvincula/mistura do Business).
+    // Estrangeiro de 13 dígitos sem 55 perde só o cache e cai no drawer.
+    if (normalized.length < 8 || normalized.length > 13) return;
+    if (normalized.length === 13 && !normalized.startsWith('55')) return;
     const value = normalized.startsWith('55') || normalized.length > 11 ? normalized : `55${normalized}`;
     if (chatPhoneByName.get(key) === value) return;
     chatPhoneByName.set(key, value);
@@ -1202,6 +1210,9 @@
     for (const value of candidates) {
       const jid = String(value).match(/(\d{8,15})@(?:c\.us|s\.whatsapp\.net)/);
       if (jid) return normalizeWhatsappPhone(jid[1]);
+      // Dígitos de @lid não são telefone — sem este skip o fallback genérico
+      // abaixo capturava o LID do mesmo jeito.
+      if (String(value).includes('@lid')) continue;
       const phone = String(value).match(/\+?\d[\d\s\-()+]{7,}/);
       if (phone) {
         const clean = digits(phone[0]);
@@ -4679,6 +4690,7 @@
     // conta que estava logada — não podem vazar/persistir pra próxima conta que
     // logar neste mesmo navegador. Zera também o estado em memória.
     try {
+      localStorage.removeItem('fp_chat_phones_v3');
       localStorage.removeItem('fp_chat_phones_v2');
       localStorage.removeItem('fp_chat_phones_v1');
       localStorage.removeItem('fp_contact_photos_v2');
@@ -5087,7 +5099,10 @@
       if (!headerNm) return true;
       const dn = normalizeNameForMatch(d?.contact_name || d?.title || '');
       if (!dn || headerNm.includes(dn) || dn.includes(headerNm)) return true;
-      const toks = (s) => s.split(' ').filter((w) => w.length >= 3);
+      // Preposição/conector não é evidência de mesma pessoa: "Ana dos Santos"
+      // e "Marcia dos Reis" compartilham só "dos" e passavam no match.
+      const stop = new Set(['dos', 'das', 'com', 'para', 'the']);
+      const toks = (s) => s.split(' ').filter((w) => w.length >= 3 && !stop.has(w));
       const a = toks(headerNm), b = new Set(toks(dn));
       return a.some((w) => b.has(w));
     };
@@ -5231,10 +5246,22 @@
           { expected: pd, got: returnedDealPhone });
         chatDeal = null;
       } else if (result.deal && !nameMatchesHeader(result.deal)) {
-        // Telefone "atrasado": resolveu pra um deal cujo nome não bate com o
-        // header visível → não usa (o próximo detectState pega a pessoa certa).
-        console.warn('[fp-extension] deal-by-phone com nome diferente do header — ignorado');
-        chatDeal = null;
+        // Nome não bate com o header. Em perfil COMERCIAL isso é NORMAL: o
+        // header mostra o nome verificado da EMPRESA e o card tem o nome da
+        // PESSOA. Telefone é a identidade forte — antes de derrubar um match
+        // EXATO por telefone, confirma no drawer qual é o número real do chat.
+        const confirmed = await readPhoneFromContactDrawer(1500).catch(() => null);
+        if (chatKey !== requestKey) return; // trocou de conversa no meio
+        if (confirmed && !phonesMatch(confirmed, pd)) {
+          // Telefone atrasado DE VERDADE: o chat tem outro número. Recomeça a
+          // detecção com o número certo em vez de oferecer "Adicionar" com o
+          // telefone errado (era assim que nascia card com fone de outra pessoa).
+          console.warn('[fp-extension] telefone do chat difere do buscado — redetectando');
+          chatKey = null;
+          onChatOpened(confirmed);
+          return;
+        }
+        chatDeal = result.deal; // número confirmado (ou drawer indisponível)
       } else {
         chatDeal = result.deal;
       }
@@ -5343,7 +5370,27 @@
     // comercial), vincula a conversa a ele em vez de criar outro card.
     const dup = findOpenDealByPhoneLocal(cleanPhone);
     if (dup) {
-      rememberChatPhoneByName(name, cleanPhone);
+      // Nome do card CLARAMENTE diferente do da conversa = sinal de telefone
+      // atrasado (lido da conversa anterior). Vincular aqui colava o card de
+      // uma pessoa na conversa de outra — confere o número real no drawer
+      // antes. Se o chat tem OUTRO número, recomeça com o certo.
+      const dupName = dup.contact_name || dup.title || '';
+      if (name && dupName && !namesMatch(dupName, name)) {
+        const confirmed = await readPhoneFromContactDrawer(1800).catch(() => null);
+        if (confirmed && !phonesMatch(confirmed, cleanPhone)) {
+          createDealFromChat(confirmed, stageId, stageName);
+          return;
+        }
+        if (!confirmed) {
+          // Sem confirmação, não arrisca nem vincular nem criar com esse fone:
+          // abre o modal pro usuário conferir os dados.
+          openModal(cleanPhone, name, stageId, true);
+          toast('Confira o telefone — não deu pra confirmar o número desta conversa.', true);
+          return;
+        }
+        // Drawer confirmou o MESMO número com outro nome (contato renomeado):
+        // segue e vincula — o telefone é a identidade forte.
+      }
       chatDeal = dup;
       chatPhone = digits(cleanPhone);
       chatStages = chatStages.length ? chatStages : stages;
@@ -6934,7 +6981,11 @@
       for (const attr of ['data-id', 'data-jid', 'data-remote-jid']) {
         const value = el.getAttribute(attr) || '';
         if (!value) continue;
-        const m = value.match(/(?:^|[_:])(\d{8,15})@(?:c\.us|s\.whatsapp\.net|lid)/);
+        // @lid é o "linked id" de privacidade do WhatsApp (padrão em conta
+        // Business): os dígitos NÃO são telefone. Tratá-los como telefone
+        // fazia o lead certo ser rejeitado e envenenava o cache nome→fone.
+        if (value.includes('@lid')) continue;
+        const m = value.match(/(?:^|[_:])(\d{8,15})@(?:c\.us|s\.whatsapp\.net)/);
         if (m) return m[1];
       }
     }
@@ -6997,15 +7048,17 @@
         if (m) { const dd = digits(m[0]); if (dd.length >= 8) return dd; }
       }
     }
-    // 2) data-id em mensagens (funciona pra contatos salvos com conversa carregada)
-    const fromData = getPhoneFromDataIds();
-    if (fromData) return fromData;
-    // 3) Item selecionado na sidebar (funciona em conversas antigas/sem mensagens carregadas)
+    // 2) Item selecionado na sidebar: reflete o clique NA HORA. Vem ANTES do
+    //    #main, que na troca de conversa ainda contém mensagens (e data-ids)
+    //    da conversa ANTERIOR — era o "telefone atrasado" que misturava cards.
     const selectedItem = getSelectedChatListItem();
     if (selectedItem) {
       const fromList = extractPhoneFromChatListItem(selectedItem, '');
       if (fromList) return digits(fromList);
     }
+    // 3) data-id em mensagens (pode estar obsoleto logo após trocar de conversa)
+    const fromData = getPhoneFromDataIds();
+    if (fromData) return fromData;
     // 4) Cache nome → telefone (populado por leituras anteriores do drawer)
     const headerName = getWAChatName();
     const cached = getCachedPhoneByName(headerName);
@@ -7051,9 +7104,11 @@
     const header = getChatHeaderEl();
     if (!header) return null;
 
+    // SEM curto-circuito de cache aqui: o drawer é o último recurso e a ÚNICA
+    // fonte que corrige entrada envenenada — o remember lá embaixo sobrescreve
+    // o par nome→telefone com o valor real lido do painel. Quem quer resposta
+    // rápida de cache usa getCachedPhoneByName antes de chamar.
     const headerName = getWAChatName();
-    const cached = getCachedPhoneByName(headerName);
-    if (cached) return cached;
 
     let info = findOpenContactDrawer();
     let openedByUs = false;
@@ -7297,9 +7352,10 @@
       const drawerPhone = await readPhoneFromContactDrawer(1800);
       if (drawerPhone) contact = { ...contact, phone: drawerPhone };
     }
-    if (!isWeakPhone(contact.phone) && !isWeakName(contact.name)) {
-      rememberChatPhoneByName(contact.name, contact.phone);
-    }
+    // NÃO grava o cache nome→telefone aqui: contact.phone pode ser o fallback
+    // "atrasado" da conversa anterior — gravado, o par errado ficava preso no
+    // localStorage e resolvia pro card errado em toda reabertura. O caminho do
+    // drawer (fonte confiável) já grava dentro de readPhoneFromContactDrawer.
     return contact;
   }
 
