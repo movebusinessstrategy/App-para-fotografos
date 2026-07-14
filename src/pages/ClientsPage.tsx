@@ -38,7 +38,20 @@ import { useApi } from "../utils/useApi";
 import { cn } from "../utils/cn";
 import { parseDate, toLocalISO } from "../utils/date";
 import { cleanPhone, parseCSV, parseDateBR, parseValueBR } from "../utils/csvParser";
-import { buildMetaCustomerListCSV, buildMetaOfflineEventsCSV, clientToMetaContact, countMatchable, countMatchableEvents, downloadCSV, leadEvents, purchaseEvents } from "../utils/metaExport";
+import {
+  buildMetaCustomerListCSV,
+  buildMetaOfflineEventsCSV,
+  clientToMetaContact,
+  countForaDaJanela,
+  countMatchable,
+  countMatchableEvents,
+  diasAtras,
+  downloadCSV,
+  filterEventsByPeriod,
+  JANELA_META_DIAS,
+  leadEvents,
+  purchaseEvents,
+} from "../utils/metaExport";
 import { supabase } from "../integrations/supabase/client";
 import { Client, Deal, Job, Opportunity, PipelineStage } from "../types";
 import UsageBar from "../components/UsageBar";
@@ -1345,6 +1358,18 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
 // EXPORTAR PARA META ADS (Clientes)
 // ============================================
 
+// 62 dias é a janela em que o Meta aceita a conversão offline pra atribuição —
+// por isso é o padrão. Os outros períodos servem pra conferência e reenvio.
+const PERIODOS: { id: "30" | "62" | "90" | "tudo" | "custom"; label: string; dica: string }[] = [
+  { id: "30", label: "30 dias", dica: "Vendas e leads dos últimos 30 dias" },
+  { id: "62", label: "62 dias", dica: "Janela em que o Meta atribui a conversão offline ao anúncio" },
+  { id: "90", label: "90 dias", dica: "Últimos 90 dias (parte já fora da janela de atribuição)" },
+  { id: "tudo", label: "Tudo", dica: "Histórico completo" },
+  { id: "custom", label: "Escolher", dica: "Definir data inicial e final" },
+];
+
+const fmtBRL = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
+
 function MetaExportModal({
   filteredClients,
   selectedClients,
@@ -1363,23 +1388,46 @@ function MetaExportModal({
   const { data: dealsData, isLoading: dealsLoading } = useApi<Deal[]>(formato === "offline" ? "/api/deals" : null);
   const { data: stagesData } = useApi<PipelineStage[]>(formato === "offline" ? "/api/pipeline/stages" : null);
 
+  // Janela de envio do Meta: 62 dias. É o padrão porque evento mais velho que
+  // isso sobe mas não é atribuído a anúncio nenhum.
+  const [periodo, setPeriodo] = useState<"30" | "62" | "90" | "tudo" | "custom">(String(JANELA_META_DIAS) as "62");
+  const [de, setDe] = useState("");
+  const [ate, setAte] = useState("");
+
+  const hoje = toLocalISO(new Date());
+  const janela = useMemo(() => {
+    if (periodo === "tudo") return { de: "", ate: "" };
+    if (periodo === "custom") return { de, ate };
+    return { de: diasAtras(Number(periodo)), ate: hoje };
+  }, [periodo, de, ate, hoje]);
+
   const baseList = scope === "selected" ? selectedClients : filteredClients;
   const contacts = baseList.map(clientToMetaContact);
   const matchable = countMatchable(contacts);
 
-  const compras = useMemo(() => purchaseEvents(baseList), [baseList]);
-  const leads = useMemo(
-    () => leadEvents(Array.isArray(dealsData) ? dealsData : [], Array.isArray(stagesData) ? stagesData : []),
-    [dealsData, stagesData]
+  const todosEventos = useMemo(
+    () => [
+      ...purchaseEvents(baseList),
+      ...leadEvents(Array.isArray(dealsData) ? dealsData : [], Array.isArray(stagesData) ? stagesData : []),
+    ],
+    [baseList, dealsData, stagesData]
   );
-  const comprasCount = countMatchableEvents(compras);
-  const leadsCount = countMatchableEvents(leads);
+  const eventos = useMemo(
+    () => filterEventsByPeriod(todosEventos, janela.de, janela.ate),
+    [todosEventos, janela]
+  );
+
+  const comprasCount = countMatchableEvents(eventos.filter((e) => e.eventName === "Purchase"));
+  const leadsCount = countMatchableEvents(eventos.filter((e) => e.eventName === "Lead"));
+  const foraDaJanela = countForaDaJanela(eventos);
+  const faturamento = eventos.reduce((soma, e) => soma + (e.value || 0), 0);
 
   const handleExport = () => {
     if (formato === "customer") {
       downloadCSV("meta_publico_clientes.csv", buildMetaCustomerListCSV(contacts));
     } else {
-      downloadCSV("meta_eventos_offline.csv", buildMetaOfflineEventsCSV([...compras, ...leads]));
+      const sufixo = janela.de || janela.ate ? `_${janela.de || "inicio"}_a_${janela.ate || hoje}` : "_completo";
+      downloadCSV(`meta_eventos_offline${sufixo}.csv`, buildMetaOfflineEventsCSV(eventos));
     }
     onClose();
   };
@@ -1485,6 +1533,49 @@ function MetaExportModal({
             </div>
           </div>
 
+          {formato === "offline" && (
+            <div>
+              <p className="text-xs font-semibold uppercase text-gray-400 dark:text-gray-500 mb-2">Período da venda</p>
+              <div className="grid grid-cols-5 gap-1.5">
+                {PERIODOS.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setPeriodo(p.id)}
+                    title={p.dica}
+                    className={cn(
+                      "px-2 py-2 rounded-lg text-xs font-medium border transition-all",
+                      periodo === p.id
+                        ? "bg-blue-50 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-500/30"
+                        : "bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-700"
+                    )}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+              {periodo === "custom" && (
+                <div className="flex items-center gap-2 mt-2">
+                  <input
+                    type="date"
+                    value={de}
+                    max={hoje}
+                    onChange={(e) => setDe(e.target.value)}
+                    className="flex-1 px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  />
+                  <span className="text-xs text-gray-400">até</span>
+                  <input
+                    type="date"
+                    value={ate}
+                    max={hoje}
+                    onChange={(e) => setAte(e.target.value)}
+                    className="flex-1 px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 rounded-xl px-3 py-2">
             {formato === "customer" && (
               <>Serão exportados <span className="font-bold text-gray-700 dark:text-gray-200">{matchable}</span> contatos com telefone ou e-mail válido.</>
@@ -1493,11 +1584,17 @@ function MetaExportModal({
             {formato === "offline" && !carregandoFunil && (
               <>
                 <span className="block">
-                  <span className="font-bold text-gray-700 dark:text-gray-200">{comprasCount}</span> eventos <span className="font-semibold">Purchase</span>: um por ensaio vendido, com o valor daquela venda.
+                  <span className="font-bold text-gray-700 dark:text-gray-200">{comprasCount}</span> eventos <span className="font-semibold">Purchase</span>, somando{" "}
+                  <span className="font-bold text-gray-700 dark:text-gray-200">{fmtBRL(faturamento)}</span>. Um por ensaio vendido, com data, horário e valor da venda.
                 </span>
                 <span className="block mt-0.5">
-                  <span className="font-bold text-gray-700 dark:text-gray-200">{leadsCount}</span> eventos <span className="font-semibold">Lead</span>: quem está no funil e ainda não fechou venda.
+                  <span className="font-bold text-gray-700 dark:text-gray-200">{leadsCount}</span> eventos <span className="font-semibold">Lead</span>: entrou no funil no período e ainda não fechou venda.
                 </span>
+                {foraDaJanela > 0 && (
+                  <span className="block mt-1 text-amber-600 dark:text-amber-400">
+                    {foraDaJanela} {foraDaJanela === 1 ? "evento tem" : "eventos têm"} mais de {JANELA_META_DIAS} dias. O Meta aceita o arquivo, mas não atribui esses a anúncio.
+                  </span>
+                )}
                 <span className="block mt-0.5 italic">Tudo no mesmo arquivo. O filtro de clientes acima vale para as vendas; os leads do funil vão todos.</span>
               </>
             )}

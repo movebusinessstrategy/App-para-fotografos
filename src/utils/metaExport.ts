@@ -50,6 +50,35 @@ function isoDate(d?: string | null): string {
   return dt.toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
+const pad = (n: number) => String(n).padStart(2, "0");
+
+// O Meta quer data E HORA do evento. Formato ISO 8601 com o fuso local
+// (2026-03-09T15:00:00-03:00): ele lê o horário certo, e o arquivo continua
+// legível pra conferência, o que um timestamp Unix não seria.
+function toISO8601Local(dt: Date): string {
+  const off = -dt.getTimezoneOffset(); // minutos; Brasil = -180 → off = -180
+  const sinal = off >= 0 ? "+" : "-";
+  const abs = Math.abs(off);
+  const data = `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+  const hora = `${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
+  return `${data}T${hora}${sinal}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+}
+
+// Junta a data (YYYY-MM-DD) com o horário (HH:mm) quando ele existe. Sem horário
+// usa meio-dia: evita que o fuso jogue o evento pro dia anterior/seguinte.
+export function eventTimestamp(data?: string | null, hora?: string | null): string {
+  if (!data) return "";
+  const dia = String(data).slice(0, 10);
+  const temHoraNaData = String(data).includes("T");
+  if (temHoraNaData && !hora) {
+    const dt = new Date(data as string);
+    return isNaN(dt.getTime()) ? "" : toISO8601Local(dt);
+  }
+  const [h, m] = String(hora || "12:00").split(":");
+  const dt = new Date(`${dia}T${pad(Number(h) || 12)}:${pad(Number(m) || 0)}:00`);
+  return isNaN(dt.getTime()) ? "" : toISO8601Local(dt);
+}
+
 const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
 
 function toCSV(headers: string[], rows: string[][]): string {
@@ -105,7 +134,9 @@ export function buildMetaOfflineEventsCSV(events: MetaOfflineEvent[]): string {
       fn.toLowerCase(),
       ln.toLowerCase(),
       e.eventName || "Purchase",
-      isoDate(e.eventTime),
+      // já vem como ISO com hora dos construtores de evento; isoDate é só rede
+      // de segurança pra quem passar uma data solta.
+      String(e.eventTime || "").includes("T") ? String(e.eventTime) : isoDate(e.eventTime),
       temValor ? String(e.value) : "",
       temValor ? CURRENCY : "",
     ]);
@@ -130,16 +161,21 @@ const soData = (d?: string | null) => (d ? String(d).slice(0, 10) : "");
 
 // O Meta recusa evento com data no futuro. Um ensaio agendado pra semana que vem
 // tem job_date futuro, mas a VENDA aconteceu quando foi registrada — então a data
-// do Purchase é a primeira data que já passou: ensaio → cadastro do ensaio →
-// fechamento do cliente.
-export function purchaseDate(job: Job, client: Client, hojeISO?: string): string {
+// do Purchase é a primeira que já passou: ensaio → cadastro do ensaio → fechamento
+// do cliente. O horário sai junto (hora do ensaio, ou do registro da venda).
+export function purchaseTimestamp(job: Job, client: Client, hojeISO?: string): string {
   const hoje = hojeISO || soData(new Date().toISOString());
-  const candidatas = [job.job_date, job.created_at, client.closing_date, client.created_at];
-  const passadas = candidatas.map(soData).filter((d) => d && d <= hoje);
-  return passadas[0] || hoje;
+  const candidatas: { data?: string | null; hora?: string | null }[] = [
+    { data: job.job_date, hora: job.job_time },
+    { data: job.created_at },
+    { data: client.closing_date },
+    { data: client.created_at },
+  ];
+  const passada = candidatas.find((c) => soData(c.data) && soData(c.data) <= hoje);
+  return eventTimestamp(passada?.data, passada?.hora) || eventTimestamp(hoje);
 }
 
-// Purchase: uma linha por ensaio vendido, com o valor e a data daquela venda.
+// Purchase: uma linha por ensaio vendido, com o valor e a data/hora daquela venda.
 // Quem comprou 3 vezes gera 3 eventos, e o Meta soma sozinho o total gasto.
 export function purchaseEvents(clients: Client[]): MetaOfflineEvent[] {
   const eventos: MetaOfflineEvent[] = [];
@@ -147,7 +183,7 @@ export function purchaseEvents(clients: Client[]): MetaOfflineEvent[] {
     const contato = clientToMetaContact(c);
     for (const job of c.jobs || []) {
       if (!((job.amount ?? 0) > 0) || !STATUS_DE_VENDA.has(job.status)) continue;
-      eventos.push({ ...contato, value: job.amount, eventTime: purchaseDate(job, c), eventName: "Purchase" });
+      eventos.push({ ...contato, value: job.amount, eventTime: purchaseTimestamp(job, c), eventName: "Purchase" });
     }
   }
   return eventos;
@@ -164,9 +200,38 @@ export function leadEvents(deals: Deal[], stages: PipelineStage[]): MetaOfflineE
       phone: d.contact_phone,
       email: d.contact_email,
       value: null,
-      eventTime: d.created_at,
+      eventTime: eventTimestamp(d.created_at),
       eventName: "Lead",
     }));
+}
+
+// ── Período ────────────────────────────────────────────────────────────────
+// O Meta pede que a conversão offline seja enviada em até 62 dias depois de
+// acontecer. Passou disso, o arquivo sobe mas o evento não é atribuído a
+// anúncio nenhum — por isso o filtro de período e o aviso.
+export const JANELA_META_DIAS = 62;
+
+export function diasAtras(dias: number, hoje = new Date()): string {
+  const d = new Date(hoje);
+  d.setDate(d.getDate() - dias);
+  return soData(d.toISOString());
+}
+
+// `de` e `ate` são YYYY-MM-DD (inclusive nas duas pontas).
+export function filterEventsByPeriod(events: MetaOfflineEvent[], de?: string, ate?: string): MetaOfflineEvent[] {
+  return events.filter((e) => {
+    const dia = soData(e.eventTime);
+    if (!dia) return false;
+    if (de && dia < de) return false;
+    if (ate && dia > ate) return false;
+    return true;
+  });
+}
+
+// Quantos eventos já passaram da janela de envio do Meta.
+export function countForaDaJanela(events: MetaOfflineEvent[], dias = JANELA_META_DIAS): number {
+  const limite = diasAtras(dias);
+  return events.filter((e) => soData(e.eventTime) && soData(e.eventTime) < limite).length;
 }
 
 export function downloadCSV(filename: string, content: string): void {
