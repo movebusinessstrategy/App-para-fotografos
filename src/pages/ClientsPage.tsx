@@ -38,9 +38,9 @@ import { useApi } from "../utils/useApi";
 import { cn } from "../utils/cn";
 import { parseDate, toLocalISO } from "../utils/date";
 import { cleanPhone, parseCSV, parseDateBR, parseValueBR } from "../utils/csvParser";
-import { buildMetaCustomerListCSV, buildMetaOfflineEventsCSV, countMatchable, downloadCSV, MetaContact } from "../utils/metaExport";
+import { buildMetaCustomerListCSV, buildMetaOfflineEventsCSV, clientToMetaContact, countMatchable, countMatchableEvents, downloadCSV, leadEvents, purchaseEvents } from "../utils/metaExport";
 import { supabase } from "../integrations/supabase/client";
-import { Client, Job, Opportunity } from "../types";
+import { Client, Deal, Job, Opportunity, PipelineStage } from "../types";
 import UsageBar from "../components/UsageBar";
 
 import * as Select from '@radix-ui/react-select';
@@ -1344,17 +1344,6 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
 // ============================================
 // EXPORTAR PARA META ADS (Clientes)
 // ============================================
-function clientToMetaContact(c: Client): MetaContact {
-  return { name: c.name, phone: c.phone, email: c.email, city: c.city, state: c.state, zip: c.cep };
-}
-
-// Melhor data pra atribuir um "evento de compra": fechamento → último ensaio → cadastro.
-function bestPurchaseDate(c: Client): string {
-  if (c.closing_date) return c.closing_date;
-  const jobDates = (c.jobs || []).map((j) => j.job_date).filter(Boolean).sort();
-  if (jobDates.length) return jobDates[jobDates.length - 1];
-  return c.created_at || "";
-}
 
 function MetaExportModal({
   filteredClients,
@@ -1369,25 +1358,28 @@ function MetaExportModal({
   const [scope, setScope] = useState<"selected" | "filtered">(hasSelection ? "selected" : "filtered");
   const [formato, setFormato] = useState<"customer" | "offline">("customer");
 
+  // O lead que ainda não virou venda NÃO existe em Clientes: ele vive no funil.
+  // Só busca quando o formato de eventos offline está selecionado.
+  const { data: dealsData, isLoading: dealsLoading } = useApi<Deal[]>(formato === "offline" ? "/api/deals" : null);
+  const { data: stagesData } = useApi<PipelineStage[]>(formato === "offline" ? "/api/pipeline/stages" : null);
+
   const baseList = scope === "selected" ? selectedClients : filteredClients;
   const contacts = baseList.map(clientToMetaContact);
   const matchable = countMatchable(contacts);
-  const comprasCount = baseList.filter((c) => (c.total_invested ?? 0) > 0).length;
+
+  const compras = useMemo(() => purchaseEvents(baseList), [baseList]);
+  const leads = useMemo(
+    () => leadEvents(Array.isArray(dealsData) ? dealsData : [], Array.isArray(stagesData) ? stagesData : []),
+    [dealsData, stagesData]
+  );
+  const comprasCount = countMatchableEvents(compras);
+  const leadsCount = countMatchableEvents(leads);
 
   const handleExport = () => {
     if (formato === "customer") {
       downloadCSV("meta_publico_clientes.csv", buildMetaCustomerListCSV(contacts));
     } else {
-      const compras = baseList.filter((c) => (c.total_invested ?? 0) > 0);
-      const csv = buildMetaOfflineEventsCSV(
-        compras.map((c) => ({
-          ...clientToMetaContact(c),
-          value: c.total_invested ?? 0,
-          eventTime: bestPurchaseDate(c),
-          eventName: "Purchase",
-        }))
-      );
-      downloadCSV("meta_eventos_offline.csv", csv);
+      downloadCSV("meta_eventos_offline.csv", buildMetaOfflineEventsCSV([...compras, ...leads]));
     }
     onClose();
   };
@@ -1402,12 +1394,13 @@ function MetaExportModal({
     {
       id: "offline",
       titulo: "Eventos offline (Conversões)",
-      desc: "Compras (Purchase) com valor e data do fechamento.",
+      desc: "Purchase por venda, com o valor do ensaio. Quem ainda não comprou vai como Lead.",
       uso: "Suba como Conjunto de eventos offline pra medir/otimizar conversões.",
     },
   ];
 
-  const exportCount = formato === "customer" ? matchable : comprasCount;
+  const carregandoFunil = formato === "offline" && dealsLoading;
+  const exportCount = formato === "customer" ? matchable : comprasCount + leadsCount;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
@@ -1493,10 +1486,20 @@ function MetaExportModal({
           </div>
 
           <div className="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 rounded-xl px-3 py-2">
-            {formato === "customer" ? (
+            {formato === "customer" && (
               <>Serão exportados <span className="font-bold text-gray-700 dark:text-gray-200">{matchable}</span> contatos com telefone ou e-mail válido.</>
-            ) : (
-              <>Serão exportados <span className="font-bold text-gray-700 dark:text-gray-200">{comprasCount}</span> clientes com compra registrada (valor &gt; 0).</>
+            )}
+            {formato === "offline" && carregandoFunil && <>Carregando os leads do funil...</>}
+            {formato === "offline" && !carregandoFunil && (
+              <>
+                <span className="block">
+                  <span className="font-bold text-gray-700 dark:text-gray-200">{comprasCount}</span> eventos <span className="font-semibold">Purchase</span>: um por ensaio vendido, com o valor daquela venda.
+                </span>
+                <span className="block mt-0.5">
+                  <span className="font-bold text-gray-700 dark:text-gray-200">{leadsCount}</span> eventos <span className="font-semibold">Lead</span>: quem está no funil e ainda não fechou venda.
+                </span>
+                <span className="block mt-0.5 italic">Tudo no mesmo arquivo. O filtro de clientes acima vale para as vendas; os leads do funil vão todos.</span>
+              </>
             )}
             <span className="block mt-1">O Meta criptografa os dados no upload — o arquivo vai em texto puro, sem hash.</span>
           </div>
@@ -1513,7 +1516,7 @@ function MetaExportModal({
           <button
             type="button"
             onClick={handleExport}
-            disabled={exportCount === 0}
+            disabled={exportCount === 0 || carregandoFunil}
             className="flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-all shadow-lg shadow-blue-200 dark:shadow-blue-500/20"
           >
             <Download size={16} />
