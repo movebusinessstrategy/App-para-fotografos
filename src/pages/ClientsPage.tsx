@@ -1405,13 +1405,13 @@ function MetaExportModal({
   const contacts = baseList.map(clientToMetaContact);
   const matchable = countMatchable(contacts);
 
-  const todosEventos = useMemo(
-    () => [
-      ...purchaseEvents(baseList),
-      ...leadEvents(Array.isArray(dealsData) ? dealsData : [], Array.isArray(stagesData) ? stagesData : []),
-    ],
-    [baseList, dealsData, stagesData]
-  );
+  const todosEventos = useMemo(() => {
+    const deals = Array.isArray(dealsData) ? dealsData : [];
+    return [
+      ...purchaseEvents(baseList, deals),
+      ...leadEvents(deals, Array.isArray(stagesData) ? stagesData : []),
+    ];
+  }, [baseList, dealsData, stagesData]);
   const eventos = useMemo(
     () => filterEventsByPeriod(todosEventos, janela.de, janela.ate),
     [todosEventos, janela]
@@ -1442,7 +1442,7 @@ function MetaExportModal({
     {
       id: "offline",
       titulo: "Eventos offline (Conversões)",
-      desc: "Purchase por venda, com o valor do ensaio. Quem ainda não comprou vai como Lead.",
+      desc: "Purchase por venda, datado pelo fechamento. Quem ainda não comprou vai como Lead.",
       uso: "Suba como Conjunto de eventos offline pra medir/otimizar conversões.",
     },
   ];
@@ -1585,7 +1585,7 @@ function MetaExportModal({
               <>
                 <span className="block">
                   <span className="font-bold text-gray-700 dark:text-gray-200">{comprasCount}</span> eventos <span className="font-semibold">Purchase</span>, somando{" "}
-                  <span className="font-bold text-gray-700 dark:text-gray-200">{fmtBRL(faturamento)}</span>. Um por ensaio vendido, com data, horário e valor da venda.
+                  <span className="font-bold text-gray-700 dark:text-gray-200">{fmtBRL(faturamento)}</span>. Um por venda, na data em que ela foi fechada (não na data do ensaio).
                 </span>
                 <span className="block mt-0.5">
                   <span className="font-bold text-gray-700 dark:text-gray-200">{leadsCount}</span> eventos <span className="font-semibold">Lead</span>: entrou no funil no período e ainda não fechou venda.

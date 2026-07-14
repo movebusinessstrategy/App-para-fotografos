@@ -159,32 +159,63 @@ const STATUS_DE_VENDA = new Set(["scheduled", "completed"]);
 
 const soData = (d?: string | null) => (d ? String(d).slice(0, 10) : "");
 
-// O Meta recusa evento com data no futuro. Um ensaio agendado pra semana que vem
-// tem job_date futuro, mas a VENDA aconteceu quando foi registrada — então a data
-// do Purchase é a primeira que já passou: ensaio → cadastro do ensaio → fechamento
-// do cliente. O horário sai junto (hora do ensaio, ou do registro da venda).
-export function purchaseTimestamp(job: Job, client: Client, hojeISO?: string): string {
+const ehVenda = (job: Job) => (job.amount ?? 0) > 0 && STATUS_DE_VENDA.has(job.status);
+
+// A data que o Meta quer no Purchase é a da VENDA, não a do ensaio. No estúdio a
+// venda fecha semanas antes do ensaio acontecer (mediana de 12 dias), então datar
+// pelo ensaio jogava venda antiga pra dentro da janela recente e inflava o período.
+//
+// `closing_date` é do CLIENTE, não da venda: quem comprou 3 vezes tem uma data só.
+// Por isso ela só vale para a PRIMEIRA venda da pessoa, e só se for anterior ao
+// ensaio (tem cadastro com fechamento depois do ensaio, que é incoerente).
+function dataDaVenda(job: Job, client: Client, ehPrimeiraVenda: boolean, conversao?: string): string | undefined {
+  if (conversao) return conversao; // veio do funil: data exata daquela venda
+  const fechamento = soData(client.closing_date);
+  const ensaio = soData(job.job_date);
+  const fechamentoServe = fechamento && ehPrimeiraVenda && (!ensaio || fechamento <= ensaio);
+  return fechamentoServe ? fechamento : undefined;
+}
+
+// Sem data de venda registrada, cai na data do ensaio (aproximação). Ensaio ainda
+// por acontecer usa o dia em que foi cadastrado: o Meta recusa evento no futuro.
+export function purchaseTimestamp(job: Job, venda?: string, hojeISO?: string): string {
   const hoje = hojeISO || soData(new Date().toISOString());
   const candidatas: { data?: string | null; hora?: string | null }[] = [
+    { data: venda },
     { data: job.job_date, hora: job.job_time },
     { data: job.created_at },
-    { data: client.closing_date },
-    { data: client.created_at },
   ];
   const passada = candidatas.find((c) => soData(c.data) && soData(c.data) <= hoje);
   return eventTimestamp(passada?.data, passada?.hora) || eventTimestamp(hoje);
 }
 
-// Purchase: uma linha por ensaio vendido, com o valor e a data/hora daquela venda.
+// Data de conversão do funil, por ensaio. Cobre os dois vínculos que existem:
+// deal.converted_job_id e job.deal_id.
+function conversoesPorJob(deals: Deal[]): (job: Job) => string | undefined {
+  const porJob = new Map<number, string>();
+  const porDeal = new Map<string, string>();
+  for (const d of deals) {
+    if (!d.converted_at) continue;
+    if (d.converted_job_id) porJob.set(d.converted_job_id, d.converted_at);
+    porDeal.set(String(d.id), d.converted_at);
+  }
+  return (job) => porJob.get(job.id) || (job.deal_id ? porDeal.get(String(job.deal_id)) : undefined);
+}
+
+// Purchase: uma linha por ensaio vendido, com o valor e a data/hora da VENDA.
 // Quem comprou 3 vezes gera 3 eventos, e o Meta soma sozinho o total gasto.
-export function purchaseEvents(clients: Client[]): MetaOfflineEvent[] {
+export function purchaseEvents(clients: Client[], deals: Deal[] = []): MetaOfflineEvent[] {
+  const conversao = conversoesPorJob(deals);
   const eventos: MetaOfflineEvent[] = [];
   for (const c of clients) {
     const contato = clientToMetaContact(c);
-    for (const job of c.jobs || []) {
-      if (!((job.amount ?? 0) > 0) || !STATUS_DE_VENDA.has(job.status)) continue;
-      eventos.push({ ...contato, value: job.amount, eventTime: purchaseTimestamp(job, c), eventName: "Purchase" });
-    }
+    const vendas = (c.jobs || [])
+      .filter(ehVenda)
+      .sort((a, b) => soData(a.job_date).localeCompare(soData(b.job_date)));
+    vendas.forEach((job, i) => {
+      const venda = dataDaVenda(job, c, i === 0, conversao(job));
+      eventos.push({ ...contato, value: job.amount, eventTime: purchaseTimestamp(job, venda), eventName: "Purchase" });
+    });
   }
   return eventos;
 }
