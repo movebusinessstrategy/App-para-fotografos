@@ -345,8 +345,12 @@ export function HistoricoTab({ deals, stages, clients, initialFilter = "todos", 
       <ConfirmModal
         open={!!cancelDeal}
         title="Cancelar venda?"
-        message={`A venda de "${cancelDeal?.contact_name || cancelDeal?.title || "cliente"}" será marcada como perdida e o trabalho vinculado será excluído. O cliente continua salvo.`}
-        confirmText={cancelling ? "Cancelando..." : "Cancelar venda"}
+        message={
+          cancelDeal?.converted_job_id
+            ? `Isso vai EXCLUIR o ensaio de "${cancelDeal?.contact_name || cancelDeal?.title || "cliente"}" da produção — junto com o sinal e os itens já lançados — e desvincular o contrato. A venda sai de Convertidas e o cadastro do cliente continua salvo. Use SÓ pra venda duplicada ou criada por engano, nunca pra cancelar um ensaio que vai acontecer.`
+            : `A venda de "${cancelDeal?.contact_name || cancelDeal?.title || "cliente"}" será marcada como perdida e sai de Convertidas. O cadastro do cliente continua salvo.`
+        }
+        confirmText={cancelling ? "Cancelando..." : "Sim, cancelar a venda"}
         cancelText="Voltar"
         variant="danger"
         onConfirm={cancelConvertedSale}
