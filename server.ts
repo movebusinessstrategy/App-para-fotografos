@@ -4620,7 +4620,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     try {
       const { data: job } = await supabase
         .from('jobs')
-        .select('google_event_id')
+        // job_name/job_date entram pro histórico de atividade (quem apagou o quê)
+        .select('google_event_id, job_name, job_date')
         .eq('id', req.params.id)
         .eq('user_id', userId)
         .single();
@@ -4633,6 +4634,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
       await supabase.from('opportunities').delete().eq('trigger_job_id', req.params.id);
       await supabase.from('jobs').delete().eq('id', req.params.id);
+      await logActivity(req, {
+        action: 'job_delete',
+        entityType: 'job',
+        entityId: req.params.id,
+        summary: 'Ensaio excluído',
+        details: { job_name: (job as any).job_name, job_date: (job as any).job_date },
+      });
 
       // Se este ensaio era a conversão de uma venda, tira o deal do "ganho" pra
       // NÃO virar venda fantasma (deal ganho apontando pra ensaio que não existe).
@@ -4673,6 +4681,161 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       console.error('Error deleting job:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
+  });
+
+  // Grava "quem fez o quê" nas ações de negócio. O audit_logs (gatilho do banco)
+  // não sabe quem é o membro — só o servidor sabe, via realUserId. Best-effort:
+  // falhar aqui NUNCA pode derrubar a ação em si.
+  const logActivity = async (
+    req: express.Request,
+    entry: { action: string; entityType: 'job' | 'deal'; entityId: string | number; summary: string; details?: any },
+  ) => {
+    if (!supabaseAdmin) return;
+    try {
+      await supabaseAdmin.from('activity_log').insert({
+        user_id: (req as any).userId,
+        actor_user_id: (req as any).realUserId || (req as any).userId,
+        action: entry.action,
+        entity_type: entry.entityType,
+        entity_id: String(entry.entityId),
+        summary: entry.summary,
+        details: entry.details || null,
+      });
+    } catch { /* sem a migration 063 ainda; não bloqueia a ação */ }
+  };
+
+  // ============ HISTÓRICO DO ENSAIO ============
+  // "Quem fez o quê" num ensaio. Duas fontes:
+  //  - audit_logs: gatilho no banco que já grava INSERT/UPDATE/DELETE com o dado
+  //    antes/depois desde sempre. Diz O QUÊ e QUANDO, mas não quem (grava a conta).
+  //  - activity_log: gravado pelo servidor nas ações de negócio, com o MEMBRO que
+  //    fez. Só cobre o que aconteceu depois desta versão.
+  const JOB_FIELD_LABELS: Record<string, string> = {
+    job_date: 'Data do ensaio',
+    job_time: 'Horário',
+    job_name: 'Nome do trabalho',
+    job_type: 'Tipo de ensaio',
+    amount: 'Valor',
+    payment_status: 'Pagamento',
+    payment_method: 'Forma de pagamento',
+    status: 'Situação',
+    production_stage: 'Etapa da produção',
+    assignee_id: 'Responsável',
+    notes: 'Observações',
+    cover_image_url: 'Foto de capa',
+  };
+
+  const fmtHistValue = (
+    field: string,
+    v: any,
+    stageNames: Map<string, string>,
+    memberNames: Map<string, string>,
+  ): string => {
+    if (v === null || v === undefined || v === '') return 'ninguém';
+    if (field === 'production_stage') return stageNames.get(String(v)) || String(v);
+    if (field === 'assignee_id') return memberNames.get(String(v)) || 'outro membro';
+    if (field === 'job_date') return String(v).slice(0, 10).split('-').reverse().join('/');
+    if (field === 'amount') return `R$ ${Number(v).toLocaleString('pt-BR')}`;
+    if (field === 'notes' || field === 'cover_image_url') return '—';
+    return String(v);
+  };
+
+  app.get('/api/jobs/:id/history', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+    const jobId = String(req.params.id);
+
+    const { data: job } = await supabase
+      .from('jobs')
+      .select('id')
+      .eq('id', jobId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!job) return res.status(404).json({ error: 'Ensaio não encontrado' });
+
+    const stagesV2 = await ensureProductionStagesV2(supabase, userId).catch(() => [] as any[]);
+    const stageNames = new Map<string, string>((stagesV2 as any[]).map((s: any) => [s.id, s.name]));
+
+    // Nomes dos membros pra traduzir assignee_id (é team_members.id).
+    const { data: allMembers } = await adminClient
+      .from('team_members')
+      .select('id, name')
+      .eq('owner_user_id', userId);
+    const memberNames = new Map<string, string>((allMembers || []).map((m: any) => [m.id, m.name]));
+
+    const eventos: { at: string; text: string; actor: string | null }[] = [];
+
+    // 1) Auditoria do banco (histórico completo, sem autor)
+    const { data: audit } = await adminClient
+      .from('audit_logs')
+      .select('action, old_data, new_data, created_at')
+      .eq('user_id', userId)
+      .eq('table_name', 'jobs')
+      .eq('record_id', jobId)
+      .order('created_at', { ascending: true })
+      .limit(200);
+
+    for (const row of (audit || []) as any[]) {
+      if (row.action === 'INSERT') {
+        eventos.push({ at: row.created_at, text: 'Ensaio criado', actor: null });
+        continue;
+      }
+      if (row.action === 'DELETE') {
+        eventos.push({ at: row.created_at, text: 'Ensaio excluído', actor: null });
+        continue;
+      }
+      const antes = row.old_data || {};
+      const depois = row.new_data || {};
+      const mudou = Object.keys(JOB_FIELD_LABELS).filter((f) => {
+        const a = antes[f] ?? null;
+        const b = depois[f] ?? null;
+        return JSON.stringify(a) !== JSON.stringify(b);
+      });
+      for (const f of mudou) {
+        const de = fmtHistValue(f, antes[f], stageNames, memberNames);
+        const para = fmtHistValue(f, depois[f], stageNames, memberNames);
+        const texto = f === 'notes' || f === 'cover_image_url'
+          ? `${JOB_FIELD_LABELS[f]} alterada`
+          : `${JOB_FIELD_LABELS[f]}: ${de} → ${para}`;
+        eventos.push({ at: row.created_at, text: texto, actor: null });
+      }
+    }
+
+    // 2) Ações de negócio com autor (a partir desta versão)
+    let atores = new Map<string, string>();
+    try {
+      const { data: acts } = await adminClient
+        .from('activity_log')
+        .select('actor_user_id, summary, created_at')
+        .eq('user_id', userId)
+        .eq('entity_type', 'job')
+        .eq('entity_id', jobId)
+        .order('created_at', { ascending: true })
+        .limit(200);
+
+      if (acts && acts.length) {
+        const ids = [...new Set(acts.map((a: any) => a.actor_user_id).filter(Boolean))];
+        if (ids.length) {
+          const { data: membros } = await adminClient
+            .from('team_members')
+            .select('member_user_id, name')
+            .eq('owner_user_id', userId)
+            .in('member_user_id', ids);
+          atores = new Map((membros || []).map((m: any) => [m.member_user_id, m.name]));
+        }
+        for (const a of acts as any[]) {
+          eventos.push({
+            at: a.created_at,
+            text: a.summary,
+            actor: a.actor_user_id === userId ? 'Dono da conta' : (atores.get(a.actor_user_id) || null),
+          });
+        }
+      }
+    } catch { /* sem a migration 063 o histórico segue só com a auditoria */ }
+
+    eventos.sort((a, b) => String(b.at).localeCompare(String(a.at))); // mais recente primeiro
+    res.json(eventos);
   });
 
   // ============ JOB DETAIL / CHECKLIST / TESTIMONIALS / STAGE HISTORY ============
@@ -14639,6 +14802,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const { error } = await supabase.from('deals').update(updates).eq('id', req.params.id).eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
+    if (jobId) {
+      await logActivity(req, {
+        action: 'convert',
+        entityType: 'job',
+        entityId: jobId,
+        summary: `Venda convertida e ensaio criado${req.body?.force === true ? ' — confirmado mesmo já tendo ensaio em aberto' : ''}`,
+        details: { deal_id: Number(req.params.id), client_id: clientId, forced: req.body?.force === true },
+      });
+    }
     await recordStageEvent(
       supabase,
       userId,
@@ -16066,6 +16238,25 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       console.error('[cancel-sale] update do deal falhou:', error.message);
       return res.status(500).json({ error: `Falha ao mover pra perdido: ${error.message}` });
     }
+
+    // Registra quem cancelou. Foi por aqui que uma venda real (em produção, com
+    // contrato) sumiu de Convertidas sem ninguém saber quem tinha feito.
+    if (deal.converted_job_id) {
+      await logActivity(req, {
+        action: 'cancel_sale',
+        entityType: 'job',
+        entityId: deal.converted_job_id,
+        summary: `Venda cancelada — ensaio excluído da produção${jobDeleted ? '' : ' (ensaio já não existia)'}`,
+        details: { deal_id: Number(req.params.id), reason: updates.lost_reason },
+      });
+    }
+    await logActivity(req, {
+      action: 'cancel_sale',
+      entityType: 'deal',
+      entityId: req.params.id,
+      summary: `Venda cancelada: ${updates.lost_reason}`,
+      details: { job_id: deal.converted_job_id, job_deleted: jobDeleted },
+    });
 
     try {
       await recordStageEvent(

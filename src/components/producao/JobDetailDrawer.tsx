@@ -132,7 +132,11 @@ const formatDuration = (ms: number | null | undefined) => {
 
 export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsChange, onRemoveFromProduction, onJobUpdate }: JobDetailDrawerProps) {
   const { isProductionOnly } = useAuth();
-  const [tab, setTab] = useState<"details" | "financeiro" | "testimonials">("details");
+  const [tab, setTab] = useState<"details" | "financeiro" | "testimonials" | "historico">("details");
+  // Histórico: o que foi feito nesse ensaio e quando (e por quem, nas ações
+  // registradas a partir da migration 063).
+  const [historico, setHistorico] = useState<{ at: string; text: string; actor: string | null }[]>([]);
+  const [historicoLoading, setHistoricoLoading] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [client, setClient] = useState<ClientDetail | null>(null);
   const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
@@ -426,6 +430,17 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
       })
       .catch(() => {});
   }, [job?.id]);
+
+  // Histórico só carrega quando a aba é aberta (evita buscar em todo ensaio).
+  useEffect(() => {
+    if (tab !== "historico" || !job?.id) return;
+    setHistoricoLoading(true);
+    authFetch(`/api/jobs/${job.id}/history`)
+      .then(r => (r.ok ? r.json() : []))
+      .then((data) => setHistorico(Array.isArray(data) ? data : []))
+      .catch(() => setHistorico([]))
+      .finally(() => setHistoricoLoading(false));
+  }, [tab, job?.id]);
 
   const handleAddPayment = async () => {
     const amountVal = Number(newPayment.amount) || 0;
@@ -799,12 +814,13 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
 
         {/* Tabs */}
         <div className="flex border-b border-gray-200 dark:border-gray-700">
-          {(["details", "financeiro", "testimonials"] as const).filter((t) => t !== "financeiro" || !isProductionOnly).map((t) => {
+          {(["details", "financeiro", "testimonials", "historico"] as const).filter((t) => t !== "financeiro" || !isProductionOnly).map((t) => {
             const totalPago = payments.reduce((s, p) => s + p.amount, 0);
             const tabLabels: Record<string, string> = {
               details: "Detalhes",
               financeiro: "Financeiro",
               testimonials: `Depoimentos${testimonials.length > 0 ? ` (${testimonials.length})` : ""}`,
+              historico: "Histórico",
             };
             return (
               <button
@@ -1657,6 +1673,34 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {tab === "historico" && (
+            <div className="p-5">
+              {historicoLoading ? (
+                <p className="text-center text-sm text-gray-400 py-8">Carregando histórico...</p>
+              ) : historico.length === 0 ? (
+                <p className="text-center text-sm text-gray-400 py-8">Nenhum registro de histórico ainda.</p>
+              ) : (
+                <ol className="space-y-3">
+                  {historico.map((h, i) => (
+                    <li key={i} className="flex gap-3">
+                      <div className="mt-1.5 h-2 w-2 flex-shrink-0 rounded-full bg-gold-400" />
+                      <div className="flex-1">
+                        <p className="text-sm text-gray-800 dark:text-gray-100">{h.text}</p>
+                        <p className="text-xs text-gray-400 dark:text-gray-500">
+                          {new Date(h.at).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                          {h.actor ? ` · ${h.actor}` : ""}
+                        </p>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
+              <p className="mt-4 text-[11px] text-gray-400 dark:text-gray-500 leading-relaxed">
+                O nome de quem fez a ação aparece nos registros novos. Ações antigas mostram só o que mudou e quando.
+              </p>
             </div>
           )}
         </div>
