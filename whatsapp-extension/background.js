@@ -76,7 +76,12 @@ async function apiFetch(path, options = {}) {
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     const msg = body.error || `HTTP ${response.status}`;
-    throw new Error(`${msg} (em ${apiBase}${path})`);
+    // Leva status + corpo junto: sem isso só a mensagem sobrevivia e quem chama
+    // não conseguia tratar caso estruturado (ex: 409 de ensaio duplicado).
+    const err = new Error(`${msg} (em ${apiBase}${path})`);
+    err.status = response.status;
+    err.body = body;
+    throw err;
   }
 
   return response.json();
@@ -85,7 +90,7 @@ async function apiFetch(path, options = {}) {
 // Escuta mensagens dos content scripts
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   handleMessage(message).then(sendResponse).catch((err) => {
-    sendResponse({ error: err.message });
+    sendResponse({ error: err.message, status: err.status, body: err.body });
   });
   return true; // indica resposta assíncrona
 });

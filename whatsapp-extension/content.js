@@ -70,7 +70,14 @@
   const bg = (msg) => new Promise((ok, fail) => {
     chrome.runtime.sendMessage(msg, (r) => {
       if (chrome.runtime.lastError) return fail(new Error(chrome.runtime.lastError.message));
-      if (r?.error) return fail(new Error(r.error));
+      if (r?.error) {
+        // Preserva status + corpo pra quem precisa tratar erro estruturado
+        // (ex: 409 de ensaio duplicado pede confirmação em vez de falhar).
+        const e = new Error(r.error);
+        e.status = r.status;
+        e.body = r.body;
+        return fail(e);
+      }
       ok(r);
     });
   });
@@ -6996,11 +7003,37 @@
     try {
       const soldDate = val(modal, '#fp-win-sold-date');
       const campaignId = val(modal, '#fp-win-campaign-slot') || undefined;
-      const convRes = await bg({
+      const convertPayload = (force) => ({
         type: 'CONVERT_DEAL',
         dealId: deal.id,
-        data: { existingClientId, createClient, createJob, client, job, campaign_id: campaignId, sinalAmount: sinalAmount > 0 ? sinalAmount : undefined, converted_at: soldDate || undefined },
+        data: { existingClientId, createClient, createJob, client, job, campaign_id: campaignId, sinalAmount: sinalAmount > 0 ? sinalAmount : undefined, converted_at: soldDate || undefined, ...(force ? { force: true } : {}) },
       });
+
+      let convRes;
+      try {
+        convRes = await bg(convertPayload(false));
+      } catch (convErr) {
+        // 409 = essa cliente já tem ensaio do mesmo tipo em aberto. Confirma
+        // antes de criar um segundo — era assim que nascia ensaio duplicado na
+        // produção (o import trouxe um e a conversão criou outro).
+        const dup = convErr?.status === 409 && convErr?.body?.error === 'duplicate_job' ? convErr.body : null;
+        if (!dup) throw convErr;
+        const dataBR = (d) => (d ? String(d).slice(0, 10).split('-').reverse().join('/') : 'sem data');
+        const lista = (dup.existing || [])
+          .map((j) => `• ${j.job_name || j.job_type} — ${dataBR(j.job_date)}${j.in_production ? ' (já em produção)' : ''}`)
+          .join('\n');
+        if (btn) { btn.textContent = 'Converter e salvar'; btn.disabled = false; }
+        const ok = await fpConfirm({
+          title: 'Essa cliente já tem ensaio em aberto',
+          message: `${dup.message}\n\n${lista}\n\nSe for o MESMO ensaio, cancele aqui e edite o que já existe — criar outro deixa a cliente duplicada na produção.`,
+          confirmLabel: 'Criar outro mesmo assim',
+          cancelLabel: 'Cancelar',
+          danger: true,
+        });
+        if (!ok) return;
+        if (btn) { btn.textContent = 'Convertendo...'; btn.disabled = true; }
+        convRes = await bg(convertPayload(true));
+      }
 
       // Os itens entram DEPOIS da conversão dar certo. Antes eram gravados no
       // card ANTES de converter: se a conversão falhasse (ou o usuário fechasse

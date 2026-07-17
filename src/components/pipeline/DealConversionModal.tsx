@@ -247,7 +247,7 @@ export function DealConversionModal({
       } : undefined;
 
       // 1. Converte PRIMEIRO (converted_at permite registrar venda retroativa)
-      const convRes = await authFetch(`/api/deals/${deal.id}/convert`, {
+      const doConvert = (force: boolean) => authFetch(`/api/deals/${deal.id}/convert`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -259,8 +259,27 @@ export function DealConversionModal({
           campaign_id: campaignId || undefined,
           sinalAmount: sinalAmount > 0 ? sinalAmount : undefined,
           converted_at: soldDate || undefined,
+          ...(force ? { force: true } : {}),
         }),
       });
+
+      let convRes = await doConvert(false);
+      // 409 = esse cliente já tem ensaio do mesmo tipo em aberto. Confirma antes
+      // de criar um segundo (era assim que nascia ensaio duplicado em produção).
+      if (convRes.status === 409) {
+        const dup = await convRes.json().catch(() => null);
+        if (dup?.error === "duplicate_job") {
+          const dataBR = (d?: string) => (d ? String(d).slice(0, 10).split("-").reverse().join("/") : "sem data");
+          const lista = (dup.existing || [])
+            .map((j: any) => `• ${j.job_name || j.job_type} — ${dataBR(j.job_date)}${j.in_production ? " (já em produção)" : ""}`)
+            .join("\n");
+          const ok = window.confirm(
+            `${dup.message}\n\n${lista}\n\nSe for o MESMO ensaio, cancele aqui e edite o que já existe — criar outro deixa a cliente duplicada na produção.\n\nCriar um ensaio novo mesmo assim?`
+          );
+          if (!ok) return;
+          convRes = await doConvert(true);
+        }
+      }
       if (!convRes.ok) {
         const err = await convRes.json().catch(() => null);
         throw new Error(err?.error || `Erro ao converter (HTTP ${convRes.status})`);

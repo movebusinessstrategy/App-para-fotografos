@@ -3118,6 +3118,9 @@ body.fp-kanban-open #pane-side { display: none !important; }
   font-size: 13px;
   color: #5f6368;
   line-height: 1.45;
+  /* honra quebra de linha em avisos com lista (ex: ensaios já em aberto).
+     Mensagem de uma linha só renderiza igual a antes. */
+  white-space: pre-line;
 }
 .fp-confirm-foot {
   display: flex;

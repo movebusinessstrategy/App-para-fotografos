@@ -14498,6 +14498,36 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       preReservedJob = pr || null;
     } catch { /* coluna deal_id ainda não existe */ }
 
+    // TRAVA ANTI-DUPLICIDADE: o cliente já tem um ensaio ABERTO do mesmo tipo?
+    // Caso real: o import da planilha trouxe o ensaio e, semanas depois, alguém
+    // criou um lead e converteu — nasceu um SEGUNDO card do mesmo ensaio (mesma
+    // cliente, mesmo tipo, até a mesma data) e ninguém percebeu.
+    // Não bloqueia: devolve 409 pro cliente confirmar e repetir com force=true.
+    if (createJob && job && clientId && req.body?.force !== true) {
+      const { data: abertos } = await supabase
+        .from('jobs')
+        .select('id, job_name, job_type, job_date, production_stage')
+        .eq('user_id', userId)
+        .eq('client_id', clientId)
+        .eq('job_type', job.job_type)
+        .eq('status', 'scheduled') // ignora cancelado, concluído e pré-reserva
+        .limit(5);
+      const outros = (abertos || []).filter((j: any) => !preReservedJob || j.id !== preReservedJob.id);
+      if (outros.length > 0) {
+        return res.status(409).json({
+          error: 'duplicate_job',
+          message: `Esse cliente já tem ensaio de ${job.job_type} em aberto.`,
+          existing: outros.map((j: any) => ({
+            id: j.id,
+            job_name: j.job_name,
+            job_type: j.job_type,
+            job_date: j.job_date,
+            in_production: !!j.production_stage,
+          })),
+        });
+      }
+    }
+
     let jobId: number | null = null;
     if (createJob && job) {
       // Guardas com mensagem CLARA — sem isso a falha do insert no Supabase
