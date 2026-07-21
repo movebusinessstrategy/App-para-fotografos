@@ -27,6 +27,7 @@ import { createSupabaseClient, supabaseAdmin } from './supabase.js';
 import { getAgentReply, extractCadastroWithAI, analyzeDossierWithAI, DEFAULT_PERSONA, DEFAULT_OBJECTIVE, DEFAULT_KNOWLEDGE, DEFAULT_RULES, DEFAULT_SALES_STRATEGY } from './ai-agent.js';
 import { buildDossierPdf, normalizePhotoToJpeg, DossierPhoto } from './dossier-pdf.js';
 import * as plugnotas from './plugnotas.js';
+import * as nfseNacional from './nfse-nacional.js';
 import { understandMedia } from './media-understanding.js';
 import {
   DEFAULT_STAGES,
@@ -8998,29 +8999,116 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return data;
   }
 
+  // O certificado cifrado NUNCA sai pro front.
+  const fiscalConfigSegura = (cfg: any) => {
+    if (!cfg) return null;
+    const { certificado_blob, ...safe } = cfg;
+    return { ...safe, certificado_enviado: !!(cfg.certificado_enviado || certificado_blob) };
+  };
+
+  // Abre o certificado A1 do estúdio (cifrado no banco) pra assinar/mTLS.
+  function abrirCertificadoDoConfig(cfg: any): nfseNacional.KeyPair {
+    if (!cfg?.certificado_blob) throw new Error('Envie o certificado A1 na configuração antes de emitir.');
+    const { pfx, senha } = nfseNacional.decifrarCertificado(cfg.certificado_blob);
+    const kp = nfseNacional.abrirCertificado(pfx, senha);
+    if (kp.validade.getTime() < Date.now()) {
+      throw new Error(`Certificado A1 vencido em ${kp.validade.toISOString().slice(0, 10)}. Renove e envie o novo.`);
+    }
+    return kp;
+  }
+
+  const fiscalAmbiente = (cfg: any): nfseNacional.NacEnv =>
+    cfg?.environment === 'production' ? 'production' : 'sandbox';
+
   // Config fiscal do estúdio (dados do emitente + serviço).
   app.get('/api/fiscal/config', requireAuth, requirePermission('finance'), async (req, res) => {
     const cfg = await getFiscalConfig(req);
-    res.json(cfg || null);
+    res.json(fiscalConfigSegura(cfg));
   });
 
   app.put('/api/fiscal/config', requireAuth, requirePermission('finance'), async (req, res) => {
     const userId = (req as any).userId;
-    // Nunca aceita certificado/senha aqui (vai por rota própria, vai pro PlugNotas).
-    const { certificado, senha, pfxBase64, user_id, created_at, ...rest } = req.body || {};
-    const row = { ...rest, user_id: userId, updated_at: new Date().toISOString() };
+    // Nunca aceita certificado/senha aqui (o certificado vai por rota própria, cifrado).
+    const { certificado, senha, pfxBase64, certificado_blob, certificado_titular, user_id, created_at, ...rest } = req.body || {};
+    const row: any = { ...rest, user_id: userId, updated_at: new Date().toISOString() };
+    if (!row.provider) row.provider = 'nacional'; // emissão direta na API do governo (padrão)
     const { error } = await fiscalDb(req)
       .from('fiscal_config').upsert(row, { onConflict: 'user_id' });
     if (error) return res.status(500).json({ error: error.message });
-    res.json(await getFiscalConfig(req));
+    res.json(fiscalConfigSegura(await getFiscalConfig(req)));
   });
 
-  // Cadastra/atualiza o emitente no PlugNotas a partir da config salva.
+  // Fila "prontas para emitir": ensaios cuja etapa de produção já libera a nota.
+  // Regra: etapa escolhida na config (emit_stage_id) ou, sem escolha, da 2ª etapa
+  // do kanban em diante. Exclui cancelados e quem já tem nota neste ambiente.
+  app.get('/api/fiscal/elegiveis', requireAuth, requirePermission('finance'), async (req, res) => {
+    const userId = (req as any).userId;
+    const db = fiscalDb(req);
+    const cfg = await getFiscalConfig(req);
+    const processes = await ensureProductionProcesses(db, userId);
+    const stages = await ensureProductionStagesV2(db, userId);
+
+    // Ordena as etapas na ordem visual do kanban (processo -> etapa).
+    const procPos = new Map(processes.map((p: any) => [p.id, p.position ?? 0]));
+    const ordenadas = [...stages].sort((a: any, b: any) =>
+      ((procPos.get(a.process_id) ?? 0) - (procPos.get(b.process_id) ?? 0)) || ((a.position ?? 0) - (b.position ?? 0)));
+    let minRank = ordenadas.findIndex((s: any) => s.id === cfg?.emit_stage_id);
+    if (minRank < 0) minRank = Math.min(Math.max(0, (Number(cfg?.emit_stage_pos ?? 2) || 2) - 1), Math.max(0, ordenadas.length - 1));
+    const liberadas = new Set(ordenadas.slice(minRank).map((s: any) => s.id));
+    const nomeEtapa = new Map(ordenadas.map((s: any) => [s.id, s.name]));
+
+    const { data: jobs, error } = await db.from('jobs')
+      .select('id, client_id, job_name, job_type, job_date, amount, status, production_stage, clients(name, cpf, email)')
+      .eq('user_id', userId)
+      .not('production_stage', 'is', null)
+      .neq('status', 'cancelled')
+      .limit(5000);
+    if (error) return res.status(500).json({ error: error.message });
+
+    const amb = fiscalAmbiente(cfg);
+    const { data: emitidas } = await db.from('fiscal_invoices')
+      .select('job_id').eq('user_id', userId).eq('ambiente', amb)
+      .in('status', ['autorizada', 'processando']).not('job_id', 'is', null);
+    const jaTem = new Set((emitidas || []).map((r: any) => r.job_id));
+
+    const itens = (jobs || [])
+      .filter((j: any) => liberadas.has(j.production_stage) && !jaTem.has(j.id))
+      .map((j: any) => {
+        const c: any = (j as any).clients || {};
+        const cpfDigitos = String(c?.cpf || '').replace(/\D/g, '');
+        const faltas: string[] = [];
+        if (!c?.name) faltas.push('nome');
+        if (!cpfDigitos) faltas.push('cpf');
+        if (!(Number(j.amount) > 0)) faltas.push('valor');
+        return {
+          job_id: j.id, client_id: j.client_id,
+          client_name: c?.name || null,
+          job_name: j.job_name || j.job_type || null,
+          job_date: j.job_date, valor: Number(j.amount) || 0,
+          stage_id: j.production_stage, stage_name: nomeEtapa.get(j.production_stage) || '',
+          tomador_doc: c?.cpf || '', tomador_email: c?.email || '',
+          faltas,
+        };
+      })
+      .sort((a: any, b: any) => String(b.job_date || '').localeCompare(String(a.job_date || '')));
+
+    res.json({ itens, etapa_minima: (ordenadas[minRank] as any)?.name || null, ambiente: amb });
+  });
+
+  // Cadastra/atualiza o emitente no provedor a partir da config salva.
+  // Nacional: não existe "cadastrar no provedor" — valida a config e marca pronto.
   app.post('/api/fiscal/empresa', requireAuth, requirePermission('finance'), async (req, res) => {
     const userId = (req as any).userId;
     const cfg = await getFiscalConfig(req);
     if (!cfg?.cnpj || !cfg?.razao_social) {
       return res.status(400).json({ error: 'Preencha ao menos CNPJ e razão social antes de cadastrar a empresa.' });
+    }
+    if ((cfg.provider || 'nacional') !== 'plugnotas') {
+      if (!cfg.codigo_cidade) return res.status(400).json({ error: 'Preencha o código IBGE da cidade (7 dígitos).' });
+      await fiscalDb(req).from('fiscal_config')
+        .update({ empresa_cadastrada: true, updated_at: new Date().toISOString() })
+        .eq('user_id', userId);
+      return res.json({ success: true, mensagem: 'Config validada. No modelo nacional não há cadastro em provedor — o certificado A1 é o que habilita a emissão.' });
     }
     const env = fiscalEnv(cfg);
     const payload: plugnotas.EmpresaPayload = {
@@ -9055,34 +9143,134 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
   });
 
-  // Upload do certificado A1 (.pfx em base64) → vai pro PlugNotas, não fica aqui.
+  // Upload do certificado A1 (.pfx em base64).
+  // Provider "nacional": valida que o arquivo abre com a senha e guarda CIFRADO
+  // (AES-256-GCM) no banco — a senha nunca fica em claro nem é logada.
+  // Provider "plugnotas" (legado): envia pro PlugNotas e não guarda nada.
   app.post('/api/fiscal/certificado', requireAuth, requirePermission('finance'), async (req, res) => {
     const userId = (req as any).userId;
     const { pfxBase64, senha } = req.body || {};
     if (!pfxBase64 || !senha) return res.status(400).json({ error: 'Envie o arquivo .pfx e a senha.' });
     const cfg = await getFiscalConfig(req);
-    if (!cfg?.cnpj) return res.status(400).json({ error: 'Cadastre o CNPJ na config antes do certificado.' });
+    if (!cfg?.cnpj) return res.status(400).json({ error: 'Salve a configuração (com CNPJ) antes do certificado.' });
+    const buf = Buffer.from(String(pfxBase64).replace(/^data:.*;base64,/, ''), 'base64');
+
+    if ((cfg.provider || 'nacional') === 'plugnotas') {
+      try {
+        const r = await plugnotas.enviarCertificado(fiscalEnv(cfg), String(cfg.cnpj).replace(/\D/g, ''), buf, String(senha));
+        if (!r.ok) return res.status(400).json({ error: r.data?.error?.message || r.data?.message || 'Certificado recusado pelo PlugNotas.', detail: r.data });
+        const validade = r.data?.vencimento || r.data?.validade || null;
+        await fiscalDb(req).from('fiscal_config')
+          .update({ certificado_enviado: true, certificado_validade: validade, updated_at: new Date().toISOString() })
+          .eq('user_id', userId);
+        return res.json({ success: true, validade });
+      } catch (e: any) {
+        return res.status(500).json({ error: e?.message || 'Falha ao enviar o certificado.' });
+      }
+    }
+
+    // Nacional (padrão)
     try {
-      const buf = Buffer.from(String(pfxBase64).replace(/^data:.*;base64,/, ''), 'base64');
-      const r = await plugnotas.enviarCertificado(fiscalEnv(cfg), String(cfg.cnpj).replace(/\D/g, ''), buf, String(senha));
-      if (!r.ok) return res.status(400).json({ error: r.data?.error?.message || r.data?.message || 'Certificado recusado pelo PlugNotas.', detail: r.data });
-      const validade = r.data?.vencimento || r.data?.validade || null;
-      await fiscalDb(req).from('fiscal_config')
-        .update({ certificado_enviado: true, certificado_validade: validade, updated_at: new Date().toISOString() })
-        .eq('user_id', userId);
-      res.json({ success: true, validade });
+      const kp = nfseNacional.abrirCertificado(buf, String(senha)); // valida arquivo+senha
+      const blob = nfseNacional.cifrarCertificado(buf, String(senha));
+      const validade = kp.validade.toISOString().slice(0, 10);
+      const { error } = await fiscalDb(req).from('fiscal_config').update({
+        certificado_blob: blob,
+        certificado_titular: kp.titular,
+        certificado_enviado: true,
+        certificado_validade: validade,
+        empresa_cadastrada: true, // no nacional não existe "cadastrar empresa no provedor"
+        updated_at: new Date().toISOString(),
+      }).eq('user_id', userId);
+      if (error) return res.status(500).json({ error: error.message });
+      res.json({ success: true, titular: kp.titular, validade });
     } catch (e: any) {
-      res.status(500).json({ error: e?.message || 'Falha ao enviar o certificado.' });
+      const msg = String(e?.message || '');
+      if (msg.includes('FISCAL_CERT_MASTER_KEY')) return res.status(500).json({ error: msg });
+      res.status(400).json({ error: 'Certificado ou senha inválidos. Confira o arquivo .pfx/.p12 e a senha.' });
     }
   });
 
   // Emite a NFS-e de um ensaio JÁ REALIZADO, pelo valor cheio do serviço.
   app.post('/api/fiscal/nfse', requireAuth, requirePermission('finance'), async (req, res) => {
     const userId = (req as any).userId;
-    const { job_id, deal_id, client_id, valor, discriminacao, tomador, enviarEmail } = req.body || {};
+    const { job_id, deal_id, client_id, valor, discriminacao, tomador, enviarEmail, salvar_cpf } = req.body || {};
     if (!valor || Number(valor) <= 0) return res.status(400).json({ error: 'Informe o valor do serviço.' });
     if (!tomador?.cpfCnpj || !tomador?.razaoSocial) return res.status(400).json({ error: 'Informe nome e CPF/CNPJ do cliente (tomador).' });
     const cfg = await getFiscalConfig(req);
+    const dbNac = fiscalDb(req);
+
+    // ===== Provider NACIONAL (padrão): emissão direta na API do governo =====
+    if ((cfg?.provider || 'nacional') !== 'plugnotas') {
+      if (!cfg?.cnpj || !cfg?.codigo_cidade) {
+        return res.status(400).json({ error: 'Complete a configuração: CNPJ e código IBGE da cidade.' });
+      }
+      const docTomador = String(tomador.cpfCnpj).replace(/\D/g, '');
+      if (docTomador.length !== 11 && docTomador.length !== 14) {
+        return res.status(400).json({ error: 'CPF/CNPJ do cliente inválido (confira os dígitos).' });
+      }
+      let kp: nfseNacional.KeyPair;
+      try { kp = abrirCertificadoDoConfig(cfg); }
+      catch (e: any) { return res.status(400).json({ error: e?.message || 'Problema com o certificado.' }); }
+
+      // Reserva ATÔMICA do número da DPS (função da migration 044).
+      const { data: reserva, error: rErr } = await dbNac.rpc('fiscal_reservar_dps', { p_user: userId });
+      const linha = Array.isArray(reserva) ? reserva[0] : reserva;
+      if (rErr || !linha?.numero) {
+        return res.status(500).json({ error: 'Numeração da DPS indisponível. Rode a migration 044 no Supabase.' });
+      }
+      const amb = fiscalAmbiente(cfg);
+      const { data: inv, error: insErr } = await dbNac.from('fiscal_invoices').insert({
+        user_id: userId, job_id: job_id || null, deal_id: deal_id || null, client_id: client_id || null,
+        tipo: 'nfse', status: 'processando', valor: Number(valor), ambiente: amb,
+        dps_serie: linha.serie, dps_numero: linha.numero,
+        tomador_nome: tomador.razaoSocial, tomador_doc: docTomador,
+        discriminacao: discriminacao || cfg.servico_discriminacao || 'Serviço de fotografia',
+      }).select().single();
+      if (insErr) {
+        const dup = String(insErr.message || '').includes('uq_fiscal_invoices_job_ok');
+        return res.status(dup ? 409 : 500).json({ error: dup ? 'Este ensaio já tem nota emitida (ou em processamento) neste ambiente.' : insErr.message });
+      }
+      try {
+        const dps = nfseNacional.montarDps({
+          cnpjPrestador: cfg.cnpj, codigoIbge: String(cfg.codigo_cidade),
+          serie: String(linha.serie), numero: Number(linha.numero), ambiente: amb,
+          cTribNac: cfg.ctrib_nac || undefined, cNBS: cfg.cnbs || undefined,
+          pTotTribSN: cfg.ptottrib_sn != null ? Number(cfg.ptottrib_sn) : undefined,
+        }, {
+          tomadorDoc: docTomador, tomadorNome: tomador.razaoSocial,
+          tomadorEmail: tomador.email || undefined,
+          valor: Number(valor), descricao: inv.discriminacao,
+        });
+        const assinada = nfseNacional.assinarDps(dps.xml, kp);
+        const r = await nfseNacional.emitir(amb, kp, assinada);
+        if (!r.ok) {
+          await dbNac.from('fiscal_invoices').update({
+            status: 'erro', error_message: r.mensagem || 'Erro na emissão.', dps_id: dps.dpsId,
+            updated_at: new Date().toISOString(),
+          }).eq('id', inv.id);
+          return res.status(400).json({ error: r.mensagem || 'Erro na emissão.', erros: r.erros });
+        }
+        const numeroNota = (r.nfseXml?.match(/<nNFSe>(\d+)<\/nNFSe>/) || [])[1] || null;
+        await dbNac.from('fiscal_invoices').update({
+          status: 'autorizada', chave_acesso: r.chaveAcesso, provider_id: r.chaveAcesso,
+          dps_id: dps.dpsId, numero: numeroNota, xml_nfse: r.nfseXml || null,
+          emitida_em: new Date().toISOString(), updated_at: new Date().toISOString(),
+        }).eq('id', inv.id);
+        // Preenche o CPF no cadastro do cliente quando pedido (dado faltante corrigido na emissão).
+        if (salvar_cpf && client_id && docTomador.length === 11) {
+          await dbNac.from('clients').update({ cpf: docTomador }).eq('id', client_id).eq('user_id', userId);
+        }
+        return res.json({ success: true, id: inv.id, chave_acesso: r.chaveAcesso, numero: numeroNota, ambiente: amb });
+      } catch (e: any) {
+        await dbNac.from('fiscal_invoices').update({
+          status: 'erro', error_message: e?.message || 'falha', updated_at: new Date().toISOString(),
+        }).eq('id', inv.id);
+        return res.status(500).json({ error: e?.message || 'Falha ao emitir a nota.' });
+      }
+    }
+
+    // ===== Provider PLUGNOTAS (legado) =====
     if (!cfg?.empresa_cadastrada || !cfg?.certificado_enviado) {
       return res.status(400).json({ error: 'Configure a empresa e o certificado antes de emitir.' });
     }
@@ -9130,6 +9318,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const db = fiscalDb(req);
     const { data: inv } = await db.from('fiscal_invoices').select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
     if (!inv) return res.status(404).json({ error: 'Nota não encontrada.' });
+    if (inv.chave_acesso) return res.json(inv); // nacional: emissão é síncrona, nada a atualizar
     if (!inv.provider_id) return res.json(inv);
     const cfg = await getFiscalConfig(req);
     const r = await plugnotas.consultarNfse(fiscalEnv(cfg), inv.provider_id);
@@ -9152,12 +9341,60 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (justificativa.length < 15) return res.status(400).json({ error: 'A justificativa precisa de pelo menos 15 caracteres.' });
     const db = fiscalDb(req);
     const { data: inv } = await db.from('fiscal_invoices').select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (inv?.chave_acesso) {
+      // Nacional: o cancelamento por evento assinado ainda não está no app.
+      // Caminho seguro por enquanto: portal do Emissor Nacional (1 minuto).
+      return res.status(400).json({
+        error: 'Cancelamento pelo app chega em breve. Por enquanto, cancele esta nota no portal nfse.gov.br (Emissor Nacional) — depois marque aqui com "Atualizar".',
+      });
+    }
     if (!inv?.provider_id) return res.status(400).json({ error: 'Nota sem registro no provedor.' });
     const cfg = await getFiscalConfig(req);
     const r = await plugnotas.cancelarNfse(fiscalEnv(cfg), inv.provider_id, justificativa);
     if (!r.ok) return res.status(400).json({ error: r.data?.error?.message || r.data?.message || 'Erro ao cancelar.', detail: r.data });
     await db.from('fiscal_invoices').update({ status: 'cancelada', updated_at: new Date().toISOString() }).eq('id', inv.id);
     res.json({ success: true });
+  });
+
+  // PDF oficial (DANFSe) — servido pelo nosso backend porque o ADN exige mTLS.
+  app.get('/api/fiscal/nfse/:id/pdf', requireAuth, requirePermission('finance'), async (req, res) => {
+    const userId = (req as any).userId;
+    const db = fiscalDb(req);
+    const { data: inv } = await db.from('fiscal_invoices').select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!inv) return res.status(404).json({ error: 'Nota não encontrada.' });
+    if (inv.chave_acesso) {
+      try {
+        const cfg = await getFiscalConfig(req);
+        const kp = abrirCertificadoDoConfig(cfg);
+        const amb: nfseNacional.NacEnv = inv.ambiente === 'production' ? 'production' : 'sandbox';
+        const p = await nfseNacional.danfsePdf(amb, kp, inv.chave_acesso);
+        if (p.ok && p.pdf) {
+          res.setHeader('Content-Type', 'application/pdf');
+          res.setHeader('Content-Disposition', `inline; filename="nfse-${inv.numero || inv.id}.pdf"`);
+          return res.send(p.pdf);
+        }
+        return res.status(502).json({ error: 'DANFSe indisponível agora — baixe o XML (documento oficial) ou tente de novo.' });
+      } catch (e: any) {
+        return res.status(500).json({ error: e?.message || 'Falha ao buscar o PDF.' });
+      }
+    }
+    if (inv.pdf_url) return res.redirect(inv.pdf_url);
+    res.status(404).json({ error: 'Sem PDF pra esta nota.' });
+  });
+
+  // XML autorizado (documento com validade fiscal).
+  app.get('/api/fiscal/nfse/:id/xml', requireAuth, requirePermission('finance'), async (req, res) => {
+    const userId = (req as any).userId;
+    const db = fiscalDb(req);
+    const { data: inv } = await db.from('fiscal_invoices').select('id, numero, xml_nfse, xml_url').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!inv) return res.status(404).json({ error: 'Nota não encontrada.' });
+    if (inv.xml_nfse) {
+      res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="nfse-${inv.numero || inv.id}.xml"`);
+      return res.send(inv.xml_nfse);
+    }
+    if (inv.xml_url) return res.redirect(inv.xml_url);
+    res.status(404).json({ error: 'Sem XML pra esta nota.' });
   });
 
   app.get('/api/me', requireAuth, async (req, res) => {
