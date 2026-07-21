@@ -9068,7 +9068,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const amb = fiscalAmbiente(cfg);
     const { data: emitidas } = await db.from('fiscal_invoices')
       .select('job_id').eq('user_id', userId).eq('ambiente', amb)
-      .in('status', ['autorizada', 'processando']).not('job_id', 'is', null);
+      .in('status', ['autorizada', 'processando', 'dispensada']).not('job_id', 'is', null);
     const jaTem = new Set((emitidas || []).map((r: any) => r.job_id));
 
     const itens = (jobs || [])
@@ -9307,7 +9307,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.get('/api/fiscal/nfse', requireAuth, requirePermission('finance'), async (req, res) => {
     const userId = (req as any).userId;
     const { data, error } = await fiscalDb(req).from('fiscal_invoices')
-      .select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(500);
+      .select('*').eq('user_id', userId).neq('status', 'dispensada')
+      .order('created_at', { ascending: false }).limit(500);
     if (error) return res.status(500).json({ error: error.message });
     res.json(data || []);
   });
@@ -9395,6 +9396,51 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
     if (inv.xml_url) return res.redirect(inv.xml_url);
     res.status(404).json({ error: 'Sem XML pra esta nota.' });
+  });
+
+  // Detalhe do card: nota + pacote/financeiro do ensaio (o que o cliente gastou).
+  app.get('/api/fiscal/nfse/:id/detalhe', requireAuth, requirePermission('finance'), async (req, res) => {
+    const userId = (req as any).userId;
+    const { data: inv } = await fiscalDb(req).from('fiscal_invoices')
+      .select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!inv) return res.status(404).json({ error: 'Nota não encontrada.' });
+    res.json(inv);
+  });
+
+  // Excluir o REGISTRO de uma nota do app (não cancela na prefeitura).
+  app.delete('/api/fiscal/nfse/:id', requireAuth, requirePermission('finance'), async (req, res) => {
+    const userId = (req as any).userId;
+    const db = fiscalDb(req);
+    const { data: inv } = await db.from('fiscal_invoices')
+      .select('status, ambiente').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+    if (!inv) return res.status(404).json({ error: 'Nota não encontrada.' });
+    const { error } = await db.from('fiscal_invoices').delete().eq('id', req.params.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({
+      success: true,
+      aviso: inv.status === 'autorizada' && inv.ambiente === 'production'
+        ? 'Removido do app. Isto NÃO cancela a nota na prefeitura — se precisar cancelar de verdade, use o portal nfse.gov.br.'
+        : null,
+    });
+  });
+
+  // Tirar um ensaio da fila de nota (dispensar), sem apagar o ensaio.
+  app.post('/api/fiscal/dispensar', requireAuth, requirePermission('finance'), async (req, res) => {
+    const userId = (req as any).userId;
+    const { job_id, tomador_nome } = req.body || {};
+    if (!job_id) return res.status(400).json({ error: 'Informe o ensaio.' });
+    const cfg = await getFiscalConfig(req);
+    const amb = fiscalAmbiente(cfg);
+    const db = fiscalDb(req);
+    const { data: ja } = await db.from('fiscal_invoices')
+      .select('id').eq('user_id', userId).eq('job_id', job_id).eq('ambiente', amb).eq('status', 'dispensada').maybeSingle();
+    if (ja) return res.json({ success: true });
+    const { error } = await db.from('fiscal_invoices').insert({
+      user_id: userId, job_id, ambiente: amb, tipo: 'nfse', status: 'dispensada',
+      valor: 0, tomador_nome: tomador_nome || null,
+    });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
   });
 
   app.get('/api/me', requireAuth, async (req, res) => {

@@ -1,72 +1,14 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Receipt, Building2, ShieldCheck, Plus, RefreshCw, Download, XCircle,
-  CheckCircle2, Clock, AlertTriangle, Loader2, Save, Upload, FileText, Zap,
+  CheckCircle2, Clock, AlertTriangle, Loader2, Save, Upload, FileText, Search, X,
 } from "lucide-react";
-import { authFetch } from "../utils/authFetch";
-
-// ─── Tipos ───────────────────────────────────────────────────────────────────
-interface FiscalConfig {
-  provider?: string;
-  environment?: "sandbox" | "production";
-  cnpj?: string; inscricao_municipal?: string; inscricao_estadual?: string;
-  razao_social?: string; nome_fantasia?: string;
-  simples_nacional?: boolean; incentivo_cultural?: boolean;
-  email?: string; telefone?: string;
-  cep?: string; logradouro?: string; numero?: string; complemento?: string;
-  bairro?: string; codigo_cidade?: string; cidade?: string; estado?: string;
-  servico_discriminacao?: string;
-  dps_serie?: string; emit_stage_id?: string | null;
-  ctrib_nac?: string; cnbs?: string; ptottrib_sn?: number;
-  empresa_cadastrada?: boolean; certificado_enviado?: boolean;
-  certificado_validade?: string | null; certificado_titular?: string | null;
-}
-
-interface Invoice {
-  id: string; status: string; valor: number; numero?: string | null;
-  tomador_nome?: string; tomador_doc?: string; discriminacao?: string;
-  chave_acesso?: string | null; ambiente?: string | null;
-  pdf_url?: string | null; xml_url?: string | null; xml_nfse?: string | null;
-  error_message?: string | null;
-  created_at: string; emitida_em?: string | null; job_id?: number | null;
-}
-
-interface Elegivel {
-  job_id: number; client_id: number | null; client_name: string | null;
-  job_name: string | null; job_date: string | null; valor: number;
-  stage_id: string; stage_name: string;
-  tomador_doc: string; tomador_email: string; faltas: string[];
-}
-
-interface StageOpt { id: string; label: string }
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-async function api<T = any>(path: string, opts?: RequestInit): Promise<T> {
-  const res = await authFetch(path, opts);
-  const data = await res.json().catch(() => null);
-  if (!res.ok) throw new Error((data && (data.error || data.message)) || "Erro na requisição.");
-  return data as T;
-}
-
-const brl = (n: number) =>
-  `R$ ${Number(n || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`;
-const dataBr = (s?: string | null) => (s ? new Date(s + (s.length === 10 ? "T12:00:00" : "")).toLocaleDateString("pt-BR") : "—");
-
-async function baixarArquivo(path: string, nome: string) {
-  const res = await authFetch(path);
-  if (!res.ok) {
-    const j = await res.json().catch(() => null);
-    alert((j && j.error) || "Não consegui baixar o arquivo.");
-    return;
-  }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = nome; a.target = "_blank";
-  if (blob.type.includes("pdf")) { window.open(url, "_blank"); }
-  else { a.click(); }
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
-}
+import ConfirmModal from "../components/shared/ConfirmModal";
+import { FiscalKanban } from "../components/fiscal/FiscalKanban";
+import { FiscalDrawerElegivel, FiscalDrawerNota } from "../components/fiscal/FiscalDrawer";
+import {
+  FiscalConfig, Invoice, Elegivel, api, brl, baixarArquivo,
+} from "../components/fiscal/fiscalShared";
 
 const STATUS_META: Record<string, { label: string; cls: string; icon: React.ElementType }> = {
   autorizada:  { label: "Autorizada", cls: "text-emerald-700 bg-emerald-50 dark:text-emerald-300 dark:bg-emerald-900/30", icon: CheckCircle2 },
@@ -106,6 +48,13 @@ function AmbienteBadge({ env }: { env?: string }) {
   );
 }
 
+interface StageOpt { id: string; label: string }
+
+type Confirmacao = {
+  open: boolean; title: string; message: string; onConfirm: () => void;
+};
+const CONF_FECHADA: Confirmacao = { open: false, title: "", message: "", onConfirm: () => {} };
+
 // ═════════════════════════════════════════════════════════════════════════════
 export default function FiscalPage() {
   const [tab, setTab] = useState<"emitir" | "notas" | "config">("emitir");
@@ -116,7 +65,11 @@ export default function FiscalPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
-  const [emitindo, setEmitindo] = useState<Elegivel | null | "avulsa">(null);
+  const [busca, setBusca] = useState("");
+  const [drawerElegivel, setDrawerElegivel] = useState<Elegivel | null>(null);
+  const [drawerNota, setDrawerNota] = useState<Invoice | null>(null);
+  const [confirmacao, setConfirmacao] = useState<Confirmacao>(CONF_FECHADA);
+  const [avulsaOpen, setAvulsaOpen] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -162,7 +115,7 @@ export default function FiscalPage() {
         r.onerror = reject;
         r.readAsDataURL(file);
       });
-      const r = await api<{ titular?: string; validade?: string }>("/api/fiscal/certificado", {
+      const r = await api<{ titular?: string }>("/api/fiscal/certificado", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pfxBase64: base64, senha }),
       });
@@ -174,24 +127,86 @@ export default function FiscalPage() {
 
   const podeEmitir = !!(cfg.cnpj && cfg.codigo_cidade && cfg.certificado_enviado);
 
+  // Busca filtra os 3 grupos por nome do cliente / número da nota.
+  const q = busca.trim().toLowerCase();
+  const filtrados = useMemo(() => {
+    const bate = (s?: string | null) => !q || String(s || "").toLowerCase().includes(q);
+    const ele = elegiveis.filter((i) => bate(i.client_name) || bate(i.job_name));
+    return {
+      prontos: ele.filter((i) => i.faltas.length === 0),
+      incompletos: ele.filter((i) => i.faltas.length > 0),
+      emitidas: invoices.filter((n) => n.status === "autorizada" && (bate(n.tomador_nome) || bate(n.numero))).slice(0, 60),
+    };
+  }, [elegiveis, invoices, q]);
+
+  // ── Ações com confirmação ──────────────────────────────────────────────────
+  const pedirDispensa = (it: Elegivel) => setConfirmacao({
+    open: true,
+    title: "Tirar da fila de nota",
+    message: `Tirar "${it.client_name || it.job_name || "este ensaio"}" da fila? Ele não vai mais aparecer pra emitir nota (o ensaio continua intacto na Produção).`,
+    onConfirm: async () => {
+      try {
+        await api("/api/fiscal/dispensar", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ job_id: it.job_id, tomador_nome: it.client_name }),
+        });
+        load();
+      } catch (e: any) { setMsg({ type: "err", text: e?.message || "Erro." }); }
+    },
+  });
+
+  const pedirExclusaoNota = (n: Invoice) => setConfirmacao({
+    open: true,
+    title: "Excluir registro da nota",
+    message: n.ambiente === "production" && n.status === "autorizada"
+      ? `Excluir o registro da nota ${n.numero ? `nº ${n.numero} ` : ""}do app? ATENÇÃO: isso NÃO cancela a nota na prefeitura — pra cancelar de verdade, use o portal nfse.gov.br. Esta ação não pode ser desfeita.`
+      : `Excluir o registro ${n.numero ? `da nota nº ${n.numero} ` : ""}do app? Esta ação não pode ser desfeita.`,
+    onConfirm: async () => {
+      try {
+        const r = await api<{ aviso?: string | null }>(`/api/fiscal/nfse/${n.id}`, { method: "DELETE" });
+        setDrawerNota(null);
+        if (r.aviso) setMsg({ type: "ok", text: r.aviso });
+        load();
+      } catch (e: any) { setMsg({ type: "err", text: e?.message || "Erro ao excluir." }); }
+    },
+  });
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center justify-between gap-3 px-4 md:px-6 py-4 border-b border-gray-200 dark:border-gray-800">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 md:px-6 py-4 border-b border-gray-200 dark:border-gray-800">
         <div className="flex items-center gap-2">
           <Receipt className="w-5 h-5 text-gold-500" />
           <h1 className="text-xl font-bold text-gray-900 dark:text-white">Nota Fiscal</h1>
           <AmbienteBadge env={cfg.environment} />
         </div>
-        <button onClick={() => setEmitindo("avulsa")} disabled={!podeEmitir}
-          className="flex items-center gap-1.5 px-3 py-2 bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white rounded-lg text-sm font-semibold">
-          <Plus size={16} /> Emitir avulsa
-        </button>
+        <div className="flex items-center gap-2">
+          {tab === "emitir" && (
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500" size={16} />
+              <input
+                type="text" value={busca} onChange={(e) => setBusca(e.target.value)}
+                placeholder="Buscar cliente..."
+                className="pl-9 pr-8 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl outline-none text-sm text-gray-700 dark:text-gray-200 w-48 md:w-64 focus:border-gold-300 dark:focus:border-gold-500 focus:ring-2 focus:ring-gold-100 dark:focus:ring-gold-500/20 transition-all placeholder:text-gray-400 dark:placeholder:text-gray-500"
+              />
+              {busca && (
+                <button type="button" onClick={() => setBusca("")}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300">
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+          )}
+          <button onClick={() => setAvulsaOpen(true)} disabled={!podeEmitir}
+            className="flex items-center gap-1.5 px-3 py-2 bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white rounded-xl text-sm font-semibold">
+            <Plus size={16} /> Avulsa
+          </button>
+        </div>
       </div>
 
       {/* Tabs */}
       <div className="flex gap-1 px-4 md:px-6 pt-3 border-b border-gray-200 dark:border-gray-800">
-        {([["emitir", `Prontas pra emitir${elegiveis.length ? ` (${elegiveis.length})` : ""}`], ["notas", "Notas emitidas"], ["config", "Configuração"]] as const).map(([k, lbl]) => (
+        {([["emitir", "Quadro"], ["notas", "Histórico"], ["config", "Configuração"]] as const).map(([k, lbl]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${tab === k ? "border-gold-500 text-gold-600 dark:text-gold-400" : "border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-200"}`}>
             {lbl}
@@ -200,8 +215,9 @@ export default function FiscalPage() {
       </div>
 
       {msg && (
-        <div className={`mx-4 md:mx-6 mt-3 text-sm px-3 py-2 rounded-lg ${msg.type === "ok" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" : "bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300"}`}>
-          {msg.text}
+        <div className={`mx-4 md:mx-6 mt-3 text-sm px-3 py-2 rounded-lg flex items-start justify-between gap-2 ${msg.type === "ok" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" : "bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300"}`}>
+          <span>{msg.text}</span>
+          <button onClick={() => setMsg(null)} className="flex-shrink-0 opacity-60 hover:opacity-100"><X size={14} /></button>
         </div>
       )}
 
@@ -209,208 +225,114 @@ export default function FiscalPage() {
         {loading ? (
           <div className="flex items-center justify-center py-16 text-gray-400"><Loader2 className="animate-spin" /></div>
         ) : tab === "emitir" ? (
-          <EmitirKanban itens={elegiveis} invoices={invoices} etapaMinima={etapaMinima} podeEmitir={podeEmitir}
-            onEmitir={(item) => setEmitindo(item)} onIrConfig={() => setTab("config")} />
+          !podeEmitir ? (
+            <div className="text-center py-16">
+              <ShieldCheck className="mx-auto mb-3 text-gray-300" size={40} />
+              <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+                Pra emitir, complete a configuração (CNPJ, código IBGE) e envie o certificado A1.
+              </p>
+              <button onClick={() => setTab("config")} className="px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white rounded-xl text-sm font-semibold">
+                Ir pra Configuração
+              </button>
+            </div>
+          ) : (
+            <>
+              {etapaMinima && (
+                <p className="text-[12px] text-gray-400 mb-3">
+                  Ensaios entram no quadro ao chegar na etapa “{etapaMinima}” da Produção (mude na Configuração).
+                </p>
+              )}
+              <FiscalKanban
+                prontos={filtrados.prontos}
+                incompletos={filtrados.incompletos}
+                emitidas={filtrados.emitidas}
+                onAbrirElegivel={setDrawerElegivel}
+                onAbrirNota={setDrawerNota}
+                onDispensar={pedirDispensa}
+                onExcluirNota={pedirExclusaoNota}
+              />
+            </>
+          )
         ) : tab === "notas" ? (
-          <NotasTab invoices={invoices} onRefresh={load} />
+          <NotasTab invoices={invoices} onRefresh={load} onAbrir={setDrawerNota} />
         ) : (
           <ConfigTab cfg={cfg} set={set} saving={saving} onSave={saveConfig} onEnviarCertificado={enviarCertificado} />
         )}
       </div>
 
-      {emitindo && (
-        <EmitirModal cfg={cfg} item={emitindo === "avulsa" ? null : emitindo}
-          onClose={() => setEmitindo(null)}
-          onEmitted={() => { setEmitindo(null); load(); }} />
+      {/* Drawers */}
+      {drawerElegivel && (
+        <FiscalDrawerElegivel item={drawerElegivel} cfg={cfg}
+          onClose={() => setDrawerElegivel(null)}
+          onEmitted={() => { setDrawerElegivel(null); load(); }} />
       )}
-    </div>
-  );
-}
-
-// ─── Aba: Kanban de emissão ──────────────────────────────────────────────────
-// 3 colunas: Fazer nota (dados completos) | Faltando dados | Nota emitida.
-function EmitirKanban({ itens, invoices, etapaMinima, podeEmitir, onEmitir, onIrConfig }: {
-  itens: Elegivel[]; invoices: Invoice[]; etapaMinima: string | null; podeEmitir: boolean;
-  onEmitir: (i: Elegivel) => void; onIrConfig: () => void;
-}) {
-  if (!podeEmitir) {
-    return (
-      <div className="text-center py-16">
-        <ShieldCheck className="mx-auto mb-3 text-gray-300" size={40} />
-        <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
-          Pra emitir, complete a configuração (CNPJ, código IBGE da cidade) e envie o certificado A1.
-        </p>
-        <button onClick={onIrConfig} className="px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white rounded-lg text-sm font-semibold">
-          Ir pra Configuração
-        </button>
-      </div>
-    );
-  }
-
-  const prontos = itens.filter((i) => i.faltas.length === 0);
-  const incompletos = itens.filter((i) => i.faltas.length > 0);
-  const emitidas = invoices.filter((n) => n.status === "autorizada").slice(0, 40);
-
-  return (
-    <div>
-      {etapaMinima && (
-        <p className="text-[12px] text-gray-400 mb-3 flex items-center gap-1">
-          <Zap size={12} /> Ensaios entram no quadro quando chegam na etapa “{etapaMinima}” da Produção (mude na Configuração).
-        </p>
+      {drawerNota && (
+        <FiscalDrawerNota nota={drawerNota}
+          onClose={() => setDrawerNota(null)}
+          onExcluir={() => pedirExclusaoNota(drawerNota)} />
       )}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
-        <KanbanCol titulo="Fazer nota" cor="bg-gold-500" qtd={prontos.length}
-          vazio="Ninguém esperando nota agora.">
-          {prontos.map((it) => (
-            <CardElegivel key={it.job_id} it={it} onEmitir={() => onEmitir(it)} acao="Emitir" />
-          ))}
-        </KanbanCol>
-
-        <KanbanCol titulo="Faltando dados" cor="bg-amber-500" qtd={incompletos.length}
-          vazio="Nenhum cadastro incompleto. 👌">
-          {incompletos.map((it) => (
-            <CardElegivel key={it.job_id} it={it} onEmitir={() => onEmitir(it)} acao="Completar e emitir" />
-          ))}
-        </KanbanCol>
-
-        <KanbanCol titulo="Nota emitida" cor="bg-emerald-500" qtd={emitidas.length}
-          vazio="As notas emitidas aparecem aqui.">
-          {emitidas.map((n) => (
-            <div key={n.id} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl px-3 py-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="font-semibold text-gray-900 dark:text-white text-sm truncate">{n.tomador_nome || "—"}</div>
-                <div className="font-bold text-sm text-gray-900 dark:text-white shrink-0">{brl(n.valor)}</div>
-              </div>
-              <div className="flex items-center justify-between mt-1">
-                <div className="text-[11px] text-gray-400">
-                  {n.numero ? `Nº ${n.numero} · ` : ""}{new Date(n.emitida_em || n.created_at).toLocaleDateString("pt-BR")}
-                  {n.ambiente === "sandbox" && <span className="ml-1 px-1 py-0.5 rounded bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">teste</span>}
-                </div>
-                <div className="flex gap-1">
-                  <button onClick={() => baixarArquivo(`/api/fiscal/nfse/${n.id}/pdf`, `nfse-${n.numero || n.id}.pdf`)} title="PDF"
-                    className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500"><Download size={13} /></button>
-                  <button onClick={() => baixarArquivo(`/api/fiscal/nfse/${n.id}/xml`, `nfse-${n.numero || n.id}.xml`)} title="XML"
-                    className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500"><FileText size={13} /></button>
-                </div>
-              </div>
-            </div>
-          ))}
-        </KanbanCol>
-      </div>
-    </div>
-  );
-}
-
-function KanbanCol({ titulo, cor, qtd, vazio, children }: {
-  titulo: string; cor: string; qtd: number; vazio: string; children: React.ReactNode;
-}) {
-  return (
-    <div className="bg-gray-50 dark:bg-gray-950/60 border border-gray-200 dark:border-gray-800 rounded-2xl p-3">
-      <div className="flex items-center gap-2 mb-3 px-1">
-        <span className={`w-2.5 h-2.5 rounded-full ${cor}`} />
-        <span className="text-sm font-bold text-gray-800 dark:text-gray-100">{titulo}</span>
-        <span className="text-[11px] font-semibold text-gray-400 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full px-2 py-0.5">{qtd}</span>
-      </div>
-      <div className="space-y-2 min-h-[60px]">
-        {qtd === 0 ? <p className="text-[12px] text-gray-400 px-1 py-4 text-center">{vazio}</p> : children}
-      </div>
-    </div>
-  );
-}
-
-function CardElegivel({ it, onEmitir, acao }: { it: Elegivel; onEmitir: () => void; acao: string }) {
-  return (
-    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl px-3 py-2.5">
-      <div className="flex items-center justify-between gap-2">
-        <div className="font-semibold text-gray-900 dark:text-white text-sm truncate">{it.client_name || "(sem nome)"}</div>
-        <div className="font-bold text-sm text-gray-900 dark:text-white shrink-0">{it.valor > 0 ? brl(it.valor) : "—"}</div>
-      </div>
-      <div className="text-[11px] text-gray-400 truncate mt-0.5">
-        {it.job_name || "Ensaio"} · {dataBr(it.job_date)} · {it.stage_name}
-      </div>
-      {it.faltas.length > 0 && (
-        <div className="flex gap-1 mt-1.5">
-          {it.faltas.map((f) => (
-            <span key={f} className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 font-medium">
-              falta {f === "cpf" ? "CPF" : f}
-            </span>
-          ))}
-        </div>
+      {avulsaOpen && (
+        <AvulsaModal cfg={cfg} onClose={() => setAvulsaOpen(false)}
+          onEmitted={() => { setAvulsaOpen(false); load(); }} />
       )}
-      <button onClick={onEmitir}
-        className="mt-2 w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-gold-600 hover:bg-gold-700 text-white rounded-lg text-[13px] font-semibold">
-        <Receipt size={14} /> {acao}
-      </button>
+
+      <ConfirmModal
+        open={confirmacao.open}
+        title={confirmacao.title}
+        message={confirmacao.message}
+        confirmLabel="Excluir"
+        cancelLabel="Cancelar"
+        variant="danger"
+        onCancel={() => setConfirmacao(CONF_FECHADA)}
+        onConfirm={() => { const fn = confirmacao.onConfirm; setConfirmacao(CONF_FECHADA); fn(); }}
+      />
     </div>
   );
 }
 
-// ─── Modal: Emitir NFS-e ─────────────────────────────────────────────────────
-function EmitirModal({ cfg, item, onClose, onEmitted }: {
-  cfg: FiscalConfig; item: Elegivel | null; onClose: () => void; onEmitted: () => void;
-}) {
-  const descPadrao = () => {
-    const base = cfg.servico_discriminacao || "Serviço de fotografia — ensaio fotográfico";
-    return item?.job_name ? `${base} (${item.job_name})` : base;
-  };
-  const [nome, setNome] = useState(item?.client_name || "");
-  const [doc, setDoc] = useState(item?.tomador_doc || "");
-  const [email, setEmail] = useState(item?.tomador_email || "");
-  const [valor, setValor] = useState(item ? String(item.valor || "") : "");
-  const [descricao, setDescricao] = useState(descPadrao());
-  const [salvarCpf, setSalvarCpf] = useState(true);
+// ─── Modal: emissão avulsa (sem ensaio vinculado) ────────────────────────────
+function AvulsaModal({ cfg, onClose, onEmitted }: { cfg: FiscalConfig; onClose: () => void; onEmitted: () => void }) {
+  const [nome, setNome] = useState("");
+  const [doc, setDoc] = useState("");
+  const [email, setEmail] = useState("");
+  const [valor, setValor] = useState("");
+  const [descricao, setDescricao] = useState(cfg.servico_discriminacao || "Serviço de fotografia — ensaio fotográfico.");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const [okInfo, setOkInfo] = useState<{ id: string; chave?: string; numero?: string | null } | null>(null);
-
-  const cpfFaltava = !!item && item.faltas.includes("cpf");
+  const [okInfo, setOkInfo] = useState<{ id: string; numero?: string | null } | null>(null);
   const prod = cfg.environment === "production";
 
   const emitir = async () => {
     setErr(""); setBusy(true);
     try {
-      const r = await api<{ id: string; chave_acesso?: string; numero?: string | null }>("/api/fiscal/nfse", {
+      const r = await api<{ id: string; numero?: string | null }>("/api/fiscal/nfse", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          job_id: item?.job_id || null, client_id: item?.client_id || null,
-          valor: Number(valor), discriminacao: descricao,
-          salvar_cpf: cpfFaltava && salvarCpf,
-          tomador: { cpfCnpj: doc, razaoSocial: nome, email: email || undefined },
-        }),
+        body: JSON.stringify({ valor: Number(valor), discriminacao: descricao, tomador: { cpfCnpj: doc, razaoSocial: nome, email: email || undefined } }),
       });
-      setOkInfo({ id: r.id, chave: r.chave_acesso, numero: r.numero });
+      setOkInfo(r);
     } catch (e: any) { setErr(e?.message || "Erro ao emitir."); }
     finally { setBusy(false); }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40" onClick={busy ? undefined : onClose} />
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={busy ? undefined : onClose} />
       <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-md border border-gray-200 dark:border-gray-800 max-h-[90vh] overflow-y-auto">
         <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-800">
-          <h3 className="font-bold text-gray-900 dark:text-white flex items-center gap-2"><Receipt size={16} className="text-gold-500" /> Emitir NFS-e</h3>
+          <h3 className="font-bold text-gray-900 dark:text-white flex items-center gap-2"><Receipt size={16} className="text-gold-500" /> NFS-e avulsa</h3>
           <div className={`mt-2 text-[12px] px-2.5 py-1.5 rounded-lg font-medium ${prod ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" : "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"}`}>
-            {prod ? "PRODUÇÃO — nota fiscal REAL, vale na prefeitura." : "HOMOLOGAÇÃO — nota de teste, não vale na prefeitura."}
+            {prod ? "PRODUÇÃO — nota real." : "HOMOLOGAÇÃO — nota de teste."}
           </div>
         </div>
-
         {okInfo ? (
           <div className="p-5 space-y-3">
             <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 font-semibold">
-              <CheckCircle2 size={18} /> Nota emitida com sucesso!
+              <CheckCircle2 size={18} /> Nota emitida!{okInfo.numero ? ` Nº ${okInfo.numero}` : ""}
             </div>
-            {okInfo.numero && <p className="text-sm text-gray-600 dark:text-gray-300">Número: <b>{okInfo.numero}</b></p>}
-            {okInfo.chave && <p className="text-[11px] text-gray-400 break-all">Chave: {okInfo.chave}</p>}
-            <div className="flex gap-2 pt-1">
+            <div className="flex gap-2">
               <button onClick={() => baixarArquivo(`/api/fiscal/nfse/${okInfo.id}/pdf`, "nfse.pdf")}
-                className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-200">
-                <Download size={15} /> PDF
-              </button>
-              <button onClick={() => baixarArquivo(`/api/fiscal/nfse/${okInfo.id}/xml`, "nfse.xml")}
-                className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-200">
-                <FileText size={15} /> XML
-              </button>
-              <button onClick={onEmitted} className="ml-auto px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white rounded-lg text-sm font-semibold">Fechar</button>
+                className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 dark:border-gray-700 rounded-xl text-sm text-gray-700 dark:text-gray-200"><Download size={15} /> PDF</button>
+              <button onClick={onEmitted} className="ml-auto px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white rounded-xl text-sm font-semibold">Fechar</button>
             </div>
           </div>
         ) : (
@@ -418,25 +340,17 @@ function EmitirModal({ cfg, item, onClose, onEmitted }: {
             <div className="p-5 space-y-3">
               <Field label="Cliente (tomador)"><input className={inputCls} value={nome} onChange={(e) => setNome(e.target.value)} /></Field>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="CPF/CNPJ" hint={cpfFaltava ? "Estava faltando no cadastro." : undefined}>
-                  <input className={inputCls} value={doc} onChange={(e) => setDoc(e.target.value)} placeholder="000.000.000-00" />
-                </Field>
+                <Field label="CPF/CNPJ"><input className={inputCls} value={doc} onChange={(e) => setDoc(e.target.value)} /></Field>
                 <Field label="E-mail (opcional)"><input className={inputCls} value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
               </div>
-              {cpfFaltava && (
-                <label className="flex items-center gap-2 text-[12px] text-gray-600 dark:text-gray-300">
-                  <input type="checkbox" checked={salvarCpf} onChange={(e) => setSalvarCpf(e.target.checked)} />
-                  Salvar este CPF no cadastro do cliente
-                </label>
-              )}
               <Field label="Valor do serviço (R$)"><input type="number" step="0.01" className={inputCls} value={valor} onChange={(e) => setValor(e.target.value)} /></Field>
-              <Field label="Descrição na nota"><textarea className={inputCls} rows={2} value={descricao} onChange={(e) => setDescricao(e.target.value)} /></Field>
+              <Field label="Descrição"><textarea className={inputCls} rows={2} value={descricao} onChange={(e) => setDescricao(e.target.value)} /></Field>
               {err && <div className="text-sm text-rose-600 bg-rose-50 dark:bg-rose-900/20 px-3 py-2 rounded-lg">{err}</div>}
             </div>
             <div className="px-5 py-4 border-t border-gray-100 dark:border-gray-800 flex justify-end gap-2">
-              <button onClick={onClose} disabled={busy} className="px-4 py-2 text-sm text-gray-500">Cancelar</button>
+              <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500">Cancelar</button>
               <button onClick={emitir} disabled={busy || !nome || !doc || !(Number(valor) > 0)}
-                className="flex items-center gap-1.5 px-4 py-2 bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white rounded-lg text-sm font-semibold">
+                className="flex items-center gap-1.5 px-4 py-2 bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white rounded-xl text-sm font-semibold">
                 {busy ? <Loader2 size={16} className="animate-spin" /> : <Receipt size={16} />} Emitir
               </button>
             </div>
@@ -447,21 +361,13 @@ function EmitirModal({ cfg, item, onClose, onEmitted }: {
   );
 }
 
-// ─── Aba: Notas emitidas ─────────────────────────────────────────────────────
-function NotasTab({ invoices, onRefresh }: { invoices: Invoice[]; onRefresh: () => void }) {
+// ─── Aba: Histórico (todas as notas, inclusive erro/cancelada) ───────────────
+function NotasTab({ invoices, onRefresh, onAbrir }: { invoices: Invoice[]; onRefresh: () => void; onAbrir: (n: Invoice) => void }) {
   const [busy, setBusy] = useState<string | null>(null);
 
   const refreshOne = async (id: string) => {
     setBusy(id);
     try { await api(`/api/fiscal/nfse/${id}/refresh`, { method: "POST" }); onRefresh(); }
-    finally { setBusy(null); }
-  };
-  const cancelOne = async (id: string) => {
-    const justificativa = window.prompt("Motivo do cancelamento (mín. 15 caracteres):") || "";
-    if (justificativa.trim().length < 15) return;
-    setBusy(id);
-    try { await api(`/api/fiscal/nfse/${id}/cancelar`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ justificativa }) }); onRefresh(); }
-    catch (e: any) { alert(e?.message || "Erro ao cancelar."); }
     finally { setBusy(null); }
   };
 
@@ -485,7 +391,8 @@ function NotasTab({ invoices, onRefresh }: { invoices: Invoice[]; onRefresh: () 
             const Icon = meta.icon;
             const temDoc = inv.status === "autorizada" && (inv.chave_acesso || inv.pdf_url);
             return (
-              <tr key={inv.id} className="border-b border-gray-50 dark:border-gray-800/50">
+              <tr key={inv.id} onClick={() => inv.status === "autorizada" && onAbrir(inv)}
+                className={`border-b border-gray-50 dark:border-gray-800/50 ${inv.status === "autorizada" ? "cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/40" : ""}`}>
                 <td className="px-4 py-3">
                   <div className="font-medium text-gray-900 dark:text-white">{inv.tomador_nome || "—"}</div>
                   <div className="text-[11px] text-gray-400">{inv.tomador_doc}</div>
@@ -498,24 +405,20 @@ function NotasTab({ invoices, onRefresh }: { invoices: Invoice[]; onRefresh: () 
                   <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${meta.cls}`}><Icon size={11} /> {meta.label}</span>
                 </td>
                 <td className="px-4 py-3 text-gray-500 text-xs">{new Date(inv.emitida_em || inv.created_at).toLocaleDateString("pt-BR")}</td>
-                <td className="px-4 py-3">
+                <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                   <div className="flex items-center justify-end gap-1.5">
                     {temDoc && (
                       <>
-                        <button onClick={() => baixarArquivo(`/api/fiscal/nfse/${inv.id}/pdf`, `nfse-${inv.numero || inv.id}.pdf`)} title="PDF (DANFSe)"
+                        <button onClick={() => baixarArquivo(`/api/fiscal/nfse/${inv.id}/pdf`, `nfse-${inv.numero || inv.id}.pdf`)} title="PDF"
                           className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500"><Download size={15} /></button>
-                        <button onClick={() => baixarArquivo(`/api/fiscal/nfse/${inv.id}/xml`, `nfse-${inv.numero || inv.id}.xml`)} title="XML (documento fiscal)"
+                        <button onClick={() => baixarArquivo(`/api/fiscal/nfse/${inv.id}/xml`, `nfse-${inv.numero || inv.id}.xml`)} title="XML"
                           className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500"><FileText size={15} /></button>
                       </>
                     )}
-                    <button onClick={() => refreshOne(inv.id)} disabled={busy === inv.id} title="Atualizar status"
+                    <button onClick={() => refreshOne(inv.id)} disabled={busy === inv.id} title="Atualizar"
                       className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500">
                       <RefreshCw size={15} className={busy === inv.id ? "animate-spin" : ""} />
                     </button>
-                    {inv.status === "autorizada" && (
-                      <button onClick={() => cancelOne(inv.id)} disabled={busy === inv.id} title="Cancelar nota"
-                        className="p-1.5 rounded hover:bg-rose-50 dark:hover:bg-rose-900/20 text-rose-500"><XCircle size={15} /></button>
-                    )}
                   </div>
                 </td>
               </tr>
@@ -538,7 +441,6 @@ function ConfigTab({ cfg, set, saving, onSave, onEnviarCertificado }: {
   const [avancado, setAvancado] = useState(false);
 
   useEffect(() => {
-    // Etapas da Produção (na ordem do kanban) pro seletor "liberar nota a partir de".
     Promise.all([
       api<any[]>("/api/production/processes").catch(() => []),
       api<any[]>("/api/production/stages-v2").catch(() => []),
@@ -553,7 +455,6 @@ function ConfigTab({ cfg, set, saving, onSave, onEnviarCertificado }: {
 
   return (
     <div className="max-w-3xl space-y-6">
-      {/* Status */}
       <div className="grid grid-cols-2 gap-3">
         <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${cfg.cnpj && cfg.codigo_cidade ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-900/20 dark:text-emerald-300" : "border-gray-200 dark:border-gray-700 text-gray-500"}`}>
           <Building2 size={16} /> Dados do estúdio {cfg.cnpj && cfg.codigo_cidade ? "✓" : "—"}
@@ -563,7 +464,6 @@ function ConfigTab({ cfg, set, saving, onSave, onEnviarCertificado }: {
         </div>
       </div>
 
-      {/* Ambiente */}
       <Section title="Ambiente">
         <div className="flex gap-2">
           {(["sandbox", "production"] as const).map((env) => (
@@ -576,10 +476,9 @@ function ConfigTab({ cfg, set, saving, onSave, onEnviarCertificado }: {
         <p className="text-[11px] text-gray-400 mt-1">Comece em homologação. Depois de 1 nota de teste OK, troque pra produção e salve.</p>
       </Section>
 
-      {/* Quando liberar a nota */}
       <Section title="Quando liberar a nota">
         <Field label="Liberar emissão a partir da etapa (Produção)"
-          hint="Ensaios que chegarem nesta etapa (ou depois dela) entram na fila 'Prontas pra emitir'.">
+          hint="Ensaios que chegarem nesta etapa (ou depois dela) entram no quadro.">
           <select className={inputCls} value={cfg.emit_stage_id || ""} onChange={(e) => set("emit_stage_id", e.target.value || null)}>
             <option value="">— 2ª etapa do kanban (padrão) —</option>
             {etapas.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
@@ -587,7 +486,6 @@ function ConfigTab({ cfg, set, saving, onSave, onEnviarCertificado }: {
         </Field>
       </Section>
 
-      {/* Emitente */}
       <Section title="Dados do estúdio (emitente)">
         <div className="grid grid-cols-2 gap-3">
           <Field label="CNPJ"><input className={inputCls} value={cfg.cnpj || ""} onChange={(e) => set("cnpj", e.target.value)} /></Field>
@@ -606,7 +504,6 @@ function ConfigTab({ cfg, set, saving, onSave, onEnviarCertificado }: {
         </label>
       </Section>
 
-      {/* Serviço */}
       <Section title="Serviço (o que sai na nota)">
         <Field label="Descrição padrão do serviço">
           <textarea className={inputCls} rows={2} value={cfg.servico_discriminacao || ""} onChange={(e) => set("servico_discriminacao", e.target.value)} placeholder="Ex.: Serviço de fotografia — ensaio fotográfico." />
@@ -615,20 +512,19 @@ function ConfigTab({ cfg, set, saving, onSave, onEnviarCertificado }: {
           {avancado ? "Esconder" : "Mostrar"} campos avançados
         </button>
         {avancado && (
-          <div className="grid grid-cols-3 gap-3 mt-2">
-            <Field label="Cód. tributação nacional" hint="Fotografia = 130301"><input className={inputCls} value={cfg.ctrib_nac || ""} onChange={(e) => set("ctrib_nac", e.target.value)} placeholder="130301" /></Field>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
+            <Field label="Cód. trib. nacional" hint="Fotografia = 130301"><input className={inputCls} value={cfg.ctrib_nac || ""} onChange={(e) => set("ctrib_nac", e.target.value)} placeholder="130301" /></Field>
             <Field label="Cód. NBS" hint="Fotografia = 114082000"><input className={inputCls} value={cfg.cnbs || ""} onChange={(e) => set("cnbs", e.target.value)} placeholder="114082000" /></Field>
-            <Field label="% tributos SN" hint="Informativo na nota"><input type="number" step="0.01" className={inputCls} value={cfg.ptottrib_sn ?? 2} onChange={(e) => set("ptottrib_sn", Number(e.target.value))} /></Field>
+            <Field label="% tributos SN" hint="Informativo"><input type="number" step="0.01" className={inputCls} value={cfg.ptottrib_sn ?? 2} onChange={(e) => set("ptottrib_sn", Number(e.target.value))} /></Field>
             <Field label="Série da DPS" hint="Não mude sem precisar"><input className={inputCls} value={cfg.dps_serie || "00010"} onChange={(e) => set("dps_serie", e.target.value)} /></Field>
           </div>
         )}
       </Section>
 
-      <button onClick={onSave} disabled={saving} className="flex items-center gap-1.5 px-4 py-2 bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white rounded-lg text-sm font-semibold">
+      <button onClick={onSave} disabled={saving} className="flex items-center gap-1.5 px-4 py-2 bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white rounded-xl text-sm font-semibold">
         <Save size={16} /> Salvar configuração
       </button>
 
-      {/* Certificado */}
       <Section title="Certificado digital A1">
         <p className="text-[12px] text-gray-500 dark:text-gray-400 mb-2">
           O arquivo .pfx/.p12 fica guardado criptografado e a senha nunca aparece pra ninguém. É ele que assina as notas.
@@ -641,7 +537,7 @@ function ConfigTab({ cfg, set, saving, onSave, onEnviarCertificado }: {
             <input type="password" className={inputCls} value={senha} onChange={(e) => setSenha(e.target.value)} />
           </Field>
           <button onClick={() => pfx && senha && onEnviarCertificado(pfx, senha)} disabled={saving || !pfx || !senha}
-            className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-200 disabled:opacity-50">
+            className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-200 disabled:opacity-50">
             <Upload size={16} /> Enviar certificado
           </button>
         </div>
