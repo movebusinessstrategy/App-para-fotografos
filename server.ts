@@ -18,7 +18,6 @@ import { encryptIfNeeded, decryptIfNeeded, isEncryptionConfigured } from './lib/
 import { signGallerySession, verifyGallerySession, isGallerySessionConfigured, type GallerySessionPayload } from './lib/gallery-session.js';
 import { signAlbumSession, verifyAlbumSession, type AlbumSessionPayload } from './lib/album-session.js';
 import bcrypt from 'bcryptjs';
-import crypto from 'crypto';
 
 // Não bloqueia o boot — roda em paralelo
 const sentryReady = initSentry();
@@ -6259,14 +6258,17 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const now = new Date();
     const fromQ = String(req.query.from || '').trim();
     const toQ = String(req.query.to || '').trim();
+    const todayYMD = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     let dInicio: string, dFimIncl: string;
     if (okYMD(fromQ) && okYMD(toQ)) {
       dInicio = fromQ <= toQ ? fromQ : toQ;
       dFimIncl = fromQ <= toQ ? toQ : fromQ;
     } else {
-      dInicio = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1)).toISOString().slice(0, 10);
-      dFimIncl = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 0)).toISOString().slice(0, 10);
+      dInicio = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+      dFimIncl = todayYMD;
     }
+    if (dFimIncl > todayYMD) dFimIncl = todayYMD;
+    if (dInicio > dFimIncl) dInicio = dFimIncl;
     const dayMs = 86400000;
     const startMs = Date.parse(`${dInicio}T00:00:00Z`);
     const endMs = Date.parse(`${dFimIncl}T00:00:00Z`);
@@ -6281,7 +6283,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     let deals: any[] = [];
     if (wonStageIds.length) {
       const { data } = await supabase.from('deals')
-        .select('id, assigned_to, value, converted_at, converted_job_id')
+        .select('id, assigned_to, value, converted_at, converted_job_id, title, contact_name')
         .eq('user_id', userId)
         .in('stage', wonStageIds)
         .gte('converted_at', histStart)
@@ -6302,6 +6304,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       });
     }
     const dOf = (d: any) => String(d.converted_at || '').slice(0, 10);
+    deals = deals.filter((d) => dOf(d) <= todayYMD);
     const inWin = (d: any, a: string, b: string) => { const x = dOf(d); return x >= a && x <= b; };
     const periodo = deals.filter((d) => inWin(d, dInicio, dFimIncl));
     const anterior = deals.filter((d) => inWin(d, prevStart, prevEnd));
@@ -6330,7 +6333,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       e.total += (Number(i.catalog_value) || 0) * (Number(i.quantidade) || 1);
       champMap.set(k, e);
     });
-    const campeoes = [...champMap.values()].sort((a, b) => b.total - a.total).slice(0, 6);
+    const campeoes = [...champMap.values()]
+      .sort((a, b) => (b.qtd - a.qtd) || (b.total - a.total))
+      .slice(0, 6);
 
     // Ranking de vendedores com META (migration 042: meta_venda por membro)
     const { data: membersData } = await supabase.from('team_members').select('*').eq('owner_user_id', userId);
@@ -6355,9 +6360,34 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       r.vendas += 1;
     }
     const ranking = [...rkMap.values()]
-      .filter((r) => r.vendas > 0 || r.meta > 0)
       .map((r) => ({ ...r, pct: r.meta > 0 ? Math.round((r.realizado / r.meta) * 100) : null }))
       .sort((a, b) => b.realizado - a.realizado);
+
+    const itemNamesByDeal = new Map<number, string[]>();
+    for (const item of itemsPeriodo) {
+      const name = String(item.catalog_name || '').trim();
+      if (!name) continue;
+      const names = itemNamesByDeal.get(item.deal_id) || [];
+      if (!names.includes(name)) names.push(name);
+      itemNamesByDeal.set(item.deal_id, names);
+    }
+    const recentSales = [...periodo]
+      .sort((a, b) => String(b.converted_at || '').localeCompare(String(a.converted_at || '')))
+      .slice(0, 8)
+      .map((deal) => {
+        const member = deal.assigned_to ? memberById.get(deal.assigned_to) : null;
+        const itemNames = itemNamesByDeal.get(deal.id) || [];
+        return {
+          id: deal.id,
+          title: itemNames.length > 0 ? itemNames.join(' + ') : String(deal.title || 'Ensaio'),
+          client_name: deal.contact_name || null,
+          seller_id: member?.id || null,
+          seller_name: member?.name || 'Sem vendedor',
+          seller_color: member?.color || null,
+          value: Number(deal.value) || 0,
+          converted_at: deal.converted_at,
+        };
+      });
 
     // Séries mensais (últimos 6 meses, incluindo o atual) + meta do time
     const metaTime = members.filter((m) => m.is_active !== false).reduce((x, m) => x + (Number(m.meta_venda) || 0), 0);
@@ -6398,6 +6428,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       ranking,
       mensal,
       campeoes,
+      recentSales,
     });
   });
 
@@ -20799,13 +20830,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const now = new Date();
     const todayStr = toDateOnly(now);
     const monthStart = toDateOnly(new Date(now.getFullYear(), now.getMonth(), 1));
-    const monthEnd = toDateOnly(new Date(now.getFullYear(), now.getMonth() + 1, 0));
     const next7DaysEnd = addDaysOnly(todayStr, 7);
     const futureLimit = toDateOnly(new Date(now.getFullYear(), now.getMonth() + 3, 0));
 
     let periodStart = parseDateOnlyParam(req.query.from) || monthStart;
-    let periodEnd = parseDateOnlyParam(req.query.to) || monthEnd;
+    let periodEnd = parseDateOnlyParam(req.query.to) || todayStr;
     if (periodStart > periodEnd) [periodStart, periodEnd] = [periodEnd, periodStart];
+    if (periodEnd > todayStr) periodEnd = todayStr;
+    if (periodStart > periodEnd) periodStart = periodEnd;
 
     const periodDays = Math.max(
       1,
@@ -20854,22 +20886,33 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const jobIds = jobs.map((j: any) => j.id);
       const amountPaidByJob = new Map<number, number>();
       const paymentsByDate = new Map<string, number>();
+      const signalPaymentsByDate = new Map<string, number>();
       if (jobIds.length > 0) {
         const { data: pmts } = await adminClient
           .from('job_payments')
-          .select('job_id, amount, payment_date')
+          .select('job_id, amount, payment_date, description')
           .in('job_id', jobIds);
         (pmts || []).forEach((p: any) => {
           amountPaidByJob.set(p.job_id, (amountPaidByJob.get(p.job_id) || 0) + (p.amount || 0));
           if (p.payment_date) {
             const paymentDay = String(p.payment_date).slice(0, 10);
             paymentsByDate.set(paymentDay, (paymentsByDate.get(paymentDay) || 0) + (p.amount || 0));
+            if (/sinal/i.test(String(p.description || ''))) {
+              signalPaymentsByDate.set(paymentDay, (signalPaymentsByDate.get(paymentDay) || 0) + (p.amount || 0));
+            }
           }
         });
       }
       const sumPaymentsBetween = (start: string, end: string) => {
         let total = 0;
         for (const [day, value] of paymentsByDate.entries()) {
+          if (day >= start && day <= end) total += value;
+        }
+        return total;
+      };
+      const sumSignalsBetween = (start: string, end: string) => {
+        let total = 0;
+        for (const [day, value] of signalPaymentsByDate.entries()) {
           if (day >= start && day <= end) total += value;
         }
         return total;
@@ -21067,6 +21110,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       // ── FINANCE ────────────────────────────────────────────────────────────
       const revenueThisMonth = sumPaymentsBetween(periodStart, periodEnd);
       const revenueLastMonth = sumPaymentsBetween(previousStart, previousEnd);
+      const signalReceivedThisPeriod = sumSignalsBetween(periodStart, periodEnd);
+      const wonDealsThisPeriod = dealsByStage.filter((stage: any) => stage.is_won);
+      const soldThisPeriod = wonDealsThisPeriod.reduce(
+        (total: number, stage: any) => total + Number(stage.total_value || 0), 0);
+      const soldCountThisPeriod = wonDealsThisPeriod.reduce(
+        (total: number, stage: any) => total + Number(stage.count || 0), 0);
       const futureRevenue = jobs
         .filter((j: any) => j.job_date >= todayStr && j.job_date <= futureLimit && j.status !== 'cancelled')
         .reduce((acc: number, j: any) => {
@@ -21090,6 +21139,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         (acc: number, j: any) => acc + Math.max((Number(j.amount) || 0) - (amountPaidByJob.get(j.id) || 0), 0), 0);
       const sinalRecebidoOpen = openJobs.reduce(
         (acc: number, j: any) => acc + Math.max(amountPaidByJob.get(j.id) || 0, 0), 0);
+      const contractedOpenValue = sinalRecebidoOpen + toReceiveOpen;
 
       // SAÍDA do período: despesas pagas (fin_despesas status='pago') por
       // data_pagamento dentro do período. Fim exclusivo (dia seguinte) cobre o
@@ -21167,17 +21217,23 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         // só se o dono ligou). Sem ela, zera o finance — a UI também esconde os
         // cards, mas aqui é a trava de rede.
         finance: canSeeFinance ? {
+          soldThisPeriod,
+          soldCountThisPeriod,
           revenueThisMonth,
           revenueLastMonth,
+          signalReceivedThisPeriod,
           futureRevenue,
           toReceiveOpen,
           sinalRecebidoOpen,
+          contractedOpenValue,
           openJobsCount: openJobs.length,
           expensesThisMonth,
           dailyRevenue,
         } : {
+          soldThisPeriod: 0, soldCountThisPeriod: 0,
           revenueThisMonth: 0, revenueLastMonth: 0, futureRevenue: 0,
-          toReceiveOpen: 0, sinalRecebidoOpen: 0, openJobsCount: 0,
+          signalReceivedThisPeriod: 0, toReceiveOpen: 0, sinalRecebidoOpen: 0,
+          contractedOpenValue: 0, openJobsCount: 0,
           expensesThisMonth: 0, dailyRevenue: [],
         },
       });

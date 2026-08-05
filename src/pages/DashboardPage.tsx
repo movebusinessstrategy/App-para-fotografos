@@ -12,7 +12,7 @@ import {
 import {
   AlertTriangle, ArrowRight, Calendar as CalendarIcon, Camera, Check, ChevronLeft, ChevronRight,
   DollarSign, Eye, EyeOff, FileClock, FileText, Lightbulb, PieChart as PieIcon,
-  Sparkles, Target, TrendingDown, TrendingUp, Trophy, Wallet, X,
+  Sparkles, Target, TrendingDown, TrendingUp, Trophy, UserRound, Users, Wallet, X,
 } from "lucide-react";
 
 import { motion, animate } from "motion/react";
@@ -71,15 +71,45 @@ interface Analytics {
     list: Array<{ id: number; client_id: number; client_name: string | null; type: string; suggested_date: string; priority: 'urgent' | 'active' | 'future' }>;
   };
   finance: {
+    soldThisPeriod: number;
+    soldCountThisPeriod: number;
     revenueThisMonth: number;
     revenueLastMonth: number;
+    signalReceivedThisPeriod: number;
     futureRevenue: number;
     toReceiveOpen: number;
     sinalRecebidoOpen: number;
+    contractedOpenValue: number;
     openJobsCount: number;
     expensesThisMonth: number;
     dailyRevenue: Array<{ date: string; total: number }>;
   };
+}
+
+interface SalesAnalytics {
+  period: { from: string; to: string };
+  metaTime: number;
+  mensal: Array<{ month: string; meta: number; realizado: number; vendas: number; ticket: number }>;
+  ranking: Array<{
+    id: string | null;
+    nome: string;
+    cor: string | null;
+    meta: number;
+    realizado: number;
+    vendas: number;
+    pct: number | null;
+  }>;
+  campeoes: Array<{ nome: string; qtd: number; total: number }>;
+  recentSales: Array<{
+    id: number;
+    title: string;
+    client_name: string | null;
+    seller_id: string | null;
+    seller_name: string;
+    seller_color: string | null;
+    value: number;
+    converted_at: string;
+  }>;
 }
 
 type DatePreset = "month" | "7d" | "15d" | "30d" | "custom";
@@ -113,7 +143,15 @@ function buildPresetRange(preset: DatePreset): DashboardDateRange {
   if (preset === "7d") return { from: toDateOnly(subDays(today, 6)), to: toDateOnly(today) };
   if (preset === "15d") return { from: toDateOnly(subDays(today, 14)), to: toDateOnly(today) };
   if (preset === "30d") return { from: toDateOnly(subDays(today, 29)), to: toDateOnly(today) };
-  return { from: toDateOnly(startOfMonth(today)), to: toDateOnly(endOfMonth(today)) };
+  return { from: toDateOnly(startOfMonth(today)), to: toDateOnly(today) };
+}
+
+function clampRangeToToday(range: DashboardDateRange): DashboardDateRange {
+  const today = toDateOnly(new Date());
+  const ordered = range.from <= range.to ? range : { from: range.to, to: range.from };
+  const to = ordered.to > today ? today : ordered.to;
+  const from = ordered.from > to ? to : ordered.from;
+  return { from, to };
 }
 
 function formatRangeLabel(range: DashboardDateRange) {
@@ -143,12 +181,12 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState(false);
-  const [vendasA, setVendasA] = useState<any | null>(null); // /api/vendas/analytics (meta + ticket 6m)
+  const [vendasA, setVendasA] = useState<SalesAnalytics | null>(null);
   const [hideValuesPref, setHideValues] = useState(() => localStorage.getItem("dashboard_hide_values") === "true");
   // Sem permissão de Financeiro: valores SEMPRE mascarados (sobra funil, hot deals).
   const hideValues = !canSeeFinance || hideValuesPref;
-  const [datePreset, setDatePreset] = useState<DatePreset>("month");
-  const [dateRange, setDateRange] = useState<DashboardDateRange>(() => buildPresetRange("month"));
+  const [datePreset, setDatePreset] = useState<DatePreset>("30d");
+  const [dateRange, setDateRange] = useState<DashboardDateRange>(() => buildPresetRange("30d"));
   const fetchSeq = useRef(0);
 
   const toggleHideValues = () => {
@@ -167,23 +205,19 @@ export default function DashboardPage() {
     setRefreshing(!fullPageLoading);
     try {
       const qs = new URLSearchParams({ from: dateRange.from, to: dateRange.to });
-      const [aRes, oRes, cRes] = await Promise.all([
+      const [aRes, oRes, cRes, salesRes] = await Promise.all([
         authFetch(`/api/dashboard/analytics?${qs.toString()}`),
         authFetch("/api/opportunities"),
         authFetch("/api/clients"),
+        canSeeFinance ? authFetch(`/api/vendas/analytics?${qs.toString()}`) : Promise.resolve(null),
       ]);
       if (fetchSeq.current !== seq) return;
       if (aRes.ok) { setAnalytics(await aRes.json()); setLoadError(false); }
       else setLoadError(true); // API com erro → mostra retry, não spinner eterno
       if (oRes.ok) setOpportunities(await oRes.json());
       if (cRes.ok) setClients(await cRes.json());
-      // Central de vendas (meta vs realizado + ticket médio, 6 meses) — best-effort
-      if (canSeeFinance) {
-        authFetch(`/api/vendas/analytics?${qs.toString()}`)
-          .then(r => (r.ok ? r.json() : null))
-          .then(d => { if (fetchSeq.current === seq && d) setVendasA(d); })
-          .catch(() => {});
-      }
+      if (salesRes?.ok) setVendasA(await salesRes.json());
+      else if (canSeeFinance) setVendasA(null);
     } catch (err) {
       console.error(err);
       if (fetchSeq.current === seq) setLoadError(true);
@@ -204,7 +238,7 @@ export default function DashboardPage() {
 
   const applyCustomRange = (range: DashboardDateRange) => {
     setDatePreset("custom");
-    setDateRange(range);
+    setDateRange(clampRangeToToday(range));
   };
 
   const removeOpportunityLocally = (oppId: number) =>
@@ -260,26 +294,20 @@ export default function DashboardPage() {
   const periodDelta = a.finance.revenueLastMonth > 0
     ? Math.round(((a.finance.revenueThisMonth - a.finance.revenueLastMonth) / a.finance.revenueLastMonth) * 100)
     : null;
-  // ── Visão de diretoria (derivados) ────────────────────────────────────────
-  const lucro = a.finance.revenueThisMonth - a.finance.expensesThisMonth;
-  const margem = a.finance.revenueThisMonth > 0 ? (lucro / a.finance.revenueThisMonth) * 100 : 0;
-  const wonAgg = a.sales.byStage.filter(s => s.is_won);
-  const lostAgg = a.sales.byStage.filter(s => s.is_final && !s.is_won);
-  const wonCount = wonAgg.reduce((x, s) => x + s.count, 0);
-  const wonValue = wonAgg.reduce((x, s) => x + s.total_value, 0);
-  const lostCount = lostAgg.reduce((x, s) => x + s.count, 0);
-  const convPeriodo = wonCount + lostCount > 0 ? Math.round((wonCount / (wonCount + lostCount)) * 100) : null;
-  const insights = computeInsights(a, periodDelta, canSeeFinance, hideValues);
-
   return (
-    <div className="space-y-3">
+    <div className="space-y-5 pb-8">
       {/* Header */}
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-gray-900 dark:text-white">
-            Visão geral
+          <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-gold-600 dark:text-gold-400 mb-1.5">
+            Inteligência do estúdio
+          </p>
+          <h1 className="text-2xl font-semibold tracking-[-0.03em] text-gray-950 dark:text-white">
+            Dashboard financeiro & comercial
           </h1>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 capitalize">{periodLabel}</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1.5 capitalize">
+            O que foi vendido, o que entrou no caixa e o que ainda falta receber · {periodLabel}
+          </p>
           {refreshing && (
             <p className="text-[11px] text-gold-600 dark:text-gold-400 mt-1">Atualizando dados...</p>
           )}
@@ -303,39 +331,20 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ══ O PULSO: uma faixa única, sem 4 caixinhas ══ */}
-      <motion.div
-        initial={{ opacity: 0, y: 14 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-        className="rounded-3xl bg-white/70 dark:bg-white/[0.045] backdrop-blur-sm shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:shadow-none overflow-hidden"
-      >
-        <div className="grid grid-cols-2 xl:grid-cols-4 divide-y xl:divide-y-0 xl:divide-x divide-black/5 dark:divide-white/[0.06]">
-          {canSeeFinance ? (<>
-            <KpiCell label="Faturamento" num={a.finance.revenueThisMonth} render={(n) => formatBRL(n, hideValues)} deltaPct={periodDelta} spark={a.finance.dailyRevenue} />
-            <KpiCell label="Lucro" num={lucro} render={(n) => formatBRL(n, hideValues)} hint={hideValues ? 'Entrada − Saída' : `Margem de ${margem.toFixed(0)}%`} negative={lucro < 0} />
-            <KpiCell label="A receber" num={a.finance.toReceiveOpen} render={(n) => formatBRL(n, hideValues)} hint={`${a.finance.openJobsCount} ensaio${a.finance.openJobsCount === 1 ? '' : 's'} · sinal ${formatBRLShort(a.finance.sinalRecebidoOpen, hideValues)} pago`} />
-            <KpiCell label="Vendas fechadas" num={wonCount} render={(n) => String(Math.round(n))} hint={`${formatBRLShort(wonValue, hideValues)}${convPeriodo !== null ? ` · ${convPeriodo}% de conversão` : ''}`} spark={vendasA?.daily} sparkKey="count" />
-          </>) : (<>
-            <KpiCell label="Ensaios no período" num={a.jobs.thisMonth.total} render={(n) => String(Math.round(n))} hint={`${a.jobs.thisMonth.completed} feitos · ${a.jobs.thisMonth.scheduled} agendados`} />
-            <KpiCell label="Funil ativo" num={a.sales.activeCount} render={(n) => String(Math.round(n))} hint="leads em aberto" />
-            <KpiCell label="Pendências" num={a.attention} render={(n) => String(Math.round(n))} hint="atrasos, contratos e seleção" />
-            <KpiCell label="Hoje" num={a.jobs.today.count} render={(n) => String(Math.round(n))} hint={a.jobs.today.count === 0 ? 'sem ensaios hoje' : 'ensaios agendados'} />
-          </>)}
-        </div>
-      </motion.div>
+      <ExecutiveOverview
+        analytics={a}
+        canSeeFinance={canSeeFinance}
+        hideValues={hideValues}
+        periodDelta={periodDelta}
+        onNavigate={navigate}
+      />
 
-      {canSeeFinance && (
-        <div className="flex flex-wrap gap-2">
-          <MiniStat label="Ensaios" value={String(a.jobs.thisMonth.total)} onClick={() => navigate('/jobs')} />
-          <MiniStat label="Funil ativo" value={`${a.sales.activeCount} · ${formatBRLShort(a.sales.activeValue, hideValues)}`} onClick={() => navigate('/vendas')} />
-          <MiniStat label="Hoje" value={a.jobs.today.count === 0 ? 'livre' : `${a.jobs.today.count} ensaio${a.jobs.today.count === 1 ? '' : 's'}`} onClick={() => navigate('/calendar')} />
-          <MiniStat label="Pendências" value={String(a.attention)} tone={a.attention > 0 ? 'warn' : 'ok'} onClick={() => navigate('/jobs')} />
-        </div>
-      )}
-
-      {/* ══ Evolução (grande, com linhas-guia) + Precisa de você ══ */}
-      <div className="grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-3">
+      <DashboardSectionHeading
+        eyebrow="Leitura do período"
+        title="Caixa e pontos de atenção"
+        description="A linha termina hoje e usa exatamente o intervalo escolhido no filtro."
+      />
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_380px] gap-4">
         {canSeeFinance ? (
           <Card>
             <div className="flex items-start justify-between mb-1">
@@ -366,6 +375,8 @@ export default function DashboardPage() {
                   <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => hideValues ? '•••' : `R$ ${Number(v) >= 1000 ? `${(Number(v) / 1000).toFixed(0)}k` : Number(v).toFixed(0)}`} width={50} />
                   <Tooltip
                     contentStyle={{ background: 'rgba(20, 20, 20, 0.95)', border: '1px solid rgba(241, 198, 101, 0.3)', borderRadius: 12, color: '#fff', fontSize: 12 }}
+                    labelStyle={{ color: '#f9fafb', fontWeight: 700 }}
+                    itemStyle={{ color: '#f9fafb' }}
                     formatter={(v: any) => hideValues ? ['•••', 'Receita'] : [`R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, 'Receita']}
                     labelFormatter={(d) => format(parseISO(String(d)), "dd 'de' MMMM", { locale: ptBR })}
                   />
@@ -397,14 +408,83 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {/* ══ Meta vs Realizado + Ticket médio (6 meses) — os gráficos da referência ══ */}
+      {canSeeFinance && vendasA && (
+        <>
+          <DashboardSectionHeading
+            eyebrow="Performance comercial"
+            title="Quem vendeu e o que foi vendido"
+            description="Ranking individual, ensaio campeão e os fechamentos do período com o vendedor responsável."
+          />
+          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(340px,0.85fr)] gap-4">
+            <Card>
+              <div className="flex items-start justify-between gap-3 mb-4">
+                <div>
+                  <CardHeader icon={<Users size={16} />} title="Vendas por vendedor" inline />
+                  <p className="mt-1.5 text-[11px] text-gray-500 dark:text-gray-400">Valor vendido e quantidade de contratos no período.</p>
+                </div>
+                <button onClick={() => navigate('/finance')} className="text-[10px] uppercase tracking-wider text-gold-600 dark:text-gold-400 hover:text-gold-500 inline-flex items-center gap-1">
+                  Relatório <ArrowRight size={10} />
+                </button>
+              </div>
+              <SellerLeaderboard ranking={vendasA.ranking} hideValues={hideValues} />
+            </Card>
+
+            <Card>
+              <CardHeader icon={<Trophy size={16} />} title="Ensaios mais vendidos" inline />
+              <p className="mt-1.5 text-[11px] text-gray-500 dark:text-gray-400">Ranking por quantidade de itens fechados no período.</p>
+              <BestSellingShoots champions={vendasA.campeoes} hideValues={hideValues} />
+            </Card>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(340px,0.85fr)] gap-4">
+            <Card>
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <CardHeader icon={<Camera size={16} />} title="Vendas fechadas" inline />
+                <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                  {(vendasA.recentSales || []).length} exibidas
+                </span>
+              </div>
+              <RecentSalesList sales={vendasA.recentSales || []} hideValues={hideValues} />
+            </Card>
+
+            <Card>
+              <div className="flex items-center justify-between mb-3">
+                <CardHeader icon={<CalendarIcon size={16} />} title={a.jobs.today.count > 0 ? "Agenda de hoje" : "Próximos ensaios"} inline />
+                <button onClick={() => navigate("/calendar")} className="text-[10px] uppercase tracking-wider text-gold-600 dark:text-gold-400 hover:text-gold-500 inline-flex items-center gap-1">
+                  Agenda <ArrowRight size={10} />
+                </button>
+              </div>
+              <AgendaList a={a} hideValues={hideValues} />
+            </Card>
+          </div>
+        </>
+      )}
+
+      {!canSeeFinance && (
+        <Card>
+          <div className="flex items-center justify-between mb-3">
+            <CardHeader icon={<CalendarIcon size={16} />} title={a.jobs.today.count > 0 ? "Agenda de hoje" : "Próximos ensaios"} inline />
+            <button onClick={() => navigate("/calendar")} className="text-[10px] uppercase tracking-wider text-gold-600 dark:text-gold-400 hover:text-gold-500 inline-flex items-center gap-1">
+              Agenda <ArrowRight size={10} />
+            </button>
+          </div>
+          <AgendaList a={a} hideValues={hideValues} />
+        </Card>
+      )}
+
       {canSeeFinance && vendasA?.mensal?.length > 0 && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <>
+          <DashboardSectionHeading
+            eyebrow="Tendência"
+            title="Metas e qualidade das vendas"
+            description="Histórico de seis meses para comparar ritmo de venda e ticket médio."
+          />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <Card>
             <div className="flex items-center justify-between mb-2">
-              <p className="text-[11px] uppercase tracking-widest text-gray-400 dark:text-gray-500 font-semibold">Meta vs realizado · 6 meses</p>
+              <p className="text-[11px] uppercase tracking-widest text-gray-600 dark:text-gray-300 font-semibold">Meta vs realizado · 6 meses</p>
               {Number(vendasA.metaTime) > 0 && (
-                <span className="flex items-center gap-3 text-[10px] text-gray-400 dark:text-gray-500">
+                <span className="flex items-center gap-3 text-[10px] text-gray-500 dark:text-gray-300">
                   <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-gray-300 dark:bg-gray-600" /> Meta</span>
                   <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-emerald-500" /> Realizado</span>
                 </span>
@@ -416,43 +496,34 @@ export default function DashboardPage() {
             )}
           </Card>
           <Card>
-            <p className="text-[11px] uppercase tracking-widest text-gray-400 dark:text-gray-500 font-semibold mb-2">Ticket médio · 6 meses</p>
+            <p className="text-[11px] uppercase tracking-widest text-gray-600 dark:text-gray-300 font-semibold mb-2">Ticket médio · 6 meses</p>
             <TicketLine mensal={vendasA.mensal} hideValues={hideValues} />
           </Card>
-        </div>
+          </div>
+        </>
       )}
 
-      {/* ══ Funil + Onde o dinheiro nasce + Agenda ══ */}
-      <div className={cn("grid grid-cols-1 gap-3", canSeeFinance ? "lg:grid-cols-3" : "lg:grid-cols-2")}>
-        {canSeeFinance && (
+      {canSeeFinance && (
+        <>
+          <DashboardSectionHeading
+            eyebrow="Funil"
+            title="Jornada comercial"
+            description="A carteira aberta agora fica separada dos ganhos e perdas do período."
+          />
           <Card>
             <div className="flex items-center justify-between mb-4">
-              <CardHeader icon={<Target size={16} />} title="Funil de vendas" inline />
+              <div>
+                <CardHeader icon={<Target size={16} />} title="Jornada comercial" inline />
+                <p className="mt-1.5 text-[11px] text-gray-500 dark:text-gray-400">A carteira aberta agora e os fechamentos do período aparecem separados.</p>
+              </div>
               <button onClick={() => navigate("/vendas")} className="text-[10px] uppercase tracking-wider text-gold-500 hover:text-gold-400 inline-flex items-center gap-1">
                 Detalhes <ArrowRight size={10} />
               </button>
             </div>
             <SalesFunnel byStage={a.sales.byStage} conversion={a.sales.conversion} hideValues={hideValues} />
           </Card>
-        )}
-
-        {canSeeFinance && (
-          <Card>
-            <CardHeader icon={<Camera size={16} />} title="Onde o dinheiro nasce" inline />
-            <TypeBars byType={a.jobs.byType || []} hideValues={hideValues} />
-          </Card>
-        )}
-
-        <Card>
-          <div className="flex items-center justify-between mb-3">
-            <CardHeader icon={<CalendarIcon size={16} />} title={a.jobs.today.count > 0 ? "Hoje" : "Próximos ensaios"} inline />
-            <button onClick={() => navigate("/calendar")} className="text-[10px] uppercase tracking-wider text-gold-500 hover:text-gold-400 inline-flex items-center gap-1">
-              Agenda <ArrowRight size={10} />
-            </button>
-          </div>
-          <AgendaList a={a} hideValues={hideValues} />
-        </Card>
-      </div>
+        </>
+      )}
 
       {/* ══ Recompra ══ */}
       {(opportunities.length > 0 || a.opportunities.total > 0) && (
@@ -478,10 +549,9 @@ export default function DashboardPage() {
 // ─── Dashboard period filter ─────────────────────────────────────────────────
 
 const PRESETS: Array<{ id: DatePreset; label: string }> = [
-  { id: "month", label: "Mês atual" },
-  { id: "7d", label: "7 dias" },
-  { id: "15d", label: "15 dias" },
-  { id: "30d", label: "30 dias" },
+  { id: "7d", label: "Últimos 7 dias" },
+  { id: "30d", label: "Últimos 30 dias" },
+  { id: "month", label: "Mês até hoje" },
 ];
 
 const WEEKDAYS = ["D", "S", "T", "Q", "Q", "S", "S"];
@@ -566,6 +636,9 @@ function DateRangePopover({
   const [cursor, setCursor] = useState(() => startOfMonth(fromDateOnly(range.from)));
   const [draftFrom, setDraftFrom] = useState<Date | null>(() => fromDateOnly(range.from));
   const [draftTo, setDraftTo] = useState<Date | null>(() => fromDateOnly(range.to));
+  const rawToday = new Date();
+  const today = new Date(rawToday.getFullYear(), rawToday.getMonth(), rawToday.getDate());
+  const canMoveForward = startOfMonth(cursor) < startOfMonth(today);
 
   const commitDay = (day: Date) => {
     const clean = new Date(day.getFullYear(), day.getMonth(), day.getDate());
@@ -622,8 +695,9 @@ function DateRangePopover({
         </div>
         <button
           type="button"
+          disabled={!canMoveForward}
           onClick={() => setCursor(c => addMonths(c, 1))}
-          className="p-2 rounded-lg text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+          className="p-2 rounded-lg text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-25 disabled:hover:bg-transparent transition-colors"
           title="Próximo mês"
         >
           <ChevronRight size={16} />
@@ -631,16 +705,14 @@ function DateRangePopover({
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 px-4 pb-4">
-        <RangeMonth month={cursor} from={draftFrom} to={draftTo} onPick={commitDay} />
-        <RangeMonth month={addMonths(cursor, 1)} from={draftFrom} to={draftTo} onPick={commitDay} className="hidden sm:block" />
+        <RangeMonth month={cursor} from={draftFrom} to={draftTo} maxDate={today} onPick={commitDay} />
+        <RangeMonth month={addMonths(cursor, 1)} from={draftFrom} to={draftTo} maxDate={today} onPick={commitDay} className="hidden sm:block" />
       </div>
 
       <div className="flex items-center justify-between gap-3 px-4 py-3 bg-gray-50 dark:bg-gray-900/70 border-t border-gray-100 dark:border-gray-800">
         <button
           type="button"
           onClick={() => {
-            const rawToday = new Date();
-            const today = new Date(rawToday.getFullYear(), rawToday.getMonth(), rawToday.getDate());
             setDraftFrom(subDays(today, 6));
             setDraftTo(today);
             setCursor(startOfMonth(today));
@@ -667,11 +739,12 @@ function DateRangePopover({
 }
 
 function RangeMonth({
-  month, from, to, onPick, className,
+  month, from, to, maxDate, onPick, className,
 }: {
   month: Date;
   from: Date | null;
   to: Date | null;
+  maxDate: Date;
   onPick: (day: Date) => void;
   className?: string;
 }) {
@@ -702,15 +775,19 @@ function RangeMonth({
           const isStart = !!from && isSameDay(day, from);
           const isEnd = !!to && isSameDay(day, to);
           const inRange = !!selectedInterval && isWithinInterval(day, selectedInterval);
+          const isFuture = day > maxDate;
 
           return (
             <button
               key={i}
               type="button"
+              disabled={isFuture}
               onClick={() => onPick(day)}
               className={cn(
                 "h-9 text-sm font-semibold transition-colors",
+                isFuture && "cursor-not-allowed text-gray-200 dark:text-gray-700",
                 inRange ? "bg-gold-500/12 text-gold-800 dark:text-gold-200" : "text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800",
+                isFuture && "bg-transparent text-gray-200 hover:bg-transparent dark:bg-transparent dark:text-gray-700 dark:hover:bg-transparent",
                 isStart && "rounded-l-full bg-gold-600 text-white hover:bg-gold-600 dark:text-white",
                 isEnd && "rounded-r-full bg-gold-600 text-white hover:bg-gold-600 dark:text-white",
                 isStart && isEnd && "rounded-full",
@@ -727,31 +804,41 @@ function RangeMonth({
 
 // ─── Card primitives ─────────────────────────────────────────────────────────
 
-// Entrada em CASCATA: cada card guarda seu lugar na fila no primeiro render e
-// entra com um pequeno atraso — o dashboard "monta" na frente do usuário.
-let cardEntrySeq = 0;
-
 function Card({ children, onClick }: { children: React.ReactNode; onClick?: () => void }) {
-  const entryDelay = useRef((cardEntrySeq++ % 12) * 0.05).current;
   const Comp: any = onClick ? motion.button : motion.div;
   return (
     <Comp
       onClick={onClick}
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5, delay: entryDelay, ease: [0.22, 1, 0.36, 1] }}
-      whileHover={{ y: -2 }}
+      transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
       whileTap={onClick ? { scale: 0.985 } : undefined}
       className={cn(
-        "relative overflow-hidden rounded-3xl p-5 text-left w-full",
-        "bg-white/70 dark:bg-white/[0.045] backdrop-blur-sm",
-        "shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:shadow-none",
-        "transition-shadow hover:shadow-md hover:shadow-black/5 dark:hover:bg-white/[0.06]",
+        "relative overflow-hidden rounded-[1.75rem] p-5 text-left w-full",
+        "border border-black/[0.055] dark:border-white/[0.07] bg-white/75 dark:bg-white/[0.04] backdrop-blur-sm",
+        "shadow-[0_16px_48px_-42px_rgba(0,0,0,0.5)]",
+        "transition-colors hover:border-gold-500/20 dark:hover:bg-white/[0.055]",
         onClick && "cursor-pointer"
       )}
     >
       <div className="relative">{children}</div>
     </Comp>
+  );
+}
+
+function DashboardSectionHeading({ eyebrow, title, description }: {
+  eyebrow: string;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1 pt-2 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
+      <div>
+        <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-gold-600 dark:text-gold-400">{eyebrow}</p>
+        <h2 className="mt-1 text-lg font-semibold tracking-[-0.02em] text-gray-950 dark:text-white">{title}</h2>
+      </div>
+      <p className="max-w-xl text-[11px] leading-relaxed text-gray-500 dark:text-gray-400 sm:text-right">{description}</p>
+    </div>
   );
 }
 
@@ -815,6 +902,195 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       </h2>
       {children}
     </section>
+  );
+}
+
+// ─── Executive overview ─────────────────────────────────────────────────────
+
+function ExecutiveOverview({
+  analytics, canSeeFinance, hideValues, periodDelta, onNavigate,
+}: {
+  analytics: Analytics;
+  canSeeFinance: boolean;
+  hideValues: boolean;
+  periodDelta: number | null;
+  onNavigate: (to: string) => void;
+}) {
+  if (!canSeeFinance) {
+    return (
+      <div className="rounded-[2rem] overflow-hidden bg-[#12110f] text-white shadow-[0_24px_70px_-38px_rgba(0,0,0,0.8)]">
+        <div className="grid grid-cols-2 lg:grid-cols-4 divide-x divide-white/10">
+          <DarkMetric label="Ensaios no período" value={String(analytics.jobs.thisMonth.total)} hint={`${analytics.jobs.thisMonth.completed} realizados`} />
+          <DarkMetric label="Funil ativo" value={String(analytics.sales.activeCount)} hint="oportunidades abertas" />
+          <DarkMetric label="Pendências" value={String(analytics.attention)} hint="itens que pedem ação" />
+          <DarkMetric label="Agenda de hoje" value={String(analytics.jobs.today.count)} hint="ensaios agendados" />
+        </div>
+      </div>
+    );
+  }
+
+  const finance = analytics.finance;
+  const cashResult = finance.revenueThisMonth - finance.expensesThisMonth;
+  const receivedPct = finance.contractedOpenValue > 0
+    ? Math.min(100, (finance.sinalRecebidoOpen / finance.contractedOpenValue) * 100)
+    : 0;
+
+  return (
+    <section className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.65fr)_minmax(320px,0.8fr)] gap-4">
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+        className="relative overflow-hidden rounded-[2rem] bg-[#12110f] text-white p-6 sm:p-7 shadow-[0_28px_80px_-42px_rgba(0,0,0,0.95)]"
+      >
+        <div className="absolute -right-24 -top-32 h-72 w-72 rounded-full bg-gold-400/15 blur-3xl" aria-hidden />
+        <div className="absolute -bottom-36 left-1/3 h-64 w-64 rounded-full bg-gold-700/10 blur-3xl" aria-hidden />
+        <div className="relative">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-gold-300">Movimento do período</p>
+              <h2 className="mt-1.5 text-lg font-semibold tracking-tight">Venda contratada não é dinheiro recebido</h2>
+            </div>
+            <span className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-white/55">
+              leitura gerencial
+            </span>
+          </div>
+
+          <div className="mt-7 grid grid-cols-1 sm:grid-cols-2 gap-7 sm:divide-x sm:divide-white/10">
+            <ExecutiveMetric
+              icon={<Trophy size={16} />}
+              label="Vendido no período"
+              value={finance.soldThisPeriod}
+              hideValues={hideValues}
+              hint={`${finance.soldCountThisPeriod} novo${finance.soldCountThisPeriod === 1 ? '' : 's'} contrato${finance.soldCountThisPeriod === 1 ? '' : 's'} fechado${finance.soldCountThisPeriod === 1 ? '' : 's'}`}
+            />
+            <div className="sm:pl-7">
+              <ExecutiveMetric
+                icon={<Wallet size={16} />}
+                label="Recebido no período"
+                value={finance.revenueThisMonth}
+                hideValues={hideValues}
+                hint={periodDelta === null ? 'pagamentos que entraram no caixa' : `${periodDelta >= 0 ? '+' : ''}${periodDelta}% vs. período anterior`}
+                positive={periodDelta !== null && periodDelta >= 0}
+              />
+            </div>
+          </div>
+
+          <div className="mt-7 grid grid-cols-1 sm:grid-cols-3 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.045] divide-y sm:divide-y-0 sm:divide-x divide-white/10">
+            <CashDetail label="Sinais recebidos" value={finance.signalReceivedThisPeriod} hideValues={hideValues} hint="identificados como sinal" />
+            <CashDetail label="Saídas pagas" value={finance.expensesThisMonth} hideValues={hideValues} hint="despesas do período" />
+            <CashDetail label="Resultado de caixa" value={cashResult} hideValues={hideValues} hint="recebido menos saídas" tone={cashResult < 0 ? 'negative' : 'positive'} />
+          </div>
+        </div>
+      </motion.div>
+
+      <motion.button
+        type="button"
+        onClick={() => onNavigate('/finance')}
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.45, delay: 0.06, ease: [0.22, 1, 0.36, 1] }}
+        className="group rounded-[2rem] border border-black/[0.06] dark:border-white/[0.07] bg-white/80 dark:bg-white/[0.045] p-6 text-left shadow-[0_18px_50px_-38px_rgba(0,0,0,0.5)] transition-colors hover:border-gold-500/35"
+      >
+        <div className="flex items-start justify-between">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-gold-600 dark:text-gold-400">Carteira de ensaios</p>
+            <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-gray-950 dark:text-white">Posição atual a receber</h2>
+          </div>
+          <ArrowRight size={16} className="mt-1 text-gray-300 transition-transform group-hover:translate-x-1 group-hover:text-gold-500" />
+        </div>
+        <p className="mt-7 text-[11px] font-medium text-gray-500 dark:text-gray-400">Valor total dos ensaios em aberto</p>
+        <p className="mt-1 text-3xl font-semibold tracking-[-0.04em] text-gray-950 dark:text-white tabular-nums">
+          <AnimatedNumber value={finance.contractedOpenValue} format={(n) => formatBRL(n, hideValues)} />
+        </p>
+
+        <div className="mt-6 h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-white/10">
+          <motion.div
+            initial={{ width: 0 }}
+            animate={{ width: `${receivedPct}%` }}
+            transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+            className="h-full rounded-full bg-gold-500"
+          />
+        </div>
+        <div className="mt-4 grid grid-cols-2 gap-4">
+          <PortfolioValue label="Já recebido" value={finance.sinalRecebidoOpen} hideValues={hideValues} />
+          <PortfolioValue label="Falta receber" value={finance.toReceiveOpen} hideValues={hideValues} emphasis />
+        </div>
+        <p className="mt-6 border-t border-black/[0.06] dark:border-white/[0.07] pt-4 text-[11px] text-gray-500 dark:text-gray-400">
+          {finance.openJobsCount} ensaio{finance.openJobsCount === 1 ? '' : 's'} em produção com saldo pendente · {receivedPct.toFixed(0)}% recebido
+        </p>
+      </motion.button>
+    </section>
+  );
+}
+
+function ExecutiveMetric({ icon, label, value, hideValues, hint, positive }: {
+  icon: React.ReactNode;
+  label: string;
+  value: number;
+  hideValues: boolean;
+  hint: string;
+  positive?: boolean;
+}) {
+  return (
+    <div>
+      <div className="flex items-center gap-2 text-gold-300">
+        {icon}
+        <span className="text-[10px] font-bold uppercase tracking-[0.18em]">{label}</span>
+      </div>
+      <p className="mt-3 text-[2rem] sm:text-[2.3rem] leading-none font-semibold tracking-[-0.045em] tabular-nums">
+        <AnimatedNumber value={value} format={(n) => formatBRL(n, hideValues)} />
+      </p>
+      <p className={cn("mt-2 text-xs", positive ? "text-emerald-400" : "text-white/48")}>{hint}</p>
+    </div>
+  );
+}
+
+function CashDetail({ label, value, hideValues, hint, tone }: {
+  label: string;
+  value: number;
+  hideValues: boolean;
+  hint: string;
+  tone?: 'positive' | 'negative';
+}) {
+  return (
+    <div className="px-4 py-3.5">
+      <p className="text-[10px] uppercase tracking-wider text-white/40">{label}</p>
+      <p className={cn(
+        "mt-1 text-base font-semibold tabular-nums",
+        tone === 'positive' && 'text-emerald-400',
+        tone === 'negative' && 'text-red-400',
+        !tone && 'text-white',
+      )}>{formatBRL(value, hideValues)}</p>
+      <p className="mt-0.5 text-[10px] text-white/35">{hint}</p>
+    </div>
+  );
+}
+
+function PortfolioValue({ label, value, hideValues, emphasis }: {
+  label: string;
+  value: number;
+  hideValues: boolean;
+  emphasis?: boolean;
+}) {
+  return (
+    <div>
+      <p className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500">{label}</p>
+      <p className={cn(
+        "mt-1 text-base font-semibold tabular-nums",
+        emphasis ? "text-gold-700 dark:text-gold-400" : "text-gray-800 dark:text-gray-200",
+      )}>{formatBRL(value, hideValues)}</p>
+    </div>
+  );
+}
+
+function DarkMetric({ label, value, hint }: { label: string; value: string; hint: string }) {
+  return (
+    <div className="px-5 py-6">
+      <p className="text-[10px] uppercase tracking-wider text-white/40">{label}</p>
+      <p className="mt-2 text-3xl font-semibold tabular-nums">{value}</p>
+      <p className="mt-1 text-[11px] text-white/40">{hint}</p>
+    </div>
   );
 }
 
@@ -1166,6 +1442,143 @@ function TypeBars({ byType, hideValues }: { byType: Array<{ type: string; count:
   );
 }
 
+function initials(name: string) {
+  return name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map(part => part[0]?.toUpperCase() || '')
+    .join('') || '?';
+}
+
+function SellerLeaderboard({ ranking, hideValues }: {
+  ranking: SalesAnalytics['ranking'];
+  hideValues: boolean;
+}) {
+  if (ranking.length === 0) {
+    return <p className="py-10 text-center text-sm text-gray-500 dark:text-gray-400">Nenhum vendedor cadastrado para comparar.</p>;
+  }
+
+  const highestValue = Math.max(1, ...ranking.map(seller => seller.realizado));
+  return (
+    <div className="space-y-2">
+      {ranking.slice(0, 7).map((seller, index) => {
+        const progress = seller.meta > 0
+          ? Math.min(100, (seller.realizado / seller.meta) * 100)
+          : (seller.realizado / highestValue) * 100;
+        return (
+          <div key={seller.id || 'unassigned'} className="rounded-2xl border border-black/[0.05] bg-black/[0.018] px-3.5 py-3 dark:border-white/[0.06] dark:bg-white/[0.025]">
+            <div className="flex items-center gap-3">
+              <span
+                className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white shadow-sm"
+                style={{ backgroundColor: seller.cor || (seller.id ? '#8A6620' : '#9CA3AF') }}
+              >
+                {initials(seller.nome)}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-[13px] font-semibold text-gray-950 dark:text-white">
+                      {index === 0 && seller.realizado > 0 ? '1º · ' : ''}{seller.nome}
+                    </p>
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400">
+                      {seller.vendas} venda{seller.vendas === 1 ? '' : 's'}
+                      {seller.meta > 0 && seller.pct !== null ? ` · ${seller.pct}% da meta` : ''}
+                    </p>
+                  </div>
+                  <p className="flex-shrink-0 text-sm font-bold tabular-nums text-gray-950 dark:text-white">{formatBRLShort(seller.realizado, hideValues)}</p>
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-100 dark:bg-white/10">
+                  <motion.div
+                    initial={{ width: 0 }}
+                    animate={{ width: `${progress}%` }}
+                    transition={{ duration: 0.6, delay: index * 0.05 }}
+                    className={cn('h-full rounded-full', seller.pct !== null && seller.pct >= 100 ? 'bg-emerald-500' : 'bg-gold-500')}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function BestSellingShoots({ champions, hideValues }: {
+  champions: SalesAnalytics['campeoes'];
+  hideValues: boolean;
+}) {
+  if (champions.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
+        <span className="flex h-11 w-11 items-center justify-center rounded-full bg-gold-500/10 text-gold-600 dark:text-gold-400"><Camera size={19} /></span>
+        <p className="text-sm font-semibold text-gray-900 dark:text-white">Sem itens de catálogo nas vendas</p>
+        <p className="max-w-xs text-[11px] text-gray-500 dark:text-gray-400">As vendas fechadas aparecem ao lado, mas o ranking por ensaio depende dos itens adicionados à proposta.</p>
+      </div>
+    );
+  }
+
+  const maxQuantity = Math.max(1, ...champions.map(item => item.qtd));
+  return (
+    <div className="mt-4 space-y-2.5">
+      {champions.slice(0, 6).map((item, index) => (
+        <div key={item.nome} className={cn('relative overflow-hidden rounded-2xl border px-4 py-3', index === 0 ? 'border-gold-500/30 bg-gold-500/[0.08]' : 'border-black/[0.05] bg-black/[0.018] dark:border-white/[0.06] dark:bg-white/[0.025]')}>
+          <div className="relative flex items-center gap-3">
+            <span className={cn('flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-bold', index === 0 ? 'bg-gold-500 text-white' : 'bg-gray-100 text-gray-500 dark:bg-white/10 dark:text-gray-300')}>
+              {index + 1}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between gap-3">
+                <p className="truncate text-[12px] font-semibold text-gray-950 dark:text-white">{item.nome}</p>
+                <p className="flex-shrink-0 text-[11px] font-semibold tabular-nums text-gray-600 dark:text-gray-300">{formatBRLShort(item.total, hideValues)}</p>
+              </div>
+              <div className="mt-1.5 flex items-center gap-2">
+                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-gray-100 dark:bg-white/10">
+                  <div className="h-full rounded-full bg-gold-500" style={{ width: `${(item.qtd / maxQuantity) * 100}%` }} />
+                </div>
+                <span className="w-12 text-right text-[10px] text-gray-500 dark:text-gray-400">{item.qtd}x</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RecentSalesList({ sales, hideValues }: {
+  sales: SalesAnalytics['recentSales'];
+  hideValues: boolean;
+}) {
+  if (sales.length === 0) {
+    return <p className="py-10 text-center text-sm text-gray-500 dark:text-gray-400">Nenhuma venda fechada neste período.</p>;
+  }
+
+  return (
+    <div className="divide-y divide-black/[0.055] dark:divide-white/[0.07]">
+      {sales.map(sale => (
+        <div key={sale.id} className="flex items-center gap-3 py-3 first:pt-1 last:pb-1">
+          <span
+            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl text-[10px] font-bold text-white"
+            style={{ backgroundColor: sale.seller_color || (sale.seller_id ? '#8A6620' : '#9CA3AF') }}
+            title={sale.seller_name}
+          >
+            {sale.seller_id ? initials(sale.seller_name) : <UserRound size={15} />}
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[13px] font-semibold text-gray-950 dark:text-white">{sale.title}</p>
+            <p className="truncate text-[10px] text-gray-500 dark:text-gray-400">
+              {sale.client_name || 'Cliente não informado'} · {sale.seller_name} · {format(parseISO(sale.converted_at), 'dd/MM/yyyy')}
+            </p>
+          </div>
+          <p className="flex-shrink-0 text-[12px] font-bold tabular-nums text-emerald-600 dark:text-emerald-400">{formatBRLShort(sale.value, hideValues)}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // Agenda enxuta: hoje (ou os próximos), nome + tipo + hora + valor.
 function AgendaList({ a, hideValues }: { a: Analytics; hideValues: boolean }) {
   const list = (a.jobs.today.count > 0 ? a.jobs.today.list : a.jobs.next7Days.list).slice(0, 5);
@@ -1253,6 +1666,8 @@ function MonthlyBars({ mensal, hideValues }: { mensal: Array<{ month: string; me
         <Tooltip
           cursor={{ fill: 'rgba(212,169,74,0.06)' }}
           contentStyle={{ background: 'rgba(20,20,20,0.95)', border: '1px solid rgba(241,198,101,0.3)', borderRadius: 12, color: '#fff', fontSize: 12 }}
+          labelStyle={{ color: '#f9fafb', fontWeight: 700, marginBottom: 4 }}
+          itemStyle={{ color: '#f9fafb' }}
           formatter={(v: any, name: any) => [hideValues ? '•••' : `R$ ${Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 0 })}`, name === 'meta' ? 'Meta' : 'Realizado']}
         />
         {hasMeta && <Bar dataKey="meta" fill="rgba(148,163,184,0.28)" radius={[4, 4, 0, 0]} />}
@@ -1279,6 +1694,8 @@ function TicketLine({ mensal, hideValues }: { mensal: Array<{ month: string; tic
           <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} width={44} tickFormatter={(v) => hideValues ? '•••' : `R$ ${Number(v) >= 1000 ? `${(Number(v) / 1000).toFixed(1)}k` : v}`} />
           <Tooltip
             contentStyle={{ background: 'rgba(20,20,20,0.95)', border: '1px solid rgba(16,185,129,0.35)', borderRadius: 12, color: '#fff', fontSize: 12 }}
+            labelStyle={{ color: '#f9fafb', fontWeight: 700, marginBottom: 4 }}
+            itemStyle={{ color: '#f9fafb' }}
             formatter={(v: any) => [hideValues ? '•••' : `R$ ${Number(v).toLocaleString('pt-BR')}`, 'Ticket médio']}
           />
           <Line type="monotone" dataKey="ticket" stroke="#10b981" strokeWidth={2.5} dot={{ r: 3, fill: '#10b981', strokeWidth: 0 }} activeDot={{ r: 5 }} animationDuration={900} />
@@ -1325,95 +1742,84 @@ function SalesFunnel({
   }
 
   const max = Math.max(1, ...stages.map(s => s.count));
+  const journeyWidth = Math.max(720, stages.length * 180);
 
   return (
-    <div className="space-y-2">
-      {/* Cabeçalho honesto: o que está em jogo AGORA */}
-      <div className="flex items-baseline justify-between mb-1">
-        <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500">No funil agora</span>
-        <span className="text-[11px] font-semibold text-gray-600 dark:text-gray-300 tabular-nums">
-          {activeCount} lead{activeCount === 1 ? '' : 's'}{hideValues ? '' : ` · ${formatBRLShort(activeValue, hideValues)}`}
+    <div>
+      <div className="overflow-x-auto pb-2">
+        <div className="flex overflow-hidden rounded-2xl border border-black/[0.06] dark:border-white/[0.07] bg-black/[0.015] dark:bg-white/[0.025]" style={{ minWidth: journeyWidth }}>
+          {stages.map((stage, index) => (
+            <FunnelStage
+              key={stage.id}
+              stage={stage}
+              index={index}
+              total={stages.length}
+              max={max}
+              conversion={conversion.find(item => item.stage_id === stage.id)}
+              hideValues={hideValues}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 lg:grid-cols-4 overflow-hidden rounded-2xl border border-black/[0.06] dark:border-white/[0.07] divide-x divide-y lg:divide-y-0 divide-black/[0.06] dark:divide-white/[0.07]">
+        <FunnelSummary label="Em negociação agora" value={String(activeCount)} hint={formatBRLShort(activeValue, hideValues)} />
+        <FunnelSummary label="Ganhos no período" value={String(wonCount)} hint={formatBRLShort(wonValue, hideValues)} tone="positive" />
+        <FunnelSummary label="Perdidos no período" value={String(lostCount)} hint="negócios encerrados" />
+        <FunnelSummary
+          label="Conversão do período"
+          value={convGeral === null ? '—' : `${convGeral}%`}
+          hint="ganhos ÷ negócios fechados"
+          tone={convGeral !== null && convGeral >= 50 ? 'positive' : undefined}
+        />
+      </div>
+    </div>
+  );
+}
+
+function FunnelStage({ stage, index, total, max, conversion, hideValues }: {
+  stage: Analytics['sales']['byStage'][number];
+  index: number;
+  total: number;
+  max: number;
+  conversion?: Analytics['sales']['conversion'][number];
+  hideValues: boolean;
+}) {
+  const occupancy = stage.count > 0 ? Math.max(8, (stage.count / max) * 100) : 0;
+  const rate = conversion?.conversion_rate;
+  return (
+    <div className={cn("relative min-w-0 flex-1 p-4", index < total - 1 && "border-r border-black/[0.06] dark:border-white/[0.07]")}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-gold-500/12 text-[10px] font-bold text-gold-700 dark:text-gold-400">
+          {String(index + 1).padStart(2, '0')}
         </span>
-      </div>
-
-      {/* Barras centralizadas = silhueta de funil de verdade */}
-      <div className="space-y-1.5">
-        {stages.map((s, i) => {
-          const conv = conversion.find(c => c.stage_id === s.id);
-          const widthPct = s.count > 0 ? Math.max((s.count / max) * 100, 14) : 6;
-          return (
-            <div key={s.id}>
-              <div className="flex items-center justify-between mb-0.5">
-                <span className="text-[11px] font-medium text-gray-600 dark:text-gray-300 truncate">{s.name}</span>
-                <div className="flex items-center gap-2 flex-shrink-0 tabular-nums">
-                  <span className="text-xs font-bold text-gray-900 dark:text-white">{s.count}</span>
-                  <span className="text-[10px] text-gray-500 dark:text-gray-400 w-14 text-right">{formatBRLShort(s.total_value, hideValues)}</span>
-                </div>
-              </div>
-              <div className="flex justify-center">
-                <motion.div
-                  initial={{ width: 0, opacity: 0 }}
-                  animate={{ width: `${widthPct}%`, opacity: 1 }}
-                  transition={{ duration: 0.7, delay: 0.15 + i * 0.08, ease: [0.22, 1, 0.36, 1] }}
-                  className={cn(
-                    "h-5 rounded-md flex items-center justify-center",
-                    s.count > 0
-                      ? "bg-gradient-to-r from-gold-400/80 via-gold-500 to-gold-400/80 shadow-[0_2px_8px_-2px_rgba(212,169,74,0.5)]"
-                      : "bg-gray-100 dark:bg-gray-800"
-                  )}
-                >
-                  {s.count > 0 && (
-                    <span className="text-[10px] font-bold text-white drop-shadow-sm">{s.count}</span>
-                  )}
-                </motion.div>
-              </div>
-              {conv && conv.conversion_rate !== null && conv.entered > 0 && (
-                <div className="flex justify-center mt-0.5">
-                  <span className={cn(
-                    "text-[9px] font-semibold tabular-nums",
-                    conv.conversion_rate < 40 ? "text-red-400" :
-                    conv.conversion_rate < 70 ? "text-amber-500" : "text-emerald-500"
-                  )}>
-                    ↓ {conv.conversion_rate}% avançam
-                  </span>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Fechados NO PERÍODO — rotulado, sem misturar com a foto de agora */}
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, delay: 0.15 + stages.length * 0.08 }}
-        className="pt-2 mt-1 border-t border-gray-200 dark:border-gray-800 space-y-1.5"
-      >
-        <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500">Fechados no período</span>
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">🏆 Ganhos</span>
-          <div className="flex items-center gap-2 tabular-nums">
-            <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400">{wonCount}</span>
-            <span className="text-[10px] text-emerald-600 dark:text-emerald-500 w-14 text-right">{formatBRLShort(wonValue, hideValues)}</span>
-          </div>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] font-medium text-gray-500 dark:text-gray-400">Perdidos</span>
-          <span className="text-xs font-bold text-gray-500 dark:text-gray-400 tabular-nums">{lostCount}</span>
-        </div>
-        {convGeral !== null && (
-          <div className="flex items-center justify-between pt-1">
-            <span className="text-[11px] font-semibold text-gray-600 dark:text-gray-300">Conversão do período</span>
-            <span className={cn(
-              "text-sm font-bold tabular-nums",
-              convGeral >= 50 ? "text-emerald-500" : convGeral >= 25 ? "text-amber-500" : "text-red-400"
-            )}>
-              {convGeral}%
-            </span>
-          </div>
+        {rate !== null && rate !== undefined && (
+          <span className="text-[9px] font-semibold text-gray-400 dark:text-gray-500">{rate}% seguem</span>
         )}
-      </motion.div>
+      </div>
+      <p className="mt-4 truncate text-[11px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">{stage.name}</p>
+      <div className="mt-1 flex items-end justify-between gap-2">
+        <p className="text-2xl font-semibold tracking-tight text-gray-950 dark:text-white tabular-nums">{stage.count}</p>
+        <p className="pb-0.5 text-[11px] font-medium text-gray-500 dark:text-gray-400 tabular-nums">{formatBRLShort(stage.total_value, hideValues)}</p>
+      </div>
+      <div className="mt-3 h-1 overflow-hidden rounded-full bg-gray-100 dark:bg-white/10">
+        <div className="h-full rounded-full bg-gold-500" style={{ width: `${occupancy}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function FunnelSummary({ label, value, hint, tone }: {
+  label: string;
+  value: string;
+  hint: string;
+  tone?: 'positive';
+}) {
+  return (
+    <div className="px-4 py-3.5">
+      <p className="text-[9px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">{label}</p>
+      <p className={cn("mt-1 text-lg font-semibold tabular-nums text-gray-950 dark:text-white", tone === 'positive' && "text-emerald-600 dark:text-emerald-400")}>{value}</p>
+      <p className="mt-0.5 text-[10px] text-gray-500 dark:text-gray-400">{hint}</p>
     </div>
   );
 }
