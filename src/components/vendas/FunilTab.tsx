@@ -269,8 +269,8 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
               <Settings2 size={13} /> Gerenciar campanhas
             </button>
           </div>
-          <div ref={boardRef} className="flex-1 overflow-x-auto overflow-y-hidden pb-4 snap-x snap-mandatory sm:snap-none">
-            <div className="flex gap-2 sm:gap-4 h-full px-2 sm:px-1" style={{ minWidth: "max-content" }}>
+          <div ref={boardRef} className="flex-1 overflow-x-auto overflow-y-hidden bg-[#f5f4f1] pb-5 pt-1 dark:bg-[#111111] snap-x snap-mandatory sm:snap-none">
+            <div className="flex h-full gap-3 px-3 sm:gap-5 sm:px-4" style={{ minWidth: "max-content" }}>
               {activeStages.map((stage) => (
                 <React.Fragment key={stage.id}>
                   <StageColumn
@@ -341,31 +341,30 @@ function StageColumn({ stage, deals, clientMap, onDealClick, labelMap, campaignM
   return (
     <div
       ref={setNodeRef}
-      className={`flex flex-col flex-shrink-0 snap-center w-[85vw] sm:w-[280px] max-w-[320px] sm:min-w-[280px] h-full rounded-lg border transition-colors ${
+      className={`flex h-full w-[85vw] max-w-[330px] flex-shrink-0 snap-center flex-col rounded-[1.6rem] border transition-colors sm:min-w-[300px] sm:w-[300px] ${
         isOver
-          ? "border-gray-400 dark:border-gray-500 bg-gray-50 dark:bg-gray-800/80"
-          : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+          ? "border-gold-500/45 bg-gold-500/[0.07] dark:bg-gold-500/[0.06]"
+          : "border-black/[0.055] bg-white/50 dark:border-white/[0.06] dark:bg-white/[0.025]"
       }`}
     >
       {/* Header */}
-      <div className="flex-shrink-0 p-3 border-b border-gray-200 dark:border-gray-700">
+      <div className="flex-shrink-0 px-4 pb-3 pt-4">
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-gray-900 dark:text-white text-sm truncate">
-            {stage.name}
-          </h3>
-          <span className="text-xs text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ backgroundColor: stage.color || '#D4A94A' }} />
+            <h3 className="truncate text-[12px] font-bold uppercase tracking-[0.1em] text-gray-700 dark:text-gray-200">{stage.name}</h3>
+          </div>
+          <span className="rounded-full bg-black/[0.055] px-2 py-0.5 text-[10px] font-semibold text-gray-500 dark:bg-white/[0.07] dark:text-gray-400">
             {deals.length}
           </span>
         </div>
         {canSeeFinance && (
-          <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-            R$ {totalValue.toLocaleString("pt-BR")}
-          </div>
+          <p className="mt-2 text-[11px] font-medium tabular-nums text-gray-400 dark:text-gray-500">R$ {totalValue.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
         )}
       </div>
 
       {/* Cards */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-2">
+      <div className="flex-1 space-y-3 overflow-y-auto px-2.5 pb-3">
         <SortableContext items={deals.map((d) => d.id.toString())}>
           {deals.map((deal) => (
             <React.Fragment key={deal.id}>
@@ -383,8 +382,8 @@ function StageColumn({ stage, deals, clientMap, onDealClick, labelMap, campaignM
         </SortableContext>
 
         {deals.length === 0 && (
-          <div className="flex items-center justify-center h-20 border border-dashed border-gray-200 dark:border-gray-700 rounded-lg">
-            <span className="text-xs text-gray-400 dark:text-gray-500">Arraste negócios aqui</span>
+          <div className="flex h-24 items-center justify-center rounded-2xl border border-dashed border-black/10 dark:border-white/10">
+            <span className="text-[11px] text-gray-400 dark:text-gray-600">Arraste uma oportunidade</span>
           </div>
         )}
       </div>

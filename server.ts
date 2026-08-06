@@ -14858,6 +14858,44 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json(history);
   });
 
+  // Estado real da automação de follow-up deste negócio. Diferente do antigo
+  // campo next_follow_up (que era só uma data solta), esta rota lê a fila que o
+  // worker efetivamente processa e permite à UI mostrar agendado/enviado/falhou.
+  app.get('/api/deals/:id/follow-ups', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const dealId = Number(req.params.id);
+    if (!Number.isFinite(dealId)) return res.status(400).json({ error: 'ID inválido' });
+
+    const { data, error } = await supabase
+      .from('scheduled_followups')
+      .select('id, deal_id, message, scheduled_at, status, sent_at, created_at')
+      .eq('user_id', userId)
+      .eq('deal_id', dealId)
+      .order('created_at', { ascending: false })
+      .limit(5);
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  });
+
+  app.delete('/api/deals/:id/follow-ups/pending', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const dealId = Number(req.params.id);
+    if (!Number.isFinite(dealId)) return res.status(400).json({ error: 'ID inválido' });
+
+    const { error } = await supabase
+      .from('scheduled_followups')
+      .update({ status: 'cancelled' })
+      .eq('user_id', userId)
+      .eq('deal_id', dealId)
+      .eq('status', 'pending');
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
   app.get('/api/deals/:id/activities', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;

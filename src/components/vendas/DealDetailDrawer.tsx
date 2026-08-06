@@ -1,13 +1,15 @@
 // src/components/vendas/DealDetailDrawer.tsx
 import React, { useState, useEffect, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { format } from "date-fns";
 import {
   X, Trash2, CheckCircle, XCircle, User, Phone, Mail, Instagram,
-  Edit3, Link2, MessageCircle, Trophy, Pencil, Search, Check, Package, Layers, Briefcase, ChevronDown, Plus, Tag, Sparkles
+  Edit3, Link2, MessageCircle, Trophy, Pencil, Search, Check, Package, Layers, Briefcase,
+  ChevronDown, Plus, Tag, Sparkles, CalendarDays, DollarSign, Save, Clock3, Zap, AlertCircle,
+  RefreshCw, Copy, Flame, Snowflake, SunMedium
 } from "lucide-react";
 import { ConfirmModal } from "../ui/ConfirmModal";
-import { Deal, Client, PipelineStage, DealActivity, StageHistoryEntry, Produto, Servico, Combo, DealItem, PipelineLabel, SaleCampaign } from "../../types";
+import { Deal, Client, PipelineStage, DealActivity, StageHistoryEntry, Produto, Servico, Combo, DealItem, PipelineLabel, SaleCampaign, DealTemperature } from "../../types";
 import { authFetch } from "../../utils/authFetch";
 import { useApi } from "../../utils/useApi";
 import { parseDate } from "../../utils/date";
@@ -174,7 +176,20 @@ const PRIORITY_OPTIONS = [
   { value: "medium", label: "Média"  },
   { value: "high",   label: "Alta"   },
 ];
-const PRIORITY_LABELS: Record<string, string> = { low: "Baixa", medium: "Média", high: "Alta" };
+
+const TEMPERATURE_OPTIONS: Array<{ value: DealTemperature; label: string; icon: React.ReactNode; active: string }> = [
+  { value: 'cold', label: 'Frio', icon: <Snowflake size={12} />, active: 'bg-sky-500 text-white shadow-sm' },
+  { value: 'warm', label: 'Morno', icon: <SunMedium size={12} />, active: 'bg-amber-500 text-white shadow-sm' },
+  { value: 'hot', label: 'Quente', icon: <Flame size={12} />, active: 'bg-rose-500 text-white shadow-sm' },
+];
+interface ScheduledFollowUp {
+  id: number;
+  message: string;
+  scheduled_at: string;
+  status: string;
+  sent_at?: string | null;
+  created_at: string;
+}
 
 const LABEL_COLORS = [
   "#EF4444", // red
@@ -195,11 +210,11 @@ export function DealDetailDrawer({
   deal, client, clients = [], stages, onClose, onUpdate,
 }: DealDetailDrawerProps) {
   const { canAccess } = useAuth();
+  const navigate = useNavigate();
   const canSeeFinance = canAccess('finance'); // funcionário sem permissão não vê/edita valores
   const [activities, setActivities] = useState<DealActivity[]>([]);
   const [loadingActivities, setLoadingActivities] = useState(false);
   const [newActivity, setNewActivity] = useState({ type: "note", description: "" });
-  const [followUp, setFollowUp] = useState("");
   const [notes, setNotes] = useState("");
   const [history, setHistory] = useState<StageHistoryEntry[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -216,15 +231,21 @@ export function DealDetailDrawer({
   const [selectedClientId, setSelectedClientId] = useState<number | null>(null);
 
   // ── Inline editing states ──────────────────────────────────────────────────
-  const [editingValue, setEditingValue] = useState(false);
   const [dealValueStr, setDealValueStr] = useState("");   // string para permitir apagar
-
-  const [editingDate, setEditingDate] = useState(false);
   const [dealDate, setDealDate] = useState("");
-
-  const [editingPriority, setEditingPriority] = useState(false);
   const [dealPriority, setDealPriority] = useState("medium");
+  const [savingBasics, setSavingBasics] = useState(false);
+  const [savingTitle, setSavingTitle] = useState(false);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [saveError, setSaveError] = useState('');
+  const [dealTemperature, setDealTemperature] = useState<DealTemperature>('cold');
+  const [phoneCopied, setPhoneCopied] = useState(false);
   // ──────────────────────────────────────────────────────────────────────────
+
+  const [followUpTasks, setFollowUpTasks] = useState<ScheduledFollowUp[]>([]);
+  const [loadingFollowUps, setLoadingFollowUps] = useState(false);
+  const [followUpError, setFollowUpError] = useState(false);
+  const [cancellingFollowUp, setCancellingFollowUp] = useState(false);
 
   const [confirmModal, setConfirmModal] = useState<{
     open: boolean; onConfirm: () => void; title: string; message: string; variant?: "danger" | "warning";
@@ -269,6 +290,8 @@ export function DealDetailDrawer({
   const [localItems, setLocalItems] = useState<DealItem[]>([]);
   const [showAddItem, setShowAddItem] = useState(false);
   const catalogRef = useRef<HTMLDivElement>(null);
+  const packageSectionRef = useRef<HTMLDivElement>(null);
+  const detailsRef = useRef<HTMLDetailsElement>(null);
 
   // Inicializa/sincroniza itens do deal
   useEffect(() => {
@@ -340,24 +363,34 @@ export function DealDetailDrawer({
         body: JSON.stringify({ catalog_type: catalogType, catalog_id: id, catalog_name: nome, catalog_value: value, quantidade: 1 }),
       });
       const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Não foi possível adicionar o item');
       if (data.item) {
         setLocalItems(prev => prev.map(i => i.id === tempItem.id ? data.item : i));
       }
+      setDealValueStr(Number(data.total) > 0 ? String(data.total) : '');
       onUpdate({ silent: true });
-    } catch {
+    } catch (error: any) {
       setLocalItems(prev => prev.filter(i => i.id !== tempItem.id));
+      setSaveState('error');
+      setSaveError(error?.message || 'Não foi possível adicionar o item');
     } finally {
       setCatalogSaving(false);
     }
   };
 
   const removeDealItem = async (itemId: string) => {
+    const removed = localItems.find(item => item.id === itemId);
     setLocalItems(prev => prev.filter(i => i.id !== itemId));
     try {
-      await authFetch(`/api/deal-items/${itemId}`, { method: 'DELETE' });
+      const res = await authFetch(`/api/deal-items/${itemId}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || 'Não foi possível remover o item');
+      setDealValueStr(Number(data?.total) > 0 ? String(data.total) : '');
       onUpdate({ silent: true });
-    } catch {
-      onUpdate({ silent: true });
+    } catch (error: any) {
+      if (removed) setLocalItems(prev => [...prev, removed]);
+      setSaveState('error');
+      setSaveError(error?.message || 'Não foi possível remover o item');
     }
   };
 
@@ -369,13 +402,18 @@ export function DealDetailDrawer({
     if (!item) return;
     const newQty = Math.max(1, item.quantidade + delta);
     try {
-      await authFetch(`/api/deal-items/${itemId}`, {
+      const res = await authFetch(`/api/deal-items/${itemId}`, {
         method: 'PUT',
         body: JSON.stringify({ quantidade: newQty }),
       });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || 'Não foi possível alterar a quantidade');
+      setDealValueStr(Number(data?.total) > 0 ? String(data.total) : '');
       onUpdate({ silent: true });
-    } catch {
+    } catch (error: any) {
       setLocalItems(prev => prev.map(i => i.id === itemId ? { ...i, quantidade: item.quantidade } : i));
+      setSaveState('error');
+      setSaveError(error?.message || 'Não foi possível alterar a quantidade');
     }
   };
 
@@ -388,7 +426,6 @@ export function DealDetailDrawer({
 
   useEffect(() => {
     if (deal) {
-      setFollowUp(deal.next_follow_up || "");
       setNotes(deal.notes || "");
       setHistory([]);
       setHistoryError(false);
@@ -402,10 +439,11 @@ export function DealDetailDrawer({
       setDealValueStr(deal.value ? String(deal.value) : "");
       setDealDate(deal.expected_close_date || "");
       setDealPriority(deal.priority || "medium");
+      setDealTemperature(deal.temperature || 'cold');
+      setPhoneCopied(false);
       setIsEditingContact(false);
-      setEditingValue(false);
-      setEditingDate(false);
-      setEditingPriority(false);
+      setSaveState('idle');
+      setSaveError('');
       setEditingTitleVal(deal.title || "");
       setEditingTitle(false);
       setDealLabels(Array.isArray(deal.labels) ? deal.labels : []);
@@ -415,6 +453,7 @@ export function DealDetailDrawer({
       setShowCampaignPicker(false);
       loadActivities();
       loadHistory();
+      loadFollowUps();
     }
     // Depende do ID, não do objeto: o polling de 12s recria o objeto `deal`
     // (mesmo dado, identidade nova) e este reset apagava notas/campos em edição.
@@ -455,14 +494,42 @@ export function DealDetailDrawer({
     finally { setLoadingHistory(false); }
   };
 
+  const loadFollowUps = async () => {
+    if (!deal) return;
+    setLoadingFollowUps(true);
+    try {
+      const res = await authFetch(`/api/deals/${deal.id}/follow-ups`);
+      if (!res.ok) throw new Error('Falha ao consultar follow-ups');
+      const data = await res.json();
+      setFollowUpTasks(Array.isArray(data) ? data : []);
+      setFollowUpError(false);
+    } catch {
+      setFollowUpTasks([]);
+      setFollowUpError(true);
+    } finally {
+      setLoadingFollowUps(false);
+    }
+  };
+
   const updateDeal = async (data: Partial<Deal>) => {
     if (!deal) return;
-    await authFetch(`/api/deals/${deal.id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
-    onUpdate();
+    setSaveState('saving');
+    setSaveError('');
+    try {
+      const res = await authFetch(`/api/deals/${deal.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(payload?.error || 'Não foi possível salvar');
+      await onUpdate({ silent: true });
+      setSaveState('saved');
+    } catch (error: any) {
+      setSaveState('error');
+      setSaveError(error?.message || 'Não foi possível salvar');
+      throw error;
+    }
   };
 
   const deleteDeal = () => {
@@ -491,22 +558,57 @@ export function DealDetailDrawer({
     await updateDeal({ client_id: clientId });
   };
 
-  const saveValue = async () => {
-    const num = parseFloat(dealValueStr) || 0;
-    setDealValueStr(num === 0 ? "" : String(num));
-    await updateDeal({ value: num });
-    setEditingValue(false);
+  const saveBasics = async () => {
+    setSavingBasics(true);
+    try {
+      const updates: Partial<Deal> = {
+        expected_close_date: dealDate || null,
+        priority: dealPriority as Deal['priority'],
+      };
+      if (canSeeFinance) updates.value = parseFloat(dealValueStr) || 0;
+      await updateDeal(updates);
+    } finally {
+      setSavingBasics(false);
+    }
   };
 
-  const saveDate = async () => {
-    await updateDeal({ expected_close_date: dealDate || null });
-    setEditingDate(false);
+  const setTemperature = async (temperature: DealTemperature) => {
+    const previous = dealTemperature;
+    setDealTemperature(temperature);
+    try {
+      await updateDeal({ temperature, temperature_locked: true });
+    } catch {
+      setDealTemperature(previous);
+    }
   };
 
-  const savePriority = async (val: string) => {
-    setDealPriority(val);
-    await updateDeal({ priority: val as any });
-    setEditingPriority(false);
+  const copyPhone = async () => {
+    if (!chatPhone) return;
+    try {
+      await navigator.clipboard.writeText(String(chatPhone));
+      setPhoneCopied(true);
+      window.setTimeout(() => setPhoneCopied(false), 1800);
+    } catch {
+      setSaveState('error');
+      setSaveError('Não foi possível copiar o telefone');
+    }
+  };
+
+  const openPackageEditor = () => {
+    if (detailsRef.current) detailsRef.current.open = true;
+    window.requestAnimationFrame(() => packageSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  };
+
+  const cancelPendingFollowUp = async () => {
+    if (!deal) return;
+    setCancellingFollowUp(true);
+    try {
+      const res = await authFetch(`/api/deals/${deal.id}/follow-ups/pending`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Não foi possível cancelar');
+      await loadFollowUps();
+    } finally {
+      setCancellingFollowUp(false);
+    }
   };
 
   // Label picker click-outside (info tab + header dropdown)
@@ -580,10 +682,14 @@ export function DealDetailDrawer({
 
   const saveTitle = async () => {
     const trimmed = editingTitleVal.trim();
-    if (trimmed && trimmed !== deal?.title) {
-      await updateDeal({ title: trimmed });
+    if (!trimmed) return;
+    setSavingTitle(true);
+    try {
+      if (trimmed !== deal?.title) await updateDeal({ title: trimmed });
+      setEditingTitle(false);
+    } finally {
+      setSavingTitle(false);
     }
-    setEditingTitle(false);
   };
 
   if (!deal) return null;
@@ -593,6 +699,15 @@ export function DealDetailDrawer({
   const isLost = currentStage?.is_final && !currentStage?.is_won;
   const isFinal = currentStage?.is_final;
   const safeHistory = Array.isArray(history) ? history : [];
+  const pendingFollowUp = followUpTasks.find(task => task.status === 'pending' || task.status === 'processing');
+  const latestFollowUp = followUpTasks[0];
+  const basicsDirty =
+    (canSeeFinance && (parseFloat(dealValueStr) || 0) !== (Number(deal.value) || 0)) ||
+    (dealDate || '') !== (deal.expected_close_date || '') ||
+    dealPriority !== (deal.priority || 'medium');
+  const packageHeadline = localItems.length > 0
+    ? localItems.slice(0, 2).map(item => item.catalog_name).join(' + ')
+    : deal.catalog_name || 'Nenhum pacote definido';
 
   const linkedClient = selectedClientId
     ? clients.find(c => c.id === selectedClientId) || client
@@ -619,7 +734,7 @@ export function DealDetailDrawer({
     <>
       {/* Painel lateral - popup da conversa ocupando ~50% da tela à direita.
           Sem fundo escuro: a pipeline continua visível e clicável atrás. */}
-      <div className="fixed inset-y-0 right-0 z-50 w-full lg:w-[30vw] flex">
+      <div className="fixed inset-y-0 right-0 z-50 w-full lg:w-[min(760px,52vw)] flex">
         <div className="relative bg-white dark:bg-gray-900 shadow-2xl flex flex-col overflow-hidden w-full h-full border-l border-gray-200 dark:border-gray-800 animate-slide-up sm:animate-none">
           {/* Header */}
           <div className={`border-b border-gray-200 dark:border-gray-800 px-3 sm:px-5 pt-3 sm:pt-4 pb-0 flex-shrink-0 ${
@@ -647,45 +762,46 @@ export function DealDetailDrawer({
 
               {/* Name + Phone + Stage */}
               <div className="flex-1 min-w-0">
-                {isFinal && (
-                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded-full mb-0.5 ${
-                    isWon
-                      ? "bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300"
-                      : "bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300"
-                  }`}>
-                    {isWon ? <><Trophy size={10} /> Convertido</> : <><XCircle size={10} /> Perdido</>}
-                  </span>
-                )}
-                {editingTitle ? (
-                  <input
-                    autoFocus
-                    value={editingTitleVal}
-                    onChange={e => setEditingTitleVal(e.target.value)}
-                    onBlur={saveTitle}
-                    onKeyDown={e => { if (e.key === "Enter") saveTitle(); if (e.key === "Escape") setEditingTitle(false); }}
-                    className="text-base font-bold text-gray-900 dark:text-white bg-transparent border-b border-gold-400 dark:border-gold-500 outline-none w-full"
-                  />
-                ) : (
-                  <div className="flex items-center gap-1 group">
-                    <h2 className="text-base font-bold text-gray-900 dark:text-white truncate">{deal.title}</h2>
-                    <button
-                      onClick={() => { setEditingTitleVal(deal.title); setEditingTitle(true); }}
-                      className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400 transition-all flex-shrink-0"
-                      title="Editar nome"
-                    >
-                      <Pencil size={11} />
-                    </button>
-                  </div>
-                )}
-                <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 mt-0.5 flex-wrap">
-                  {chatPhone && (
-                    <span className="flex items-center gap-1">
-                      <Phone size={10} /> {chatPhone}
+                <div className="flex items-center gap-2">
+                  <h2 className="truncate text-lg font-semibold tracking-tight text-gray-950 dark:text-white">{chatName}</h2>
+                  {isFinal && (
+                    <span className={`inline-flex flex-shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-bold ${isWon ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300' : 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300'}`}>
+                      {isWon ? <Trophy size={9} /> : <XCircle size={9} />}{isWon ? 'Convertido' : 'Perdido'}
                     </span>
                   )}
-                  {chatPhone && <span>·</span>}
-                  <span className="truncate">{currentStage?.name || deal.stage}</span>
                 </div>
+
+                <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                  {chatPhone ? (
+                    <>
+                      <span className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 dark:text-gray-400"><Phone size={11} />{chatPhone}</span>
+                      <button type="button" onClick={copyPhone} className="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200" title="Copiar telefone">
+                        {phoneCopied ? <Check size={12} className="text-emerald-500" /> : <Copy size={12} />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { onClose(); setSearchParams({ tab: 'inbox', phone: String(chatPhone).replace(/\D/g, '') }); }}
+                        className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-[10px] font-bold text-emerald-700 hover:bg-emerald-500/15 dark:text-emerald-300"
+                      >
+                        <MessageCircle size={11} /> Mensagem
+                      </button>
+                    </>
+                  ) : (
+                    <span className="text-[11px] text-amber-600 dark:text-amber-400">Telefone não informado</span>
+                  )}
+                </div>
+
+                {editingTitle ? (
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <input autoFocus value={editingTitleVal} onChange={e => setEditingTitleVal(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveTitle().catch(() => {}); if (e.key === 'Escape') setEditingTitle(false); }} className="min-w-0 flex-1 rounded-lg border border-gold-400 bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-900 outline-none dark:border-gold-500 dark:bg-gray-800 dark:text-white" />
+                    <button type="button" onClick={() => saveTitle().catch(() => {})} disabled={savingTitle || !editingTitleVal.trim()} className="flex h-7 w-7 items-center justify-center rounded-lg bg-gold-600 text-white disabled:opacity-50" title="Salvar oportunidade">{savingTitle ? <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" /> : <Check size={12} />}</button>
+                    <button type="button" onClick={() => { setEditingTitleVal(deal.title); setEditingTitle(false); }} className="flex h-7 w-7 items-center justify-center rounded-lg border border-gray-200 text-gray-400 dark:border-gray-700" title="Cancelar"><X size={12} /></button>
+                  </div>
+                ) : (
+                  <button type="button" onClick={() => { setEditingTitleVal(deal.title); setEditingTitle(true); }} className="mt-1 inline-flex max-w-full items-center gap-1 text-[10px] text-gray-400 hover:text-gold-600 dark:hover:text-gold-400" title="Editar oportunidade">
+                    <span className="truncate">{currentStage?.name || deal.stage} · {deal.title}</span><Pencil size={10} className="flex-shrink-0" />
+                  </button>
+                )}
               </div>
 
               {/* Fechar - sempre visível no canto */}
@@ -700,16 +816,16 @@ export function DealDetailDrawer({
 
             {/* Row 2: Botões de ação - empilham com gap respiratório */}
             {!isFinal && (
-              <div className="flex items-center gap-2 mb-3 flex-wrap">
+              <div className="mb-3 flex items-center gap-2">
                 <button
                   onClick={markAsWon}
-                  className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold transition-colors min-w-[120px]"
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-gray-950 px-3 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-gray-800 dark:bg-white dark:text-gray-950 dark:hover:bg-gray-100"
                 >
-                  <Trophy size={13} /> Converter
+                  <Trophy size={13} /> Fechar venda
                 </button>
                 <button
                   onClick={markAsLost}
-                  className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 text-xs font-semibold transition-colors min-w-[100px]"
+                  className="flex items-center justify-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-xs font-semibold text-gray-500 transition-colors hover:border-red-200 hover:text-red-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400"
                 >
                   <XCircle size={13} /> Perdido
                 </button>
@@ -720,7 +836,7 @@ export function DealDetailDrawer({
                       setSearchParams({ tab: "inbox", phone: String(chatPhone).replace(/\D/g, "") });
                     }}
                     title="Abrir conversa no Inbox"
-                    className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-emerald-200 dark:border-emerald-800/40 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 text-xs font-semibold transition-colors"
+                    className="hidden"
                   >
                     <MessageCircle size={13} /> Mensagem
                   </button>
@@ -728,14 +844,14 @@ export function DealDetailDrawer({
                 <button
                   onClick={deleteDeal}
                   title="Excluir negócio"
-                  className="flex items-center justify-center p-2 text-gray-400 hover:text-red-500 dark:hover:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors flex-shrink-0 ml-auto sm:ml-0"
+                  className="hidden"
                 >
                   <Trash2 size={16} />
                 </button>
               </div>
             )}
             {isFinal && (
-              <div className="flex justify-end mb-3">
+              <div className="hidden">
                 <button
                   onClick={deleteDeal}
                   title="Excluir negócio"
@@ -746,8 +862,26 @@ export function DealDetailDrawer({
               </div>
             )}
 
+            {!isFinal && (
+              <div className="mb-3 flex items-center justify-between gap-3 rounded-xl bg-gray-50 px-3 py-2 dark:bg-gray-800/60">
+                <span className="text-[9px] font-bold uppercase tracking-[0.14em] text-gray-400 dark:text-gray-500">Temperatura</span>
+                <div className="flex items-center gap-1 rounded-lg bg-white p-1 shadow-sm dark:bg-gray-900">
+                  {TEMPERATURE_OPTIONS.map(option => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setTemperature(option.value)}
+                      className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold transition-colors ${dealTemperature === option.value ? option.active : 'text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'}`}
+                    >
+                      {option.icon}{option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Etiquetas do lead - dropdown inline no header */}
-            <div ref={headerLabelRef} className="relative flex items-center gap-1.5 mb-2 flex-wrap">
+            <div ref={headerLabelRef} className="hidden">
               {/* Labels aplicadas - clique para remover */}
               {dealLabels.map(lId => {
                 const label = availableLabels.find(l => l.id === lId);
@@ -853,122 +987,132 @@ export function DealDetailDrawer({
               )}
             </div>
 
+            {saveState !== 'idle' && (
+              <div className={`mb-3 flex items-center gap-2 rounded-xl px-3 py-2 text-[11px] font-medium ${
+                saveState === 'error'
+                  ? 'bg-red-50 text-red-700 dark:bg-red-900/25 dark:text-red-300'
+                  : saveState === 'saved'
+                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/25 dark:text-emerald-300'
+                  : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'
+              }`}>
+                {saveState === 'saving' && <span className="h-3 w-3 animate-spin rounded-full border-2 border-gray-300 border-t-gray-700 dark:border-gray-600 dark:border-t-white" />}
+                {saveState === 'saved' && <CheckCircle size={13} />}
+                {saveState === 'error' && <AlertCircle size={13} />}
+                <span>{saveState === 'saving' ? 'Salvando alterações...' : saveState === 'saved' ? 'Alterações salvas' : saveError}</span>
+              </div>
+            )}
+
           </div>
 
           <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-4 sm:space-y-6">
 
-            {/* ── Info principal: Valor / Previsão / Prioridade ── */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
-
-              {/* Valor — só quem tem permissão "Financeiro" vê/edita */}
-              {canSeeFinance && (
-              <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide">Valor</label>
-                  {!editingValue && (
-                    <button onClick={() => setEditingValue(true)} className="p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">
-                      <Pencil size={11} />
-                    </button>
-                  )}
+            {/* ── Pacote em destaque: primeira informação comercial ── */}
+            <div className="relative overflow-hidden rounded-2xl border border-gold-500/25 bg-gradient-to-br from-gold-50 to-white p-4 dark:from-gold-950/35 dark:to-gray-900">
+              <div className="absolute -right-8 -top-8 h-28 w-28 rounded-full bg-gold-400/15 blur-2xl" aria-hidden />
+              <div className="relative flex items-start gap-3">
+                <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-gold-500 text-white shadow-sm">
+                  <Package size={18} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-gold-700 dark:text-gold-300">Pacote da oportunidade</p>
+                  <p className={`mt-1 truncate text-base font-semibold ${localItems.length > 0 || deal.catalog_name ? 'text-gray-950 dark:text-white' : 'text-gray-500 dark:text-gray-400'}`}>
+                    {packageHeadline}
+                  </p>
+                  <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                    {localItems.length > 0
+                      ? `${localItems.length} item${localItems.length === 1 ? '' : 's'} vinculado${localItems.length === 1 ? '' : 's'}`
+                      : 'Adicione um combo, serviço ou produto para deixar a proposta clara.'}
+                  </p>
                 </div>
-                {editingValue ? (
-                  <div className="space-y-1.5">
-                    <input
-                      type="number"
-                      value={dealValueStr}
-                      onChange={e => setDealValueStr(e.target.value)}
-                      placeholder="0"
-                      autoFocus
-                      className="w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded px-2 py-1 text-sm text-gray-900 dark:text-white outline-none focus:border-gold-400 dark:focus:border-gold-500"
-                      onKeyDown={e => { if (e.key === "Enter") saveValue(); if (e.key === "Escape") setEditingValue(false); }}
-                    />
-                    <div className="flex gap-2">
-                      <button onClick={saveValue} className="flex-1 py-1 bg-gold-600 hover:bg-gold-700 text-white text-xs rounded font-medium">✓</button>
-                      <button onClick={() => setEditingValue(false)} className="flex-1 py-1 border border-gray-200 dark:border-gray-700 text-gray-500 text-xs rounded">✕</button>
-                    </div>
-                  </div>
-                ) : (
-                  <div>
-                    <p className="text-base font-bold text-gray-900 dark:text-white">
-                      R$ {(deal.value || 0).toLocaleString("pt-BR")}
+                <div className="flex-shrink-0 text-right">
+                  {canSeeFinance && (
+                    <p className="text-sm font-bold tabular-nums text-gray-950 dark:text-white">
+                      R$ {(localItems.length > 0 ? itemsTotal : Number(deal.value) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                     </p>
-                    {localItems.length > 0 && itemsTotal !== deal.value && (
-                      <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">
-                        Itens: R$ {itemsTotal.toLocaleString("pt-BR")}
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-              )}
-
-              {/* Previsão */}
-              <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide">Previsão</label>
-                  {!editingDate && (
-                    <button onClick={() => setEditingDate(true)} className="p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">
-                      <Pencil size={11} />
-                    </button>
                   )}
+                  <button
+                    type="button"
+                    onClick={openPackageEditor}
+                    className="mt-2 inline-flex items-center gap-1 rounded-lg bg-gold-600 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-gold-700"
+                  >
+                    {localItems.length > 0 ? <Pencil size={11} /> : <Plus size={11} />}
+                    {localItems.length > 0 ? 'Editar pacote' : 'Adicionar pacote'}
+                  </button>
                 </div>
-                {editingDate ? (
-                  <div className="space-y-1.5">
-                    <input
-                      type="date"
-                      value={dealDate}
-                      onChange={e => setDealDate(e.target.value)}
-                      autoFocus
-                      className="w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded px-2 py-1 text-xs text-gray-900 dark:text-white outline-none [color-scheme:light] dark:[color-scheme:dark]"
-                      onKeyDown={e => { if (e.key === "Escape") setEditingDate(false); }}
-                    />
-                    <div className="flex gap-2">
-                      <button onClick={saveDate} className="flex-1 py-1 bg-gold-600 hover:bg-gold-700 text-white text-xs rounded font-medium">✓</button>
-                      <button onClick={() => setEditingDate(false)} className="flex-1 py-1 border border-gray-200 dark:border-gray-700 text-gray-500 text-xs rounded">✕</button>
+              </div>
+            </div>
+
+            <details ref={detailsRef} className="group overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800/60 [&::-webkit-details-marker]:hidden">
+                <span>
+                  Mais detalhes
+                  <span className="ml-2 text-[10px] font-normal text-gray-400">valor, previsão, vendedor e automações</span>
+                </span>
+                <ChevronDown size={15} className="text-gray-400 transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="space-y-6 border-t border-gray-100 p-4 dark:border-gray-800">
+
+            {/* ── Dados comerciais sempre editáveis ── */}
+            <div className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800/45">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-950 dark:text-white">Dados da oportunidade</h3>
+                  <p className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400">Preencha ou altere os campos e salve tudo de uma vez.</p>
+                </div>
+                {basicsDirty && <span className="rounded-full bg-amber-500/10 px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-300">Não salvo</span>}
+              </div>
+
+              <div className={`grid grid-cols-1 gap-3 ${canSeeFinance ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
+                {canSeeFinance && (
+                  <label className="block">
+                    <span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 dark:text-gray-400"><DollarSign size={12} /> Valor da venda</span>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">R$</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={dealValueStr}
+                        onChange={e => setDealValueStr(e.target.value)}
+                        placeholder="0,00"
+                        className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-9 pr-3 text-sm font-semibold text-gray-950 outline-none focus:border-gold-500 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                      />
                     </div>
-                  </div>
-                ) : (
-                  <p className="text-sm font-semibold text-gray-900 dark:text-white">
-                    {(() => {
-                      const formatted = safeFormat(deal.expected_close_date, "dd/MM/yyyy");
-                      return formatted || <span className="text-gray-400 font-normal">-</span>;
-                    })()}
-                  </p>
+                  </label>
                 )}
+
+                <label className="block">
+                  <span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 dark:text-gray-400"><CalendarDays size={12} /> Previsão de fechamento</span>
+                  <input
+                    type="date"
+                    value={dealDate}
+                    onChange={e => setDealDate(e.target.value)}
+                    className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-semibold text-gray-950 outline-none focus:border-gold-500 dark:border-gray-700 dark:bg-gray-900 dark:text-white [color-scheme:light] dark:[color-scheme:dark]"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 dark:text-gray-400"><Zap size={12} /> Prioridade</span>
+                  <select
+                    value={dealPriority}
+                    onChange={e => setDealPriority(e.target.value)}
+                    className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-semibold text-gray-950 outline-none focus:border-gold-500 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                  >
+                    {PRIORITY_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </label>
               </div>
 
-              {/* Prioridade */}
-              <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide">Prioridade</label>
-                  {!editingPriority && (
-                    <button onClick={() => setEditingPriority(true)} className="p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">
-                      <Pencil size={11} />
-                    </button>
-                  )}
-                </div>
-                {editingPriority ? (
-                  <div className="space-y-1">
-                    {PRIORITY_OPTIONS.map(opt => (
-                      <button
-                        key={opt.value}
-                        onClick={() => savePriority(opt.value)}
-                        className={`w-full text-left px-2 py-1 rounded text-xs font-medium transition-colors ${
-                          dealPriority === opt.value
-                            ? "bg-gold-600 text-white"
-                            : "hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                    <button onClick={() => setEditingPriority(false)} className="w-full py-1 border border-gray-200 dark:border-gray-700 text-gray-500 text-xs rounded mt-0.5">Cancelar</button>
-                  </div>
-                ) : (
-                  <p className="text-sm font-semibold text-gray-900 dark:text-white capitalize">
-                    {PRIORITY_LABELS[deal.priority] || deal.priority || "Média"}
-                  </p>
-                )}
+              <div className="mt-3 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => saveBasics().catch(() => {})}
+                  disabled={!basicsDirty || savingBasics}
+                  className="inline-flex items-center gap-2 rounded-xl bg-gray-950 px-4 py-2.5 text-xs font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-35 dark:bg-white dark:text-gray-950 dark:hover:bg-gray-100"
+                >
+                  {savingBasics ? <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white dark:border-gray-400 dark:border-t-gray-950" /> : <Save size={14} />}
+                  {savingBasics ? 'Salvando...' : 'Salvar dados'}
+                </button>
               </div>
             </div>
 
@@ -1052,10 +1196,10 @@ export function DealDetailDrawer({
             </div>
 
             {/* ── Pacote / Serviço vinculado (múltiplos itens) ── */}
-            <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-4">
+            <div ref={packageSectionRef} className="scroll-mt-4 rounded-2xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
               <div className="flex items-center justify-between mb-3">
                 <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase flex items-center gap-1">
-                  <Package size={12} /> Pacote / Itens
+                  <Package size={12} /> Composição do pacote
                   {localItems.length > 0 && (
                     <span className="ml-1 px-1.5 py-0.5 rounded-full bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 text-[10px] font-bold">
                       {localItems.length}
@@ -1449,24 +1593,17 @@ export function DealDetailDrawer({
               </div>
             </div>
 
-            {/* Follow-up */}
-            <div>
-              <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase block mb-1">Próximo Follow-up</label>
-              <div className="flex gap-2">
-                <input
-                  type="date"
-                  value={followUp}
-                  onChange={e => setFollowUp(e.target.value)}
-                  className="flex-1 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white outline-none focus:border-gray-400 dark:focus:border-gray-600 [color-scheme:light] dark:[color-scheme:dark]"
-                />
-                <button
-                  onClick={() => updateDeal({ next_follow_up: followUp })}
-                  className="px-3 py-2 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-sm rounded-lg hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors"
-                >
-                  Salvar
-                </button>
-              </div>
-            </div>
+            <FollowUpAutomationCard
+              stage={currentStage}
+              pendingTask={pendingFollowUp}
+              latestTask={latestFollowUp}
+              loading={loadingFollowUps}
+              error={followUpError}
+              cancelling={cancellingFollowUp}
+              onRefresh={loadFollowUps}
+              onCancel={() => cancelPendingFollowUp().catch(() => {})}
+              onConfigure={() => { onClose(); navigate('/pipeline-settings'); }}
+            />
 
             {/* Atividades */}
             <div>
@@ -1561,6 +1698,8 @@ export function DealDetailDrawer({
                 <Trash2 size={16} /> Excluir Negócio
               </button>
             </div>
+              </div>
+            </details>
           </div> {/* fim conteúdo */}
 
         </div> {/* fim modal */}
@@ -1594,6 +1733,123 @@ export function DealDetailDrawer({
         onCancel={() => setConfirmModal(p => ({ ...p, open: false }))}
       />
     </>
+  );
+}
+
+const FOLLOW_UP_STATUS: Record<string, { label: string; detail: string; tone: string }> = {
+  pending: {
+    label: 'Agendado de verdade',
+    detail: 'Está na fila do servidor e será processado automaticamente.',
+    tone: 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800/60 dark:bg-blue-950/30 dark:text-blue-300',
+  },
+  processing: {
+    label: 'Enviando agora',
+    detail: 'O servidor já assumiu esta tarefa de envio.',
+    tone: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-300',
+  },
+  sent: {
+    label: 'Enviado',
+    detail: 'O WhatsApp confirmou o processamento deste follow-up.',
+    tone: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800/60 dark:bg-emerald-950/30 dark:text-emerald-300',
+  },
+  failed: {
+    label: 'Falhou',
+    detail: 'O envio não foi concluído. Revise a conexão e a configuração da etapa.',
+    tone: 'border-red-200 bg-red-50 text-red-700 dark:border-red-800/60 dark:bg-red-950/30 dark:text-red-300',
+  },
+  skipped_no_template: {
+    label: 'Sem template aprovado',
+    detail: 'Fora da janela de 24h, a Meta exige um template aprovado nesta etapa.',
+    tone: 'border-red-200 bg-red-50 text-red-700 dark:border-red-800/60 dark:bg-red-950/30 dark:text-red-300',
+  },
+  cancelled: {
+    label: 'Cancelado',
+    detail: 'Não existe envio pendente desta automação.',
+    tone: 'border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-700 dark:bg-gray-800/60 dark:text-gray-300',
+  },
+};
+
+function FollowUpAutomationCard({
+  stage, pendingTask, latestTask, loading, error, cancelling, onRefresh, onCancel, onConfigure,
+}: {
+  stage?: PipelineStage;
+  pendingTask?: ScheduledFollowUp;
+  latestTask?: ScheduledFollowUp;
+  loading: boolean;
+  error: boolean;
+  cancelling: boolean;
+  onRefresh: () => void;
+  onCancel: () => void;
+  onConfigure: () => void;
+}) {
+  const task = pendingTask || latestTask;
+  const configured = !!stage?.auto_follow_up_enabled && !!stage.follow_up_message;
+  const status = task ? FOLLOW_UP_STATUS[task.status] || FOLLOW_UP_STATUS.cancelled : null;
+
+  return (
+    <section className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800/45">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <span className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl ${configured ? 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400' : 'bg-gray-100 text-gray-400 dark:bg-gray-800'}`}>
+            <Zap size={17} />
+          </span>
+          <div>
+            <h3 className="text-sm font-semibold text-gray-950 dark:text-white">Automação de follow-up</h3>
+            <p className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400">Estado real da fila automática para este negócio.</p>
+          </div>
+        </div>
+        <button type="button" onClick={onRefresh} disabled={loading} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-50 dark:hover:bg-gray-800 dark:hover:text-gray-200" title="Atualizar estado">
+          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+        </button>
+      </div>
+
+      {error ? (
+        <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-[11px] text-red-700 dark:border-red-800/60 dark:bg-red-950/30 dark:text-red-300">
+          Não foi possível consultar a fila agora. Isso não confirma nem cancela um envio já existente.
+        </div>
+      ) : task && status ? (
+        <div className={`mt-3 rounded-xl border px-3 py-3 ${status.tone}`}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-bold">{status.label}</p>
+              <p className="mt-0.5 text-[10px] opacity-80">{status.detail}</p>
+              <p className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold">
+                <Clock3 size={12} />
+                {task.status === 'sent' && task.sent_at
+                  ? `Enviado em ${safeFormat(task.sent_at, 'dd/MM/yyyy HH:mm') || '-'}`
+                  : `Programado para ${safeFormat(task.scheduled_at, 'dd/MM/yyyy HH:mm') || '-'}`}
+              </p>
+              {pendingTask?.message && !pendingTask.message.startsWith('###') && (
+                <p className="mt-2 line-clamp-2 rounded-lg bg-white/45 px-2.5 py-2 text-[10px] italic dark:bg-black/10">“{pendingTask.message}”</p>
+              )}
+            </div>
+            {pendingTask?.status === 'pending' && (
+              <button type="button" onClick={onCancel} disabled={cancelling} className="flex-shrink-0 rounded-lg border border-current/20 px-2.5 py-1.5 text-[10px] font-bold hover:bg-white/40 disabled:opacity-50 dark:hover:bg-black/10">
+                {cancelling ? 'Cancelando...' : 'Cancelar envio'}
+              </button>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className={`mt-3 rounded-xl border px-3 py-3 ${configured ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800/60 dark:bg-emerald-950/30 dark:text-emerald-300' : 'border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-700 dark:bg-gray-800/60 dark:text-gray-300'}`}>
+          <p className="text-xs font-bold">{configured ? 'Ativa na etapa, sem envio pendente' : 'Desativada nesta etapa'}</p>
+          <p className="mt-0.5 text-[10px] opacity-80">
+            {configured
+              ? 'A automação é criada quando o negócio entra nesta etapa. Este lead não tem uma tarefa aguardando envio agora.'
+              : 'Nenhuma mensagem automática será criada ao entrar nesta etapa.'}
+          </p>
+        </div>
+      )}
+
+      <div className="mt-3 flex flex-col gap-2 border-t border-gray-100 pt-3 dark:border-gray-700 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-[10px] leading-relaxed text-gray-500 dark:text-gray-400">
+          O servidor verifica a fila a cada minuto. Fora da janela de 24h do WhatsApp oficial, é necessário um template aprovado.
+        </p>
+        <button type="button" onClick={onConfigure} className="flex-shrink-0 text-left text-[11px] font-semibold text-gold-700 hover:text-gold-600 dark:text-gold-400 dark:hover:text-gold-300">
+          Configurar esta etapa →
+        </button>
+      </div>
+    </section>
   );
 }
 
