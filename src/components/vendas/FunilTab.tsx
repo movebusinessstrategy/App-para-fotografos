@@ -111,7 +111,9 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
   const activeStages = stages.filter((s) => !s.is_final);
 
   const filteredDeals = useMemo(() => {
-    let result = localDeals;
+    // Uma venda convertida pertence ao Histórico/Produção, mesmo se um dado
+    // legado estiver apontando por engano para uma etapa aberta.
+    let result = localDeals.filter(d => !d.converted && !d.converted_job_id);
     if (sellerFilter === 'none') result = result.filter(d => !d.assigned_to);
     else if (sellerFilter !== 'all') result = result.filter(d => d.assigned_to === sellerFilter);
     if (campaignFilter !== 'all') result = result.filter(d => d.campaign_id === campaignFilter);
@@ -174,11 +176,15 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
     );
 
     try {
-      await authFetch(`/api/deals/${dealId}`, {
+      const response = await authFetch(`/api/deals/${dealId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stage: newStageId }),
       });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.message || payload?.error || 'Não foi possível mover o negócio');
+      }
       onUpdate({ silent: true });
     } catch {
       setLocalDeals(previousDeals);
@@ -189,12 +195,13 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
     <>
       <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
         <div className="h-full flex flex-col">
-          {sellers.length > 0 && (
-            <div className="flex items-center gap-2 px-3 sm:px-2 pt-2 pb-2 sm:pb-3 overflow-x-auto">
-              <span className="hidden sm:inline text-xs font-medium text-gray-500 dark:text-gray-400 flex-shrink-0 pl-1">Vendedor:</span>
+          <div className="flex items-center gap-1.5 overflow-x-auto border-b border-black/[0.04] px-2.5 py-1.5 dark:border-white/[0.05]">
+            {sellers.length > 0 && (
+              <>
+              <span className="hidden flex-shrink-0 pl-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400 sm:inline">Vendedor</span>
               <button
                 onClick={() => setSellerFilter('all')}
-                className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                className={`flex-shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
                   sellerFilter === 'all'
                     ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900'
                     : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-300'
@@ -206,19 +213,19 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
                 <button
                   key={s.id}
                   onClick={() => setSellerFilter(s.id)}
-                  className={`flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                  className={`flex flex-shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors ${
                     sellerFilter === s.id
                       ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900'
                       : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-300'
                   }`}
                 >
-                  <SellerAvatar member={s} size={18} />
+                  <SellerAvatar member={s} size={16} />
                   {s.name.split(/\s+/)[0]}
                 </button>
               ))}
               <button
                 onClick={() => setSellerFilter('none')}
-                className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                className={`flex-shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
                   sellerFilter === 'none'
                     ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900'
                     : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-gray-300'
@@ -226,15 +233,15 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
               >
                 Sem responsável
               </button>
-            </div>
-          )}
-          <div className={`flex items-center gap-2 px-3 sm:px-2 pb-2 sm:pb-3 overflow-x-auto ${sellers.length > 0 ? '' : 'pt-2'}`}>
-            <span className="hidden sm:inline text-xs font-medium text-gray-500 dark:text-gray-400 flex-shrink-0 pl-1">Campanha:</span>
+              <span className="mx-1 h-4 w-px flex-shrink-0 bg-gray-200 dark:bg-gray-700" />
+              </>
+            )}
+            <span className="hidden flex-shrink-0 text-[10px] font-semibold uppercase tracking-wide text-gray-400 sm:inline">Campanha</span>
             {campaigns.length > 0 && (
               <>
                 <button
                   onClick={() => setCampaignFilter('all')}
-                  className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                  className={`flex-shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
                     campaignFilter === 'all'
                       ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900'
                       : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-300'
@@ -248,7 +255,7 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
                     <button
                       key={c.id}
                       onClick={() => setCampaignFilter(c.id)}
-                      className={`flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                      className={`flex flex-shrink-0 items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium transition-colors ${
                         active
                           ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900'
                           : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-300'
@@ -263,14 +270,14 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
             )}
             <button
               onClick={() => setShowCampaignManager(true)}
-              className="flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border border-dashed border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:border-pink-400 hover:text-pink-600 transition-colors"
+              className="flex flex-shrink-0 items-center gap-1.5 rounded-full border border-dashed border-gray-300 px-2 py-1 text-[11px] font-medium text-gray-500 transition-colors hover:border-pink-400 hover:text-pink-600 dark:border-gray-600 dark:text-gray-400"
               title="Criar / editar campanhas (vendas especiais)"
             >
               <Settings2 size={13} /> Gerenciar campanhas
             </button>
           </div>
-          <div ref={boardRef} className="flex-1 overflow-x-auto overflow-y-hidden bg-[#f5f4f1] pb-5 pt-1 dark:bg-[#111111] snap-x snap-mandatory sm:snap-none">
-            <div className="flex h-full gap-3 px-3 sm:gap-5 sm:px-4" style={{ minWidth: "max-content" }}>
+          <div ref={boardRef} className="flex-1 snap-x snap-mandatory overflow-x-auto overflow-y-hidden bg-[#f5f4f1] pb-3 pt-1 dark:bg-[#111111] sm:snap-none">
+            <div className="flex h-full gap-2 px-2.5" style={{ minWidth: "max-content" }}>
               {activeStages.map((stage) => (
                 <React.Fragment key={stage.id}>
                   <StageColumn
@@ -341,14 +348,14 @@ function StageColumn({ stage, deals, clientMap, onDealClick, labelMap, campaignM
   return (
     <div
       ref={setNodeRef}
-      className={`flex h-full w-[85vw] max-w-[330px] flex-shrink-0 snap-center flex-col rounded-[1.6rem] border transition-colors sm:min-w-[300px] sm:w-[300px] ${
+      className={`flex h-full w-[82vw] max-w-[272px] flex-shrink-0 snap-center flex-col rounded-2xl border transition-colors sm:w-[260px] sm:min-w-[260px] ${
         isOver
           ? "border-gold-500/45 bg-gold-500/[0.07] dark:bg-gold-500/[0.06]"
           : "border-black/[0.055] bg-white/50 dark:border-white/[0.06] dark:bg-white/[0.025]"
       }`}
     >
       {/* Header */}
-      <div className="flex-shrink-0 px-4 pb-3 pt-4">
+      <div className="flex-shrink-0 px-2.5 pb-1.5 pt-2.5">
         <div className="flex items-center justify-between">
           <div className="flex min-w-0 items-center gap-2">
             <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ backgroundColor: stage.color || '#D4A94A' }} />
@@ -359,12 +366,12 @@ function StageColumn({ stage, deals, clientMap, onDealClick, labelMap, campaignM
           </span>
         </div>
         {canSeeFinance && (
-          <p className="mt-2 text-[11px] font-medium tabular-nums text-gray-400 dark:text-gray-500">R$ {totalValue.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+          <p className="mt-1.5 text-[10px] font-medium tabular-nums text-gray-400 dark:text-gray-500">R$ {totalValue.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
         )}
       </div>
 
       {/* Cards */}
-      <div className="flex-1 space-y-3 overflow-y-auto px-2.5 pb-3">
+      <div className="flex-1 space-y-2 overflow-y-auto px-2 pb-2.5">
         <SortableContext items={deals.map((d) => d.id.toString())}>
           {deals.map((deal) => (
             <React.Fragment key={deal.id}>

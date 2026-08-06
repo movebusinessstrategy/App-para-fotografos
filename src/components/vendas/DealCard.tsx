@@ -26,7 +26,7 @@ function getStaleness(enteredAt?: string | null): 'urgent' | 'warning' | null {
   return null;
 }
 
-export function DealCard({ deal, client, onClick, campaignMap, seller, canSeeFinance = true }: DealCardProps) {
+export function DealCard({ deal, client, onClick, seller, canSeeFinance = true }: DealCardProps) {
   const {
     attributes,
     listeners,
@@ -52,7 +52,6 @@ export function DealCard({ deal, client, onClick, campaignMap, seller, canSeeFin
   const items = (deal.items || []).slice(0, 2);
   const extraItems = (deal.items?.length || 0) - items.length;
 
-  const campaign = deal.campaign_id && campaignMap ? campaignMap.get(deal.campaign_id) : undefined;
   const temperature = deal.temperature || 'cold';
   const temperatureMeta = {
     cold: { label: 'Frio', dot: 'bg-sky-400', cls: 'bg-sky-500/10 text-sky-700 dark:text-sky-300' },
@@ -68,20 +67,20 @@ export function DealCard({ deal, client, onClick, campaignMap, seller, canSeeFin
       {...attributes}
       {...listeners}
       onClick={onClick}
-      className={`group relative cursor-pointer rounded-[1.35rem] border border-black/[0.06] bg-white p-4 shadow-[0_18px_42px_-36px_rgba(0,0,0,0.7)] transition-all hover:-translate-y-0.5 hover:border-gold-500/25 hover:shadow-[0_24px_48px_-34px_rgba(0,0,0,0.55)] dark:border-white/[0.07] dark:bg-[#171717] dark:shadow-black/30 ${isDragging ? 'rotate-1 opacity-50 shadow-xl' : ''}`}
+      className={`group relative cursor-pointer rounded-xl border border-black/[0.06] bg-white p-2.5 shadow-[0_14px_34px_-30px_rgba(0,0,0,0.65)] transition-all hover:-translate-y-0.5 hover:border-gold-500/25 hover:shadow-[0_20px_40px_-30px_rgba(0,0,0,0.5)] dark:border-white/[0.07] dark:bg-[#171717] dark:shadow-black/30 ${isDragging ? 'rotate-1 opacity-50 shadow-xl' : ''}`}
     >
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-2.5">
         <div className="relative flex-shrink-0">
           {avatarUrl ? (
             <img
               src={avatarUrl}
               alt={contactName}
-              className="h-10 w-10 rounded-xl object-cover ring-1 ring-black/5 dark:ring-white/10"
+              className="h-8 w-8 rounded-lg object-cover ring-1 ring-black/5 dark:ring-white/10"
               onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
             />
           ) : (
             <div
-              className="flex h-10 w-10 items-center justify-center rounded-xl text-xs font-bold text-white ring-1 ring-white/20"
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-[10px] font-bold text-white ring-1 ring-white/20"
               style={{ background: avatarBg }}
             >
               {initials}
@@ -97,30 +96,26 @@ export function DealCard({ deal, client, onClick, campaignMap, seller, canSeeFin
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold tracking-tight text-gray-950 dark:text-white">{contactName}</p>
-              <p className="mt-0.5 truncate text-[10px] text-gray-400 dark:text-gray-500">{campaign?.name || 'Oportunidade'}</p>
+              <p className="truncate text-[13px] font-semibold tracking-tight text-gray-950 dark:text-white">{contactName}</p>
             </div>
-            <span className={`inline-flex flex-shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[9px] font-bold ${temperatureMeta.cls}`}>
+            <span className={`inline-flex flex-shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-bold ${temperatureMeta.cls}`}>
               <span className={`h-1.5 w-1.5 rounded-full ${temperatureMeta.dot}`} />{temperatureMeta.label}
             </span>
           </div>
         </div>
       </div>
 
-      <div className="mt-4 flex items-center gap-2 rounded-xl bg-black/[0.025] px-3 py-2.5 dark:bg-white/[0.04]">
-        <Package size={13} className="flex-shrink-0 text-gold-600 dark:text-gold-400" />
-        <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-gray-600 dark:text-gray-300">{primaryPackage}</span>
+      <div className="mt-2 flex items-center gap-1.5 rounded-lg bg-black/[0.025] px-2 py-1.5 dark:bg-white/[0.04]">
+        <Package size={12} className="flex-shrink-0 text-gold-600 dark:text-gold-400" />
+        <span className="min-w-0 flex-1 truncate text-[10px] font-medium text-gray-600 dark:text-gray-300">{primaryPackage}</span>
         {extraItems > 0 && <span className="flex-shrink-0 text-[9px] text-gray-400">+{extraItems}</span>}
+        <span className="flex-shrink-0 text-[10px] font-semibold tabular-nums text-gray-950 dark:text-white">
+          {canSeeFinance ? (deal.value ? `R$ ${Number(deal.value).toLocaleString('pt-BR', { maximumFractionDigits: 0 })}` : 'Sem valor') : '—'}
+        </span>
       </div>
 
-      <div className="mt-3 flex items-end justify-between gap-3">
-        <div>
-          <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-gray-400 dark:text-gray-500">Potencial</p>
-          <p className="mt-0.5 text-sm font-semibold tabular-nums text-gray-950 dark:text-white">
-            {canSeeFinance ? (deal.value ? `R$ ${Number(deal.value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'Sem valor') : '—'}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+      {(staleness || seller) && (
+        <div className="mt-1.5 flex items-center justify-end gap-2">
           {staleness && (
             <span className={`inline-flex items-center gap-1 text-[9px] font-semibold ${
               staleness === 'urgent' ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400'
@@ -129,9 +124,9 @@ export function DealCard({ deal, client, onClick, campaignMap, seller, canSeeFin
               {staleness === 'urgent' ? '+24h' : '+12h'}
             </span>
           )}
-          {seller && <SellerAvatar member={seller} size={20} />}
+          {seller && <SellerAvatar member={seller} size={18} />}
         </div>
-      </div>
+      )}
     </div>
   );
 }

@@ -199,19 +199,23 @@ export const fetchActivityMetrics = async (
   if (dealIds.length === 0) return new Map<number, { count: number; last: string | null }>();
 
   try {
-    const { data, error } = await supabase
-      .from('deal_activities')
-      .select('deal_id, created_at')
-      .in('deal_id', dealIds)
-      .eq('user_id', userId);
-
-    if (error) {
-      console.warn('fetchActivityMetrics', error.message);
-      return new Map();
+    const rows: any[] = [];
+    const batchSize = 200;
+    for (let from = 0; from < dealIds.length; from += batchSize) {
+      const { data, error } = await supabase
+        .from('deal_activities')
+        .select('deal_id, created_at')
+        .in('deal_id', dealIds.slice(from, from + batchSize))
+        .eq('user_id', userId);
+      if (error) {
+        console.warn('fetchActivityMetrics', error.message);
+        return new Map();
+      }
+      rows.push(...(data || []));
     }
 
     const map = new Map<number, { count: number; last: string | null }>();
-    (data || []).forEach((row: any) => {
+    rows.forEach((row: any) => {
       const entry = map.get(row.deal_id) || { count: 0, last: null as string | null };
       entry.count += 1;
       if (!entry.last || new Date(row.created_at) > new Date(entry.last)) {

@@ -404,6 +404,34 @@ const brazilianPhonesMatch = (a: unknown, b: unknown): boolean => {
   return brazilianPhoneVariants(b).some((variant) => av.has(variant));
 };
 
+// Serializa criações simultâneas do mesmo contato dentro do processo Node.
+// O check de duplicidade sozinho não basta: dois requests podem consultar ao
+// mesmo tempo, ambos enxergarem "nenhum" e inserirem cards repetidos. A fila é
+// curta (só envolve a consulta + insert) e a chave é isolada por conta/telefone.
+const dealMutationLocks = new Map<string, Promise<void>>();
+
+const acquireDealMutationLock = async (
+  userId: string,
+  keyPart: string | null,
+): Promise<() => void> => {
+  if (!keyPart) return () => {};
+
+  const key = `${userId}:${keyPart}`;
+  const previous = dealMutationLocks.get(key) || Promise.resolve();
+  let unlock!: () => void;
+  const current = new Promise<void>((resolve) => { unlock = resolve; });
+  dealMutationLocks.set(key, current);
+  await previous;
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    unlock();
+    if (dealMutationLocks.get(key) === current) dealMutationLocks.delete(key);
+  };
+};
+
 // Dedup na CRIAÇÃO de deal: acha um lead JÁ EXISTENTE e ABERTO (fora de etapa
 // final) com o mesmo telefone, por variantes BR (com/sem 55 e 9º dígito).
 // É a trava server-side contra a enxurrada de cards duplicados: o anti-dup do
@@ -4132,7 +4160,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // derivados no .map abaixo; clients(name) é a única relação (só expõe name).
     const { data: jobs } = await supabase
       .from('jobs')
-      .select('id, client_id, job_type, job_name, job_date, job_time, job_end_time, amount, payment_status, payment_method, status, production_stage, production_stage_entered_at, position, assignee_id, labels, cover_image_url, notes, created_at, google_event_id, clients(name)')
+      .select('id, client_id, deal_id, job_type, job_name, job_date, job_time, job_end_time, amount, payment_status, payment_method, status, production_stage, production_stage_entered_at, position, assignee_id, labels, cover_image_url, notes, created_at, google_event_id, clients(name)')
       .eq('user_id', userId)
       .order('job_date', { ascending: false })
       .limit(10000);
@@ -6969,39 +6997,76 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return next;
   };
 
+  const loadAllUserRows = async (
+    supabase: SupabaseClient,
+    table: string,
+    columns: string,
+    userId: string,
+  ): Promise<any[]> => {
+    const pageSize = 1000;
+    const rows: any[] = [];
+    let from = 0;
+
+    while (true) {
+      const { data, error } = await supabase
+        .from(table)
+        .select(columns)
+        .eq('user_id', userId)
+        .order('id', { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+
+      const page = data || [];
+      rows.push(...page);
+      if (page.length < pageSize) return rows;
+      from += pageSize;
+    }
+  };
+
+  const loadDealItemsByDeal = async (
+    supabase: SupabaseClient,
+    dealIds: number[],
+  ): Promise<Map<number, any[]>> => {
+    const itemsByDeal = new Map<number, any[]>();
+    const batchSize = 200;
+
+    for (let from = 0; from < dealIds.length; from += batchSize) {
+      const { data, error } = await supabase
+        .from('deal_items')
+        .select('*')
+        .in('deal_id', dealIds.slice(from, from + batchSize));
+      if (error) throw error;
+
+      (data || []).forEach((item: any) => {
+        const list = itemsByDeal.get(item.deal_id) || [];
+        list.push(item);
+        itemsByDeal.set(item.deal_id, list);
+      });
+    }
+    return itemsByDeal;
+  };
+
   const loadDeals = async (supabase: SupabaseClient, userId: string) => {
     const stages = await ensurePipelineStages(supabase, userId);
     const adminClient = supabaseAdmin || supabase;
 
-    const [dealsRes, clientsRes] = await Promise.all([
-      supabase.from('deals').select('*').eq('user_id', userId),
-      supabase.from('clients').select('id, name').eq('user_id', userId),
+    const [dealsRaw, clients] = await Promise.all([
+      loadAllUserRows(supabase, 'deals', '*', userId),
+      loadAllUserRows(supabase, 'clients', 'id, name', userId),
     ]);
 
-    const clients = clientsRes.data || [];
     const clientMap = new Map<number, string>();
     clients.forEach((c) => clientMap.set(c.id, c.name));
 
-    const dealsRaw = dealsRes.data || [];
-
-    // Carrega itens de todos os deals (deal_items não tem user_id → usa admin)
-    let itemsMap = new Map<number, any[]>();
-    if (dealsRaw.length) {
-      const { data: allItems } = await adminClient
-        .from('deal_items')
-        .select('*')
-        .in('deal_id', dealsRaw.map((d: any) => d.id));
-      (allItems || []).forEach((item: any) => {
-        const list = itemsMap.get(item.deal_id) || [];
-        list.push(item);
-        itemsMap.set(item.deal_id, list);
-      });
-    }
+    // deal_items não tem user_id, então usa admin e lotes pequenos para não
+    // estourar a URL do PostgREST quando a conta passa de mil negócios.
+    const dealIds = dealsRaw.map((deal: any) => Number(deal.id));
+    const itemsMap = await loadDealItemsByDeal(adminClient, dealIds);
 
     const activityMap = await fetchActivityMetrics(
       supabase,
       userId,
-      dealsRaw.map((d: any) => d.id),
+      dealIds,
     );
 
     const deals = dealsRaw.map((deal: any) => {
@@ -7021,6 +7086,117 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     });
 
     return { deals, stages };
+  };
+
+  const repairAlreadyConvertedDeal = async (
+    supabase: SupabaseClient,
+    userId: string,
+    deal: any,
+    wonStage: any,
+  ): Promise<any | null> => {
+    if (!deal.converted && !deal.converted_job_id) return null;
+
+    const jobId = deal.converted_job_id || null;
+    if (jobId) {
+      const { error } = await supabase
+        .from('jobs')
+        .update({ deal_id: deal.id })
+        .eq('id', jobId)
+        .eq('user_id', userId)
+        .is('deal_id', null);
+      if (error) return { status: 500, error: `Falha ao restaurar vínculo da venda: ${error.message}` };
+    }
+
+    const targetStageId = wonStage?.id || 'won';
+    if (deal.stage !== targetStageId || !deal.converted) {
+      const nowIso = new Date().toISOString();
+      const { error } = await supabase.from('deals').update({
+        stage: targetStageId,
+        stage_entered_at: nowIso,
+        current_stage_entered_at: nowIso,
+        stage_history: appendStageHistory(
+          deal.stage_history,
+          targetStageId,
+          wonStage?.name || 'Fechado Ganho',
+          nowIso,
+        ),
+        converted: true,
+        updated_at: nowIso,
+      }).eq('id', deal.id).eq('user_id', userId);
+      if (error) return { status: 500, error: `Falha ao restaurar etapa da venda: ${error.message}` };
+    }
+
+    return {
+      success: true,
+      already_converted: true,
+      client_id: deal.converted_client_id || deal.client_id || null,
+      job_id: jobId,
+      google_calendar_connected: null,
+    };
+  };
+
+  const validateReusableConversionJob = async (
+    supabase: SupabaseClient,
+    userId: string,
+    dealId: number,
+    clientId: number | null,
+    requestedJobId: unknown,
+    requestedJobType: unknown,
+    requestedJobDate: unknown,
+  ): Promise<{ job: any | null; status?: number; error?: string }> => {
+    const jobId = Number(requestedJobId);
+    if (!Number.isFinite(jobId) || !clientId) {
+      return { job: null, status: 400, error: 'Selecione um cliente e um ensaio válidos.' };
+    }
+
+    const { data: existingJob, error } = await supabase
+      .from('jobs')
+      .select('id, client_id, deal_id, job_name, job_type, job_date, status, production_stage')
+      .eq('id', jobId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error || !existingJob) return { job: null, status: 404, error: 'Ensaio existente não encontrado.' };
+    if (Number(existingJob.client_id) !== Number(clientId)) {
+      return { job: null, status: 409, error: 'O ensaio não pertence ao cliente selecionado.' };
+    }
+    if (existingJob.status !== 'scheduled') {
+      return { job: null, status: 409, error: 'Somente um ensaio em aberto pode ser vinculado.' };
+    }
+    if (normalizeContactNameForMatch(existingJob.job_type) !== normalizeContactNameForMatch(requestedJobType)) {
+      return { job: null, status: 409, error: 'O tipo do ensaio existente não corresponde a esta venda.' };
+    }
+    if (String(existingJob.job_date || '').slice(0, 10) !== String(requestedJobDate || '').slice(0, 10)) {
+      return { job: null, status: 409, error: 'A data do ensaio existente não corresponde a esta venda.' };
+    }
+    if (existingJob.deal_id && Number(existingJob.deal_id) !== dealId) {
+      return { job: null, status: 409, error: 'Esse ensaio já está vinculado a outro negócio.' };
+    }
+    return { job: existingJob };
+  };
+
+  const rollbackFailedConversionJob = async (
+    supabase: SupabaseClient,
+    userId: string,
+    dealId: number,
+    jobId: number | null,
+    resolution: 'reused' | 'linked' | 'pre_reserved' | 'created' | null,
+  ) => {
+    if (!jobId || !resolution) return;
+    if (resolution === 'created') {
+      await supabase.from('jobs').delete().eq('id', jobId).eq('user_id', userId);
+      return;
+    }
+    if (resolution === 'reused') {
+      await supabase.from('jobs').update({ deal_id: null })
+        .eq('id', jobId).eq('user_id', userId).eq('deal_id', dealId);
+      return;
+    }
+    if (resolution === 'linked') return;
+    await supabase.from('jobs').update({
+      status: 'pre_reserved',
+      production_stage: null,
+      production_stage_entered_at: null,
+    }).eq('id', jobId).eq('user_id', userId).eq('deal_id', dealId);
   };
 
   app.get('/api/pipeline/stages', requireAuth, async (req, res) => {
@@ -14332,12 +14508,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // de criar card com contact_phone falso que nunca casa em lookup nenhum.
     const rawCanonical = normalizeBrazilianPhone(normalizePhone(contact_phone)) || null;
     const canonicalPhone = rawCanonical && rawCanonical.length >= 14 ? null : rawCanonical;
-    if (canonicalPhone) {
-      const existing = await findOpenDealByPhone(supabase, userId, canonicalPhone, stages);
-      if (existing) return res.json({ id: existing.id, deduped: true });
-    }
+    const releaseCreationLock = await acquireDealMutationLock(userId, canonicalPhone ? `create:${canonicalPhone}` : null);
+    try {
+      if (canonicalPhone) {
+        const existing = await findOpenDealByPhone(supabase, userId, canonicalPhone, stages);
+        if (existing) return res.json({ id: existing.id, deduped: true });
+      }
 
-    const payload: any = {
+      const payload: any = {
       client_id: client_id || null,
       title,
       contact_name: contact_name || title || null,
@@ -14366,35 +14544,38 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       updated_at: nowIso,
     };
 
-    const { data, error } = await supabase.from('deals').insert(payload).select().single();
-    if (error) {
-      console.warn('Falha ao inserir com campos estendidos, tentando fallback', error.message);
-      // Guard anti-duplicata: o 1º insert pode ter GRAVADO no banco e só a
-      // resposta ter falhado (timeout do Render). Antes de re-inserir, confere
-      // se o lead já existe pelo telefone — senão o fallback cria um 2º card.
-      if (canonicalPhone) {
-        const landed = await findOpenDealByPhone(supabase, userId, canonicalPhone, stages);
-        if (landed) return res.json({ id: landed.id, deduped: true });
+      const { data, error } = await supabase.from('deals').insert(payload).select().single();
+      if (error) {
+        console.warn('Falha ao inserir com campos estendidos, tentando fallback', error.message);
+        // Guard anti-duplicata: o 1º insert pode ter GRAVADO no banco e só a
+        // resposta ter falhado (timeout do Render). Antes de re-inserir, confere
+        // se o lead já existe pelo telefone — senão o fallback cria um 2º card.
+        if (canonicalPhone) {
+          const landed = await findOpenDealByPhone(supabase, userId, canonicalPhone, stages);
+          if (landed) return res.json({ id: landed.id, deduped: true });
+        }
+        const minimal = {
+          client_id: payload.client_id,
+          title: payload.title,
+          value: payload.value,
+          stage: payload.stage,
+          priority: payload.priority,
+          expected_close_date: payload.expected_close_date,
+          next_follow_up: payload.next_follow_up,
+          notes: payload.notes,
+          user_id: userId,
+          updated_at: payload.updated_at,
+          current_stage_entered_at: payload.current_stage_entered_at,
+          stage_history: payload.stage_history,
+        };
+        const retry = await supabase.from('deals').insert(minimal).select().single();
+        if (retry.error || !retry.data) return res.status(500).json({ error: retry.error?.message || 'Erro ao criar deal' });
+        return res.json({ id: retry.data.id });
       }
-      const minimal = {
-        client_id: payload.client_id,
-        title: payload.title,
-        value: payload.value,
-        stage: payload.stage,
-        priority: payload.priority,
-        expected_close_date: payload.expected_close_date,
-        next_follow_up: payload.next_follow_up,
-        notes: payload.notes,
-        user_id: userId,
-        updated_at: payload.updated_at,
-        current_stage_entered_at: payload.current_stage_entered_at,
-        stage_history: payload.stage_history,
-      };
-      const retry = await supabase.from('deals').insert(minimal).select().single();
-      if (retry.error || !retry.data) return res.status(500).json({ error: retry.error?.message || 'Erro ao criar deal' });
-      return res.json({ id: retry.data.id });
+      res.json({ id: data.id });
+    } finally {
+      releaseCreationLock();
     }
-    res.json({ id: data.id });
   });
 
   app.post('/api/deals/quick', requireAuth, async (req, res) => {
@@ -14412,13 +14593,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // 14+ dígitos = LID do WhatsApp/lixo, não telefone (mesma guarda da rota acima).
     const rawCanonical2 = normalizeBrazilianPhone(normalizePhone(phone)) || null;
     const canonicalPhone = rawCanonical2 && rawCanonical2.length >= 14 ? null : rawCanonical2;
-    if (canonicalPhone) {
-      const existing = await findOpenDealByPhone(supabase, userId, canonicalPhone, stages);
-      if (existing) return res.json({ id: existing.id, deduped: true });
-    }
+    const releaseCreationLock = await acquireDealMutationLock(userId, canonicalPhone ? `create:${canonicalPhone}` : null);
+    try {
+      if (canonicalPhone) {
+        const existing = await findOpenDealByPhone(supabase, userId, canonicalPhone, stages);
+        if (existing) return res.json({ id: existing.id, deduped: true });
+      }
 
-    const nowIso = new Date().toISOString();
-    const payload: any = {
+      const nowIso = new Date().toISOString();
+      const payload: any = {
       title: name,
       contact_name: name,
       contact_phone: canonicalPhone,
@@ -14444,31 +14627,33 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       updated_at: nowIso,
     };
 
-    const { data, error } = await supabase.from('deals').insert(payload).select().single();
-    if (error) {
-      // Guard anti-duplicata: o 1º insert pode ter gravado e só a resposta ter
-      // falhado (timeout). Confere pelo telefone antes de re-inserir.
-      if (canonicalPhone) {
-        const landed = await findOpenDealByPhone(supabase, userId, canonicalPhone, stages);
-        if (landed) return res.json({ id: landed.id, deduped: true });
+      const { data, error } = await supabase.from('deals').insert(payload).select().single();
+      if (error) {
+        // Guard anti-duplicata: o 1º insert pode ter gravado e só a resposta ter
+        // falhado (timeout). Confere pelo telefone antes de re-inserir.
+        if (canonicalPhone) {
+          const landed = await findOpenDealByPhone(supabase, userId, canonicalPhone, stages);
+          if (landed) return res.json({ id: landed.id, deduped: true });
+        }
+        const retryPayload = {
+          title: name,
+          value: Number(value) || 0,
+          stage: targetStage.id,
+          priority: 'medium',
+          notes: `Telefone: ${phone}${email ? ` | Email: ${email}` : ''}${source ? ` | Origem: ${source}` : ''}`,
+          user_id: userId,
+          updated_at: nowIso,
+          current_stage_entered_at: nowIso,
+          stage_history: payload.stage_history,
+        };
+        const retry = await supabase.from('deals').insert(retryPayload).select().single();
+        if (retry.error || !retry.data) return res.status(500).json({ error: retry.error?.message || 'Erro ao criar lead' });
+        return res.json({ id: retry.data.id, fallbackNotes: true });
       }
-      const retryPayload = {
-        title: name,
-        value: Number(value) || 0,
-        stage: targetStage.id,
-        priority: 'medium',
-        notes: `Telefone: ${phone}${email ? ` | Email: ${email}` : ''}${source ? ` | Origem: ${source}` : ''}`,
-        user_id: userId,
-        updated_at: nowIso,
-        current_stage_entered_at: nowIso,
-        stage_history: payload.stage_history,
-      };
-      const retry = await supabase.from('deals').insert(retryPayload).select().single();
-      if (retry.error || !retry.data) return res.status(500).json({ error: retry.error?.message || 'Erro ao criar lead' });
-      return res.json({ id: retry.data.id, fallbackNotes: true });
+      res.json({ id: data.id });
+    } finally {
+      releaseCreationLock();
     }
-
-    res.json({ id: data.id });
   });
 
   // ─── Sincronização etapa do funil → etiqueta do WhatsApp Business ──────────
@@ -14707,7 +14892,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const { data: existing } = await supabase
       .from('deals')
-      .select('id, stage, stage_entered_at, stage_history, current_stage_entered_at, contact_phone, contact_name, title, converted_at')
+      .select('id, stage, stage_entered_at, stage_history, current_stage_entered_at, contact_phone, contact_name, title, converted, converted_at, converted_client_id, converted_job_id')
       .eq('id', dealId)
       .eq('user_id', userId)
       .single();
@@ -14715,6 +14900,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!existing) return res.status(404).json({ error: 'Deal not found' });
 
     const updates: any = { ...req.body, updated_at: new Date().toISOString() };
+    // Campos de ciclo de vida só podem mudar nas rotas explícitas de converter
+    // e cancelar venda. Um PUT genérico não deve desfazer silenciosamente o
+    // vínculo com Cliente/Produção.
+    delete updates.converted;
+    delete updates.converted_at;
+    delete updates.converted_client_id;
+    delete updates.converted_job_id;
     if (updates.contact_phone !== undefined) {
       updates.contact_phone = normalizePhone(updates.contact_phone) || null;
     }
@@ -14730,6 +14922,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (stageChanged) {
       const stages = await ensurePipelineStages(supabase, userId);
       const newStage = stages.find((s) => s.id === updates.stage);
+      if ((existing.converted || existing.converted_job_id) && !newStage?.is_won) {
+        return res.status(409).json({
+          error: 'converted_deal_cannot_move',
+          message: 'Esta venda já está vinculada à Produção. Use o fluxo de cancelar venda antes de reabri-la ou movê-la.',
+        });
+      }
       const stageName = newStage?.name || updates.stage;
       const nowIso = new Date().toISOString();
       updates.stage_entered_at = nowIso;
@@ -14939,12 +15137,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.post('/api/deals/:id/convert', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
+    const releaseConversionLock = await acquireDealMutationLock(userId, `convert:${req.params.id}`);
+    try {
     let stages = await ensurePipelineStages(supabase, userId);
     // Garante uma etapa de ganho REAL e persistida (contas que refizeram o funil
     // ficavam sem is_won → o negócio ia pra uma etapa 'won' órfã e sumia).
     stages = await ensureWonLostStages(supabase, userId, stages);
     const wonStage = stages.find((s) => s.is_won) || DEFAULT_STAGES.find((s) => s.is_won);
-    const { createClient, createJob, client, job, sinalAmount, existingClientId, converted_at, campaign_id } = req.body;
+    const { createClient, createJob, client, job, sinalAmount, existingClientId, existingJobId, converted_at, campaign_id } = req.body;
     const nowIso = new Date().toISOString();
     // Data da venda retroativa: aceita 'YYYY-MM-DD' (ou ISO) e usa como
     // converted_at do deal. Inválida ou no futuro → agora. O meio-dia evita
@@ -14963,6 +15163,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('user_id', userId)
       .single();
     if (!deal) return res.status(404).json({ error: 'Deal not found' });
+
+    const existingConversion = await repairAlreadyConvertedDeal(supabase, userId, deal, wonStage);
+    if (existingConversion?.status) {
+      return res.status(existingConversion.status).json({ error: existingConversion.error });
+    }
+    if (existingConversion) return res.json(existingConversion);
 
     let clientId = (existingClientId as number | null) || (deal.client_id as number | null);
 
@@ -15013,38 +15219,76 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       preReservedJob = pr || null;
     } catch { /* coluna deal_id ainda não existe */ }
 
-    // TRAVA ANTI-DUPLICIDADE: o cliente já tem um ensaio ABERTO do mesmo tipo?
+    let reusableJob: any | null = null;
+    if (existingJobId !== undefined && existingJobId !== null) {
+      const validation = await validateReusableConversionJob(
+        supabase,
+        userId,
+        Number(deal.id),
+        clientId,
+        existingJobId,
+        job?.job_type,
+        job?.job_date,
+      );
+      if (!validation.job) {
+        return res.status(validation.status || 409).json({
+          error: 'invalid_existing_job',
+          message: validation.error || 'Não foi possível vincular o ensaio existente.',
+        });
+      }
+      reusableJob = validation.job;
+    }
+
+    // TRAVA ANTI-DUPLICIDADE: o cliente já tem um ensaio ABERTO do mesmo tipo
+    // E na mesma data? O mesmo cliente pode comprar dois aniversários em datas
+    // diferentes; isso não deve abrir uma confirmação falsa.
     // Caso real: o import da planilha trouxe o ensaio e, semanas depois, alguém
     // criou um lead e converteu — nasceu um SEGUNDO card do mesmo ensaio (mesma
     // cliente, mesmo tipo, até a mesma data) e ninguém percebeu.
     // Não bloqueia: devolve 409 pro cliente confirmar e repetir com force=true.
-    if (createJob && job && clientId && req.body?.force !== true) {
+    if (!reusableJob && createJob && job && clientId && req.body?.force !== true) {
       const { data: abertos } = await supabase
         .from('jobs')
-        .select('id, job_name, job_type, job_date, production_stage')
+        .select('id, deal_id, job_name, job_type, job_date, production_stage')
         .eq('user_id', userId)
         .eq('client_id', clientId)
         .eq('job_type', job.job_type)
+        .eq('job_date', String(job.job_date || '').slice(0, 10))
         .eq('status', 'scheduled') // ignora cancelado, concluído e pré-reserva
         .limit(5);
       const outros = (abertos || []).filter((j: any) => !preReservedJob || j.id !== preReservedJob.id);
       if (outros.length > 0) {
         return res.status(409).json({
           error: 'duplicate_job',
-          message: `Esse cliente já tem ensaio de ${job.job_type} em aberto.`,
+          message: `Esse cliente já tem ensaio de ${job.job_type} nesta mesma data.`,
           existing: outros.map((j: any) => ({
             id: j.id,
             job_name: j.job_name,
             job_type: j.job_type,
             job_date: j.job_date,
             in_production: !!j.production_stage,
+            can_reuse: !j.deal_id || Number(j.deal_id) === Number(deal.id),
           })),
         });
       }
     }
 
-    let jobId: number | null = null;
-    if (createJob && job) {
+    let jobId: number | null = reusableJob?.id || null;
+    let jobResolution: 'reused' | 'linked' | 'pre_reserved' | 'created' | null = reusableJob
+      ? (reusableJob.deal_id ? 'linked' : 'reused')
+      : null;
+    let releasePreReservedJob = false;
+    if (reusableJob && !reusableJob.deal_id) {
+      const { error } = await supabase
+        .from('jobs')
+        .update({ deal_id: deal.id })
+        .eq('id', reusableJob.id)
+        .eq('user_id', userId)
+        .is('deal_id', null);
+      if (error) return res.status(500).json({ error: `Falha ao vincular o ensaio: ${error.message}` });
+    }
+
+    if (!reusableJob && createJob && job) {
       // Guardas com mensagem CLARA — sem isso a falha do insert no Supabase
       // voltava enigmática e o usuário só via "não converteu".
       const jobDate = String(job.job_date || '').slice(0, 10);
@@ -15076,6 +15320,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
 
       const jobPayload = {
+        deal_id: deal.id,
         client_id: clientId || null,
         job_type: job.job_type,
         job_date: job.job_date,
@@ -15104,33 +15349,23 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           .eq('user_id', userId);
         if (error) return res.status(500).json({ error: error.message });
         jobId = preReservedJob.id;
+        jobResolution = 'pre_reserved';
       } else {
         const { data: newJob, error } = await supabase.from('jobs').insert(jobPayload).select().single();
+        if (error?.code === '23505') {
+          return res.status(409).json({
+            error: 'conversion_in_progress',
+            message: 'Esta venda já está sendo convertida. Aguarde um instante e atualize o funil.',
+          });
+        }
         if (error) return res.status(500).json({ error: error.message });
         jobId = newJob?.id || null;
+        jobResolution = jobId ? 'created' : null;
       }
-
-      // Registra o sinal como pagamento na tabela job_payments.
-      // Venda retroativa: o sinal entra com a data real da venda.
-      if (jobId && sinalAmount && Number(sinalAmount) > 0) {
-        const adminClient = supabaseAdmin || supabase;
-        await adminClient.from('job_payments').insert({
-          job_id: jobId,
-          amount: Number(sinalAmount),
-          description: 'Sinal',
-          payment_date: soldAtIso.slice(0, 10),
-          payment_method: job.payment_method || 'Pix',
-        }).select();
-      }
-
-      // AGENDA: cria o evento no Google Calendar e convida o cliente pelo e-mail
-      // (se a conta tiver Google conectado e o job tiver data). Antes a conversão
-      // NÃO agendava — só agendava quem editava o job depois; por isso "uns sim,
-      // outros não". Fire-and-forget, igual ao POST /api/jobs (não atrasa a resposta).
-      if (jobId) syncJobToGoogleCalendar(supabase, jobId, userId);
     } else if (preReservedJob) {
-      // Converteu sem criar trabalho: libera a data que estava pré-reservada.
-      await supabase.from('jobs').delete().eq('id', preReservedJob.id).eq('user_id', userId);
+      // Só libera depois que o deal for marcado como ganho. Assim uma falha no
+      // update final não apaga a reserva e deixa a conversão pela metade.
+      releasePreReservedJob = true;
     }
 
     const stageId = wonStage?.id || 'won';
@@ -15153,14 +15388,46 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (campaign_id !== undefined) updates.campaign_id = campaign_id;
 
     const { error } = await supabase.from('deals').update(updates).eq('id', req.params.id).eq('user_id', userId);
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) {
+      await rollbackFailedConversionJob(supabase, userId, Number(deal.id), jobId, jobResolution);
+      return res.status(500).json({ error: error.message });
+    }
+
+    if (releasePreReservedJob && preReservedJob) {
+      await supabase.from('jobs').delete().eq('id', preReservedJob.id).eq('user_id', userId);
+    }
+
+    const reusedExistingJob = jobResolution === 'reused' || jobResolution === 'linked';
+
+    // Efeitos financeiros/externos só rodam depois que negócio e trabalho
+    // ficaram ligados. Assim uma falha no update do deal não deixa pagamento
+    // ou evento de calendário órfão.
+    if (jobId && sinalAmount && Number(sinalAmount) > 0) {
+      const adminClient = supabaseAdmin || supabase;
+      await adminClient.from('job_payments').insert({
+        job_id: jobId,
+        amount: Number(sinalAmount),
+        description: 'Sinal',
+        payment_date: soldAtIso.slice(0, 10),
+        payment_method: job?.payment_method || 'Pix',
+      }).select();
+    }
+    if (jobId && !reusedExistingJob) syncJobToGoogleCalendar(supabase, jobId, userId);
+
     if (jobId) {
       await logActivity(req, {
         action: 'convert',
         entityType: 'job',
         entityId: jobId,
-        summary: `Venda convertida e ensaio criado${req.body?.force === true ? ' — confirmado mesmo já tendo ensaio em aberto' : ''}`,
-        details: { deal_id: Number(req.params.id), client_id: clientId, forced: req.body?.force === true },
+        summary: reusedExistingJob
+          ? 'Venda convertida e vinculada ao ensaio que já existia'
+          : `Venda convertida e ensaio criado${req.body?.force === true ? ' — confirmado mesmo já tendo ensaio em aberto' : ''}`,
+        details: {
+          deal_id: Number(req.params.id),
+          client_id: clientId,
+          forced: req.body?.force === true,
+          reused_existing_job: reusedExistingJob,
+        },
       });
     }
     await recordStageEvent(
@@ -15193,7 +15460,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // vira no-op SILENCIOSO — a venda ia só pra agenda do sistema e o usuário
     // achava que tinha ido pro Google. O front usa esse flag pra avisar na hora.
     let googleCalendarConnected: boolean | null = null;
-    if (jobId) {
+    if (jobId && !reusedExistingJob) {
       const { data: ga } = await supabase
         .from('google_auth')
         .select('user_id')
@@ -15203,6 +15470,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
 
     res.json({ success: true, client_id: clientId, job_id: jobId, google_calendar_connected: googleCalendarConnected });
+    } finally {
+      releaseConversionLock();
+    }
   });
 
   app.post('/api/deals/:id/lost', requireAuth, async (req, res) => {
@@ -16841,6 +17111,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('user_id', userId)
       .single();
     if (!deal) return res.status(404).json({ error: 'Deal não encontrado' });
+    if ((deal.converted || deal.converted_job_id) && !targetStage.is_won) {
+      return res.status(409).json({
+        error: 'converted_deal_cannot_move',
+        message: 'Esta venda já está vinculada à Produção. Cancele a venda pelo fluxo próprio antes de reabri-la.',
+      });
+    }
 
     const nowIso = new Date().toISOString();
     const updates: any = {

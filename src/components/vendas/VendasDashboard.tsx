@@ -112,7 +112,7 @@ export function VendasDashboard() {
 
   const activeDeals = deals.filter((d) => {
     const stage = stages.find((s) => s.id === d.stage);
-    return !stage?.is_final;
+    return !d.converted && !d.converted_job_id && !stage?.is_final;
   });
 
   const TABS = [
@@ -126,10 +126,10 @@ export function VendasDashboard() {
   return (
     <div className="flex flex-col flex-1 min-h-0 bg-gray-50 dark:bg-gray-900">
       {/* Header - compacto no mobile */}
-      <div className="flex items-center justify-between gap-2 px-3 sm:px-6 py-3 sm:py-4 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+      <div className="flex flex-shrink-0 items-center justify-between gap-2 border-b border-gray-200 bg-white px-3 py-2 dark:border-gray-700 dark:bg-gray-800 sm:px-4">
         <div className="min-w-0 flex-1">
-          <h1 className="text-base sm:text-xl font-bold text-gray-900 dark:text-white truncate">Vendas</h1>
-          <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-0.5 truncate">
+          <h1 className="truncate text-base font-bold text-gray-900 dark:text-white">Vendas</h1>
+          <p className="mt-0.5 truncate text-[11px] text-gray-500 dark:text-gray-400">
             {activeDeals.length} lead{activeDeals.length !== 1 ? "s" : ""} ativos
           </p>
         </div>
@@ -139,7 +139,7 @@ export function VendasDashboard() {
             onClick={() => fetchData()}
             disabled={refreshing}
             title="Atualizar"
-            className="flex items-center justify-center w-9 h-9 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600 disabled:opacity-60 transition-colors"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-600 transition-colors hover:border-gray-300 disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-600"
           >
             <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
           </button>
@@ -147,7 +147,7 @@ export function VendasDashboard() {
             <button
               onClick={() => setCustomizerOpen(true)}
               title="Configurar funil"
-              className="flex items-center justify-center w-9 h-9 sm:w-auto sm:gap-2 sm:px-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600 text-sm font-medium transition-colors"
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-white text-[12px] font-medium text-gray-600 transition-colors hover:border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-600 sm:w-auto sm:gap-1.5 sm:px-2.5"
             >
               <Settings size={15} />
               <span className="hidden sm:inline">Configurar funil</span>
@@ -156,7 +156,7 @@ export function VendasDashboard() {
           <button
             onClick={() => setNewDealOpen(true)}
             title="Novo Lead"
-            className="flex items-center justify-center h-9 w-9 sm:w-auto sm:gap-2 sm:px-4 rounded-lg bg-gold-600 hover:bg-gold-700 text-white text-sm font-semibold transition-colors"
+            className="flex h-8 w-8 items-center justify-center rounded-lg bg-gold-600 text-[12px] font-semibold text-white transition-colors hover:bg-gold-700 sm:w-auto sm:gap-1.5 sm:px-3"
           >
             <Plus size={16} />
             <span className="hidden sm:inline">Novo Lead</span>
@@ -165,7 +165,7 @@ export function VendasDashboard() {
       </div>
 
       {/* Tabs - scroll horizontal se necessário no mobile, sem quebrar */}
-      <div className="flex gap-1 px-3 sm:px-6 py-2 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex-shrink-0 overflow-x-auto">
+      <div className="flex flex-shrink-0 gap-1 overflow-x-auto border-b border-gray-200 bg-white px-3 py-1.5 dark:border-gray-700 dark:bg-gray-800 sm:px-4">
         {TABS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
@@ -173,7 +173,7 @@ export function VendasDashboard() {
               if (id === "historico") setHistoryInitialFilter("todos");
               setTab(id);
             }}
-            className={`flex items-center gap-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-colors ${
+            className={`flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[12px] font-semibold transition-colors ${
               tab === id
                 ? "bg-gold-50 dark:bg-gold-900/30 text-gold-700 dark:text-gold-300"
                 : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"

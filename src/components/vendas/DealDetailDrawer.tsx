@@ -5,7 +5,7 @@ import { format } from "date-fns";
 import {
   X, Trash2, CheckCircle, XCircle, User, Phone, Mail, Instagram,
   Edit3, Link2, MessageCircle, Trophy, Pencil, Search, Check, Package, Layers, Briefcase,
-  ChevronDown, Plus, Tag, Sparkles, CalendarDays, DollarSign, Save, Clock3, Zap, AlertCircle,
+  Plus, Tag, Sparkles, CalendarDays, DollarSign, Save, Clock3, Zap, AlertCircle,
   RefreshCw, Copy, Flame, Snowflake, SunMedium
 } from "lucide-react";
 import { ConfirmModal } from "../ui/ConfirmModal";
@@ -290,8 +290,6 @@ export function DealDetailDrawer({
   const [localItems, setLocalItems] = useState<DealItem[]>([]);
   const [showAddItem, setShowAddItem] = useState(false);
   const catalogRef = useRef<HTMLDivElement>(null);
-  const packageSectionRef = useRef<HTMLDivElement>(null);
-  const detailsRef = useRef<HTMLDetailsElement>(null);
 
   // Inicializa/sincroniza itens do deal
   useEffect(() => {
@@ -595,8 +593,9 @@ export function DealDetailDrawer({
   };
 
   const openPackageEditor = () => {
-    if (detailsRef.current) detailsRef.current.open = true;
-    window.requestAnimationFrame(() => packageSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    setShowAddItem(true);
+    setCatalogOpen(false);
+    setCatalogSearch('');
   };
 
   const cancelPendingFollowUp = async () => {
@@ -732,29 +731,29 @@ export function DealDetailDrawer({
 
   return (
     <>
-      {/* Painel lateral - popup da conversa ocupando ~50% da tela à direita.
+      {/* Painel lateral compacto: mantém o contexto do Kanban visível.
           Sem fundo escuro: a pipeline continua visível e clicável atrás. */}
-      <div className="fixed inset-y-0 right-0 z-50 w-full lg:w-[min(760px,52vw)] flex">
+      <div className="fixed inset-y-0 right-0 z-50 flex w-full sm:w-[min(560px,94vw)]">
         <div className="relative bg-white dark:bg-gray-900 shadow-2xl flex flex-col overflow-hidden w-full h-full border-l border-gray-200 dark:border-gray-800 animate-slide-up sm:animate-none">
           {/* Header */}
-          <div className={`border-b border-gray-200 dark:border-gray-800 px-3 sm:px-5 pt-3 sm:pt-4 pb-0 flex-shrink-0 ${
+          <div className={`flex-shrink-0 border-b border-gray-200 px-3 pb-0 pt-3 dark:border-gray-800 sm:px-4 ${
             isWon ? "bg-emerald-50 dark:bg-emerald-950/30" :
             isLost ? "bg-red-50 dark:bg-red-950/30" :
             "bg-white dark:bg-gray-900"
           }`}>
             {/* Row 1: Identidade (foto + nome + telefone) + Fechar */}
-            <div className="flex items-center gap-3 mb-3">
+            <div className="mb-2.5 flex items-center gap-2.5">
               {/* WhatsApp profile photo */}
               <div className="flex-shrink-0">
                 {contactPhotoUrl ? (
                   <img
                     src={contactPhotoUrl}
                     alt={chatName || ""}
-                    className="w-11 h-11 rounded-full object-cover"
+                    className="h-9 w-9 rounded-full object-cover"
                     onError={() => setContactPhotoUrl(null)}
                   />
                 ) : (
-                  <div className="w-11 h-11 rounded-full bg-gold-500 flex items-center justify-center text-white font-bold text-sm">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gold-500 text-xs font-bold text-white">
                     {(chatName || "?").slice(0, 2).toUpperCase()}
                   </div>
                 )}
@@ -763,7 +762,7 @@ export function DealDetailDrawer({
               {/* Name + Phone + Stage */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <h2 className="truncate text-lg font-semibold tracking-tight text-gray-950 dark:text-white">{chatName}</h2>
+                  <h2 className="truncate text-base font-semibold tracking-tight text-gray-950 dark:text-white">{chatName}</h2>
                   {isFinal && (
                     <span className={`inline-flex flex-shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-bold ${isWon ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300' : 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300'}`}>
                       {isWon ? <Trophy size={9} /> : <XCircle size={9} />}{isWon ? 'Convertido' : 'Perdido'}
@@ -783,7 +782,7 @@ export function DealDetailDrawer({
                         onClick={() => { onClose(); setSearchParams({ tab: 'inbox', phone: String(chatPhone).replace(/\D/g, '') }); }}
                         className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-[10px] font-bold text-emerald-700 hover:bg-emerald-500/15 dark:text-emerald-300"
                       >
-                        <MessageCircle size={11} /> Mensagem
+                        <MessageCircle size={11} /> Abrir chat
                       </button>
                     </>
                   ) : (
@@ -808,7 +807,7 @@ export function DealDetailDrawer({
               <button
                 onClick={onClose}
                 title="Fechar"
-                className="p-2 -m-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex-shrink-0"
+                className="-m-1 flex-shrink-0 rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300"
               >
                 <X size={20} />
               </button>
@@ -816,16 +815,16 @@ export function DealDetailDrawer({
 
             {/* Row 2: Botões de ação - empilham com gap respiratório */}
             {!isFinal && (
-              <div className="mb-3 flex items-center gap-2">
+              <div className="mb-2.5 flex items-center gap-1.5">
                 <button
                   onClick={markAsWon}
-                  className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-gray-950 px-3 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-gray-800 dark:bg-white dark:text-gray-950 dark:hover:bg-gray-100"
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-gray-950 px-3 py-2 text-[11px] font-semibold text-white transition-colors hover:bg-gray-800 dark:bg-white dark:text-gray-950 dark:hover:bg-gray-100"
                 >
                   <Trophy size={13} /> Fechar venda
                 </button>
                 <button
                   onClick={markAsLost}
-                  className="flex items-center justify-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-xs font-semibold text-gray-500 transition-colors hover:border-red-200 hover:text-red-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400"
+                  className="flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-[11px] font-semibold text-gray-500 transition-colors hover:border-red-200 hover:text-red-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400"
                 >
                   <XCircle size={13} /> Perdido
                 </button>
@@ -863,7 +862,7 @@ export function DealDetailDrawer({
             )}
 
             {!isFinal && (
-              <div className="mb-3 flex items-center justify-between gap-3 rounded-xl bg-gray-50 px-3 py-2 dark:bg-gray-800/60">
+              <div className="mb-2.5 flex items-center justify-between gap-2 rounded-lg bg-gray-50 px-2.5 py-1.5 dark:bg-gray-800/60">
                 <span className="text-[9px] font-bold uppercase tracking-[0.14em] text-gray-400 dark:text-gray-500">Temperatura</span>
                 <div className="flex items-center gap-1 rounded-lg bg-white p-1 shadow-sm dark:bg-gray-900">
                   {TEMPERATURE_OPTIONS.map(option => (
@@ -1004,21 +1003,21 @@ export function DealDetailDrawer({
 
           </div>
 
-          <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-4 sm:space-y-6">
+          <div className="flex-1 space-y-3 overflow-y-auto p-3">
 
             {/* ── Pacote em destaque: primeira informação comercial ── */}
-            <div className="relative overflow-hidden rounded-2xl border border-gold-500/25 bg-gradient-to-br from-gold-50 to-white p-4 dark:from-gold-950/35 dark:to-gray-900">
+            <div className="relative overflow-hidden rounded-xl border border-gold-500/25 bg-gradient-to-br from-gold-50 to-white p-3 dark:from-gold-950/35 dark:to-gray-900">
               <div className="absolute -right-8 -top-8 h-28 w-28 rounded-full bg-gold-400/15 blur-2xl" aria-hidden />
-              <div className="relative flex items-start gap-3">
-                <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-gold-500 text-white shadow-sm">
-                  <Package size={18} />
+              <div className="relative flex items-start gap-2.5">
+                <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-gold-500 text-white shadow-sm">
+                  <Package size={15} />
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-gold-700 dark:text-gold-300">Pacote da oportunidade</p>
-                  <p className={`mt-1 truncate text-base font-semibold ${localItems.length > 0 || deal.catalog_name ? 'text-gray-950 dark:text-white' : 'text-gray-500 dark:text-gray-400'}`}>
+                  <p className={`mt-0.5 truncate text-sm font-semibold ${localItems.length > 0 || deal.catalog_name ? 'text-gray-950 dark:text-white' : 'text-gray-500 dark:text-gray-400'}`}>
                     {packageHeadline}
                   </p>
-                  <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                  <p className="mt-0.5 text-[10px] text-gray-500 dark:text-gray-400">
                     {localItems.length > 0
                       ? `${localItems.length} item${localItems.length === 1 ? '' : 's'} vinculado${localItems.length === 1 ? '' : 's'}`
                       : 'Adicione um combo, serviço ou produto para deixar a proposta clara.'}
@@ -1033,39 +1032,30 @@ export function DealDetailDrawer({
                   <button
                     type="button"
                     onClick={openPackageEditor}
-                    className="mt-2 inline-flex items-center gap-1 rounded-lg bg-gold-600 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-gold-700"
+                    className="mt-1.5 inline-flex items-center gap-1 rounded-md bg-gold-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-gold-700"
                   >
                     {localItems.length > 0 ? <Pencil size={11} /> : <Plus size={11} />}
-                    {localItems.length > 0 ? 'Editar pacote' : 'Adicionar pacote'}
+                    {localItems.length > 0 ? 'Adicionar item' : 'Adicionar pacote'}
                   </button>
                 </div>
               </div>
             </div>
 
-            <details ref={detailsRef} className="group overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800/60 [&::-webkit-details-marker]:hidden">
-                <span>
-                  Mais detalhes
-                  <span className="ml-2 text-[10px] font-normal text-gray-400">valor, previsão, vendedor e automações</span>
-                </span>
-                <ChevronDown size={15} className="text-gray-400 transition-transform group-open:rotate-180" />
-              </summary>
-              <div className="space-y-6 border-t border-gray-100 p-4 dark:border-gray-800">
+            <div className="flex flex-col gap-3">
 
             {/* ── Dados comerciais sempre editáveis ── */}
-            <div className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800/45">
-              <div className="mb-3 flex items-start justify-between gap-3">
+            <div className="-order-2 rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800/45">
+              <div className="mb-2 flex items-center justify-between gap-3">
                 <div>
-                  <h3 className="text-sm font-semibold text-gray-950 dark:text-white">Dados da oportunidade</h3>
-                  <p className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400">Preencha ou altere os campos e salve tudo de uma vez.</p>
+                  <h3 className="text-xs font-semibold text-gray-950 dark:text-white">Valor, previsão e prioridade</h3>
                 </div>
                 {basicsDirty && <span className="rounded-full bg-amber-500/10 px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-300">Não salvo</span>}
               </div>
 
-              <div className={`grid grid-cols-1 gap-3 ${canSeeFinance ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
+              <div className={`grid grid-cols-1 gap-2 ${canSeeFinance ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
                 {canSeeFinance && (
                   <label className="block">
-                    <span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 dark:text-gray-400"><DollarSign size={12} /> Valor da venda</span>
+                    <span className="mb-1 flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide text-gray-500 dark:text-gray-400"><DollarSign size={11} /> Valor</span>
                     <div className="relative">
                       <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">R$</span>
                       <input
@@ -1075,40 +1065,40 @@ export function DealDetailDrawer({
                         value={dealValueStr}
                         onChange={e => setDealValueStr(e.target.value)}
                         placeholder="0,00"
-                        className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-9 pr-3 text-sm font-semibold text-gray-950 outline-none focus:border-gold-500 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                        className="w-full rounded-lg border border-gray-200 bg-white py-2 pl-8 pr-2 text-xs font-semibold text-gray-950 outline-none focus:border-gold-500 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
                       />
                     </div>
                   </label>
                 )}
 
                 <label className="block">
-                  <span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 dark:text-gray-400"><CalendarDays size={12} /> Previsão de fechamento</span>
+                  <span className="mb-1 flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide text-gray-500 dark:text-gray-400"><CalendarDays size={11} /> Previsão</span>
                   <input
                     type="date"
                     value={dealDate}
                     onChange={e => setDealDate(e.target.value)}
-                    className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-semibold text-gray-950 outline-none focus:border-gold-500 dark:border-gray-700 dark:bg-gray-900 dark:text-white [color-scheme:light] dark:[color-scheme:dark]"
+                    className="w-full rounded-lg border border-gray-200 bg-white px-2 py-2 text-xs font-semibold text-gray-950 outline-none focus:border-gold-500 dark:border-gray-700 dark:bg-gray-900 dark:text-white [color-scheme:light] dark:[color-scheme:dark]"
                   />
                 </label>
 
                 <label className="block">
-                  <span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-gray-500 dark:text-gray-400"><Zap size={12} /> Prioridade</span>
+                  <span className="mb-1 flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide text-gray-500 dark:text-gray-400"><Zap size={11} /> Prioridade</span>
                   <select
                     value={dealPriority}
                     onChange={e => setDealPriority(e.target.value)}
-                    className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-semibold text-gray-950 outline-none focus:border-gold-500 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                    className="w-full rounded-lg border border-gray-200 bg-white px-2 py-2 text-xs font-semibold text-gray-950 outline-none focus:border-gold-500 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
                   >
                     {PRIORITY_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
                 </label>
               </div>
 
-              <div className="mt-3 flex justify-end">
+              <div className="mt-2 flex justify-end">
                 <button
                   type="button"
                   onClick={() => saveBasics().catch(() => {})}
                   disabled={!basicsDirty || savingBasics}
-                  className="inline-flex items-center gap-2 rounded-xl bg-gray-950 px-4 py-2.5 text-xs font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-35 dark:bg-white dark:text-gray-950 dark:hover:bg-gray-100"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-gray-950 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-35 dark:bg-white dark:text-gray-950 dark:hover:bg-gray-100"
                 >
                   {savingBasics ? <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white dark:border-gray-400 dark:border-t-gray-950" /> : <Save size={14} />}
                   {savingBasics ? 'Salvando...' : 'Salvar dados'}
@@ -1196,9 +1186,9 @@ export function DealDetailDrawer({
             </div>
 
             {/* ── Pacote / Serviço vinculado (múltiplos itens) ── */}
-            <div ref={packageSectionRef} className="scroll-mt-4 rounded-2xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
-              <div className="flex items-center justify-between mb-3">
-                <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase flex items-center gap-1">
+            <div className="-order-1 rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800/50">
+              <div className="mb-2 flex items-center justify-between">
+                <label className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
                   <Package size={12} /> Composição do pacote
                   {localItems.length > 0 && (
                     <span className="ml-1 px-1.5 py-0.5 rounded-full bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 text-[10px] font-bold">
@@ -1209,7 +1199,7 @@ export function DealDetailDrawer({
                 <button
                   onMouseDown={e => e.preventDefault()}
                   onClick={() => { setShowAddItem(v => !v); setCatalogOpen(false); setCatalogSearch(''); }}
-                  className="flex items-center gap-1 text-xs font-medium text-gold-600 dark:text-gold-400 hover:text-gold-700 dark:hover:text-gold-300 transition-colors"
+                  className="flex items-center gap-1 text-[11px] font-medium text-gold-600 transition-colors hover:text-gold-700 dark:text-gold-400 dark:hover:text-gold-300"
                 >
                   <Plus size={13} /> Adicionar
                 </button>
@@ -1217,11 +1207,11 @@ export function DealDetailDrawer({
 
               {/* Lista de itens vinculados */}
               {localItems.length > 0 && (
-                <div className="space-y-2 mb-3">
+                <div className="mb-2 space-y-1.5">
                   {localItems.map(item => {
                     const cfg = CATALOG_CONFIG[item.catalog_type as keyof typeof CATALOG_CONFIG] || CATALOG_CONFIG.produto;
                     return (
-                      <div key={item.id} className={`p-2.5 rounded-xl border ${cfg.bg} ${cfg.border}`}>
+                      <div key={item.id} className={`rounded-lg border p-2 ${cfg.bg} ${cfg.border}`}>
                         <div className="flex items-center gap-2">
                           <span className={`flex-shrink-0 ${cfg.color}`}>{cfg.icon}</span>
                           <p className="text-sm font-medium text-gray-900 dark:text-white truncate flex-1">{item.catalog_name}</p>
@@ -1266,10 +1256,10 @@ export function DealDetailDrawer({
                           {/* Preço — só quem tem permissão "Financeiro" */}
                           {canSeeFinance && (
                           <div className="text-right">
-                            <p className="text-xs text-gray-400 dark:text-gray-500">
+                            <p className="text-[10px] text-gray-400 dark:text-gray-500">
                               R$ {item.catalog_value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} un.
                             </p>
-                            <p className="text-sm font-bold text-gray-900 dark:text-white">
+                            <p className="text-xs font-bold text-gray-900 dark:text-white">
                               R$ {(item.catalog_value * item.quantidade).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                             </p>
                           </div>
@@ -1280,9 +1270,9 @@ export function DealDetailDrawer({
                   })}
                   {/* Total — só quem tem permissão "Financeiro" */}
                   {canSeeFinance && (
-                  <div className="flex items-center justify-between px-2.5 py-2 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
-                    <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Total dos itens</span>
-                    <span className="text-sm font-bold text-gray-900 dark:text-white">
+                  <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 dark:border-gray-700 dark:bg-gray-800">
+                    <span className="text-[10px] font-semibold uppercase text-gray-500 dark:text-gray-400">Total dos itens</span>
+                    <span className="text-xs font-bold text-gray-900 dark:text-white">
                       R$ {itemsTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                     </span>
                   </div>
@@ -1292,7 +1282,7 @@ export function DealDetailDrawer({
 
               {/* Seletor para adicionar item */}
               {showAddItem && (
-                <div ref={catalogRef} className="space-y-2 border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800">
+                <div ref={catalogRef} className="space-y-2 rounded-lg border border-gray-200 bg-white p-2.5 dark:border-gray-700 dark:bg-gray-800">
                   <p className="text-[11px] font-semibold text-gray-400 dark:text-gray-500 uppercase">Tipo</p>
                   <div className="grid grid-cols-3 gap-1.5">
                     {(['combo', 'produto', 'servico'] as const).map(t => {
@@ -1301,7 +1291,7 @@ export function DealDetailDrawer({
                       return (
                         <button key={t} onMouseDown={e => e.preventDefault()}
                           onClick={() => { setCatalogType(t); setCatalogOpen(true); setCatalogSearch(''); }}
-                          className={`flex flex-col items-center gap-1 py-2 px-1 rounded-xl border text-center transition-all ${
+                          className={`flex items-center justify-center gap-1 px-1 py-1.5 rounded-lg border text-center transition-all ${
                             active ? `${cfg.bg} ${cfg.border} ${cfg.color}` : 'border-gray-200 dark:border-gray-700 text-gray-400 hover:border-gray-300 dark:hover:border-gray-600'
                           }`}>
                           {cfg.icon}
@@ -1313,7 +1303,7 @@ export function DealDetailDrawer({
 
                   {/* Busca */}
                   <div className="relative">
-                    <div className="flex items-center gap-2 border border-gray-200 dark:border-gray-700 rounded-xl px-3 py-2 bg-gray-50 dark:bg-gray-900 focus-within:border-gold-400 dark:focus-within:border-gold-500 transition-colors">
+                    <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1.5 transition-colors focus-within:border-gold-400 dark:border-gray-700 dark:bg-gray-900 dark:focus-within:border-gold-500">
                       <Search size={13} className="text-gray-400 flex-shrink-0" />
                       <input
                         value={catalogSearch}
@@ -1661,24 +1651,9 @@ export function DealDetailDrawer({
               />
             </div>
 
-            {/* Ações */}
-            <div className="border-t border-gray-200 dark:border-gray-800 pt-4 space-y-2">
-              {!isFinal ? (
-                <div className="flex gap-2">
-                  <button
-                    onClick={markAsWon}
-                    className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-emerald-600 dark:bg-emerald-500 text-white rounded-lg hover:bg-emerald-700 dark:hover:bg-emerald-600 text-sm font-medium transition-colors"
-                  >
-                    <Trophy size={16} /> Converter em Venda
-                  </button>
-                  <button
-                    onClick={markAsLost}
-                    className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 text-sm font-medium transition-colors border border-red-200 dark:border-red-800"
-                  >
-                    <XCircle size={16} /> Perdido
-                  </button>
-                </div>
-              ) : (
+            {/* Estado final e exclusão — conversão/perda já ficam no topo. */}
+            <div className="space-y-2 border-t border-gray-200 pt-3 dark:border-gray-800">
+              {isFinal && (
                 <div className={`p-3 rounded-lg text-center ${
                   isWon ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300"
                         : "bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300"
@@ -1693,13 +1668,12 @@ export function DealDetailDrawer({
               )}
               <button
                 onClick={deleteDeal}
-                className="w-full flex items-center justify-center gap-2 py-2 text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg text-sm transition-colors"
+                className="flex w-full items-center justify-center gap-1.5 rounded-lg py-1.5 text-[11px] text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
               >
-                <Trash2 size={16} /> Excluir Negócio
+                <Trash2 size={13} /> Excluir negócio
               </button>
             </div>
               </div>
-            </details>
           </div> {/* fim conteúdo */}
 
         </div> {/* fim modal */}
@@ -1709,6 +1683,8 @@ export function DealDetailDrawer({
         <DealConversionModal
           deal={deal}
           clients={clients}
+          preferredClientId={selectedClientId}
+          preferredItems={localItems}
           onClose={() => setShowConversionModal(false)}
           onConverted={() => { celebrateSale(); setShowConversionModal(false); onUpdate(); onClose(); }}
         />

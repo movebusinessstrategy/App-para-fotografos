@@ -1,9 +1,9 @@
 // src/components/vendas/DealConversionModal.tsx
 import React, { useEffect, useState, useMemo } from "react";
 import { motion } from "motion/react";
-import { Plus, User, Briefcase, ChevronDown, ChevronUp, Link2, DollarSign, Search, Trash2, Package, Tag, Layers, CalendarDays, Megaphone } from "lucide-react";
+import { Plus, User, Briefcase, ChevronDown, ChevronUp, Link2, DollarSign, Search, Trash2, Package, Tag, Layers, CalendarDays, Megaphone, AlertTriangle } from "lucide-react";
 
-import { Deal, Client, SaleCampaign } from "../../types";
+import { Deal, Client, DealItem, SaleCampaign } from "../../types";
 import { authFetch } from "../../utils/authFetch";
 import { useApi } from "../../utils/useApi";
 import { normalizeText } from "../../utils/normalizeText";
@@ -35,14 +35,50 @@ const CATALOG_ICONS: Record<CatalogType, React.ReactNode> = {
 
 interface DealConversionModalProps {
   deal: Deal | null;
-  clients?: Client[]; // ← ADICIONAR para vincular cliente existente
+  clients?: Client[];
+  preferredClientId?: number | null;
+  preferredItems?: DealItem[];
   onClose: () => void;
   onConverted: () => void;
+}
+
+interface DuplicateJob {
+  id: number;
+  job_name?: string | null;
+  job_type: string;
+  job_date?: string | null;
+  in_production?: boolean;
+  can_reuse?: boolean;
+}
+
+interface DuplicateWarning {
+  message: string;
+  existing: DuplicateJob[];
+}
+
+function inferJobType(types: string[], names: Array<string | null | undefined>): string | null {
+  const candidates = names.map(name => normalizeText(name || "")).filter(Boolean);
+  if (candidates.length === 0) return null;
+
+  const exact = types.find(type => candidates.includes(normalizeText(type)));
+  if (exact) return exact;
+
+  return [...types]
+    .filter(type => normalizeText(type) !== "outros")
+    .sort((a, b) => b.length - a.length)
+    .find(type => candidates.some(name => name.includes(normalizeText(type)))) || null;
+}
+
+function formatDuplicateDate(value?: string | null): string {
+  if (!value) return "sem data";
+  return String(value).slice(0, 10).split("-").reverse().join("/");
 }
 
 export function DealConversionModal({ 
   deal, 
   clients = [],
+  preferredClientId,
+  preferredItems,
   onClose, 
   onConverted 
 }: DealConversionModalProps) {
@@ -51,6 +87,11 @@ export function DealConversionModal({
   const [createClient, setCreateClient] = useState(true);
   const [createJob, setCreateJob] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [duplicateWarning, setDuplicateWarning] = useState<DuplicateWarning | null>(null);
+  const [submitError, setSubmitError] = useState("");
+  const [completionWarnings, setCompletionWarnings] = useState<string[]>([]);
+  const [showClientPicker, setShowClientPicker] = useState(false);
+  const [jobTypeTouched, setJobTypeTouched] = useState(false);
   const [sinalAmount, setSinalAmount] = useState(0);
   // Venda especial / Campanha (opcional). "" => sem campanha.
   const [campaignId, setCampaignId] = useState<string>("");
@@ -92,9 +133,11 @@ export function DealConversionModal({
 
   // Itens já salvos no card. Em estado (não direto do prop) porque agora dá pra
   // DESVINCULAR: pacote errado grudado no lead não tinha como sair daqui.
-  const [linkedItems, setLinkedItems] = useState<any[]>(deal?.items || []);
+  const [linkedItems, setLinkedItems] = useState<DealItem[]>(preferredItems || deal?.items || []);
   const [unlinkingId, setUnlinkingId] = useState<string | null>(null);
-  useEffect(() => { setLinkedItems(deal?.items || []); }, [deal?.id, deal?.items]);
+  useEffect(() => {
+    setLinkedItems(preferredItems || deal?.items || []);
+  }, [deal?.id, deal?.items, preferredItems]);
 
   const unlinkItem = async (itemId: string) => {
     setUnlinkingId(itemId);
@@ -106,7 +149,7 @@ export function DealConversionModal({
       }
       setLinkedItems((prev) => prev.filter((i) => i.id !== itemId));
     } catch (e) {
-      alert(`Não deu pra remover o item: ${e instanceof Error ? e.message : "erro desconhecido"}`);
+      setSubmitError(`Não deu pra remover o item: ${e instanceof Error ? e.message : "erro desconhecido"}`);
     } finally {
       setUnlinkingId(null);
     }
@@ -153,11 +196,19 @@ export function DealConversionModal({
 
   useEffect(() => {
     if (deal) {
-      if (deal.client_id) {
+      const initialClientId = preferredClientId !== undefined
+        ? preferredClientId
+        : deal.client_id ?? null;
+      if (initialClientId) {
         setConversionMode("existing");
-        setSelectedClientId(deal.client_id);
+        setSelectedClientId(initialClientId);
         setCreateClient(false);
+      } else {
+        setConversionMode("new");
+        setSelectedClientId(null);
+        setCreateClient(true);
       }
+      const workName = preferredItems?.[0]?.catalog_name || deal.items?.[0]?.catalog_name || deal.catalog_name || deal.title || "";
       setClientData((prev) => ({
         ...prev,
         name: deal.contact_name || deal.title || "",
@@ -168,7 +219,7 @@ export function DealConversionModal({
       }));
       setJobData((prev) => ({
         ...prev,
-        job_name: deal.title || "",
+        job_name: workName,
         amount: deal.value || 0,
         notes: deal.notes || "",
       }));
@@ -176,12 +227,32 @@ export function DealConversionModal({
       setNewItems([]);
       setSoldDate(todayLocalISO());
       setCampaignId(deal.campaign_id || "");
+      setDuplicateWarning(null);
+      setSubmitError("");
+      setCompletionWarnings([]);
+      setShowClientPicker(false);
+      setJobTypeTouched(false);
     }
     // Depende do ID, não do objeto: o polling de 12s do Vendas recria o objeto
     // `deal` a cada ciclo (mesmo dado, identidade nova) e este reset apagava
     // tudo que o usuário estava digitando no meio da conversão.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deal?.id]);
+  }, [deal?.id, preferredClientId]);
+
+  const suggestedJobType = useMemo(() => inferJobType(
+    tiposEnsaio,
+    [
+      ...linkedItems.map(item => item.catalog_name),
+      ...newItems.map(item => item.catalog_name),
+      deal?.catalog_name,
+      deal?.title,
+    ],
+  ), [tiposEnsaio, linkedItems, newItems, deal?.catalog_name, deal?.title]);
+
+  useEffect(() => {
+    if (!suggestedJobType || jobTypeTouched) return;
+    setJobData(prev => prev.job_type === suggestedJobType ? prev : { ...prev, job_type: suggestedJobType });
+  }, [suggestedJobType, jobTypeTouched]);
 
   // Carrega campanhas/vendas especiais (seeds os 6 defaults na 1ª chamada do usuário)
   useEffect(() => {
@@ -223,6 +294,15 @@ export function DealConversionModal({
 
   if (!deal) return null;
 
+  const preselectedClientId = preferredClientId !== undefined
+    ? preferredClientId
+    : deal.client_id ?? null;
+  const hasPreselectedClient = preselectedClientId !== null;
+  const selectedClient = selectedClientId
+    ? clients.find(client => client.id === selectedClientId)
+    : undefined;
+  const closeModal = () => completionWarnings.length > 0 ? onConverted() : onClose();
+
   const toggleSection = (section: "client" | "job") => {
     setExpandedSections((prev) => ({
       ...prev,
@@ -230,92 +310,95 @@ export function DealConversionModal({
     }));
   };
 
-  const submit = async () => {
-    setIsSubmitting(true);
-    try {
-      const itemsNote = newItems.length
-        ? `Itens do catálogo:\n${newItems.map(i => `- ${CATALOG_LABELS[i.catalog_type]}: ${i.catalog_name} (${i.quantidade}x R$ ${i.catalog_value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })})`).join('\n')}`
-        : '';
-      const jobPayload = createJob ? {
-        ...jobData,
-        payment_status: autoPaymentStatus,
-        notes: [
-          jobData.notes,
-          itemsNote,
-          sinalAmount > 0 ? `Sinal pago: R$ ${sinalAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '',
-        ].filter(Boolean).join('\n').trim(),
-      } : undefined;
+  const buildJobPayload = () => {
+    if (!createJob) return undefined;
+    const itemsNote = newItems.length
+      ? `Itens do catálogo:\n${newItems.map(i => `- ${CATALOG_LABELS[i.catalog_type]}: ${i.catalog_name} (${i.quantidade}x R$ ${i.catalog_value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })})`).join('\n')}`
+      : '';
+    const paymentNote = sinalAmount > 0
+      ? `Sinal pago: R$ ${sinalAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+      : '';
+    return {
+      ...jobData,
+      payment_status: autoPaymentStatus,
+      notes: [jobData.notes, itemsNote, paymentNote].filter(Boolean).join('\n').trim(),
+    };
+  };
 
-      // 1. Converte PRIMEIRO (converted_at permite registrar venda retroativa)
-      const doConvert = (force: boolean) => authFetch(`/api/deals/${deal.id}/convert`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          existingClientId: conversionMode === "existing" ? selectedClientId : undefined,
-          createClient: conversionMode === "new" && createClient,
-          createJob,
-          client: conversionMode === "new" && createClient ? clientData : undefined,
-          job: jobPayload,
-          campaign_id: campaignId || undefined,
-          sinalAmount: sinalAmount > 0 ? sinalAmount : undefined,
-          converted_at: soldDate || undefined,
-          ...(force ? { force: true } : {}),
-        }),
-      });
+  const requestConversion = (force: boolean, reusableJobId?: number) => authFetch(`/api/deals/${deal.id}/convert`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      existingClientId: conversionMode === "existing" ? selectedClientId : undefined,
+      createClient: conversionMode === "new" && createClient,
+      createJob,
+      client: conversionMode === "new" && createClient ? clientData : undefined,
+      job: buildJobPayload(),
+      campaign_id: campaignId || undefined,
+      sinalAmount: sinalAmount > 0 ? sinalAmount : undefined,
+      converted_at: soldDate || undefined,
+      ...(reusableJobId ? { existingJobId: reusableJobId } : {}),
+      ...(force ? { force: true } : {}),
+    }),
+  });
 
-      let convRes = await doConvert(false);
-      // 409 = esse cliente já tem ensaio do mesmo tipo em aberto. Confirma antes
-      // de criar um segundo (era assim que nascia ensaio duplicado em produção).
-      if (convRes.status === 409) {
-        const dup = await convRes.json().catch(() => null);
-        if (dup?.error === "duplicate_job") {
-          const dataBR = (d?: string) => (d ? String(d).slice(0, 10).split("-").reverse().join("/") : "sem data");
-          const lista = (dup.existing || [])
-            .map((j: any) => `• ${j.job_name || j.job_type} — ${dataBR(j.job_date)}${j.in_production ? " (já em produção)" : ""}`)
-            .join("\n");
-          const ok = window.confirm(
-            `${dup.message}\n\n${lista}\n\nSe for o MESMO ensaio, cancele aqui e edite o que já existe — criar outro deixa a cliente duplicada na produção.\n\nCriar um ensaio novo mesmo assim?`
-          );
-          if (!ok) return;
-          convRes = await doConvert(true);
-        }
-      }
-      if (!convRes.ok) {
-        const err = await convRes.json().catch(() => null);
-        throw new Error(err?.error || `Erro ao converter (HTTP ${convRes.status})`);
-      }
-      const convData: { google_calendar_connected?: boolean | null } = await convRes.json().catch(() => ({}));
+  const readDuplicateWarning = async (response: Response): Promise<DuplicateWarning | null> => {
+    if (response.status !== 409) return null;
+    const duplicate = await response.clone().json().catch(() => null);
+    if (duplicate?.error !== "duplicate_job") return null;
+    return {
+      message: duplicate.message || "Esta cliente já tem um ensaio semelhante em aberto.",
+      existing: Array.isArray(duplicate.existing) ? duplicate.existing : [],
+    };
+  };
 
-      // 2. Só DEPOIS grava os itens no card. Antes era o contrário: se a conversão
-      // falhasse, o pacote ficava grudado no lead e não tinha como desvincular.
-      // O valor do ensaio não depende disso, já foi no payload do job.
-      for (const it of newItems) {
-        const itemRes = await authFetch(`/api/deals/${deal.id}/items`, {
+  const persistNewItems = async (): Promise<string[]> => {
+    const results = await Promise.all(newItems.map(async item => {
+      const warning = `O item "${item.catalog_name}" não entrou no pacote. Ele pode ser adicionado depois no Financeiro.`;
+      try {
+        const response = await authFetch(`/api/deals/${deal.id}/items`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(it),
+          body: JSON.stringify(item),
         });
-        if (!itemRes.ok) {
-          alert(`Venda convertida, mas o item "${it.catalog_name}" não entrou no pacote. Dá pra adicionar depois no Financeiro.`);
-        }
+        return response.ok ? null : warning;
+      } catch {
+        return warning;
+      }
+    }));
+    return results.filter((warning): warning is string => Boolean(warning));
+  };
+
+  const submit = async (force = false, reusableJobId?: number) => {
+    setIsSubmitting(true);
+    setSubmitError("");
+    setDuplicateWarning(null);
+    try {
+      const response = await requestConversion(force, reusableJobId);
+      const duplicate = await readDuplicateWarning(response);
+      if (duplicate) {
+        setDuplicateWarning(duplicate);
+        return;
+      }
+      if (!response.ok) {
+        const error = await response.json().catch(() => null);
+        throw new Error(error?.message || error?.error || `Erro ao converter (HTTP ${response.status})`);
       }
 
-      // Google desconectado = o ensaio ficou SÓ na agenda do sistema. Sem esse
-      // aviso a falha era silenciosa e o usuário só descobria depois.
-      if (createJob && convData.google_calendar_connected === false) {
-        alert(
-          "Venda convertida! Mas o Google Calendar NÃO está conectado nesta conta — " +
-          "o ensaio ficou só na agenda do sistema.\n\n" +
-          "Conecte em Configurações → Integrações → Google Calendar e use " +
-          "\"Sincronizar agora\" pra enviar os ensaios pendentes."
-        );
+      const conversion: { google_calendar_connected?: boolean | null } = await response.json().catch(() => ({}));
+      setDuplicateWarning(null);
+      const warnings = await persistNewItems();
+      if (createJob && conversion.google_calendar_connected === false) {
+        warnings.push("O Google Calendar não está conectado. O ensaio ficou somente na agenda do sistema.");
+      }
+      if (warnings.length > 0) {
+        setCompletionWarnings(warnings);
+        return;
       }
       onConverted();
     } catch (error) {
-      // Converter não pode falhar em silêncio: antes só caía no console e o
-      // usuário achava que tinha dado certo.
       console.error("Erro ao converter deal:", error);
-      alert(`Não deu pra converter a venda: ${error instanceof Error ? error.message : "erro desconhecido"}`);
+      setSubmitError(`Não deu pra converter a venda: ${error instanceof Error ? error.message : "erro desconhecido"}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -355,23 +438,23 @@ export function DealConversionModal({
       <motion.div 
         initial={{ scale: 0.96, opacity: 0 }} 
         animate={{ scale: 1, opacity: 1 }} 
-        className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl dark:shadow-black/40 w-full max-w-4xl overflow-hidden border border-transparent dark:border-gray-800"
+        className="w-full max-w-3xl overflow-hidden rounded-2xl border border-transparent bg-white shadow-2xl dark:border-gray-800 dark:bg-gray-900 dark:shadow-black/40"
       >
         {/* Header */}
-        <div className="p-6 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between bg-emerald-50/70 dark:bg-emerald-950/30">
+        <div className="flex items-center justify-between border-b border-gray-100 bg-emerald-50/70 p-4 dark:border-gray-800 dark:bg-emerald-950/30">
           <div>
             <p className="text-xs uppercase text-emerald-600 dark:text-emerald-400 font-semibold tracking-wide">
               🎉 Fechado Ganho
             </p>
-            <h3 className="text-xl font-bold text-gray-900 dark:text-white">
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white">
               Converter "{deal.title}" em venda
             </h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
               Vincule a um cliente existente ou cadastre um novo
             </p>
           </div>
-          <button 
-            onClick={onClose} 
+          <button
+            onClick={closeModal}
             className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors p-1"
           >
             <Plus className="rotate-45" size={24} />
@@ -379,9 +462,10 @@ export function DealConversionModal({
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-4 max-h-[65vh] overflow-y-auto">
+        <div className="max-h-[72vh] space-y-3 overflow-y-auto p-4">
           
           {/* ====== MODO DE CONVERSÃO ====== */}
+          {!hasPreselectedClient && (
           <div className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl space-y-3">
             <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">
               Como deseja registrar este cliente?
@@ -425,6 +509,7 @@ export function DealConversionModal({
               </button>
             </div>
           </div>
+          )}
 
           {/* ====== DATA DA VENDA (permite venda retroativa) ====== */}
           <div className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl flex flex-wrap items-center gap-4">
@@ -686,32 +771,49 @@ export function DealConversionModal({
           {/* ====== SELECIONAR CLIENTE EXISTENTE ====== */}
           {conversionMode === "existing" && (
             <div className="border border-gray-100 dark:border-gray-800 rounded-xl p-4 bg-blue-50/30 dark:bg-blue-950/10">
-              <label className={labelClasses}>
-                <Link2 size={12} className="inline mr-1" />
-                Selecione o Cliente
-              </label>
-              {/* Dropdown com busca (portal): o <select> nativo fechava sozinho
-                  quando o polling re-renderizava as <option> no meio da digitação. */}
-              <SearchableSelect
-                value={selectedClientId ? String(selectedClientId) : ""}
-                onChange={(v) => setSelectedClientId(v ? Number(v) : null)}
-                showSearchIcon
-                placeholder="Buscar cliente..."
-                searchPlaceholder="Nome, telefone ou e-mail..."
-                emptyMessage="Nenhum cliente encontrado"
-                triggerClassName="py-2"
-                options={[
-                  { value: "", label: "-- Selecione um cliente --" },
-                  ...clients.map((client) => ({
-                    value: String(client.id),
-                    label: `${client.name}${client.phone ? ` - ${client.phone}` : ""}${client.email ? ` (${client.email})` : ""}`,
-                  })),
-                ]}
-              />
-              {selectedClientId && (
-                <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-2">
-                  ✓ O deal será vinculado a este cliente
-                </p>
+              {hasPreselectedClient && !showClientPicker ? (
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-blue-500 dark:text-blue-400">Cliente já vinculado</p>
+                    <p className="mt-0.5 truncate text-sm font-semibold text-gray-900 dark:text-white">
+                      {selectedClient?.name || deal.contact_name || deal.client_name || `Cliente #${selectedClientId}`}
+                    </p>
+                    {selectedClient?.phone && <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{selectedClient.phone}</p>}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowClientPicker(true)}
+                    className="rounded-lg border border-blue-200 px-2.5 py-1.5 text-xs font-semibold text-blue-600 transition-colors hover:bg-blue-50 dark:border-blue-800 dark:text-blue-300 dark:hover:bg-blue-950/30"
+                  >
+                    Trocar
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <label className={labelClasses}>
+                    <Link2 size={12} className="inline mr-1" />
+                    Selecione o Cliente
+                  </label>
+                  <SearchableSelect
+                    value={selectedClientId ? String(selectedClientId) : ""}
+                    onChange={(v) => {
+                      setSelectedClientId(v ? Number(v) : null);
+                      if (v) setShowClientPicker(false);
+                    }}
+                    showSearchIcon
+                    placeholder="Buscar cliente..."
+                    searchPlaceholder="Nome, telefone ou e-mail..."
+                    emptyMessage="Nenhum cliente encontrado"
+                    triggerClassName="py-2"
+                    options={[
+                      { value: "", label: "-- Selecione um cliente --" },
+                      ...clients.map((client) => ({
+                        value: String(client.id),
+                        label: `${client.name}${client.phone ? ` - ${client.phone}` : ""}${client.email ? ` (${client.email})` : ""}`,
+                      })),
+                    ]}
+                  />
+                </>
               )}
             </div>
           )}
@@ -974,7 +1076,10 @@ export function DealConversionModal({
                       <label className={labelClasses}>Tipo *</label>
                       <select
                         value={jobData.job_type}
-                        onChange={(e) => setJobData((p) => ({ ...p, job_type: e.target.value }))}
+                        onChange={(e) => {
+                          setJobTypeTouched(true);
+                          setJobData((p) => ({ ...p, job_type: e.target.value }));
+                        }}
                         className={selectClasses}
                       >
                         {jobTypes.map((type) => (
@@ -1103,43 +1208,110 @@ export function DealConversionModal({
         </div>
 
         {/* Footer Actions */}
-        <div className="p-6 border-t border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
-          <div className="flex items-center justify-between">
-            <p className="text-xs text-gray-400 dark:text-gray-500">
-              {conversionMode === "existing" && selectedClientId && "Deal será vinculado ao cliente selecionado"}
-              {conversionMode === "existing" && !selectedClientId && "Selecione um cliente para continuar"}
-              {conversionMode === "new" && createClient && createJob && "Novo cliente e trabalho serão criados"}
-              {conversionMode === "new" && createClient && !createJob && "Apenas o novo cliente será cadastrado"}
-              {conversionMode === "new" && !createClient && createJob && "Apenas o trabalho será criado"}
-            </p>
-            <div className="flex gap-3">
-              <button 
-                onClick={onClose} 
-                className="px-5 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-sm font-semibold text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-              >
-                Cancelar
-              </button>
-              <button 
-                onClick={submit} 
-                disabled={!canSubmit || isSubmitting}
-                className="px-5 py-2.5 rounded-xl bg-emerald-600 dark:bg-emerald-500 text-white text-sm font-semibold flex items-center gap-2 hover:bg-emerald-700 dark:hover:bg-emerald-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isSubmitting ? (
-                  <>
-                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
-                    Convertendo...
-                  </>
-                ) : (
-                  <>
-                    <CheckIcon /> Converter e Salvar
-                  </>
-                )}
-              </button>
+        <div className="border-t border-gray-100 bg-gray-50/50 p-4 dark:border-gray-800 dark:bg-gray-800/30">
+          {completionWarnings.length > 0 ? (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-800 dark:bg-emerald-950/25">
+              <h4 className="text-sm font-bold text-emerald-900 dark:text-emerald-100">Venda convertida</h4>
+              <p className="mt-1 text-xs text-emerald-800 dark:text-emerald-200">A conversão foi concluída, com estes avisos:</p>
+              <ul className="mt-2 space-y-1 text-xs text-amber-700 dark:text-amber-300">
+                {completionWarnings.map(warning => <li key={warning}>• {warning}</li>)}
+              </ul>
+              <div className="mt-3 flex justify-end">
+                <button
+                  type="button"
+                  onClick={onConverted}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-emerald-700"
+                >
+                  Concluir
+                </button>
+              </div>
             </div>
-          </div>
+          ) : duplicateWarning ? (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/25">
+              <div className="flex items-start gap-3">
+                <AlertTriangle size={19} className="mt-0.5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
+                <div className="min-w-0 flex-1">
+                  <h4 className="text-sm font-bold text-amber-900 dark:text-amber-100">Ensaio semelhante já existente</h4>
+                  <p className="mt-1 text-xs text-amber-800 dark:text-amber-200">{duplicateWarning.message}</p>
+                  <div className="mt-2 space-y-1">
+                    {duplicateWarning.existing.map(job => (
+                      <div key={job.id} className="flex flex-wrap items-center gap-2 rounded-lg bg-white/70 px-2.5 py-1.5 text-xs text-gray-700 dark:bg-black/15 dark:text-gray-200">
+                        <div className="min-w-0 flex-1">
+                          <span className="font-semibold">{job.job_name || job.job_type}</span>
+                          <span className="ml-2 text-gray-400">{formatDuplicateDate(job.job_date)}</span>
+                          {job.in_production && <span className="ml-2 font-semibold text-purple-600 dark:text-purple-300">Em produção</span>}
+                        </div>
+                        {job.can_reuse !== false && (
+                          <button
+                            type="button"
+                            onClick={() => submit(false, job.id)}
+                            disabled={isSubmitting}
+                            className="rounded-md bg-emerald-600 px-2.5 py-1.5 font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-50"
+                          >
+                            {isSubmitting ? "Vinculando..." : "Usar este ensaio"}
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-[11px] text-amber-700 dark:text-amber-300">
+                    Se for o mesmo ensaio, use-o acima: o card sai de Vendas e o trabalho continua na Produção sem duplicar.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-3 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  disabled={isSubmitting}
+                  className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-900 transition-colors hover:bg-amber-100 disabled:opacity-50 dark:border-amber-800 dark:bg-gray-900 dark:text-amber-100 dark:hover:bg-amber-950/40"
+                >
+                  Voltar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => submit(true)}
+                  disabled={isSubmitting}
+                  className="flex items-center gap-2 rounded-lg bg-amber-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-amber-700 disabled:opacity-50"
+                >
+                  {isSubmitting ? "Convertendo..." : "É outra venda: criar novo"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {submitError && (
+                <div role="alert" className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 dark:border-red-800 dark:bg-red-950/25 dark:text-red-300">
+                  {submitError}
+                </div>
+              )}
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-gray-400 dark:text-gray-500">
+                  {conversionMode === "existing" && selectedClientId && `Venda vinculada a ${selectedClient?.name || "cliente selecionado"}`}
+                  {conversionMode === "existing" && !selectedClientId && "Selecione um cliente para continuar"}
+                  {conversionMode === "new" && createClient && createJob && "Novo cliente e trabalho serão criados"}
+                  {conversionMode === "new" && createClient && !createJob && "Apenas o novo cliente será cadastrado"}
+                  {conversionMode === "new" && !createClient && createJob && "Apenas o trabalho será criado"}
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={closeModal}
+                    disabled={isSubmitting}
+                    className="rounded-lg border border-gray-200 px-4 py-2 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-100 disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={() => submit()}
+                    disabled={!canSubmit || isSubmitting}
+                    className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-emerald-500 dark:hover:bg-emerald-600"
+                  >
+                    {isSubmitting ? "Convertendo..." : <><CheckIcon /> Converter e salvar</>}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </motion.div>
     </div>
