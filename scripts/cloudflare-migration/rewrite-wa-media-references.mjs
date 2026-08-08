@@ -36,7 +36,7 @@ function publicWaMediaPath(reference) {
 }
 
 function parseDataUrl(reference) {
-  const match = reference.match(/^data:([^;]+);base64,(.+)$/s);
+  const match = reference.match(/^data:([^;,]+)(?:;[^,]*)?;base64,(.+)$/s);
   if (!match) return null;
   return { buffer: Buffer.from(match[2], 'base64'), mimetype: match[1] };
 }
@@ -49,32 +49,52 @@ function sha256(buffer) {
   return createHash('sha256').update(buffer).digest('hex');
 }
 
-async function ensureR2Object(s3, path) {
-  const head = await s3.send(new HeadObjectCommand({ Bucket: r2Bucket, Key: `wa-media/${path}` }));
-  if (Number(head.ContentLength || 0) <= 0) throw new Error('objeto vazio no R2');
+async function r2ObjectExists(s3, path) {
+  try {
+    const head = await s3.send(new HeadObjectCommand({ Bucket: r2Bucket, Key: `wa-media/${path}` }));
+    return Number(head.ContentLength || 0) > 0;
+  } catch (error) {
+    if (error?.$metadata?.httpStatusCode === 404 || error?.name === 'NotFound' || error?.name === 'UnknownError') {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function uploadR2Buffer(s3, path, buffer, mimetype, metadata) {
+  const digest = sha256(buffer);
+  await s3.send(new PutObjectCommand({
+    Bucket: r2Bucket,
+    Key: `wa-media/${path}`,
+    Body: buffer,
+    ContentLength: buffer.length,
+    ContentType: mimetype || 'application/octet-stream',
+    Metadata: { sha256: digest, ...metadata },
+  }));
+  if (!await r2ObjectExists(s3, path)) throw new Error('objeto ausente no R2 após upload');
+}
+
+async function copyPublicObject(s3, supabase, path) {
+  if (await r2ObjectExists(s3, path)) return;
+  const { data, error } = await supabase.storage.from('wa-media').download(path);
+  if (error || !data) throw new Error(`delta ausente no Supabase: ${error?.message || path}`);
+  const buffer = Buffer.from(await data.arrayBuffer());
+  await uploadR2Buffer(s3, path, buffer, data.type, { 'source-bucket': 'wa-media', 'source-delta': 'true' });
 }
 
 async function moveDataUrl(s3, row, parsed) {
   const digest = sha256(parsed.buffer);
   const path = `${row.user_id}/legacy/${row.id}-${digest.slice(0, 16)}.${extensionForMime(parsed.mimetype)}`;
-  await s3.send(new PutObjectCommand({
-    Bucket: r2Bucket,
-    Key: `wa-media/${path}`,
-    Body: parsed.buffer,
-    ContentLength: parsed.buffer.length,
-    ContentType: parsed.mimetype,
-    Metadata: { sha256: digest, 'source-row': String(row.id) },
-  }));
-  await ensureR2Object(s3, path);
+  await uploadR2Buffer(s3, path, parsed.buffer, parsed.mimetype, { 'source-row': String(row.id) });
   return path;
 }
 
-async function prepareUpdate(s3, row) {
+async function prepareUpdate(s3, supabase, row) {
   const reference = String(row.media_url || '');
   if (!reference || reference.startsWith('r2://')) return { status: 'already_r2', row };
   const publicPath = publicWaMediaPath(reference);
   if (publicPath) {
-    await ensureR2Object(s3, publicPath);
+    await copyPublicObject(s3, supabase, publicPath);
     return { status: 'ready', row, media_url: storageReference(publicPath) };
   }
   const dataUrl = parseDataUrl(reference);
@@ -155,7 +175,7 @@ async function main() {
     credentials: { accessKeyId, secretAccessKey },
   });
   const rows = await loadRows(supabase);
-  const results = await runPool(rows, 10, (row) => prepareUpdate(s3, row));
+  const results = await runPool(rows, 10, (row) => prepareUpdate(s3, supabase, row));
   const ready = results.filter((result) => result.status === 'ready');
   if (execute) await applyUpdates(supabase, ready);
 

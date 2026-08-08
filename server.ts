@@ -75,7 +75,7 @@ async function storeWaMediaObject(userId: string, buffer: Buffer, mimetype: stri
 
 async function storeWaMediaBase64(userId: string, rawBase64: string, mimetype: string): Promise<string | null> {
   if (!rawBase64) return null;
-  const dataUrl = rawBase64.match(/^data:([^;]+);base64,(.+)$/s);
+  const dataUrl = rawBase64.match(/^data:([^;,]+)(?:;[^,]*)?;base64,(.+)$/s);
   const resolvedMime = dataUrl?.[1] || mimetype || 'application/octet-stream';
   const payload = dataUrl?.[2] || rawBase64;
   return storeWaMediaObject(userId, Buffer.from(payload, 'base64'), resolvedMime);
