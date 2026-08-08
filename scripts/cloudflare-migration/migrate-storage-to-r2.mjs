@@ -58,10 +58,12 @@ function requestedLimit() {
 }
 
 async function matchesExisting(s3, item) {
+  const expectedSha = item.expectedSha || '';
   try {
     const head = await s3.send(new HeadObjectCommand({ Bucket: r2Bucket, Key: objectKey(item) }));
     return Number(head.ContentLength || 0) === Number(item.size || 0)
-      && Boolean(head.Metadata?.sha256);
+      && Boolean(expectedSha)
+      && head.Metadata?.sha256 === expectedSha;
   } catch (error) {
     if (error?.$metadata?.httpStatusCode === 404 || error?.name === 'NotFound') return false;
     throw error;
@@ -69,7 +71,8 @@ async function matchesExisting(s3, item) {
 }
 
 async function copyObject(context, item) {
-  if (await matchesExisting(context.s3, item)) {
+  const itemWithDigest = { ...item, expectedSha: context.copiedDigests.get(objectKey(item)) };
+  if (await matchesExisting(context.s3, itemWithDigest)) {
     return { status: 'skipped', bytes: Number(item.size || 0), key: objectKey(item) };
   }
 
@@ -99,6 +102,19 @@ async function copyObject(context, item) {
     throw new Error('verificação R2 falhou após o upload');
   }
   return { status: 'copied', bytes: buffer.length, key: objectKey(item), sha256: digest };
+}
+
+async function loadCopiedDigests(path) {
+  try {
+    const text = (await readFile(path, 'utf8')).trim();
+    const rows = text ? text.split('\n').map(JSON.parse) : [];
+    return new Map(rows
+      .filter((row) => row.status === 'copied' && row.key && row.sha256)
+      .map((row) => [row.key, row.sha256]));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return new Map();
+    throw error;
+  }
 }
 
 async function appendState(path, result) {
@@ -139,6 +155,7 @@ async function main() {
   const allObjects = await loadObjects(manifestPath);
   const limit = requestedLimit();
   const objects = limit ? allObjects.slice(0, limit) : allObjects;
+  const copiedDigests = await loadCopiedDigests(statePath);
 
   console.log(JSON.stringify({ execute, objects: objects.length, totalObjects: allObjects.length, bucket: r2Bucket }, null, 2));
   if (!execute) {
@@ -156,6 +173,7 @@ async function main() {
       forcePathStyle: true,
       credentials: { accessKeyId, secretAccessKey },
     }),
+    copiedDigests,
   };
   let completed = 0;
   const results = await runPool(objects, CONCURRENCY, async (item) => {

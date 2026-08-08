@@ -26,6 +26,7 @@
 //   R2_BUCKETS             lista (vírgula) de logical buckets no R2 (ex.:
 //                          "galeria-originais,galeria-previews,album-assets")
 
+import { createHash } from 'node:crypto';
 import {
   S3Client,
   PutObjectCommand,
@@ -119,11 +120,14 @@ export async function uploadObject(
   opts: { contentType?: string; upsert?: boolean } = {},
 ): Promise<void> {
   if (isR2Bucket(bucket)) {
+    const digest = createHash('sha256').update(body).digest('hex');
     await s3().send(new PutObjectCommand({
       Bucket: R2_BUCKET,
       Key: r2Key(bucket, path),
       Body: body,
+      ContentLength: body.length,
       ContentType: opts.contentType,
+      Metadata: { sha256: digest, 'logical-bucket': bucket },
     }));
     return;
   }
