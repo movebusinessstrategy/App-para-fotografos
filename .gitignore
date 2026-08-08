@@ -35,3 +35,6 @@ server/processed/
 # Scripts de diagnóstico ad-hoc (PII de clientes + side-effects em produção)
 wa-diag-*.mjs
 wa-try-*.mjs
+
+# Backups privados de migração (dados de clientes; nunca versionar)
+private-backups/

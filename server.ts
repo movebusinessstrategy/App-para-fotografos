@@ -46,10 +46,47 @@ import {
 } from './pipeline-helpers.js';
 import { processGalleryPhoto } from './gallery-image.js';
 import { isMailerConfigured, sendGalleryReadyEmail, sendSelectionDoneEmail, sendGalleryMessageEmail } from './gallery-mailer.js';
+import {
+  downloadStoredObject,
+  getServeUrl,
+  isR2Bucket,
+  objectStorageReference,
+  resolveObjectUrl,
+  uploadObject,
+} from './object-storage.js';
 
 dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const WA_MEDIA_BUCKET = 'wa-media';
+
+function mediaExtension(mimetype: string): string {
+  return String(mimetype || 'application/octet-stream').split('/')[1]?.split(/[;+]/)[0] || 'bin';
+}
+
+async function storeWaMediaObject(userId: string, buffer: Buffer, mimetype: string): Promise<string> {
+  const objectPath = `${userId}/${Date.now()}-${crypto.randomUUID()}.${mediaExtension(mimetype)}`;
+  await uploadObject(WA_MEDIA_BUCKET, objectPath, buffer, { contentType: mimetype, upsert: false });
+  if (isR2Bucket(WA_MEDIA_BUCKET)) return objectStorageReference(WA_MEDIA_BUCKET, objectPath);
+  const publicUrl = await getServeUrl(WA_MEDIA_BUCKET, objectPath, { publicUrl: true });
+  if (!publicUrl) throw new Error('Não foi possível gerar a URL da mídia');
+  return publicUrl;
+}
+
+async function storeWaMediaBase64(userId: string, rawBase64: string, mimetype: string): Promise<string | null> {
+  if (!rawBase64) return null;
+  const dataUrl = rawBase64.match(/^data:([^;]+);base64,(.+)$/s);
+  const resolvedMime = dataUrl?.[1] || mimetype || 'application/octet-stream';
+  const payload = dataUrl?.[2] || rawBase64;
+  return storeWaMediaObject(userId, Buffer.from(payload, 'base64'), resolvedMime);
+}
+
+async function resolveMessageMediaUrls(messages: any[]): Promise<any[]> {
+  return Promise.all(messages.map(async (message) => ({
+    ...message,
+    media_url: await resolveObjectUrl(message?.media_url),
+  })));
+}
 
 // Instrução do MODO AUTÔNOMO (e do teste de fluxo na aba "Testar"). Fonte única
 // usada tanto pelo atendimento autônomo quanto pelo /api/agent/test, pra o teste
@@ -607,11 +644,23 @@ async function persistMessageToSupabase(userId: string, message: LiveWhatsAppMes
 
     // Salva mensagem
     const msgType = message.mediaType || 'text';
-    const mediaDataUrl = message.mediaBase64
+    const mediaFallback = message.mediaBase64
       ? (message.mediaBase64.startsWith('data:')
           ? message.mediaBase64
           : `data:${message.mediaMimetype || 'image/jpeg'};base64,${message.mediaBase64}`)
       : null;
+    let storedMediaUrl = mediaFallback;
+    if (message.mediaBase64) {
+      try {
+        storedMediaUrl = await storeWaMediaBase64(
+          userId,
+          message.mediaBase64,
+          message.mediaMimetype || 'image/jpeg',
+        );
+      } catch (error: any) {
+        console.error('[persistMessage] Falha ao armazenar mídia fora do banco:', error?.message || error);
+      }
+    }
 
     const { error: msgErr } = await db.from('wa_messages').insert({
       user_id: userId,
@@ -623,7 +672,7 @@ async function persistMessageToSupabase(userId: string, message: LiveWhatsAppMes
       timestamp: ts,
       status: 'received',
       wa_number: waNumber,
-      ...(mediaDataUrl ? { media_url: mediaDataUrl } : {}),
+      ...(storedMediaUrl ? { media_url: storedMediaUrl } : {}),
     });
     if (msgErr && !msgErr.message.includes('duplicate') && !msgErr.code?.includes('23505')) {
       console.error('[persistMessage] Erro ao salvar mensagem:', msgErr.message);
@@ -2696,7 +2745,7 @@ async function startServer() {
         waAccount.access_token = decryptedToken;
 
         let msgBody = '';
-        let mediaDataUrl: string | null = null;
+        let storedMediaUrl: string | null = null;
         const normalizedType = msgType === 'voice' ? 'audio' : msgType;
 
         if (msgType === 'text') {
@@ -2723,7 +2772,12 @@ async function startServer() {
                   if (fileRes.ok) {
                     const contentType = fileRes.headers.get('content-type') || `${normalizedType}/octet-stream`;
                     const buffer = Buffer.from(await fileRes.arrayBuffer());
-                    mediaDataUrl = `data:${contentType};base64,${buffer.toString('base64')}`;
+                    try {
+                      storedMediaUrl = await storeWaMediaObject(waAccount.user_id, buffer, contentType);
+                    } catch (storageError: any) {
+                      console.error('[Webhook Meta] Falha no storage externo:', storageError?.message || storageError);
+                      storedMediaUrl = `data:${contentType};base64,${buffer.toString('base64')}`;
+                    }
                     console.log(`[Webhook Meta] ✅ Mídia baixada: ${normalizedType} (${Math.round(buffer.length / 1024)}KB)`);
                   }
                 }
@@ -2734,7 +2788,7 @@ async function startServer() {
           }
         }
 
-        console.log(`[Webhook Meta] ${normalizedType} de ${fromNumber}: "${msgBody}"${mediaDataUrl ? ' [mídia]' : ''}`);
+        console.log(`[Webhook Meta] ${normalizedType} de ${fromNumber}: "${msgBody}"${storedMediaUrl ? ' [mídia]' : ''}`);
 
         const cleanFrom = normalizeBrazilianPhone(fromNumber.replace(/\D/g, ''));
         const now = new Date().toISOString();
@@ -2755,7 +2809,7 @@ async function startServer() {
           timestamp: now,
           type: normalizedType,
           status: 'received',
-          ...(mediaDataUrl ? { media_url: mediaDataUrl } : {}),
+          ...(storedMediaUrl ? { media_url: storedMediaUrl } : {}),
         });
         if (msgErr) console.error('[Webhook Meta] Erro ao salvar mensagem:', msgErr.message);
 
@@ -3141,7 +3195,7 @@ async function startServer() {
       const all = [...(data || []), ...memMessages]
         .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
         .map((m: any) => ({ ...m, waveform: parseWf(m.waveform) }));
-      return res.json(all);
+      return res.json(await resolveMessageMediaUrls(all));
     } catch {
       const msgs = getLiveMessagesByPhone(userId, phone12, limit).map((m) => ({
         message_id: m.id,
@@ -3469,10 +3523,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
       const now = new Date().toISOString();
       const fmtDur = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
+      let storedMediaUrl = mediaDataUrl;
+      try {
+        storedMediaUrl = await storeWaMediaBase64(userId, storageBase64, storageMimetype) || mediaDataUrl;
+      } catch (storageError: any) {
+        console.error('[SendMedia] Falha ao armazenar mídia fora do banco:', storageError?.message || storageError);
+      }
       const msgBase = {
         user_id: userId, phone: cleanPhone, message_id: msgId,
         body: caption || '', from_me: true, timestamp: now,
-        type: mediaType, status: 'sent', media_url: mediaDataUrl,
+        type: mediaType, status: 'sent', media_url: storedMediaUrl,
       };
       const msgFull = {
         ...msgBase,
@@ -8748,16 +8808,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   async function fetchMediaBuffer(url: string): Promise<Buffer | null> {
     try {
-      if (url.startsWith('data:')) {
-        const b64 = url.split(',')[1] || '';
-        return b64 ? Buffer.from(b64, 'base64') : null;
-      }
-      if (/^https?:\/\//.test(url)) {
-        const r = await fetch(url);
-        if (!r.ok) return null;
-        return Buffer.from(await r.arrayBuffer());
-      }
-      return null;
+      return await downloadStoredObject(url);
     } catch { return null; }
   }
 
@@ -21608,11 +21659,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   startFollowUpWorker();
 
   // ── Baileys: upload de mídia para Supabase Storage ───────────────────────
-  const WA_MEDIA_BUCKET = 'wa-media';
   let waBucketEnsured = false;
 
   async function ensureWaMediaBucket() {
     if (waBucketEnsured || !supabaseAdmin) return;
+    if (isR2Bucket(WA_MEDIA_BUCKET)) {
+      waBucketEnsured = true;
+      return;
+    }
     try {
       const { data: buckets } = await supabaseAdmin.storage.listBuckets();
       const exists = (buckets || []).some((b: any) => b.name === WA_MEDIA_BUCKET);
@@ -21630,18 +21684,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!supabaseAdmin) return null;
     await ensureWaMediaBucket();
     try {
-      const ext = mimetype.split('/')[1]?.split(';')[0] || 'bin';
-      const filename = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-      const { error } = await supabaseAdmin.storage.from(WA_MEDIA_BUCKET).upload(filename, buffer, {
-        contentType: mimetype,
-        upsert: false,
-      });
-      if (error) {
-        console.error('[Baileys] Erro ao fazer upload de mídia:', error.message);
-        return null;
-      }
-      const { data } = supabaseAdmin.storage.from(WA_MEDIA_BUCKET).getPublicUrl(filename);
-      return data?.publicUrl ?? null;
+      return await storeWaMediaObject(userId, buffer, mimetype);
     } catch (e: any) {
       console.error('[Baileys] Exceção ao fazer upload de mídia:', e?.message);
       return null;

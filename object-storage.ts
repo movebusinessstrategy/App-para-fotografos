@@ -57,6 +57,7 @@ function s3(): S3Client {
     _s3 = new S3Client({
       region: 'auto',
       endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      forcePathStyle: true,
       credentials: { accessKeyId: R2_ACCESS_KEY_ID, secretAccessKey: R2_SECRET_ACCESS_KEY },
     });
   }
@@ -66,6 +67,17 @@ function s3(): S3Client {
 /** Este logical bucket está roteado pro R2? (senão → Supabase Storage) */
 export function isR2Bucket(bucket: string): boolean {
   return r2Configured && R2_BUCKETS.has(bucket);
+}
+
+/** Referência permanente gravada no banco; a URL assinada é gerada só na leitura. */
+export function objectStorageReference(bucket: string, path: string): string {
+  return `r2://${bucket}/${path.replace(/^\/+/, '')}`;
+}
+
+export function parseObjectStorageReference(reference: string): { bucket: string; path: string } | null {
+  const match = String(reference || '').match(/^r2:\/\/([^/]+)\/(.+)$/);
+  if (!match) return null;
+  return { bucket: match[1], path: match[2] };
 }
 
 /** Diagnóstico legível — usado por rota de health/admin. */
@@ -178,6 +190,29 @@ export async function getServeUrl(
   const { data, error } = await sb().storage.from(bucket).createSignedUrl(path, opts.expiresIn ?? 3600);
   if (error || !data) return null;
   return data.signedUrl;
+}
+
+/** Resolve uma referência permanente do banco para uma URL utilizável pelo navegador. */
+export async function resolveObjectUrl(reference: string | null | undefined, expiresIn = 3600): Promise<string | null> {
+  if (!reference) return null;
+  const parsed = parseObjectStorageReference(reference);
+  if (!parsed) return reference;
+  return getServeUrl(parsed.bucket, parsed.path, { expiresIn });
+}
+
+/** Baixa data URL, URL HTTP ou referência r2:// sem espalhar regra de provider. */
+export async function downloadStoredObject(reference: string | null | undefined): Promise<Buffer | null> {
+  if (!reference) return null;
+  const parsed = parseObjectStorageReference(reference);
+  if (parsed) return downloadObject(parsed.bucket, parsed.path);
+  if (reference.startsWith('data:')) {
+    const base64 = reference.split(',')[1] || '';
+    return base64 ? Buffer.from(base64, 'base64') : null;
+  }
+  if (!/^https?:\/\//.test(reference)) return null;
+  const response = await fetch(reference);
+  if (!response.ok) return null;
+  return Buffer.from(await response.arrayBuffer());
 }
 
 /** Remove objetos (lida com lotes; o caller pode passar a lista inteira). */
