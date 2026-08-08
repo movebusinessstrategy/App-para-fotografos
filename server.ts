@@ -54,6 +54,7 @@ import {
   resolveObjectUrl,
   uploadObject,
 } from './object-storage.js';
+import { captureMetaWhatsAppTouchpoint } from './marketing-attribution.js';
 
 dotenv.config();
 
@@ -2798,6 +2799,15 @@ async function startServer() {
         // a conversa — fica invisível na UI mesmo persistida no banco.
         const ourDisplayPhone = value.metadata?.display_phone_number || '';
         const ourWaNumber = ourDisplayPhone.replace(/\D/g, '');
+
+        await captureMetaWhatsAppTouchpoint(supabaseAdmin, {
+          userId: waAccount.user_id,
+          phone: cleanFrom,
+          waNumber: ourWaNumber,
+          messageId: msgId,
+          messageTimestamp: message.timestamp,
+          referral: message.referral,
+        });
 
         const { error: msgErr } = await supabaseAdmin.from('wa_messages').insert({
           user_id: waAccount.user_id,
