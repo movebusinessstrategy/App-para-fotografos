@@ -42,10 +42,30 @@ export function useMessages(phone: string | null, slot: 'main' | 'posvenda' = 'm
     setLoading(true);
     setMessages([]);
 
+    let cancelled = false;
+    const syncRecentHistory = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const clean = phone.replace(/\D/g, '');
+      const suffix = slot === 'posvenda' ? '?slot=posvenda' : '';
+      const response = await fetch(`/api/inbox/messages/${clean}/sync${suffix}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!response.ok || cancelled) return;
+      const result = await response.json().catch(() => ({}));
+      if (!result.queued) return;
+      window.setTimeout(() => { if (!cancelled) fetchMessages(); }, 3500);
+    };
+
     fetchMessages().finally(() => setLoading(false));
+    syncRecentHistory().catch(() => {});
     intervalRef.current = startVisiblePoll(fetchMessages, 8000);
 
-    return () => { if (intervalRef.current) intervalRef.current(); };
+    return () => {
+      cancelled = true;
+      if (intervalRef.current) intervalRef.current();
+    };
     // slot nos deps: trocar de aba com a MESMA conversa aberta refaz a busca
   }, [phone, slot]);
 

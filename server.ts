@@ -3202,7 +3202,10 @@ async function startServer() {
       msgQuery = msgQuery.eq('wa_number', waNumber);
       msgQuery = msgQuery
         .or(phoneCondition)
-        .order('timestamp', { ascending: true })
+        // Busca as MAIS RECENTES. A ordenação cronológica é restaurada abaixo
+        // antes de devolver à interface. Antes, conversas longas ficavam presas
+        // nas primeiras 80 mensagens e escondiam justamente as últimas.
+        .order('timestamp', { ascending: false })
         .limit(limit);
 
       const { data, error } = await msgQuery;
@@ -3222,6 +3225,62 @@ async function startServer() {
       return res.json(await resolveMessageMediaUrls(all));
     } catch {
       return res.json([]);
+    }
+  });
+
+  const inboxHistorySyncAt = new Map<string, number>();
+  app.post('/api/inbox/messages/:phone/sync', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const db = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const slot = req.query.slot === 'posvenda' ? 'posvenda' : 'main';
+    const sessionKey = slot === 'posvenda' ? posvendaKey(userId) : userId;
+    const waNumber = registeredSlotNumber(userId, slot);
+    if (!waNumber) return res.status(409).json({ error: 'Canal do WhatsApp não identificado.' });
+    if (BaileysManager.getStatus(sessionKey) !== 'open') {
+      return res.status(409).json({ error: 'WhatsApp via QR Code está desconectado.' });
+    }
+
+    const raw = req.params.phone.replace(/\D/g, '');
+    const with55 = raw.startsWith('55') ? raw : `55${raw}`;
+    const normalized = normalizeBrazilianPhone(with55);
+    const withoutNinthDigit = normalized.length === 13
+      ? normalized.slice(0, 4) + normalized.slice(5)
+      : normalized;
+    const variants = [...new Set([with55, normalized, withoutNinthDigit])];
+    const throttleKey = `${userId}|${waNumber}|${withoutNinthDigit}`;
+    if (Date.now() - (inboxHistorySyncAt.get(throttleKey) || 0) < 30_000) {
+      return res.json({ queued: false, throttled: true });
+    }
+
+    const { data: anchors, error } = await db.from('wa_messages')
+      .select('message_id, from_me, timestamp')
+      .eq('user_id', userId)
+      .eq('wa_number', waNumber)
+      .in('phone', variants)
+      .order('timestamp', { ascending: false })
+      .limit(1);
+    if (error) return res.status(500).json({ error: error.message });
+    const anchor = anchors?.[0];
+    if (!anchor?.message_id || !anchor?.timestamp) {
+      return res.status(404).json({ error: 'Ainda não há uma mensagem de referência para sincronizar.' });
+    }
+
+    try {
+      const requestId = await BaileysManager.requestMessageHistory(
+        sessionKey,
+        withoutNinthDigit,
+        50,
+        {
+          id: String(anchor.message_id),
+          fromMe: !!anchor.from_me,
+          timestampMs: new Date(anchor.timestamp).getTime(),
+        },
+      );
+      inboxHistorySyncAt.set(throttleKey, Date.now());
+      return res.status(202).json({ queued: true, request_id: requestId });
+    } catch (syncError: any) {
+      console.warn('[InboxSync] Falha ao pedir histórico:', syncError?.message || syncError);
+      return res.status(502).json({ error: 'Não foi possível sincronizar o histórico agora.' });
     }
   });
 
@@ -22183,7 +22242,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }, delay));
   }
 
-  BaileysManager.setMessageHandler(async (sessionKey, msg, sock, isHistory = false) => {
+  BaileysManager.setMessageHandler(async (sessionKey, msg, sock, isHistory = false, downloadHistoryMedia = false) => {
     if (!supabaseAdmin) { console.warn('[Baileys] MessageHandler: supabaseAdmin não disponível'); return; }
     // 2º número (pós-venda) usa a MESMA pipeline: mensagens entram no inbox da
     // conta com o wa_number do slot. Lia autônoma responde SÓ pelo principal.
@@ -22237,27 +22296,27 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     } else if (firstKey === 'imageMessage') {
       msgType = 'image';
       msgBody = (msgContent as any).imageMessage?.caption || '';
-      if (!isHistory) {
+      if (!isHistory || downloadHistoryMedia) {
         const media = await BaileysManager.downloadIncomingMedia(msg, sock);
         if (media) { mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype); mediaBuffer = media.buffer; mediaMime = media.mimetype; }
       }
     } else if (firstKey === 'audioMessage' || firstKey === 'pttMessage') {
       msgType = 'audio';
-      if (!isHistory) {
+      if (!isHistory || downloadHistoryMedia) {
         const media = await BaileysManager.downloadIncomingMedia(msg, sock);
         if (media) { mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype); mediaBuffer = media.buffer; mediaMime = media.mimetype; }
       }
     } else if (firstKey === 'videoMessage') {
       msgType = 'video';
       msgBody = (msgContent as any).videoMessage?.caption || '';
-      if (!isHistory) {
+      if (!isHistory || downloadHistoryMedia) {
         const media = await BaileysManager.downloadIncomingMedia(msg, sock);
         if (media) mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype);
       }
     } else if (firstKey === 'documentMessage') {
       msgType = 'document';
       msgBody = (msgContent as any).documentMessage?.title || (msgContent as any).documentMessage?.fileName || '';
-      if (!isHistory) {
+      if (!isHistory || downloadHistoryMedia) {
         const media = await BaileysManager.downloadIncomingMedia(msg, sock);
         if (media) mediaDataUrl = await uploadWaMedia(userId, media.buffer, media.mimetype);
       }

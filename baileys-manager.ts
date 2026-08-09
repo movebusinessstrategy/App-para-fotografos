@@ -6,12 +6,14 @@ import makeWASocket, {
   WAMessage,
   downloadMediaMessage,
   Browsers,
+  proto,
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import QRCode from 'qrcode';
 import path from 'path';
 import fs from 'fs';
 import pino from 'pino';
+import { shouldProcessMessageUpsert } from './lib/whatsapp-upsert-policy.js';
 
 // Caminho das credenciais do WhatsApp (Baileys). Em produção, aponte
 // BAILEYS_SESSIONS_DIR para um DISCO PERSISTENTE do Render (ex.:
@@ -53,7 +55,13 @@ export function parseSlotKey(key: string): { userId: string; slot: string } {
     : { userId: key.slice(0, i), slot: key.slice(i + SLOT_SEP.length) };
 }
 
-export type IncomingMessageHandler = (userId: string, msg: WAMessage, sock: Socket, isHistory?: boolean) => Promise<void>;
+export type IncomingMessageHandler = (
+  userId: string,
+  msg: WAMessage,
+  sock: Socket,
+  isHistory?: boolean,
+  downloadHistoryMedia?: boolean,
+) => Promise<void>;
 let globalOnMessage: IncomingMessageHandler = async () => {};
 
 export function setMessageHandler(handler: IncomingMessageHandler) {
@@ -269,8 +277,11 @@ async function _initSocket(session: Session, sessionDir: string) {
   // Mensagens em tempo real
   sock.ev.on('messages.upsert', async (upsert) => {
     const { messages, type } = upsert;
-    if (type !== 'notify') return;
-    for (const msg of messages) {
+    const accepted = messages.filter((msg) => shouldProcessMessageUpsert(type, msg.key.fromMe));
+    if (type === 'append' && accepted.length > 0) {
+      console.log(`[Baileys] messages.upsert append: ${accepted.length} mensagem(ns) enviada(s) por outro aparelho para ${userId}`);
+    }
+    for (const msg of accepted) {
       try {
         await globalOnMessage(userId, msg, sock, false);
       } catch (e) {
@@ -297,13 +308,14 @@ async function _initSocket(session: Session, sessionDir: string) {
   });
 
   // Histórico ao conectar: chats + mensagens recentes
-  sock.ev.on('messaging-history.set', async ({ chats, messages }) => {
-    console.log(`[Baileys] messaging-history.set: ${chats.length} chats, ${messages.length} msgs para ${userId}`);
+  sock.ev.on('messaging-history.set', async ({ chats, messages, syncType }) => {
+    const isOnDemand = syncType === proto.HistorySync.HistorySyncType.ON_DEMAND;
+    console.log(`[Baileys] messaging-history.set: ${chats.length} chats, ${messages.length} msgs para ${userId}${isOnDemand ? ' (sob demanda)' : ''}`);
     try {
       if (chats.length > 0) await globalChatsSetHandler(userId, chats);
     } catch (e) { console.error('[Baileys] Erro messaging-history chats:', e); }
     for (const msg of messages) {
-      try { await globalOnMessage(userId, msg, sock, true); } catch { /* silencioso */ }
+      try { await globalOnMessage(userId, msg, sock, true, isOnDemand); } catch { /* silencioso */ }
     }
   });
 
@@ -576,6 +588,27 @@ export async function fetchMessageHistory(userId: string, _phone: string, _count
   if (session?.status !== 'open' || !session.sock) return [];
   // Histórico completo está no banco (Supabase); Baileys não é usado para busca retroativa
   return [];
+}
+
+export interface MessageHistoryAnchor {
+  id: string;
+  fromMe: boolean;
+  timestampMs: number;
+}
+
+export async function requestMessageHistory(
+  userId: string,
+  phone: string,
+  count: number,
+  anchor: MessageHistoryAnchor,
+): Promise<string> {
+  const sock = _requireSocket(userId);
+  const safeCount = Math.max(1, Math.min(50, Math.trunc(count)));
+  return sock.fetchMessageHistory(
+    safeCount,
+    { remoteJid: _jid(phone), id: anchor.id, fromMe: anchor.fromMe },
+    anchor.timestampMs,
+  );
 }
 
 // ─── Inicialização: restaura sessões existentes no boot ──────────────────────
