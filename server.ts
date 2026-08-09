@@ -3165,8 +3165,12 @@ async function startServer() {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const phoneRaw = req.params.phone.replace(/\D/g, '');
-    const phone12 = phoneRaw.startsWith('55') ? phoneRaw : '55' + phoneRaw;
-    const phone13 = normalizeBrazilianPhone(phone12); // versão com "9" adicionado
+    const phoneWithCountry = phoneRaw.startsWith('55') ? phoneRaw : '55' + phoneRaw;
+    const phone13 = normalizeBrazilianPhone(phoneWithCountry); // versão com "9" adicionado
+    const phone12 = phone13.length === 13
+      ? phone13.slice(0, 4) + phone13.slice(5)
+      : phoneWithCountry;
+    const phoneVariants = [...new Set([phoneWithCountry, phone12, phone13])];
     const limit = Number(req.query.limit) || 60;
     // ?slot=posvenda → mensagens do 2º número. Antes NÃO havia slot aqui: o
     // filtro usava o número PRINCIPAL e a conversa aberta na aba Pós-venda
@@ -3192,16 +3196,13 @@ async function startServer() {
     try {
       // Busca em ambos os formatos: JID exato (12 dig) e normalizado (13 dig).
       // Quando conectado, restringe ao WhatsApp atual (wa_number).
-      const phoneCondition = phone12 !== phone13
-        ? `phone.eq.${phone12},phone.eq.${phone13}`
-        : `phone.eq.${phone12}`;
       let msgQuery = dbMsg
         .from('wa_messages')
         .select('*')
         .eq('user_id', userId);
       msgQuery = msgQuery.eq('wa_number', waNumber);
       msgQuery = msgQuery
-        .or(phoneCondition)
+        .in('phone', phoneVariants)
         // Busca as MAIS RECENTES. A ordenação cronológica é restaurada abaixo
         // antes de devolver à interface. Antes, conversas longas ficavam presas
         // nas primeiras 80 mensagens e escondiam justamente as últimas.
