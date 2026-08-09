@@ -3074,7 +3074,12 @@ async function startServer() {
     if (!text) return null;
     const digits = text.replace(/\D/g, '');
     const filters = [`contact_name.ilike.%${text}%`];
-    if (digits) filters.push(`phone.ilike.%${digits}%`);
+    const phoneSearches = digits.length >= 10
+      ? brazilianPhoneVariants(digits)
+      : (digits ? [digits] : []);
+    for (const phoneSearch of phoneSearches) {
+      filters.push(`phone.ilike.%${phoneSearch}%`);
+    }
     return filters.join(',');
   }
 
