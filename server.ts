@@ -641,7 +641,10 @@ async function persistMessageToSupabase(userId: string, message: LiveWhatsAppMes
     const now = new Date().toISOString();
     // wa_number = número do WhatsApp conectado (o "estúdio"). Permite filtrar
     // o Inbox por número quando o usuário troca de WhatsApp.
-    const waNumber = BaileysManager.getConnectedPhone(userId) || '';
+    const { slot } = BaileysManager.parseSlotKey(userId);
+    const waNumber = BaileysManager.getRegisteredPhone(userId)
+      || BaileysManager.getConnectedPhone(userId)
+      || `unassigned:${slot}`;
 
     // Salva mensagem
     const msgType = message.mediaType || 'text';
@@ -694,6 +697,7 @@ async function persistMessageToSupabase(userId: string, message: LiveWhatsAppMes
       .from('wa_conversations')
       .update(convPayload)
       .eq('user_id', userId)
+      .eq('wa_number', waNumber)
       .eq('phone', phone)
       .select('id');
 
@@ -2026,6 +2030,33 @@ async function startServer() {
   const POSVENDA_SLOT = 'posvenda';
   const posvendaKey = (userId: string) => BaileysManager.slotKey(userId, POSVENDA_SLOT);
 
+  const registeredSlotNumber = (userId: string, slot: 'main' | 'posvenda') => {
+    const key = slot === 'posvenda' ? posvendaKey(userId) : userId;
+    return BaileysManager.getRegisteredPhone(key)
+      || BaileysManager.getConnectedPhone(key)
+      || '';
+  };
+
+  async function activeMetaNumber(db: SupabaseClient, userId: string): Promise<string> {
+    const { data } = await db
+      .from('whatsapp_business_accounts')
+      .select('phone_number')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .limit(1)
+      .maybeSingle();
+    return String(data?.phone_number || '').replace(/\D/g, '');
+  }
+
+  async function inboxWaNumber(
+    db: SupabaseClient,
+    userId: string,
+    slot: unknown,
+  ): Promise<string> {
+    if (slot === 'posvenda') return registeredSlotNumber(userId, 'posvenda');
+    return registeredSlotNumber(userId, 'main') || await activeMetaNumber(db, userId);
+  }
+
   app.get('/api/whatsapp/slots', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const slots = ['main', POSVENDA_SLOT].map((slot) => {
@@ -2720,13 +2751,15 @@ async function startServer() {
         // WABA ativa; rows antigas viram is_active=false).
         const { data: waAccount, error: waErr } = await supabaseAdmin
           .from('whatsapp_business_accounts')
-          .select('user_id, access_token')
+          .select('user_id, phone_number, access_token')
           .eq('phone_number_id', phoneNumberId)
           .eq('is_active', true)
           .maybeSingle();
 
         if (waErr) { console.error('[Webhook Meta] Erro ao buscar conta:', waErr.message); return; }
         if (!waAccount) { console.error('[Webhook Meta] Nenhuma conta ativa para phone_number_id:', phoneNumberId); return; }
+        const webhookDisplayPhone = value.metadata?.display_phone_number || waAccount.phone_number || '';
+        const webhookWaNumber = webhookDisplayPhone.replace(/\D/g, '') || 'unassigned:meta';
 
         // Confirmações de sent/delivered/read chegam sem `messages`. Antes o
         // handler retornava cedo e o CRM nunca refletia o estado real do WABA.
@@ -2737,6 +2770,7 @@ async function startServer() {
             .from('wa_messages')
             .update({ status: delivery.status })
             .eq('user_id', waAccount.user_id)
+            .eq('wa_number', webhookWaNumber)
             .eq('message_id', delivery.id);
           if (statusError) console.error('[Webhook Meta] Erro ao atualizar status:', statusError.message);
         }
@@ -2811,8 +2845,11 @@ async function startServer() {
         // wa_number = o NOSSO número (display_phone_number da WABA), só dígitos.
         // Sem isso, /api/inbox/conversations.eq('wa_number', X) não encontra
         // a conversa — fica invisível na UI mesmo persistida no banco.
-        const ourDisplayPhone = value.metadata?.display_phone_number || '';
-        const ourWaNumber = ourDisplayPhone.replace(/\D/g, '');
+        const ourWaNumber = webhookDisplayPhone.replace(/\D/g, '');
+        if (!ourWaNumber) {
+          console.error('[Webhook Meta] Número remetente ausente; mensagem preservada sem misturar canais');
+        }
+        const channelWaNumber = webhookWaNumber;
 
         await captureMetaWhatsAppTouchpoint(supabaseAdmin, {
           userId: waAccount.user_id,
@@ -2826,7 +2863,7 @@ async function startServer() {
         const { error: msgErr } = await supabaseAdmin.from('wa_messages').insert({
           user_id: waAccount.user_id,
           phone: cleanFrom,
-          ...(ourWaNumber ? { wa_number: ourWaNumber } : {}),
+          wa_number: channelWaNumber,
           message_id: msgId || `meta-in-${Date.now()}`,
           body: msgBody,
           from_me: false,
@@ -2842,12 +2879,15 @@ async function startServer() {
         const metaConvPayload: Record<string, any> = {
           user_id: waAccount.user_id, phone: cleanFrom,
           last_message: lastMsg, last_message_at: now, unread_count: 1,
-          ...(ourWaNumber ? { wa_number: ourWaNumber } : {}),
+          wa_number: channelWaNumber,
           ...(contactName ? { contact_name: contactName } : {}),
         };
         const { data: metaUpdated, error: metaUpdateErr } = await supabaseAdmin
           .from('wa_conversations').update(metaConvPayload)
-          .eq('user_id', waAccount.user_id).eq('phone', cleanFrom).select('id');
+          .eq('user_id', waAccount.user_id)
+          .eq('wa_number', channelWaNumber)
+          .eq('phone', cleanFrom)
+          .select('id');
         if (metaUpdateErr) {
           console.error('[Webhook Meta] Erro ao UPDATE conversa:', metaUpdateErr.message);
         } else if (!metaUpdated || metaUpdated.length === 0) {
@@ -2900,6 +2940,8 @@ async function startServer() {
 
       // Atualiza status de mensagens enviadas (entregue/lido)
       if ((eventType === 'messages.update' || eventType === 'MESSAGES_UPDATE') && userIdFromInstance && supabaseAdmin) {
+        const statusWaNumber = registeredSlotNumber(userIdFromInstance, 'main');
+        if (!statusWaNumber) return;
         const updates: any[] = Array.isArray(payload?.data) ? payload.data : [];
         for (const upd of updates) {
           const msgId: string = upd?.key?.id ?? upd?.messageId ?? '';
@@ -2922,6 +2964,7 @@ async function startServer() {
             .from('wa_messages')
             .update({ status: normalized })
             .eq('user_id', userIdFromInstance)
+            .eq('wa_number', statusWaNumber)
             .eq('message_id', msgId);
         }
         return;
@@ -3045,7 +3088,7 @@ async function startServer() {
     // não pode esconder o histórico (mesma regra da visão principal). Sem
     // nenhum pareamento do slot, devolve [] (não mistura com as de vendas).
     if (req.query.slot === 'posvenda') {
-      const pvNumber = BaileysManager.getRegisteredPhone(posvendaKey(userId)) || '';
+      const pvNumber = registeredSlotNumber(userId, 'posvenda');
       if (!pvNumber || !db) return res.json([]);
       let pvQuery = db.from('wa_conversations')
         .select('*').eq('user_id', userId).eq('wa_number', pvNumber)
@@ -3065,31 +3108,17 @@ async function startServer() {
     // Tenta Baileys primeiro, depois fallback Meta Cloud (sem isso, usuário
     // que migrou pra Cloud API via Embedded Signup nunca vê conversa — Baileys
     // não tem sessão, getConnectedPhone retorna null, query retorna []).
-    let waNumber = BaileysManager.getConnectedPhone(userId) || '';
-    if (!waNumber) {
-      try {
-        const userDb = (req as any).supabase as SupabaseClient;
-        const { data: metaAcc } = await userDb
-          .from('whatsapp_business_accounts')
-          .select('phone_number')
-          .eq('user_id', userId)
-          .eq('is_active', true)
-          .maybeSingle();
-        if (metaAcc?.phone_number) {
-          waNumber = metaAcc.phone_number.replace(/\D/g, '');
-        }
-      } catch (err: any) {
-        console.error('[Inbox] Erro fallback Meta:', err?.message || err);
-      }
-    }
-    // Desconectado (sem número ativo): NÃO esconda o histórico. O WhatsApp pode
-    // cair (sem querer ou de propósito) e as conversas continuam salvas no banco —
-    // mostra as conversas do usuário mesmo sem número conectado, em vez de [].
-    const disconnected = !waNumber;
+    const userDb = (req as any).supabase as SupabaseClient;
+    const waNumber = await inboxWaNumber(userDb, userId, 'main').catch((err: any) => {
+      console.error('[Inbox] Erro ao resolver canal principal:', err?.message || err);
+      return '';
+    });
+    // Sem um número identificável, falha fechado. Mostrar todo o histórico do
+    // usuário aqui misturaria canais diferentes na mesma lista.
+    if (!waNumber) return res.json([]);
     if (!db) {
-      const userDb = (req as any).supabase as SupabaseClient;
       let q = userDb.from('wa_conversations').select('*').eq('user_id', userId);
-      if (!disconnected) q = q.eq('wa_number', waNumber);
+      q = q.eq('wa_number', waNumber);
       if (searchFilter) q = q.or(searchFilter);
       const { data } = await q.order('last_message_at', { ascending: false }).limit(200);
       return res.json(data || []);
@@ -3100,7 +3129,7 @@ async function startServer() {
         .select('*')
         .eq('user_id', userId)
         .neq('archived', true); // arquivadas no WhatsApp ficam fora do CRM
-      if (!disconnected) q = q.eq('wa_number', waNumber);
+      q = q.eq('wa_number', waNumber);
       if (searchFilter) q = q.or(searchFilter);
       let { data, error } = await q
         .order('last_message_at', { ascending: false })
@@ -3108,7 +3137,7 @@ async function startServer() {
       if (error && /archived/.test(error.message || '')) {
         // Migration 059 pendente — lista sem o filtro
         let q2 = db.from('wa_conversations').select('*').eq('user_id', userId);
-        if (!disconnected) q2 = q2.eq('wa_number', waNumber);
+        q2 = q2.eq('wa_number', waNumber);
         if (searchFilter) q2 = q2.or(searchFilter);
         ({ data, error } = await q2.order('last_message_at', { ascending: false }).limit(200));
       }
@@ -3119,42 +3148,10 @@ async function startServer() {
       }
 
       const rows = data || [];
-
-      // Merge com cache em memória (conversas chegadas mas ainda não persistidas)
-      const dbPhones = new Set(rows.map((c: any) => c.phone));
-      const memContacts = liveEntriesForUser(userId)
-        .filter(([phone]) => !dbPhones.has(phone))
-        .map(([phone, messages]) => {
-          const latest = messages[messages.length - 1];
-          return {
-            phone,
-            contact_name: null,
-            last_message: latest?.text || '',
-            last_message_at: latest ? new Date(latest.timestamp).toISOString() : new Date().toISOString(),
-            unread_count: 0,
-            from_memory: true,
-          };
-        });
-
-      if (memContacts.length > 0) {
-        console.log(`[Inbox] + ${memContacts.length} conversas do cache de memória`);
-      }
-
-      return res.json([...rows, ...memContacts]);
+      return res.json(rows);
     } catch (err: any) {
       console.error('[Inbox] Exceção em /conversations:', err?.message || err);
-      // Fallback: cache em memória (só desta conta)
-      const contacts = liveEntriesForUser(userId).map(([phone, messages]) => {
-        const latest = messages[messages.length - 1];
-        return {
-          phone,
-          contact_name: null,
-          last_message: latest?.text || '',
-          last_message_at: latest ? new Date(latest.timestamp).toISOString() : new Date().toISOString(),
-          unread_count: 0,
-        };
-      });
-      return res.json(contacts);
+      return res.json([]);
     }
   });
 
@@ -3172,28 +3169,20 @@ async function startServer() {
     const isPosvenda = req.query.slot === 'posvenda';
     // Mesmo fallback do /conversations: tenta Baileys, depois Meta Cloud.
     let waNumber = isPosvenda
-      ? (BaileysManager.getRegisteredPhone(posvendaKey(userId)) || '')
-      : (BaileysManager.getConnectedPhone(userId) || '');
+      ? registeredSlotNumber(userId, 'posvenda')
+      : registeredSlotNumber(userId, 'main');
     // Pós-venda sem número registrado: FAIL-CLOSED (paridade com o branch
     // posvenda do /conversations). Cair no modo "disconnected" aqui mostraria
     // a thread do número PRINCIPAL dentro da aba Pós-venda — mistura proibida.
     if (isPosvenda && !waNumber) return res.json([]);
     if (!waNumber && !isPosvenda) {
       try {
-        const { data: metaAcc } = await supabase
-          .from('whatsapp_business_accounts')
-          .select('phone_number')
-          .eq('user_id', userId)
-          .eq('is_active', true)
-          .maybeSingle();
-        if (metaAcc?.phone_number) {
-          waNumber = metaAcc.phone_number.replace(/\D/g, '');
-        }
+        waNumber = await activeMetaNumber(supabase, userId);
       } catch {}
     }
-    // Desconectado: NÃO esconda as mensagens (paridade com /conversations). O
-    // histórico fica salvo no banco; mostra mesmo sem número conectado.
-    const disconnected = !waNumber;
+    // Sem canal identificável, nunca faz uma busca ampla por telefone: a mesma
+    // pessoa pode existir em dois números e os históricos se misturariam.
+    if (!waNumber) return res.json([]);
     const dbMsg = supabaseAdmin || supabase;
     try {
       // Busca em ambos os formatos: JID exato (12 dig) e normalizado (13 dig).
@@ -3205,7 +3194,7 @@ async function startServer() {
         .from('wa_messages')
         .select('*')
         .eq('user_id', userId);
-      if (!disconnected) msgQuery = msgQuery.eq('wa_number', waNumber);
+      msgQuery = msgQuery.eq('wa_number', waNumber);
       msgQuery = msgQuery
         .or(phoneCondition)
         .order('timestamp', { ascending: true })
@@ -3215,22 +3204,6 @@ async function startServer() {
 
       if (error) throw error;
 
-      // Merge com cache em memória
-      const dbIds = new Set((data || []).map((m: any) => m.message_id));
-      const memMessages = getLiveMessagesByPhone(userId, phone12, limit)
-        .filter((m) => !dbIds.has(m.id))
-        .map((m) => ({
-          message_id: m.id,
-          body: m.text,
-          from_me: m.fromMe,
-          timestamp: new Date(m.timestamp).toISOString(),
-          type: m.mediaType || 'text',
-          status: 'received',
-          media_url: m.mediaBase64
-            ? (m.mediaBase64.startsWith('data:') ? m.mediaBase64 : `data:${m.mediaMimetype||'image/jpeg'};base64,${m.mediaBase64}`)
-            : null,
-        }));
-
       const parseWf = (w: any): number[] | null => {
         if (!w) return null;
         if (Array.isArray(w)) return w;
@@ -3238,23 +3211,12 @@ async function startServer() {
         if (w instanceof Uint8Array || Buffer.isBuffer(w)) return Array.from(w);
         return null;
       };
-      const all = [...(data || []), ...memMessages]
+      const all = [...(data || [])]
         .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
         .map((m: any) => ({ ...m, waveform: parseWf(m.waveform) }));
       return res.json(await resolveMessageMediaUrls(all));
     } catch {
-      const msgs = getLiveMessagesByPhone(userId, phone12, limit).map((m) => ({
-        message_id: m.id,
-        body: m.text,
-        from_me: m.fromMe,
-        timestamp: new Date(m.timestamp).toISOString(),
-        type: m.mediaType || 'text',
-        status: m.fromMe ? 'sent' : 'received',
-        media_url: m.mediaBase64
-          ? (m.mediaBase64.startsWith('data:') ? m.mediaBase64 : `data:${m.mediaMimetype||'image/jpeg'};base64,${m.mediaBase64}`)
-          : null,
-      }));
-      return res.json(msgs);
+      return res.json([]);
     }
   });
 
@@ -3272,10 +3234,13 @@ async function startServer() {
     variants.forEach(v => readUpToTimestampByPhone.set(liveKey(userId, v), Date.now()));
     try {
       const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
+      const waNumber = await inboxWaNumber(db, userId, req.body?.slot || req.query.slot);
+      if (!waNumber) return res.status(409).json({ error: 'Canal do WhatsApp não identificado' });
       await db
         .from('wa_conversations')
         .update({ unread_count: 0, updated_at: new Date().toISOString() })
         .eq('user_id', userId)
+        .eq('wa_number', waNumber)
         .in('phone', variants);
     } catch {}
     return res.json({ ok: true });
@@ -3294,10 +3259,13 @@ async function startServer() {
     variants.forEach(v => readUpToTimestampByPhone.delete(liveKey(userId, v)));
     try {
       const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
+      const waNumber = await inboxWaNumber(db, userId, req.body?.slot || req.query.slot);
+      if (!waNumber) return res.status(409).json({ error: 'Canal do WhatsApp não identificado' });
       await db
         .from('wa_conversations')
         .update({ unread_count: 1, updated_at: new Date().toISOString() })
         .eq('user_id', userId)
+        .eq('wa_number', waNumber)
         .in('phone', variants)
         .or('unread_count.eq.0,unread_count.is.null');
     } catch {}
@@ -3411,7 +3379,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const cleanPhone = rawDigits.startsWith('55') ? rawDigits : '55' + rawDigits;
     const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
 
-    const waNumber = BaileysManager.getConnectedPhone(waKey) || '';
+    const waNumber = BaileysManager.getRegisteredPhone(waKey)
+      || BaileysManager.getConnectedPhone(waKey)
+      || `unassigned:${slot === 'posvenda' ? 'posvenda' : 'main'}`;
     // Para envio, usa o JID em 12 dígitos (formato nativo do WhatsApp).
     // Se o phone guardado tiver 13 dígitos (ex: 5543999093114 — resultado da normalização antiga),
     // remove o "9" extra na posição 4 para recuperar o JID correto (554399093114).
@@ -3420,10 +3390,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       : cleanPhone;
     console.log(`[Send] baileysPhone=${baileysPhone} | status=${BaileysManager.getStatus(userId)} | waNumber=${waNumber}`);
 
-    const saveToDb = async (msgId: string, sourceWaNumber = waNumber) => {
+    const saveToDb = async (
+      msgId: string,
+      sourceWaNumber = waNumber,
+      storedPhone = baileysPhone,
+    ) => {
       const now = new Date().toISOString();
       const { error: msgErr } = await db.from('wa_messages').insert({
-        user_id: userId, phone: baileysPhone, message_id: msgId,
+        user_id: userId, phone: storedPhone, message_id: msgId,
         body: text, from_me: true, timestamp: now, type: 'text', status: 'sent', wa_number: sourceWaNumber,
       });
       if (msgErr) {
@@ -3434,16 +3408,19 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         console.log(`[Send] Mensagem salva no DB | msgId=${msgId} | phone=${baileysPhone}`);
       }
       // UPDATE primeiro, INSERT se não existir — tenta ambos os formatos (12 e 13 dígitos)
-      const normalized = normalizeBrazilianPhone(baileysPhone);
-      const phoneOr = normalized !== baileysPhone
-        ? `phone.eq.${baileysPhone},phone.eq.${normalized}`
-        : `phone.eq.${baileysPhone}`;
+      const normalized = normalizeBrazilianPhone(storedPhone);
+      const phoneOr = normalized !== storedPhone
+        ? `phone.eq.${storedPhone},phone.eq.${normalized}`
+        : `phone.eq.${storedPhone}`;
       const { data: upd } = await db.from('wa_conversations')
-        .update({ last_message: text, last_message_at: now, updated_at: now, phone: baileysPhone })
-        .eq('user_id', userId).or(phoneOr).select('id');
+        .update({ last_message: text, last_message_at: now, updated_at: now })
+        .eq('user_id', userId)
+        .eq('wa_number', sourceWaNumber)
+        .or(phoneOr)
+        .select('id');
       if (!upd || upd.length === 0) {
         await db.from('wa_conversations').insert({
-          user_id: userId, phone: baileysPhone, last_message: text, last_message_at: now, updated_at: now, wa_number: sourceWaNumber,
+          user_id: userId, phone: storedPhone, last_message: text, last_message_at: now, updated_at: now, wa_number: sourceWaNumber,
         });
       }
     };
@@ -3509,7 +3486,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
       const msgId = metaData.messages?.[0]?.id || `meta-${Date.now()}`;
       const metaWaNumber = String(waAccount.phone_number || '').replace(/\D/g, '');
-      await saveToDb(msgId, metaWaNumber);
+      await saveToDb(msgId, metaWaNumber, cleanPhone);
       res.json({ success: true, message_id: msgId });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -3531,6 +3508,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     console.log(`[SendMedia] Recebido: phone=${phone} mimetype=${mimetype} size=${mediaBase64?.length ?? 0}`);
 
     const rawPhone = phone.replace(/\D/g, '');
+    const metaPhone = rawPhone.startsWith('55') ? rawPhone : `55${rawPhone}`;
     // Baileys usa JID de 12 dígitos — remover o "9" adicionado pela normalização
     const cleanPhone = rawPhone.length === 13 && rawPhone.startsWith('55')
       ? rawPhone.slice(0, 4) + rawPhone.slice(5)
@@ -3570,8 +3548,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const storageBase64 = mimetype.startsWith('audio/') ? mediaBase64 : finalBase64;
     const mediaDataUrl = `data:${storageMimetype};base64,${storageBase64}`;
 
-    const baileysWaNumber = BaileysManager.getConnectedPhone(mediaKey) || '';
-    const saveToDb = async (msgId: string, sourceWaNumber = baileysWaNumber) => {
+    const baileysWaNumber = BaileysManager.getRegisteredPhone(mediaKey)
+      || BaileysManager.getConnectedPhone(mediaKey)
+      || `unassigned:${slot === 'posvenda' ? 'posvenda' : 'main'}`;
+    const saveToDb = async (
+      msgId: string,
+      sourceWaNumber = baileysWaNumber,
+      storedPhone = cleanPhone,
+    ) => {
       const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
       const now = new Date().toISOString();
       const fmtDur = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
@@ -3582,10 +3566,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         console.error('[SendMedia] Falha ao armazenar mídia fora do banco:', storageError?.message || storageError);
       }
       const msgBase = {
-        user_id: userId, phone: cleanPhone, message_id: msgId,
+        user_id: userId, phone: storedPhone, message_id: msgId,
         body: caption || '', from_me: true, timestamp: now,
         type: mediaType, status: 'sent', media_url: storedMediaUrl,
-        ...(sourceWaNumber ? { wa_number: sourceWaNumber } : {}),
+        wa_number: sourceWaNumber,
       };
       const msgFull = {
         ...msgBase,
@@ -3602,16 +3586,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         : caption || `[${mediaType}]`;
       const convPayload = {
         user_id: userId,
-        phone: cleanPhone,
+        phone: storedPhone,
         last_message: lastMsg,
         last_message_at: now,
-        ...(sourceWaNumber ? { wa_number: sourceWaNumber } : {}),
+        wa_number: sourceWaNumber,
       };
-      const normalizedPhone = normalizeBrazilianPhone(cleanPhone);
-      const phoneOr = normalizedPhone !== cleanPhone
-        ? `phone.eq.${cleanPhone},phone.eq.${normalizedPhone}`
-        : `phone.eq.${cleanPhone}`;
-      const { data: upd } = await db.from('wa_conversations').update(convPayload).eq('user_id', userId).or(phoneOr).select('id');
+      const normalizedPhone = normalizeBrazilianPhone(storedPhone);
+      const phoneOr = normalizedPhone !== storedPhone
+        ? `phone.eq.${storedPhone},phone.eq.${normalizedPhone}`
+        : `phone.eq.${storedPhone}`;
+      const { data: upd } = await db.from('wa_conversations')
+        .update(convPayload)
+        .eq('user_id', userId)
+        .eq('wa_number', sourceWaNumber)
+        .or(phoneOr)
+        .select('id');
       if (!upd || upd.length === 0) { await db.from('wa_conversations').insert(convPayload); }
     };
 
@@ -3675,7 +3664,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       // 2. Envio da mensagem
       const msgBody: Record<string, unknown> = {
         messaging_product: 'whatsapp',
-        to: cleanPhone,
+        to: metaPhone,
         type: mediaType,
         [mediaType]: mediaType === 'audio'
           ? { id: mediaId }
@@ -3696,7 +3685,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
       const msgId = sendData.messages?.[0]?.id || `meta-${Date.now()}`;
       const metaWaNumber = String(waAccount.phone_number || '').replace(/\D/g, '');
-      await saveToDb(msgId, metaWaNumber);
+      await saveToDb(msgId, metaWaNumber, metaPhone);
       return res.json({ success: true, message_id: msgId });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
@@ -3734,11 +3723,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const raw = req.params.phone.replace(/\D/g, '');
     const normalized = normalizeBrazilianPhone(raw) || raw;
     try {
+      const waNumber = await inboxWaNumber(supabase, userId, req.query.slot);
+      if (!waNumber) return res.json({ profile_picture_url: null, about: null, contact_name: null, last_message_at: null });
+      const sessionKey = req.query.slot === 'posvenda' ? posvendaKey(userId) : userId;
       const [pictureUrl, about, convRow] = await Promise.all([
-        BaileysManager.getProfilePicture(userId, raw).catch(() => null),
-        BaileysManager.fetchContactAbout(userId, raw).catch(() => null),
+        BaileysManager.getProfilePicture(sessionKey, raw).catch(() => null),
+        BaileysManager.fetchContactAbout(sessionKey, raw).catch(() => null),
         supabase.from('wa_conversations').select('contact_name, last_message_at, unread_count')
-          .eq('user_id', userId).in('phone', [...new Set([raw, normalized])])
+          .eq('user_id', userId).eq('wa_number', waNumber)
+          .in('phone', [...new Set([raw, normalized])])
           .order('last_message_at', { ascending: false }).limit(1).maybeSingle(),
       ]);
       return res.json({
@@ -3755,13 +3748,26 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Salva nome de contato manualmente
   app.patch('/api/inbox/contact-name/:phone', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const phone = normalizeBrazilianPhone(req.params.phone.replace(/\D/g, ''));
-    const { name } = req.body;
+    const rawPhone = req.params.phone.replace(/\D/g, '');
+    const phone = normalizeBrazilianPhone(rawPhone);
+    const { name, slot } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'Nome inválido' });
     try {
       const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
-      const { data: upd } = await db.from('wa_conversations').update({ contact_name: name.trim() }).eq('user_id', userId).eq('phone', phone).select('id');
-      if (!upd || upd.length === 0) { await db.from('wa_conversations').insert({ user_id: userId, phone, contact_name: name.trim() }); }
+      const waNumber = await inboxWaNumber(db, userId, slot);
+      if (!waNumber) return res.status(409).json({ error: 'Canal do WhatsApp não identificado' });
+      const variants = [...new Set([rawPhone, phone])];
+      const { data: upd } = await db.from('wa_conversations')
+        .update({ contact_name: name.trim() })
+        .eq('user_id', userId)
+        .eq('wa_number', waNumber)
+        .in('phone', variants)
+        .select('id');
+      if (!upd || upd.length === 0) {
+        await db.from('wa_conversations').insert({
+          user_id: userId, phone, wa_number: waNumber, contact_name: name.trim(),
+        });
+      }
       return res.json({ ok: true });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
@@ -7489,12 +7495,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Carrega conta Meta como fallback (uma consulta antes do loop)
     const { data: waAccount } = await supabase
       .from('whatsapp_business_accounts')
-      .select('phone_number_id, access_token')
+      .select('phone_number_id, phone_number, access_token')
       .eq('user_id', userId)
       .eq('is_active', true)
       .maybeSingle();
 
     const blastMetaToken = waAccount?.access_token ? decryptIfNeeded(waAccount.access_token) : null;
+    const blastMetaNumber = String(waAccount?.phone_number || '').replace(/\D/g, '');
+    const blastQrNumber = registeredSlotNumber(userId, 'main');
 
     let sent = 0, failed = 0;
     const errors: string[] = [];
@@ -7506,10 +7514,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const personalizedMsg = message.replace(/\{nome\}/gi, name);
       let ok = false;
       let failReason = '';
+      let sourceWaNumber = '';
 
       try {
         // 1ª tentativa: Evolution API (só se for o provider configurado)
-        if (WHATSAPP_PROVIDER === 'evolution' && EVOLUTION_API_URL && EVOLUTION_API_KEY) {
+        if (WHATSAPP_PROVIDER === 'evolution' && EVOLUTION_API_URL && EVOLUTION_API_KEY && blastQrNumber) {
           const evoRes = await fetch(`${EVOLUTION_API_URL}/message/sendText/${instanceName}`, {
             method: 'POST',
             headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' },
@@ -7517,6 +7526,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           });
           if (evoRes.ok) {
             ok = true;
+            sourceWaNumber = blastQrNumber;
           } else {
             const evoData = await evoRes.json().catch(() => ({}));
             failReason = `Evolution ${evoRes.status}: ${evoData?.message || evoData?.error || ''}`;
@@ -7525,7 +7535,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         }
 
         // Meta API (provider principal se não for Evolution, ou fallback)
-        if (!ok && waAccount?.phone_number_id && blastMetaToken) {
+        if (!ok && waAccount?.phone_number_id && blastMetaToken && blastMetaNumber) {
           const metaRes = await fetch(
             `https://graph.facebook.com/v21.0/${waAccount.phone_number_id}/messages`,
             {
@@ -7537,6 +7547,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           const metaData = await metaRes.json();
           if (metaRes.ok && !metaData.error) {
             ok = true;
+            sourceWaNumber = blastMetaNumber;
           } else {
             const metaMsg = metaData?.error?.message || JSON.stringify(metaData?.error || {});
             failReason = failReason ? `${failReason} | Meta: ${metaMsg}` : `Meta: ${metaMsg}`;
@@ -7551,10 +7562,19 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           const db = supabaseAdmin || supabase;
           await db.from('wa_messages').insert({
             user_id: userId, phone, body: personalizedMsg, from_me: true,
+            wa_number: sourceWaNumber,
             timestamp: now, type: 'text', status: 'sent', message_id: msgId,
           });
-          const blastConvPayload = { user_id: userId, phone, last_message: personalizedMsg, last_message_at: now, updated_at: now };
-          const { data: blastUpd } = await db.from('wa_conversations').update(blastConvPayload).eq('user_id', userId).eq('phone', phone).select('id');
+          const blastConvPayload = {
+            user_id: userId, phone, wa_number: sourceWaNumber,
+            last_message: personalizedMsg, last_message_at: now, updated_at: now,
+          };
+          const { data: blastUpd } = await db.from('wa_conversations')
+            .update(blastConvPayload)
+            .eq('user_id', userId)
+            .eq('wa_number', sourceWaNumber)
+            .eq('phone', phone)
+            .select('id');
           if (!blastUpd || blastUpd.length === 0) { await db.from('wa_conversations').insert(blastConvPayload); }
         } else {
           failed++;
@@ -8968,9 +8988,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const db = supabaseAdmin || ((req as any).supabase as SupabaseClient);
     const emptyResp = { items: [] as any[], counts: { precisa_humano: 0, orcamento: 0, conversando: 0, total: 0 } };
     try {
+      const waNumber = await inboxWaNumber(db, userId, 'main');
+      if (!waNumber) return res.json(emptyResp);
       let { data: convData, error: convErr } = await db.from('wa_conversations')
         .select('phone, contact_name, last_message, last_message_at, needs_human, unread_count, last_agent_reply_at')
         .eq('user_id', userId)
+        .eq('wa_number', waNumber)
         .order('last_message_at', { ascending: false })
         .limit(300);
       // Resiliente: se a coluna last_agent_reply_at ainda não existe (migration 051),
@@ -8978,7 +9001,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       if (convErr && (convErr.code === '42703' || /last_agent_reply_at/.test(convErr.message || ''))) {
         const r = await db.from('wa_conversations')
           .select('phone, contact_name, last_message, last_message_at, needs_human, unread_count')
-          .eq('user_id', userId).eq('needs_human', true)
+          .eq('user_id', userId).eq('wa_number', waNumber).eq('needs_human', true)
           .order('last_message_at', { ascending: false }).limit(300);
         convData = r.data as any; convErr = r.error as any;
       } else if (convErr) {
@@ -8991,7 +9014,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         db.from('deals').select('id, stage, contact_phone').eq('user_id', userId),
         db.from('deal_stages').select('id, name').eq('user_id', userId),
         db.from('scheduled_followups').select('deal_id, status, scheduled_at')
-          .eq('user_id', userId).eq('message', AGENT_FOLLOWUP_SENTINEL).in('status', ['pending', 'sent']),
+          .eq('user_id', userId).eq('wa_number', waNumber)
+          .eq('message', AGENT_FOLLOWUP_SENTINEL).in('status', ['pending', 'sent']),
       ]);
       const stageName = new Map((stages || []).map((s: any) => [s.id, s.name]));
       const fupByDeal = new Map<any, any>();
@@ -9055,8 +9079,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const phone = String(req.params.phone || '').replace(/\D/g, '');
     if (!phone) return res.status(400).json({ error: 'phone inválido' });
     try {
+      const waNumber = await inboxWaNumber(db, userId, 'main');
+      if (!waNumber) return res.status(409).json({ error: 'Canal principal não identificado' });
       await db.from('wa_conversations').update({ needs_human: false })
-        .eq('user_id', userId).eq('phone', phone);
+        .eq('user_id', userId).eq('wa_number', waNumber).eq('phone', phone);
       res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || 'Erro ao devolver pra Lia.' });
@@ -15076,6 +15102,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         .maybeSingle();
 
       if (stageConfig?.auto_follow_up_enabled && stageConfig?.follow_up_message) {
+        const waNumber = await inboxWaNumber(supabaseAdmin, userId, 'main');
+        if (!waNumber) {
+          console.warn(`[FollowUp] Não agendado: canal principal não identificado | deal=${dealId}`);
+          return res.json({ success: true, follow_up_scheduled: false });
+        }
         const phone = normalizeBrazilianPhone(String(existing.contact_phone).replace(/\D/g, ''));
         const delayHours = stageConfig.follow_up_delay_hours || 2;
         const scheduledAt = computeScheduledAt(delayHours);
@@ -15091,7 +15122,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           .eq('status', 'pending');
 
         await supabaseAdmin.from('scheduled_followups').insert({
-          user_id: userId, deal_id: dealId, phone,
+          user_id: userId, deal_id: dealId, phone, wa_number: waNumber,
           message: personalizedMsg, stage_id: updates.stage,
           contact_name: name,
           scheduled_at: scheduledAt.toISOString(),
@@ -17088,10 +17119,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // trouxe o número.
     let resolvedPhone = phone;
     if (!resolvedPhone && contactName && supabaseAdmin) {
+      const waNumber = await inboxWaNumber(adminClient, userId, 'main');
+      if (!waNumber) return res.json({ deal: null, reason: 'whatsapp_channel_not_identified' });
       const { data: waConvs } = await supabaseAdmin
         .from('wa_conversations')
         .select('phone, contact_name')
         .eq('user_id', userId)
+        .eq('wa_number', waNumber)
         .not('contact_name', 'is', null)
         // PostgREST capa a resposta em 1000 linhas mesmo pedindo mais — sem o
         // order, conta com 1000+ conversas deixava contatos RECENTES fora da
@@ -19991,6 +20025,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (!accessToken) return res.status(500).json({ error: 'Falha ao decifrar token' });
 
     const cleanPhone = to.replace(/\D/g, '');
+    const waNumber = String(waAccount.phone_number || '').replace(/\D/g, '');
+    if (!waNumber) return res.status(409).json({ error: 'Número remetente da WABA não identificado' });
 
     // Monta o payload pro Graph API — texto livre OU template
     let payload: any;
@@ -20042,6 +20078,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         .from('wa_messages')
         .select('id')
         .eq('user_id', userId)
+        .eq('wa_number', waNumber)
         .eq('phone', cleanPhone)
         .eq('from_me', false)
         .gte('timestamp', cutoff)
@@ -20081,18 +20118,38 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         return res.status(400).json({ error: metaData.error.message });
       }
 
+      const messageId = metaData.messages?.[0]?.id || `meta-${Date.now()}`;
       await supabase.from('whatsapp_messages').insert({
         user_id: userId,
         client_id: client_id || null,
         direction: 'outbound',
         from_number: waAccount.phone_number,
         to_number: cleanPhone,
-        wa_message_id: metaData.messages?.[0]?.id,
+        wa_message_id: messageId,
         body: savedBody,
         status: 'sent',
       });
 
-      res.json({ success: true, message_id: metaData.messages?.[0]?.id });
+      const historyDb = supabaseAdmin || supabase;
+      const now = new Date().toISOString();
+      await historyDb.from('wa_messages').insert({
+        user_id: userId, phone: cleanPhone, wa_number: waNumber,
+        message_id: messageId, body: savedBody, from_me: true,
+        timestamp: now, type: 'text', status: 'sent',
+      });
+      const conversation = {
+        user_id: userId, phone: cleanPhone, wa_number: waNumber,
+        last_message: savedBody, last_message_at: now, updated_at: now,
+      };
+      const { data: updated } = await historyDb.from('wa_conversations')
+        .update(conversation)
+        .eq('user_id', userId)
+        .eq('wa_number', waNumber)
+        .eq('phone', cleanPhone)
+        .select('id');
+      if (!updated?.length) await historyDb.from('wa_conversations').insert(conversation);
+
+      res.json({ success: true, message_id: messageId });
     } catch (err: any) {
       console.error('[WhatsApp] Send error:', err);
       res.status(500).json({ error: err.message });
@@ -21755,8 +21812,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
   }
 
-  // ── Baileys: lista de conversas ao conectar ──────────────────────────────
-  // Ao conectar: vincula conversas/mensagens sem wa_number ao número atual
+  // ── Baileys: conexão sem mutação do histórico ────────────────────────────
   BaileysManager.setConnectHandler(async (sessionKey, phone) => {
     if (!supabaseAdmin) return;
     const { userId, slot } = BaileysManager.parseSlotKey(sessionKey);
@@ -21767,49 +21823,25 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       console.log(`[Baileys] Slot "${slot}" conectado (${phone}) para ${userId}`);
       return;
     }
-    console.log(`[Baileys] Vinculando histórico ao número ${phone} para ${userId}`);
-    // Corrige QUALQUER wa_number diferente do número atual (inclui '' e valores
-    // corrompidos como "55438841668246") — EXCETO as conversas do 2º número
-    // (pós-venda). Sem essa exceção, cada reconexão do principal (todo deploy
-    // do Render!) re-carimbava TUDO e a aba Pós-venda ficava vazia. Usa o
-    // número REGISTRADO no creds do slot, que vale mesmo com o pós-venda
-    // desconectado no momento.
-    const pvPhone = BaileysManager.getRegisteredPhone(posvendaKey(userId));
-    // FAIL-SAFE: se as creds do pós-venda EXISTEM mas o número não pôde ser
-    // lido agora (ex.: creds.json sendo escrito no exato momento — boot sobe
-    // as duas sessões juntas), NÃO roda a migração em massa: sem a exclusão
-    // ela re-carimbaria as conversas do pós-venda (o bug original, de volta).
-    // A próxima reconexão do principal tenta de novo.
-    if (!pvPhone && BaileysManager.hasSessionCreds(posvendaKey(userId))) {
-      console.warn(`[Baileys] Migração de wa_number ADIADA para ${userId}: creds do pós-venda existem mas o número não pôde ser lido`);
-      return;
-    }
-    let qConv = supabaseAdmin
-      .from('wa_conversations')
-      .update({ wa_number: phone })
-      .eq('user_id', userId)
-      .neq('wa_number', phone);
-    if (pvPhone && pvPhone !== phone) qConv = qConv.neq('wa_number', pvPhone);
-    const { error: eConv } = await qConv;
-    let qMsg = supabaseAdmin
-      .from('wa_messages')
-      .update({ wa_number: phone })
-      .eq('user_id', userId)
-      .neq('wa_number', phone);
-    if (pvPhone && pvPhone !== phone) qMsg = qMsg.neq('wa_number', pvPhone);
-    const { error: eMsg } = await qMsg;
-    if (eConv) console.error('[Baileys] Erro ao migrar conversas:', eConv.message);
-    if (eMsg) console.error('[Baileys] Erro ao migrar mensagens:', eMsg.message);
-    if (!eConv && !eMsg) console.log(`[Baileys] ✅ Histórico vinculado ao número ${phone}`);
+    // Conectar ou trocar o número NUNCA reatribui histórico existente. Cada
+    // conversa/mensagem mantém o wa_number original; um número novo começa em
+    // um canal novo. Reparos legados são feitos por migração auditável e com
+    // backup, não durante todo boot/deploy.
+    console.log(`[Baileys] Slot principal conectado (${phone}) para ${userId}; histórico preservado sem reatribuição`);
   });
 
   BaileysManager.setChatsSetHandler(async (sessionKey, chats) => {
     if (!supabaseAdmin) { console.warn('[Baileys] setChatsSetHandler: supabaseAdmin não disponível'); return; }
     // Slot pós-venda importa as conversas dele pro MESMO inbox (centralizado);
     // o wa_number de cada uma fica sendo o número do slot.
-    const { userId } = BaileysManager.parseSlotKey(sessionKey);
+    const { userId, slot } = BaileysManager.parseSlotKey(sessionKey);
     // Registrado (creds em disco): histórico pode chegar antes do status 'open'
-    const waNumber = BaileysManager.getRegisteredPhone(sessionKey) || '';
+    const waNumber = BaileysManager.getRegisteredPhone(sessionKey)
+      || `unassigned:${slot}`;
+    if (!waNumber) {
+      console.warn(`[Baileys] ChatsSet ignorado sem número remetente identificável | session=${sessionKey}`);
+      return;
+    }
     // Filtra apenas conversas individuais (não grupos). Chats @lid (padrão pra
     // conta Business) trazem o telefone real em pnJid (Baileys 7): sem isso o
     // contato Business nunca entrava em wa_conversations e a resolução
@@ -21828,7 +21860,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     let saved = 0, errors = 0;
     for (const chat of individual) {
       try {
-        const phone = normalizeBrazilianPhone((chat.id as string).replace('@s.whatsapp.net', ''));
+        const rawPhone = (chat.id as string).replace('@s.whatsapp.net', '');
+        const phone = normalizeBrazilianPhone(rawPhone);
         const rawTs = (chat as any).conversationTimestamp ?? (chat as any).lastMsgTimestamp;
         const ts = rawTs
           ? new Date(Number(rawTs) * 1000).toISOString()
@@ -21845,15 +21878,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           ...(name ? { contact_name: name } : {}),
         };
         const { data: existingChat } = await supabaseAdmin
-          .from('wa_conversations').select('id').eq('user_id', userId).eq('phone', phone).maybeSingle();
+          .from('wa_conversations')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('wa_number', waNumber)
+          .in('phone', [...new Set([rawPhone, phone])])
+          .limit(1)
+          .maybeSingle();
         let { error } = existingChat
-          ? await supabaseAdmin.from('wa_conversations').update(chatPayload).eq('user_id', userId).eq('phone', phone)
+          ? await supabaseAdmin.from('wa_conversations').update(chatPayload).eq('id', existingChat.id)
           : await supabaseAdmin.from('wa_conversations').insert(chatPayload);
         if (error && /archived/.test(error.message || '')) {
           // Coluna ainda não existe (migration 059 pendente) — segue sem o campo
           delete chatPayload.archived;
           ({ error } = existingChat
-            ? await supabaseAdmin.from('wa_conversations').update(chatPayload).eq('user_id', userId).eq('phone', phone)
+            ? await supabaseAdmin.from('wa_conversations').update(chatPayload).eq('id', existingChat.id)
             : await supabaseAdmin.from('wa_conversations').insert(chatPayload));
         }
         if (error) {
@@ -21891,11 +21930,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       // Blocos de 200: o filtro .in() vai na URL do PostgREST (limite de tamanho)
       for (let i = 0; i < batch.length; i += 200) {
         try {
-          await supabaseAdmin.from('wa_messages')
-            .update({ wa_number: waNumber })
-            .eq('user_id', userId)
-            .in('message_id', batch.slice(i, i + 200))
-            .neq('wa_number', waNumber);
+          const { error } = await supabaseAdmin.rpc('repair_wa_message_channel', {
+            p_user_id: userId,
+            p_target_wa_number: waNumber,
+            p_message_ids: batch.slice(i, i + 200),
+          });
+          if (error) console.warn('[Baileys] reparo seguro de canal falhou:', error.message);
         } catch { /* melhor esforço — o próximo re-sync repara */ }
       }
       console.log(`[Baileys] wa_number reparado em lote: ${batch.length} msgs → ${waNumber}`);
@@ -21914,13 +21954,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   const autoReplyTimers = new Map<string, NodeJS.Timeout>();
   const lastAutoReplyAt = new Map<string, number>();
 
-  async function loadAgentConversation(userId: string, phone: string) {
+  async function loadAgentConversation(userId: string, phone: string, waNumber: string) {
     if (!supabaseAdmin) return [] as { role: 'user' | 'assistant'; content: string }[];
     // Pega as ÚLTIMAS 60 (desc + reverte) — em conversa longa o que importa é o
     // contexto RECENTE, não as primeiras mensagens.
     const { data } = await supabaseAdmin.from('wa_messages')
       .select('body, from_me, type, transcription, timestamp')
-      .eq('user_id', userId).eq('phone', phone)
+      .eq('user_id', userId).eq('wa_number', waNumber).eq('phone', phone)
       .order('timestamp', { ascending: false }).limit(60);
     return (data || []).reverse().map((m: any) => ({
       role: (m.from_me ? 'assistant' : 'user') as 'user' | 'assistant',
@@ -22026,24 +22066,25 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return lines.join('\n');
   }
 
-  async function runAutonomousReply(userId: string, phone: string) {
+  async function runAutonomousReply(userId: string, phone: string, waNumber: string) {
     if (!supabaseAdmin) return;
-    const key = `${userId}|${phone}`;
+    if (registeredSlotNumber(userId, 'main') !== waNumber) return;
+    const key = `${userId}|${waNumber}|${phone}`;
     try {
       if (Date.now() - (lastAutoReplyAt.get(key) || 0) < 8000) return; // cooldown anti-duplicidade
       const { data: cfg } = await supabaseAdmin.from('ai_agent_config').select('*').eq('user_id', userId).maybeSingle();
       if (!cfg?.enabled || !cfg?.auto_send) return; // só se ligado E autônomo on
       // Se a última mensagem já é nossa (respondemos / humano entrou), não age.
       const { data: lastMsgs } = await supabaseAdmin.from('wa_messages')
-        .select('from_me').eq('user_id', userId).eq('phone', phone)
+        .select('from_me').eq('user_id', userId).eq('wa_number', waNumber).eq('phone', phone)
         .order('timestamp', { ascending: false }).limit(1);
       if (lastMsgs?.[0]?.from_me) return;
       // Se já foi passada pra humano, a Lia não responde mais (humano assume).
       const { data: conv } = await supabaseAdmin.from('wa_conversations')
-        .select('needs_human').eq('user_id', userId).eq('phone', phone).maybeSingle();
+        .select('needs_human').eq('user_id', userId).eq('wa_number', waNumber).eq('phone', phone).maybeSingle();
       if (conv?.needs_human) return;
 
-      const messages = await loadAgentConversation(userId, phone);
+      const messages = await loadAgentConversation(userId, phone, waNumber);
       if (!messages.length || messages[messages.length - 1].role !== 'user') return;
 
       // Reconhecer cliente antigo (opt-in): injeta um contexto de proximidade.
@@ -22065,7 +22106,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
       if (!reply || reply.includes('###HUMANO###')) {
         await supabaseAdmin.from('wa_conversations')
-          .update({ needs_human: true }).eq('user_id', userId).eq('phone', phone);
+          .update({ needs_human: true })
+          .eq('user_id', userId).eq('wa_number', waNumber).eq('phone', phone);
         console.log(`[Lia autônoma] hand-off → equipe | ${phone}`);
         return;
       }
@@ -22096,6 +22138,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
               .eq('user_id', userId).eq('deal_id', deal.id).eq('status', 'pending');
             await supabaseAdmin.from('scheduled_followups').insert({
               user_id: userId, deal_id: deal.id, phone,
+              wa_number: waNumber,
               message: AGENT_FOLLOWUP_SENTINEL, stage_id: deal.stage || null, contact_name: null,
               scheduled_at: new Date(Date.now() + AGENT_FOLLOWUP_DELAY_HOURS * 3600 * 1000).toISOString(),
             });
@@ -22114,7 +22157,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       try {
         await supabaseAdmin.from('wa_conversations')
           .update({ last_agent_reply_at: new Date().toISOString() })
-          .eq('user_id', userId).eq('phone', phone);
+          .eq('user_id', userId).eq('wa_number', waNumber).eq('phone', phone);
       } catch {}
     } catch (e: any) {
       console.warn('[Lia autônoma] erro:', e?.message);
@@ -22124,14 +22167,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Debounce: espera a pessoa terminar a RAJADA de mensagens antes de responder
   // (muita gente manda uma e já manda outra). Mídia espera mais (dá tempo da
   // transcrição/descrição ficar pronta).
-  function scheduleAutonomousReply(userId: string, phone: string, msgType: string) {
-    const key = `${userId}|${phone}`;
+  function scheduleAutonomousReply(userId: string, phone: string, msgType: string, waNumber: string) {
+    const key = `${userId}|${waNumber}|${phone}`;
     const old = autoReplyTimers.get(key);
     if (old) clearTimeout(old);
     const delay = (msgType === 'audio' || msgType === 'image') ? 18000 : 14000;
     autoReplyTimers.set(key, setTimeout(() => {
       autoReplyTimers.delete(key);
-      runAutonomousReply(userId, phone).catch(() => {});
+      runAutonomousReply(userId, phone, waNumber).catch(() => {});
     }, delay));
   }
 
@@ -22298,6 +22341,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         .from('wa_conversations')
         .update(updateFields)
         .eq('user_id', userId)
+        .eq('wa_number', waNumber)
         .or(phoneFilter)
         .select('id');
 
@@ -22311,13 +22355,6 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
         if (insertErr) {
           console.error('[Baileys] Erro no INSERT de conversa:', insertErr.message, insertErr.code);
-          // Último recurso: tenta sem wa_number (coluna pode não existir)
-          if (insertErr.message.includes('wa_number') || insertErr.code === '42703') {
-            const { wa_number: _drop, ...payloadSemWaN } = convPayload;
-            const { error: e2 } = await supabaseAdmin.from('wa_conversations').insert(payloadSemWaN);
-            if (e2) console.error('[Baileys] INSERT sem wa_number falhou:', e2.message);
-            else if (!isHistory) console.log(`[Baileys] ✅ Conversa criada (sem wa_number) | phone=${phone}`);
-          }
         } else {
           if (!isHistory) console.log(`[Baileys] ✅ Conversa CRIADA | phone=${phone}`);
         }
@@ -22343,7 +22380,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           const clean = text.replace(/^\[[^\]]+\]\s*/, '').slice(0, 60);
           await supabaseAdmin.from('wa_conversations')
             .update({ last_message: `${kind === 'audio' ? '🎤' : '📷'} ${clean}` })
-            .eq('user_id', userId).eq('phone', phone).eq('last_message', placeholder);
+            .eq('user_id', userId)
+            .eq('wa_number', waNumber)
+            .eq('phone', phone)
+            .eq('last_message', placeholder);
         } catch (e: any) { console.warn('[media] understand falhou:', e?.message); }
       })();
     }
@@ -22352,7 +22392,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // auto_send; debounce espera a pessoa terminar de mandar as mensagens).
     if (!isHistory && !msg.key.fromMe && (msgType === 'text' || msgType === 'audio' || msgType === 'image')) {
       // Lia autônoma só atende pelo número PRINCIPAL — o pós-venda é humano.
-      if (slot === 'main') scheduleAutonomousReply(userId, phone, msgType);
+      if (slot === 'main') scheduleAutonomousReply(userId, phone, msgType, waNumber);
     }
 
     // Auto-cria lead apenas para mensagens novas recebidas
@@ -22398,7 +22438,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // ✓✓ azul lido). O MessageBubble do app já renderiza pelos valores
   // 'sent'/'delivered'/'read' — faltava alimentar. Nunca rebaixa um 'read'.
   BaileysManager.setAckHandler(async (sessionKey, updates) => {
-    const { userId } = BaileysManager.parseSlotKey(sessionKey);
+    const { userId, slot } = BaileysManager.parseSlotKey(sessionKey);
+    const waNumber = BaileysManager.getRegisteredPhone(sessionKey) || `unassigned:${slot}`;
     if (!supabaseAdmin) return;
     for (const u of updates) {
       try {
@@ -22406,6 +22447,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           .from('wa_messages')
           .update({ status: u.status })
           .eq('user_id', userId)
+          .eq('wa_number', waNumber)
           .eq('message_id', u.messageId);
         // delivered só sobe a partir de estados anteriores; read sobrescreve
         // tudo menos o próprio read (acks podem chegar fora de ordem).
@@ -22428,13 +22470,19 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
 // Retorna true se o contato mandou mensagem nas últimas 24h (janela de
 // atendimento do WhatsApp, onde texto livre é permitido).
-async function isWithin24hWindow(db: SupabaseClient, userId: string, phone: string): Promise<boolean> {
+async function isWithin24hWindow(
+  db: SupabaseClient,
+  userId: string,
+  phone: string,
+  waNumber: string,
+): Promise<boolean> {
   try {
     const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const { data } = await db
       .from('wa_messages')
       .select('timestamp')
       .eq('user_id', userId)
+      .eq('wa_number', waNumber)
       .eq('phone', phone)
       .eq('from_me', false)
       .gte('timestamp', cutoff)
@@ -22444,6 +22492,20 @@ async function isWithin24hWindow(db: SupabaseClient, userId: string, phone: stri
   } catch {
     return false; // na dúvida, trata como fora da janela (mais seguro)
   }
+}
+
+async function currentMainWaNumber(db: SupabaseClient, userId: string): Promise<string> {
+  const qrNumber = BaileysManager.getRegisteredPhone(userId)
+    || BaileysManager.getConnectedPhone(userId)
+    || '';
+  if (qrNumber) return qrNumber;
+  const { data } = await db.from('whatsapp_business_accounts')
+    .select('phone_number')
+    .eq('user_id', userId)
+    .eq('is_active', true)
+    .limit(1)
+    .maybeSingle();
+  return String(data?.phone_number || '').replace(/\D/g, '');
 }
 
 // Conta variáveis {{N}} no corpo do template
@@ -22486,6 +22548,10 @@ const AGENT_FOLLOWUP_DIRECTIVE =
 async function runAgentFollowUp(task: any): Promise<'sent' | 'cancelled' | 'failed' | 'retry'> {
   if (!supabaseAdmin) return 'retry';
   try {
+    const taskWaNumber = String(task.wa_number || '').replace(/\D/g, '');
+    if (!taskWaNumber || await currentMainWaNumber(supabaseAdmin, task.user_id) !== taskWaNumber) {
+      return 'cancelled';
+    }
     const { data: cfg } = await supabaseAdmin.from('ai_agent_config')
       .select('*').eq('user_id', task.user_id).maybeSingle();
     if (!cfg?.enabled || !cfg?.auto_send) return 'cancelled'; // autônomo desligou
@@ -22497,19 +22563,19 @@ async function runAgentFollowUp(task: any): Promise<'sent' | 'cancelled' | 'fail
     if (!Number.isNaN(cutMs)) {
       const since = new Date(cutMs).toISOString();
       const { data: clientMsgs } = await supabaseAdmin.from('wa_messages')
-        .select('id').eq('user_id', task.user_id).eq('phone', task.phone)
+        .select('id').eq('user_id', task.user_id).eq('wa_number', taskWaNumber).eq('phone', task.phone)
         .eq('from_me', false).gt('timestamp', since).limit(1);
       if (clientMsgs && clientMsgs.length) return 'cancelled';
     }
     // Já passou pra humano? Não insiste.
     const { data: conv } = await supabaseAdmin.from('wa_conversations')
-      .select('needs_human').eq('user_id', task.user_id).eq('phone', task.phone).maybeSingle();
+      .select('needs_human').eq('user_id', task.user_id).eq('wa_number', taskWaNumber).eq('phone', task.phone).maybeSingle();
     if (conv?.needs_human) return 'cancelled';
     // Carrega a conversa (últimas 60, desc + reverte — precisa do contexto recente,
     // inclusive o orçamento que acabou de ir). Mesmo mapeamento do autônomo.
     const { data: rows } = await supabaseAdmin.from('wa_messages')
       .select('body, from_me, type, transcription, timestamp')
-      .eq('user_id', task.user_id).eq('phone', task.phone)
+      .eq('user_id', task.user_id).eq('wa_number', taskWaNumber).eq('phone', task.phone)
       .order('timestamp', { ascending: false }).limit(60);
     const messages = (rows || []).reverse().map((m: any) => ({
       role: (m.from_me ? 'assistant' : 'user') as 'user' | 'assistant',
@@ -22541,7 +22607,7 @@ async function runAgentFollowUp(task: any): Promise<'sent' | 'cancelled' | 'fail
     try {
       await supabaseAdmin.from('wa_conversations')
         .update({ last_agent_reply_at: new Date().toISOString() })
-        .eq('user_id', task.user_id).eq('phone', task.phone);
+        .eq('user_id', task.user_id).eq('wa_number', taskWaNumber).eq('phone', task.phone);
     } catch {}
     console.log(`[Lia follow-up] enviado | ${task.phone}: ${clean.slice(0, 60)}`);
     return 'sent';
@@ -22584,6 +22650,16 @@ function startFollowUpWorker() {
           .select('id');
 
         if (!claimed || claimed.length === 0) continue; // outro worker pegou
+
+        const taskWaNumber = String(task.wa_number || '').replace(/\D/g, '');
+        const currentMainNumber = await currentMainWaNumber(supabaseAdmin!, task.user_id);
+        if (!taskWaNumber || currentMainNumber !== taskWaNumber) {
+          await supabaseAdmin!.from('scheduled_followups')
+            .update({ status: 'cancelled' })
+            .eq('id', task.id);
+          console.warn(`[FollowUp Worker] cancelado: canal original não está mais ativo | task=${task.id}`);
+          continue;
+        }
 
         // Follow-up CONTEXTUAL da Lia: gera com IA (lê a conversa) e envia via
         // Baileys, em vez do texto fixo. Cancela sozinho se o cliente já respondeu.
@@ -22630,12 +22706,16 @@ function startFollowUpWorker() {
           if (!sent) {
             const { data: waAccount } = await supabaseAdmin!
               .from('whatsapp_business_accounts')
-              .select('phone_number_id, access_token')
+              .select('phone_number_id, phone_number, access_token')
               .eq('user_id', task.user_id)
+              .eq('is_active', true)
               .maybeSingle();
 
-            if (waAccount?.phone_number_id && waAccount?.access_token) {
-              const within24h = await isWithin24hWindow(supabaseAdmin!, task.user_id, task.phone);
+            const metaSender = String(waAccount?.phone_number || '').replace(/\D/g, '');
+            if (metaSender === taskWaNumber && waAccount?.phone_number_id && waAccount?.access_token) {
+              const within24h = await isWithin24hWindow(
+                supabaseAdmin!, task.user_id, task.phone, taskWaNumber,
+              );
               let messageBody: any;
 
               if (within24h) {
@@ -22705,10 +22785,19 @@ function startFollowUpWorker() {
             const msgId = `auto-${Date.now()}-${task.phone}`;
             await supabaseAdmin!.from('wa_messages').insert({
               user_id: task.user_id, phone: task.phone, body: task.message,
+              wa_number: taskWaNumber,
               from_me: true, timestamp: sentAt, type: 'text', status: 'sent', message_id: msgId,
             });
-            const fuConvPayload = { user_id: task.user_id, phone: task.phone, last_message: task.message, last_message_at: sentAt, updated_at: sentAt };
-            const { data: fuUpd } = await supabaseAdmin!.from('wa_conversations').update(fuConvPayload).eq('user_id', task.user_id).eq('phone', task.phone).select('id');
+            const fuConvPayload = {
+              user_id: task.user_id, phone: task.phone, wa_number: taskWaNumber,
+              last_message: task.message, last_message_at: sentAt, updated_at: sentAt,
+            };
+            const { data: fuUpd } = await supabaseAdmin!.from('wa_conversations')
+              .update(fuConvPayload)
+              .eq('user_id', task.user_id)
+              .eq('wa_number', taskWaNumber)
+              .eq('phone', task.phone)
+              .select('id');
             if (!fuUpd || fuUpd.length === 0) { await supabaseAdmin!.from('wa_conversations').insert(fuConvPayload); }
             console.log(`[FollowUp Worker] ✅ ${task.phone} (deal ${task.deal_id}) — etapa ${task.stage_id}`);
           } else {
@@ -22735,7 +22824,7 @@ async function syncEvolutionMessages() {
   try {
     const { data: convs } = await supabaseAdmin
       .from('wa_conversations')
-      .select('user_id, phone')
+      .select('user_id, phone, wa_number')
       .order('last_message_at', { ascending: false })
       .limit(200);
 
@@ -22744,15 +22833,27 @@ async function syncEvolutionMessages() {
       return;
     }
 
-    const byUser = new Map<string, string[]>();
+    const byUser = new Map<string, Array<{ phone: string; wa_number: string }>>();
     for (const c of convs) {
-      const phones = byUser.get(c.user_id) || [];
-      if (!phones.includes(c.phone)) phones.push(c.phone);
-      byUser.set(c.user_id, phones);
+      const rows = byUser.get(c.user_id) || [];
+      if (!rows.some((row) => row.phone === c.phone && row.wa_number === c.wa_number)) {
+        rows.push({ phone: c.phone, wa_number: c.wa_number });
+      }
+      byUser.set(c.user_id, rows);
     }
 
-    for (const [userId, phones] of byUser.entries()) {
+    for (const [userId, rows] of byUser.entries()) {
       const instanceName = `user_${userId.replace(/-/g, '_')}`;
+      const waNumber = BaileysManager.getRegisteredPhone(userId)
+        || BaileysManager.getConnectedPhone(userId)
+        || '';
+      if (!waNumber) {
+        console.warn(`[EvolutionSync] ${instanceName} sem número remetente identificado, pulando`);
+        continue;
+      }
+      const phones = rows
+        .filter((row) => row.wa_number === waNumber)
+        .map((row) => row.phone);
 
       // Usa o endpoint correto de status
       let isConnected = false;
@@ -22822,7 +22923,7 @@ async function syncEvolutionMessages() {
             const { error: insErr } = await supabaseAdmin.from('wa_messages').insert({
               user_id: userId, phone, message_id: msgId,
               body, from_me: fromMe, type: 'text', timestamp: ts,
-              status: fromMe ? 'sent' : 'received', wa_number: '',
+              status: fromMe ? 'sent' : 'received', wa_number: waNumber,
             });
             if (insErr && !insErr.code?.includes('23505')) {
               console.error(`[EvolutionSync] Erro ao salvar msg ${msgId}:`, insErr.message);
@@ -22830,8 +22931,18 @@ async function syncEvolutionMessages() {
             }
             savedCount++;
 
-            const convPayload = { user_id: userId, phone, last_message: body, last_message_at: ts, updated_at: new Date().toISOString(), ...(!fromMe ? { unread_count: 1 } : {}) };
-            const { data: upd } = await supabaseAdmin.from('wa_conversations').update(convPayload).eq('user_id', userId).eq('phone', phone).select('id');
+            const convPayload = {
+              user_id: userId, phone, wa_number: waNumber,
+              last_message: body, last_message_at: ts,
+              updated_at: new Date().toISOString(),
+              ...(!fromMe ? { unread_count: 1 } : {}),
+            };
+            const { data: upd } = await supabaseAdmin.from('wa_conversations')
+              .update(convPayload)
+              .eq('user_id', userId)
+              .eq('wa_number', waNumber)
+              .eq('phone', phone)
+              .select('id');
             if (!upd || upd.length === 0) { await supabaseAdmin.from('wa_conversations').insert(convPayload); }
           }
 

@@ -155,14 +155,15 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session?.access_token) return;
-        const r = await fetch(`/api/inbox/contact-info/${selectedPhone.replace(/\D/g, '')}`, {
+        const slotQuery = waSlot === 'posvenda' ? '?slot=posvenda' : '';
+        const r = await fetch(`/api/inbox/contact-info/${selectedPhone.replace(/\D/g, '')}${slotQuery}`, {
           headers: { Authorization: `Bearer ${session.access_token}` },
         });
         if (on && r.ok) setInfoData(await r.json());
       } catch { /* silencioso */ }
     })();
     return () => { on = false; };
-  }, [infoOpen, selectedPhone]);
+  }, [infoOpen, selectedPhone, waSlot]);
 
   const doMoveToVendas = async () => {
     if (!confirmToVendas) return;
@@ -243,7 +244,11 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
   useEffect(() => {
     if (!selectedPhone) return;
     const clean = selectedPhone.replace(/\D/g, '');
-    authFetch(`/api/inbox/mark-read/${clean}`, { method: 'POST' })
+    authFetch(`/api/inbox/mark-read/${clean}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slot: waSlot }),
+    })
       .then(() => refresh())
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -256,7 +261,11 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
   useEffect(() => {
     if (!selectedPhone || !lastIncomingId) return;
     const clean = selectedPhone.replace(/\D/g, '');
-    authFetch(`/api/inbox/mark-read/${clean}`, { method: 'POST' })
+    authFetch(`/api/inbox/mark-read/${clean}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slot: waSlot }),
+    })
       .then(() => refresh())
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -685,13 +694,21 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
                   // "conversa aberta" desfaz o não-lida na próxima mensagem
                   if (conv.phone === selectedPhone) setSelectedPhone(null);
                   mutateUnread(conv.phone, 1); // otimista: badge aparece na hora
-                  authFetch(`/api/inbox/mark-unread/${conv.phone.replace(/\D/g, '')}`, { method: 'POST' })
+                  authFetch(`/api/inbox/mark-unread/${conv.phone.replace(/\D/g, '')}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ slot: waSlot }),
+                  })
                     .then(() => refresh())
                     .catch(() => {});
                 }}
                 onMarkRead={() => {
                   mutateUnread(conv.phone, 0); // otimista: badge some na hora
-                  authFetch(`/api/inbox/mark-read/${conv.phone.replace(/\D/g, '')}`, { method: 'POST' })
+                  authFetch(`/api/inbox/mark-read/${conv.phone.replace(/\D/g, '')}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ slot: waSlot }),
+                  })
                     .then(() => refresh())
                     .catch(() => {});
                 }}

@@ -29,6 +29,12 @@ function requireConfig() {
   if (missing.length) throw new Error(`Configuração ausente: ${missing.join(', ')}`);
 }
 
+function requireLocalConfig() {
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error('Configuração ausente: supabaseUrl, serviceRoleKey');
+  }
+}
+
 function objectKey(item) {
   return `${item.bucket}/${String(item.path).replace(/^\/+/, '')}`;
 }
@@ -267,11 +273,28 @@ function auditStatus(sections) {
 }
 
 async function main() {
-  requireConfig();
+  const localOnly = process.argv.includes('--local-only');
+  if (localOnly) requireLocalConfig();
+  else requireConfig();
   const directoryArg = process.argv.find((argument) => argument.includes('supabase-'));
   if (!directoryArg) throw new Error('Informe o diretório do backup Supabase');
   const directory = resolve(directoryArg);
   const manifest = await readJson(join(directory, 'manifest.json'));
+  if (localOnly) {
+    const localBackup = await auditLocalBackup(directory, manifest);
+    const status = localBackup.failures.length === 0 ? 'passed' : 'failed';
+    const report = {
+      created_at: new Date().toISOString(),
+      backup: basename(directory),
+      status,
+      local_backup: localBackup,
+    };
+    const reportPath = join(directory, 'local-backup-audit-report.json');
+    await writeFile(reportPath, JSON.stringify(report, null, 2), { mode: 0o600 });
+    console.log(JSON.stringify({ reportPath, ...report }, null, 2));
+    if (status !== 'passed') process.exitCode = 1;
+    return;
+  }
   const storageObjects = await readGzipNdjson(join(directory, 'storage-objects.ndjson.gz'));
   const stateRows = await readNdjson(join(directory, 'r2-migration-state.ndjson'));
   const databaseReport = await readJson(join(directory, 'r2-database-backup-report.json'));
