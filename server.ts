@@ -2712,20 +2712,8 @@ async function startServer() {
 
         const entry = payload.entry?.[0];
         const value = entry?.changes?.[0]?.value;
-        if (!value?.messages?.length) return;
-
-        const message = value.messages[0];
-        const msgType: string = message.type || 'text';
-
-        // Ignora tipos que não sabemos tratar (reaction, system, etc.)
-        if (!['text', 'image', 'audio', 'video', 'document', 'sticker', 'voice'].includes(msgType)) return;
-
         const phoneNumberId = value.metadata?.phone_number_id;
-        const fromNumber = message.from;
-        const msgId = message.id;
-
-        // Nome do contato vem em value.contacts[0].profile.name
-        const contactName: string | null = value.contacts?.[0]?.profile?.name || null;
+        if (!phoneNumberId) return;
 
         // Precisa do access_token para baixar mídia — busca antes do processamento.
         // Filtra is_active=true (multi-WABA: um phone_number_id pertence só a uma
@@ -2739,6 +2727,32 @@ async function startServer() {
 
         if (waErr) { console.error('[Webhook Meta] Erro ao buscar conta:', waErr.message); return; }
         if (!waAccount) { console.error('[Webhook Meta] Nenhuma conta ativa para phone_number_id:', phoneNumberId); return; }
+
+        // Confirmações de sent/delivered/read chegam sem `messages`. Antes o
+        // handler retornava cedo e o CRM nunca refletia o estado real do WABA.
+        const deliveryStatuses = Array.isArray(value.statuses) ? value.statuses : [];
+        for (const delivery of deliveryStatuses.slice(0, 100)) {
+          if (!delivery?.id || !delivery?.status) continue;
+          const { error: statusError } = await supabaseAdmin
+            .from('wa_messages')
+            .update({ status: delivery.status })
+            .eq('user_id', waAccount.user_id)
+            .eq('message_id', delivery.id);
+          if (statusError) console.error('[Webhook Meta] Erro ao atualizar status:', statusError.message);
+        }
+        if (!value?.messages?.length) return;
+
+        const message = value.messages[0];
+        const msgType: string = message.type || 'text';
+
+        // Ignora tipos que não sabemos tratar (reaction, system, etc.)
+        if (!['text', 'image', 'audio', 'video', 'document', 'sticker', 'voice'].includes(msgType)) return;
+
+        const fromNumber = message.from;
+        const msgId = message.id;
+
+        // Nome do contato vem em value.contacts[0].profile.name
+        const contactName: string | null = value.contacts?.[0]?.profile?.name || null;
 
         // Decifra o token (no-op se a linha estiver em plaintext legacy).
         const decryptedToken = decryptIfNeeded(waAccount.access_token);
@@ -3006,10 +3020,26 @@ async function startServer() {
 
   // ============ INBOX ENDPOINTS ============
 
+  function inboxConversationSearchFilter(raw: unknown): string | null {
+    if (typeof raw !== 'string') return null;
+    const text = raw
+      .trim()
+      .slice(0, 80)
+      .replace(/[(),.%]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!text) return null;
+    const digits = text.replace(/\D/g, '');
+    const filters = [`contact_name.ilike.%${text}%`];
+    if (digits) filters.push(`phone.ilike.%${digits}%`);
+    return filters.join(',');
+  }
+
   // Lista conversas do Supabase (persistido) + merge com cache em memória
   app.get('/api/inbox/conversations', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const db = supabaseAdmin;
+    const searchFilter = inboxConversationSearchFilter(req.query.search);
     // ?slot=posvenda → visão SEPARADA do 2º número: só as conversas dele.
     // Usa o número REGISTRADO (creds em disco) — uma queda temporária do socket
     // não pode esconder o histórico (mesma regra da visão principal). Sem
@@ -3017,14 +3047,17 @@ async function startServer() {
     if (req.query.slot === 'posvenda') {
       const pvNumber = BaileysManager.getRegisteredPhone(posvendaKey(userId)) || '';
       if (!pvNumber || !db) return res.json([]);
-      let { data, error: pvErr } = await db.from('wa_conversations')
+      let pvQuery = db.from('wa_conversations')
         .select('*').eq('user_id', userId).eq('wa_number', pvNumber)
-        .neq('archived', true)
+        .neq('archived', true);
+      if (searchFilter) pvQuery = pvQuery.or(searchFilter);
+      let { data, error: pvErr } = await pvQuery
         .order('last_message_at', { ascending: false }).limit(200);
       if (pvErr && /archived/.test(pvErr.message || '')) {
-        ({ data } = await db.from('wa_conversations')
-          .select('*').eq('user_id', userId).eq('wa_number', pvNumber)
-          .order('last_message_at', { ascending: false }).limit(200));
+        let pvFallback = db.from('wa_conversations')
+          .select('*').eq('user_id', userId).eq('wa_number', pvNumber);
+        if (searchFilter) pvFallback = pvFallback.or(searchFilter);
+        ({ data } = await pvFallback.order('last_message_at', { ascending: false }).limit(200));
       }
       return res.json(data || []);
     }
@@ -3057,6 +3090,7 @@ async function startServer() {
       const userDb = (req as any).supabase as SupabaseClient;
       let q = userDb.from('wa_conversations').select('*').eq('user_id', userId);
       if (!disconnected) q = q.eq('wa_number', waNumber);
+      if (searchFilter) q = q.or(searchFilter);
       const { data } = await q.order('last_message_at', { ascending: false }).limit(200);
       return res.json(data || []);
     }
@@ -3067,6 +3101,7 @@ async function startServer() {
         .eq('user_id', userId)
         .neq('archived', true); // arquivadas no WhatsApp ficam fora do CRM
       if (!disconnected) q = q.eq('wa_number', waNumber);
+      if (searchFilter) q = q.or(searchFilter);
       let { data, error } = await q
         .order('last_message_at', { ascending: false })
         .limit(200);
@@ -3074,6 +3109,7 @@ async function startServer() {
         // Migration 059 pendente — lista sem o filtro
         let q2 = db.from('wa_conversations').select('*').eq('user_id', userId);
         if (!disconnected) q2 = q2.eq('wa_number', waNumber);
+        if (searchFilter) q2 = q2.or(searchFilter);
         ({ data, error } = await q2.order('last_message_at', { ascending: false }).limit(200));
       }
 
@@ -3384,11 +3420,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       : cleanPhone;
     console.log(`[Send] baileysPhone=${baileysPhone} | status=${BaileysManager.getStatus(userId)} | waNumber=${waNumber}`);
 
-    const saveToDb = async (msgId: string) => {
+    const saveToDb = async (msgId: string, sourceWaNumber = waNumber) => {
       const now = new Date().toISOString();
       const { error: msgErr } = await db.from('wa_messages').insert({
         user_id: userId, phone: baileysPhone, message_id: msgId,
-        body: text, from_me: true, timestamp: now, type: 'text', status: 'sent', wa_number: waNumber,
+        body: text, from_me: true, timestamp: now, type: 'text', status: 'sent', wa_number: sourceWaNumber,
       });
       if (msgErr) {
         if (!msgErr.message.includes('duplicate') && !msgErr.code?.includes('23505')) {
@@ -3407,7 +3443,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         .eq('user_id', userId).or(phoneOr).select('id');
       if (!upd || upd.length === 0) {
         await db.from('wa_conversations').insert({
-          user_id: userId, phone: baileysPhone, last_message: text, last_message_at: now, updated_at: now, wa_number: waNumber,
+          user_id: userId, phone: baileysPhone, last_message: text, last_message_at: now, updated_at: now, wa_number: sourceWaNumber,
         });
       }
     };
@@ -3420,6 +3456,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       } catch (err: any) {
         console.warn('[Send] Baileys erro:', err.message);
       }
+    }
+
+    if (slot === 'posvenda') {
+      return res.status(400).json({ error: 'WhatsApp do Pós-venda desconectado. Reconecte o QR Code desse número antes de enviar.' });
     }
 
     // ── Meta WhatsApp Business API (fallback) ────────────────────────────────
@@ -3468,7 +3508,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         return res.status(400).json({ error: msg });
       }
       const msgId = metaData.messages?.[0]?.id || `meta-${Date.now()}`;
-      await saveToDb(msgId);
+      const metaWaNumber = String(waAccount.phone_number || '').replace(/\D/g, '');
+      await saveToDb(msgId, metaWaNumber);
       res.json({ success: true, message_id: msgId });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -3529,7 +3570,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const storageBase64 = mimetype.startsWith('audio/') ? mediaBase64 : finalBase64;
     const mediaDataUrl = `data:${storageMimetype};base64,${storageBase64}`;
 
-    const saveToDb = async (msgId: string) => {
+    const baileysWaNumber = BaileysManager.getConnectedPhone(mediaKey) || '';
+    const saveToDb = async (msgId: string, sourceWaNumber = baileysWaNumber) => {
       const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
       const now = new Date().toISOString();
       const fmtDur = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
@@ -3543,6 +3585,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         user_id: userId, phone: cleanPhone, message_id: msgId,
         body: caption || '', from_me: true, timestamp: now,
         type: mediaType, status: 'sent', media_url: storedMediaUrl,
+        ...(sourceWaNumber ? { wa_number: sourceWaNumber } : {}),
       };
       const msgFull = {
         ...msgBase,
@@ -3557,7 +3600,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const lastMsg = mediaType === 'audio'
         ? `🎤 Mensagem de voz${audioSeconds > 0 ? ` (${fmtDur(audioSeconds)})` : ''}`
         : caption || `[${mediaType}]`;
-      const convPayload = { user_id: userId, phone: cleanPhone, last_message: lastMsg, last_message_at: now };
+      const convPayload = {
+        user_id: userId,
+        phone: cleanPhone,
+        last_message: lastMsg,
+        last_message_at: now,
+        ...(sourceWaNumber ? { wa_number: sourceWaNumber } : {}),
+      };
       const normalizedPhone = normalizeBrazilianPhone(cleanPhone);
       const phoneOr = normalizedPhone !== cleanPhone
         ? `phone.eq.${cleanPhone},phone.eq.${normalizedPhone}`
@@ -3588,10 +3637,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
     }
 
+    if (slot === 'posvenda') {
+      return res.status(400).json({ error: 'WhatsApp do Pós-venda desconectado. Reconecte o QR Code desse número antes de enviar.' });
+    }
+
     // ── Meta WhatsApp Business API ───────────────────────────────────────────
     const { data: waAccount } = await supabase
       .from('whatsapp_business_accounts')
-      .select('phone_number_id, access_token')
+      .select('phone_number_id, phone_number, access_token')
       .eq('user_id', userId)
       .eq('is_active', true)
       .maybeSingle();
@@ -3642,7 +3695,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         return res.status(400).json({ error: sendData.error.message || 'Erro ao enviar mídia' });
       }
       const msgId = sendData.messages?.[0]?.id || `meta-${Date.now()}`;
-      await saveToDb(msgId);
+      const metaWaNumber = String(waAccount.phone_number || '').replace(/\D/g, '');
+      await saveToDb(msgId, metaWaNumber);
       return res.json({ success: true, message_id: msgId });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });

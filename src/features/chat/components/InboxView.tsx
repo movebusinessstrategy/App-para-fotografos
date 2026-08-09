@@ -7,6 +7,7 @@ import { useAuth } from '../../../contexts/AuthContext';
 import { extractContact, formatBrazilianPhone, getInitials } from '../utils/contactHelpers';
 import { useContactProfile } from '../hooks/useContactProfile';
 import { updateCachedContact } from '../utils/contactCache';
+import { conversationMatchesSearch } from '../utils/conversationSearch';
 import { useConversations } from '../hooks/useConversations';
 import { useMessages } from '../hooks/useMessages';
 import { useWaStatus } from '../hooks/useWaStatus';
@@ -107,13 +108,20 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
       setPvQrBusy(false);
     }
   };
-  const { conversations, loading: loadingConvs, refresh, mutateUnread } = useConversations(waSlot);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(searchTerm.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [searchTerm]);
+  const { conversations, loading: loadingConvs, refresh, mutateUnread } = useConversations(waSlot, debouncedSearch);
   const { connected } = useWaStatus();
   const [selectedPhone, setSelectedPhone] = useState<string | null>(initialPhone || null);
   const [unreadOnly, setUnreadOnly] = useState(false);
-  const shownConversations = unreadOnly
-    ? conversations.filter((c) => c.unread_count > 0)
-    : conversations;
+  const shownConversations = conversations.filter((conversation) => {
+    if (unreadOnly && conversation.unread_count <= 0) return false;
+    return conversationMatchesSearch(conversation, searchTerm, extractContact(conversation).name);
+  });
   const unreadTotal = conversations.filter((c) => c.unread_count > 0).length;
   const { messages, loading: loadingMsgs, sendText } = useMessages(selectedPhone, waSlot);
   const [text, setText] = useState('');
@@ -549,6 +557,38 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
           </div>
         )}
 
+        <div className="px-3 pt-2 flex-shrink-0">
+          <div
+            className="h-10 rounded-xl px-3 flex items-center gap-2 border transition-colors focus-within:ring-2"
+            style={{
+              background: 'var(--wa-bg-hover)',
+              borderColor: 'var(--wa-border)',
+              color: 'var(--wa-text-secondary)',
+            }}
+          >
+            <Search size={16} className="flex-shrink-0" />
+            <input
+              type="search"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder="Buscar por nome ou número"
+              aria-label="Buscar conversas por nome ou número"
+              className="min-w-0 flex-1 bg-transparent border-0 outline-none text-[13px] placeholder:opacity-70"
+              style={{ color: 'var(--wa-text-primary)' }}
+            />
+            {searchTerm && (
+              <button
+                type="button"
+                onClick={() => setSearchTerm('')}
+                className="w-6 h-6 rounded-full flex items-center justify-center hover:opacity-70"
+                aria-label="Limpar busca"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        </div>
+
         {/* Filtros: Todas / Não lidas (igual WhatsApp) */}
         <div
           className="px-3 py-2 flex-shrink-0 flex items-center gap-2"
@@ -626,7 +666,11 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
             <div className="flex flex-col items-center justify-center h-full gap-3 px-6 text-center py-16">
               <MessageCircle size={32} style={{ color: 'var(--wa-text-muted)' }} strokeWidth={1.5} />
               <p className="text-sm" style={{ color: 'var(--wa-text-muted)' }}>
-                {unreadOnly ? 'Nenhuma conversa não lida' : 'Nenhuma conversa ainda'}
+                {searchTerm
+                  ? `Nenhuma conversa encontrada para “${searchTerm}”`
+                  : unreadOnly
+                    ? 'Nenhuma conversa não lida'
+                    : 'Nenhuma conversa ainda'}
               </p>
             </div>
           ) : (

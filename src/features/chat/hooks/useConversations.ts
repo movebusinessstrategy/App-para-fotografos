@@ -5,7 +5,7 @@ import { startVisiblePoll } from '../../../utils/poll';
 
 // slot: 'main' = WhatsApp de vendas (padrão) | 'posvenda' = 2º número
 // (alinhamento) — visões SEPARADAS, cada uma só com as conversas do seu número.
-export function useConversations(slot: 'main' | 'posvenda' = 'main') {
+export function useConversations(slot: 'main' | 'posvenda' = 'main', search = '') {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
   const intervalRef = useRef<(() => void) | null>(null);
@@ -20,7 +20,11 @@ export function useConversations(slot: 'main' | 'posvenda' = 'main') {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) return;
 
-      const res = await fetch(`/api/inbox/conversations${slot === 'posvenda' ? '?slot=posvenda' : ''}`, {
+      const params = new URLSearchParams();
+      if (slot === 'posvenda') params.set('slot', 'posvenda');
+      if (search.trim()) params.set('search', search.trim());
+      const query = params.toString();
+      const res = await fetch(`/api/inbox/conversations${query ? `?${query}` : ''}`, {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       if (!res.ok) return;
@@ -60,7 +64,7 @@ export function useConversations(slot: 'main' | 'posvenda' = 'main') {
     fetchConversations();
     intervalRef.current = startVisiblePoll(fetchConversations, 25000);
     return () => { if (intervalRef.current) intervalRef.current(); };
-  }, [slot]);
+  }, [slot, search]);
 
   return { conversations, loading, refresh: fetchConversations, mutateUnread };
 }
