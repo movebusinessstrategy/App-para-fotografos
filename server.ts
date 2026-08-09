@@ -3235,8 +3235,12 @@ async function startServer() {
     const slot = req.query.slot === 'posvenda' ? 'posvenda' : 'main';
     const sessionKey = slot === 'posvenda' ? posvendaKey(userId) : userId;
     const waNumber = registeredSlotNumber(userId, slot);
-    if (!waNumber) return res.status(409).json({ error: 'Canal do WhatsApp não identificado.' });
+    if (!waNumber) {
+      console.warn(`[InboxSync] canal ausente | user=${userId} | slot=${slot}`);
+      return res.status(409).json({ error: 'Canal do WhatsApp não identificado.' });
+    }
     if (BaileysManager.getStatus(sessionKey) !== 'open') {
+      console.warn(`[InboxSync] QR desconectado | user=${userId} | slot=${slot}`);
       return res.status(409).json({ error: 'WhatsApp via QR Code está desconectado.' });
     }
 
@@ -3262,6 +3266,7 @@ async function startServer() {
     if (error) return res.status(500).json({ error: error.message });
     const anchor = anchors?.[0];
     if (!anchor?.message_id || !anchor?.timestamp) {
+      console.warn(`[InboxSync] âncora ausente | user=${userId} | final=${withoutNinthDigit.slice(-4)}`);
       return res.status(404).json({ error: 'Ainda não há uma mensagem de referência para sincronizar.' });
     }
 
@@ -3277,6 +3282,7 @@ async function startServer() {
         },
       );
       inboxHistorySyncAt.set(throttleKey, Date.now());
+      console.log(`[InboxSync] pedido aceito | user=${userId} | final=${withoutNinthDigit.slice(-4)} | request=${requestId}`);
       return res.status(202).json({ queued: true, request_id: requestId });
     } catch (syncError: any) {
       console.warn('[InboxSync] Falha ao pedir histórico:', syncError?.message || syncError);
