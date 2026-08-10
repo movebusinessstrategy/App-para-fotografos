@@ -21406,7 +21406,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     try {
       const [
         jobsRes,
-        dealsRes,
+        dealsRows,
         dealStagesRes,
         prodStagesRes,
         prodProcessesRes,
@@ -21415,7 +21415,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         clientsRes,
       ] = await Promise.all([
         supabase.from('jobs').select('*, clients(name)').eq('user_id', userId).limit(10000),
-        supabase.from('deals').select('*').eq('user_id', userId),
+        loadAllUserRows(supabase, 'deals', '*', userId),
         supabase.from('deal_stages').select('*').eq('user_id', userId).not('id', 'like', 'prod-%').order('position'),
         supabase.from('deal_stages').select('*').eq('user_id', userId).like('id', 'prod-%').order('position'),
         supabase.from('production_processes').select('*').eq('user_id', userId).order('position'),
@@ -21430,7 +21430,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const jobs = (jobsRes.data || [])
         .filter((j: any) => j.status !== 'pre_reserved')
         .map((j: any) => ({ ...j, client_name: (j.clients as any)?.name || null }));
-      const deals = dealsRes.data || [];
+      const deals = dealsRows || [];
       const dealStages = dealStagesRes.data || [];
       const prodStages = prodStagesRes.data || [];
       const prodProcesses = prodProcessesRes.data || [];
