@@ -73,8 +73,39 @@ import {
   normalizeCalendarClockTime,
   type CalendarEventPayload,
 } from './calendar-sync.js';
+import {
+  GoogleAdsApiError,
+  GoogleAdsRestClient,
+  createEnabledGoogleAdsRestClient,
+  googleAdsSafeFailure,
+  normalizeGoogleAdsCustomerId,
+  readGoogleAdsRestConfig,
+} from './google-ads-rest.js';
+import {
+  GOOGLE_ADS_STALE_AFTER_HOURS,
+  GoogleAdsValidationError,
+  aggregateGoogleAdsCampaigns,
+  aggregateGoogleAdsOverview,
+  assertTenantGoogleAdsRequestHasNoCustomerId,
+  buildGoogleAdsRangeReplacement,
+  computeCrmAttribution,
+  fetchGoogleAdsAccount,
+  fetchGoogleAdsDailyMetrics,
+  fetchGoogleAdsHierarchy,
+  googleAdsConnectionState,
+  googleAdsCooldownRemaining,
+  maskGoogleAdsCustomerId,
+  resolveGoogleAdsDateRange,
+  scopeGoogleAdsMetricRows,
+  type GoogleAdsAccount,
+  type GoogleAdsDateRange,
+} from './google-ads-sync.js';
 
 dotenv.config();
+
+const googleAdsRuntimeConfig = readGoogleAdsRestConfig();
+const googleAdsSyncFlagEnabled = String(process.env.GOOGLE_ADS_SYNC_ENABLED || '').trim().toLowerCase() === 'true';
+const googleAdsRestClient = createEnabledGoogleAdsRestClient(googleAdsRuntimeConfig);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WA_MEDIA_BUCKET = 'wa-media';
@@ -1449,9 +1480,56 @@ async function startServer() {
   // 1. /api/data-deletion/request — formulário em /excluir-dados (UI pro user)
   // 2. /api/data-deletion-callback — callback signed_request da Meta
   //
-  // Por enquanto ambos só logam a solicitação e geram um ticket_id determinístico.
-  // Processamento manual (operador apaga via Supabase Studio + responde por email).
-  // TODO futuro: tabela data_deletion_requests + worker async + email automático.
+  // O formulário apenas persiste uma solicitação pendente. Nenhum dado real é
+  // apagado nesta rota; o processamento exige revisão posterior do operador.
+
+  type DeletionRequestScope = 'all' | 'whatsapp_only' | 'google_ads_only';
+  type ParsedDeletionRequest = {
+    email: string;
+    reason: string | null;
+    scope: DeletionRequestScope;
+  };
+
+  const deletionRequestScopes = new Set<DeletionRequestScope>([
+    'all',
+    'whatsapp_only',
+    'google_ads_only',
+  ]);
+  const deletionEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const deletionRateLimitWindowMs = 24 * 60 * 60 * 1000;
+  const deletionRateLimitMax = 3;
+
+  const parseDeletionRequest = (body: any): ParsedDeletionRequest | null => {
+    const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
+    if (!email || email.length > 254 || !deletionEmailPattern.test(email)) return null;
+
+    const rawScope = typeof body?.scope === 'string' ? body.scope : 'all';
+    if (!deletionRequestScopes.has(rawScope as DeletionRequestScope)) return null;
+
+    if (body?.reason !== undefined && typeof body.reason !== 'string') return null;
+    const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
+    if (reason.length > 1000) return null;
+    return { email, reason: reason || null, scope: rawScope as DeletionRequestScope };
+  };
+
+  const generatePublicDeletionTicketId = (): string => (
+    `DEL-${crypto.randomBytes(12).toString('hex').toUpperCase()}`
+  );
+
+  const deletionRateLimitStatus = async (
+    email: string,
+  ): Promise<'allowed' | 'limited' | 'unavailable'> => {
+    if (!supabaseAdmin) return 'unavailable';
+    const cutoff = new Date(Date.now() - deletionRateLimitWindowMs).toISOString();
+    const { data, error } = await supabaseAdmin
+      .from('data_deletion_requests')
+      .select('id')
+      .eq('email', email)
+      .gte('created_at', cutoff)
+      .limit(deletionRateLimitMax);
+    if (error) return 'unavailable';
+    return (data?.length || 0) >= deletionRateLimitMax ? 'limited' : 'allowed';
+  };
 
   const generateDeletionTicketId = (input: string): string => {
     // Hash determinístico do input + slice — não vaza dados, só serve como protocolo único.
@@ -1459,26 +1537,65 @@ async function startServer() {
   };
 
   app.post('/api/data-deletion/request', async (req, res) => {
-    const { email, reason, scope } = req.body || {};
-    if (!email || typeof email !== 'string' || !email.includes('@')) {
-      return res.status(400).json({ error: 'E-mail válido é obrigatório.' });
+    res.setHeader('Cache-Control', 'no-store');
+    const request = parseDeletionRequest(req.body);
+    if (!request) {
+      return res.status(400).json({
+        error: 'Informe um e-mail válido, um escopo permitido e um motivo de até 1000 caracteres.',
+      });
     }
-    const requestedScope: 'all' | 'whatsapp_only' = scope === 'whatsapp_only' ? 'whatsapp_only' : 'all';
-    const ticketId = generateDeletionTicketId(email + ':' + new Date().toISOString().slice(0, 10));
-    // Log estruturado pro operador picar via grep nos logs do Render:
-    console.log('[DataDeletion] Nova solicitação:', JSON.stringify({
-      ticket_id: ticketId,
-      email,
-      scope: requestedScope,
-      reason: (reason || '').slice(0, 500),
-      received_at: new Date().toISOString(),
-      ip: req.ip || req.headers['x-forwarded-for'] || 'unknown',
-    }));
-    res.json({
-      ok: true,
-      ticket_id: ticketId,
-      message: `Solicitação registrada com protocolo ${ticketId}. Você receberá confirmação por e-mail em até 48 horas úteis. A exclusão completa será processada em até 15 dias úteis, conforme prazo da LGPD.`,
-    });
+    if (!supabaseAdmin) {
+      console.error('[DataDeletion] Persistência indisponível: service role ausente');
+      return res.status(503).json({
+        error: 'Não foi possível registrar a solicitação agora. Nenhum pedido foi criado; tente novamente mais tarde.',
+      });
+    }
+
+    try {
+      const rateLimitStatus = await deletionRateLimitStatus(request.email);
+      if (rateLimitStatus === 'unavailable') {
+        console.error('[DataDeletion] Não foi possível validar o limite de solicitações');
+        return res.status(503).json({
+          error: 'Não foi possível registrar a solicitação agora. Nenhum pedido foi criado; tente novamente mais tarde.',
+        });
+      }
+      if (rateLimitStatus === 'limited') {
+        res.setHeader('Retry-After', '86400');
+        return res.status(429).json({
+          error: 'Limite temporário de solicitações atingido para este e-mail. Aguarde antes de tentar novamente.',
+        });
+      }
+
+      const ticketId = generatePublicDeletionTicketId();
+      const { error } = await supabaseAdmin.from('data_deletion_requests').insert({
+        ticket_id: ticketId,
+        email: request.email,
+        scope: request.scope,
+        reason: request.reason,
+        status: 'pending',
+      });
+      if (error) {
+        console.error('[DataDeletion] Falha ao persistir solicitação', { code: error.code || 'unknown' });
+        return res.status(503).json({
+          error: 'Não foi possível registrar a solicitação agora. Nenhum pedido foi criado; tente novamente mais tarde.',
+        });
+      }
+
+      console.info('[DataDeletion] Solicitação persistida', { ticket_id: ticketId, scope: request.scope });
+      return res.status(201).json({
+        ok: true,
+        ticket_id: ticketId,
+        status: 'pending',
+        message: `Solicitação registrada com o protocolo ${ticketId}. Guarde este código para identificar o pedido. Nenhum dado foi excluído automaticamente neste envio.`,
+      });
+    } catch (error) {
+      console.error('[DataDeletion] Erro inesperado ao registrar solicitação', {
+        type: error instanceof Error ? error.name : 'unknown',
+      });
+      return res.status(503).json({
+        error: 'Não foi possível registrar a solicitação agora. Nenhum pedido foi criado; tente novamente mais tarde.',
+      });
+    }
   });
 
   // Meta Data Deletion Callback — formato signed_request.
@@ -2099,6 +2216,577 @@ async function startServer() {
     if (!allowed) return res.status(403).json({ error: 'Acesso restrito ao painel da plataforma' });
     next();
   };
+
+  // ============ GOOGLE ADS (MCC CENTRAL, SOMENTE LEITURA) ============
+  // O customer_id nunca vem das rotas do tenant. Ele é resolvido pelo vínculo
+  // criado por um super-admin e todas as queries repetem user_id + customer_id.
+  type GoogleAdsLinkRow = {
+    user_id: string;
+    customer_id: string;
+    descriptive_name: string | null;
+    currency_code: string | null;
+    time_zone: string | null;
+    account_status: string | null;
+    last_tested_at: string | null;
+    updated_at: string;
+  };
+  type GoogleAdsConnectionRow = {
+    user_id: string;
+    last_sync_status: string;
+    last_sync_started_at: string | null;
+    last_synced_at: string | null;
+    last_error: string | null;
+  };
+  type GoogleAdsTenantContext = {
+    link: GoogleAdsLinkRow | null;
+    connection: GoogleAdsConnectionRow | null;
+  };
+
+  const googleAdsSyncLocks = new Set<string>();
+
+  function requireDirectPlatformAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+    if ((req as any).isImpersonating) {
+      return res.status(403).json({ error: 'Saia do modo de visualização para configurar o Google Ads' });
+    }
+    next();
+  }
+
+  function requireRealTenantOwner(req: express.Request, res: express.Response, next: express.NextFunction) {
+    const userId = (req as any).userId as string | undefined;
+    const realUserId = (req as any).realUserId as string | undefined;
+    if ((req as any).isMember || (req as any).isImpersonating || !userId || realUserId !== userId) {
+      return res.status(403).json({ error: 'A sincronização é restrita ao dono real da conta', owner_only: true });
+    }
+    next();
+  }
+
+  function rejectTenantGoogleAdsCustomerId(req: express.Request, res: express.Response, next: express.NextFunction) {
+    try {
+      assertTenantGoogleAdsRequestHasNoCustomerId(req.query);
+      assertTenantGoogleAdsRequestHasNoCustomerId(req.body);
+      next();
+    } catch (error) {
+      res.status(400).json({ error: (error as Error).message });
+    }
+  }
+
+  function googleAdsClientOrRespond(res: express.Response): GoogleAdsRestClient | null {
+    if (googleAdsRestClient) return googleAdsRestClient;
+    res.status(503).json({
+      error: googleAdsSyncFlagEnabled
+        ? 'Google Ads ainda não foi configurado na plataforma'
+        : 'A sincronização do Google Ads está desabilitada na plataforma',
+      state: 'config_missing',
+      sync_enabled: googleAdsSyncFlagEnabled,
+      missing: [
+        ...googleAdsRuntimeConfig.missing,
+        ...(!googleAdsSyncFlagEnabled ? ['GOOGLE_ADS_SYNC_ENABLED=true'] : []),
+      ],
+    });
+    return null;
+  }
+
+  function logGoogleAdsError(scope: string, error: unknown) {
+    const apiError = error instanceof GoogleAdsApiError ? error : null;
+    console.error(`[google-ads/${scope}]`, {
+      name: error instanceof Error ? error.name : 'UnknownError',
+      status: apiError?.status ?? null,
+      request_id: apiError?.requestId ?? null,
+    });
+  }
+
+  async function getGoogleAdsTenantContext(db: SupabaseClient, userId: string): Promise<GoogleAdsTenantContext> {
+    const [linkResult, connectionResult] = await Promise.all([
+      db.from('google_ads_customer_links')
+        .select('user_id, customer_id, descriptive_name, currency_code, time_zone, account_status, last_tested_at, updated_at')
+        .eq('user_id', userId)
+        .maybeSingle(),
+      db.from('google_ads_connections')
+        .select('user_id, last_sync_status, last_sync_started_at, last_synced_at, last_error')
+        .eq('user_id', userId)
+        .maybeSingle(),
+    ]);
+    if (linkResult.error) throw linkResult.error;
+    if (connectionResult.error) throw connectionResult.error;
+    return {
+      link: (linkResult.data as GoogleAdsLinkRow | null) || null,
+      connection: (connectionResult.data as GoogleAdsConnectionRow | null) || null,
+    };
+  }
+
+  function tenantGoogleAdsAccount(link: GoogleAdsLinkRow | null) {
+    if (!link) return null;
+    return {
+      customer_id_masked: maskGoogleAdsCustomerId(link.customer_id),
+      name: link.descriptive_name,
+      currency_code: link.currency_code,
+      time_zone: link.time_zone,
+    };
+  }
+
+  function platformGoogleAdsAccount(link: GoogleAdsLinkRow) {
+    return {
+      customer_id: link.customer_id,
+      descriptive_name: link.descriptive_name,
+      currency_code: link.currency_code,
+      time_zone: link.time_zone,
+      status: link.account_status,
+      last_tested_at: link.last_tested_at,
+      updated_at: link.updated_at,
+    };
+  }
+
+  function googleAdsStatusPayload(context: GoogleAdsTenantContext, canSync: boolean) {
+    const cooldown = googleAdsCooldownRemaining(context.connection?.last_sync_started_at);
+    const state = googleAdsConnectionState({
+      configured: !!googleAdsRestClient,
+      linked: !!context.link,
+      lastSyncedAt: context.connection?.last_synced_at,
+      lastError: context.connection?.last_error,
+    });
+    return {
+      state,
+      linked: !!context.link,
+      account: tenantGoogleAdsAccount(context.link),
+      last_synced_at: context.connection?.last_synced_at || null,
+      last_error: context.connection?.last_error || null,
+      stale_after_hours: GOOGLE_ADS_STALE_AFTER_HOURS,
+      sync_enabled: googleAdsSyncFlagEnabled,
+      missing: googleAdsRestClient ? [] : [
+        ...googleAdsRuntimeConfig.missing,
+        ...(!googleAdsSyncFlagEnabled ? ['GOOGLE_ADS_SYNC_ENABLED=true'] : []),
+      ],
+      can_sync: canSync && state !== 'config_missing' && state !== 'unlinked' && cooldown === 0,
+      cooldown_seconds_remaining: cooldown,
+    };
+  }
+
+  function googleAdsContextOrRespond(context: GoogleAdsTenantContext, res: express.Response): GoogleAdsLinkRow | null {
+    if (context.link) return context.link;
+    res.status(409).json({ error: 'Nenhuma conta Google Ads vinculada', state: 'unlinked' });
+    return null;
+  }
+
+  function googleAdsRangeFromRequest(req: express.Request, maxDays: number): GoogleAdsDateRange {
+    return resolveGoogleAdsDateRange({ from: req.query.from, to: req.query.to, maxDays, defaultDays: 30 });
+  }
+
+  function googleAdsCampaignLimit(value: unknown): number {
+    if (value === undefined) return 50;
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 200) {
+      throw new GoogleAdsValidationError('limit deve ser um inteiro entre 1 e 200');
+    }
+    return parsed;
+  }
+
+  async function listGoogleAdsMetricRows(
+    db: SupabaseClient,
+    userId: string,
+    customerId: string,
+    range: GoogleAdsDateRange,
+  ): Promise<any[]> {
+    const rows: any[] = [];
+    const pageSize = 1000;
+    for (let from = 0; from < 100_000; from += pageSize) {
+      const { data, error } = await db.from('google_ads_campaign_daily_metrics')
+        .select('user_id, customer_id, campaign_id, campaign_name, campaign_status, metric_date, impressions, clicks, cost_micros, conversions, conversions_value, currency_code, time_zone')
+        .eq('user_id', userId)
+        .eq('customer_id', customerId)
+        .gte('metric_date', range.from)
+        .lte('metric_date', range.to)
+        .order('metric_date', { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+      rows.push(...scopeGoogleAdsMetricRows(data || [], userId, customerId));
+      if ((data || []).length < pageSize) return rows;
+    }
+    throw new Error('O período retornou métricas demais; reduza o intervalo');
+  }
+
+  function googleAdsMetadata(account: GoogleAdsAccount, testedAt: string) {
+    return {
+      descriptive_name: account.descriptiveName,
+      currency_code: account.currencyCode,
+      time_zone: account.timeZone,
+      account_status: account.status,
+      last_tested_at: testedAt,
+      updated_at: testedAt,
+    };
+  }
+
+  async function replaceGoogleAdsMetricsRange(
+    userId: string,
+    customerId: string,
+    range: GoogleAdsDateRange,
+    rows: any[],
+    account: GoogleAdsAccount,
+    finishedAt: string,
+  ) {
+    if (!supabaseAdmin) throw new Error('Service role indisponível');
+    const replacement = buildGoogleAdsRangeReplacement({ userId, customerId, range, rows });
+    const { error } = await supabaseAdmin.rpc('replace_google_ads_campaign_daily_metrics', {
+      ...replacement,
+      p_descriptive_name: account.descriptiveName,
+      p_currency_code: account.currencyCode,
+      p_time_zone: account.timeZone,
+      p_account_status: account.status,
+      p_finished_at: finishedAt,
+    });
+    if (error) throw error;
+  }
+
+  async function markGoogleAdsSyncError(userId: string, customerId: string, message: string, finishedAt: string) {
+    if (!supabaseAdmin) return;
+    const { error } = await supabaseAdmin.rpc('mark_google_ads_sync_error', {
+      p_user_id: userId,
+      p_customer_id: customerId,
+      p_error_message: message,
+      p_finished_at: finishedAt,
+    });
+    if (error) throw error;
+  }
+
+  async function acquireGoogleAdsSync(userId: string, startedAt: string): Promise<boolean> {
+    if (!supabaseAdmin) return false;
+    const cutoff = new Date(new Date(startedAt).getTime() - 300_000).toISOString();
+    const { data, error } = await supabaseAdmin.from('google_ads_connections')
+      .update({ last_sync_status: 'running', last_sync_started_at: startedAt, last_error: null, updated_at: startedAt })
+      .eq('user_id', userId)
+      .or(`last_sync_started_at.is.null,last_sync_started_at.lt.${cutoff}`)
+      .select('user_id')
+      .maybeSingle();
+    if (error) throw error;
+    return !!data;
+  }
+
+  async function createGoogleAdsSyncRun(userId: string, customerId: string, range: GoogleAdsDateRange, startedAt: string) {
+    if (!supabaseAdmin) throw new Error('Service role indisponível');
+    const { data, error } = await supabaseAdmin.from('google_ads_sync_runs').insert({
+      user_id: userId,
+      customer_id: customerId,
+      triggered_by: userId,
+      date_from: range.from,
+      date_to: range.to,
+      status: 'running',
+      started_at: startedAt,
+    }).select('id').single();
+    if (error) throw error;
+    return data.id;
+  }
+
+  async function finishGoogleAdsSyncRun(runId: number, status: 'success' | 'error', update: Record<string, any>) {
+    if (!supabaseAdmin) return;
+    const { error } = await supabaseAdmin.from('google_ads_sync_runs')
+      .update({ status, finished_at: new Date().toISOString(), ...update })
+      .eq('id', runId);
+    if (error) throw error;
+  }
+
+  async function ensureGoogleAdsLinkUnchanged(userId: string, customerId: string) {
+    if (!supabaseAdmin) throw new Error('Service role indisponível');
+    const { data, error } = await supabaseAdmin.from('google_ads_customer_links')
+      .select('user_id')
+      .eq('user_id', userId)
+      .eq('customer_id', customerId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new Error('O vínculo do Google Ads mudou durante a sincronização');
+  }
+
+  function googleAdsAccountResponse(account: GoogleAdsAccount, testedAt: string) {
+    return {
+      customer_id: account.customerId,
+      descriptive_name: account.descriptiveName,
+      currency_code: account.currencyCode,
+      time_zone: account.timeZone,
+      status: account.status,
+      last_tested_at: testedAt,
+      updated_at: testedAt,
+    };
+  }
+
+  function handleGoogleAdsRouteError(res: express.Response, scope: string, error: unknown) {
+    logGoogleAdsError(scope, error);
+    if (error instanceof GoogleAdsValidationError) return res.status(400).json({ error: error.message });
+    if ((error as any)?.code === '42P01') {
+      return res.status(503).json({
+        error: 'A estrutura do Google Ads ainda não foi ativada',
+        state: 'config_missing',
+        sync_enabled: false,
+      });
+    }
+    return res.status(500).json({ error: 'Não foi possível carregar os dados do Google Ads' });
+  }
+
+  app.get('/api/marketing/google-ads/status', requireAuth, rejectTenantGoogleAdsCustomerId, requirePermission('finance'), denyProductionOnly, async (req, res) => {
+    const userId = (req as any).userId as string;
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Service role indisponível' });
+    try {
+      const context = await getGoogleAdsTenantContext(supabaseAdmin, userId);
+      const canSync = !(req as any).isMember && !(req as any).isImpersonating && (req as any).realUserId === userId;
+      res.json(googleAdsStatusPayload(context, canSync));
+    } catch (error) {
+      handleGoogleAdsRouteError(res, 'status', error);
+    }
+  });
+
+  app.get('/api/marketing/google-ads/overview', requireAuth, rejectTenantGoogleAdsCustomerId, requirePermission('finance'), denyProductionOnly, async (req, res) => {
+    const userId = (req as any).userId as string;
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Service role indisponível' });
+    try {
+      if (!googleAdsRestClient) return googleAdsClientOrRespond(res);
+      const range = googleAdsRangeFromRequest(req, 366);
+      const context = await getGoogleAdsTenantContext(supabaseAdmin, userId);
+      const link = googleAdsContextOrRespond(context, res);
+      if (!link) return;
+      const rows = context.connection?.last_synced_at
+        ? await listGoogleAdsMetricRows(supabaseAdmin, userId, link.customer_id, range)
+        : [];
+      const totals = aggregateGoogleAdsOverview(rows);
+      res.json({
+        state: googleAdsStatusPayload(context, false).state,
+        date_range: range,
+        currency_code: link.currency_code || rows[0]?.currency_code || null,
+        time_zone: link.time_zone || rows[0]?.time_zone || null,
+        totals,
+        crm_attribution: computeCrmAttribution({
+          valid: false,
+          click_mapping_verified: false,
+          attributedSales: 0,
+          attributedRevenueMicros: '0',
+          costMicros: totals.cost_micros,
+        }),
+      });
+    } catch (error) {
+      handleGoogleAdsRouteError(res, 'overview', error);
+    }
+  });
+
+  app.get('/api/marketing/google-ads/campaigns', requireAuth, rejectTenantGoogleAdsCustomerId, requirePermission('finance'), denyProductionOnly, async (req, res) => {
+    const userId = (req as any).userId as string;
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Service role indisponível' });
+    try {
+      if (!googleAdsRestClient) return googleAdsClientOrRespond(res);
+      const range = googleAdsRangeFromRequest(req, 366);
+      const limit = googleAdsCampaignLimit(req.query.limit);
+      const context = await getGoogleAdsTenantContext(supabaseAdmin, userId);
+      const link = googleAdsContextOrRespond(context, res);
+      if (!link) return;
+      const rows = context.connection?.last_synced_at
+        ? await listGoogleAdsMetricRows(supabaseAdmin, userId, link.customer_id, range)
+        : [];
+      res.json({
+        state: googleAdsStatusPayload(context, false).state,
+        date_range: range,
+        currency_code: link.currency_code || rows[0]?.currency_code || null,
+        time_zone: link.time_zone || rows[0]?.time_zone || null,
+        campaigns: aggregateGoogleAdsCampaigns(rows).slice(0, limit),
+      });
+    } catch (error) {
+      handleGoogleAdsRouteError(res, 'campaigns', error);
+    }
+  });
+
+  app.post('/api/marketing/google-ads/sync', requireAuth, rejectTenantGoogleAdsCustomerId, requireRealTenantOwner, async (req, res) => {
+    const userId = (req as any).userId as string;
+    const client = googleAdsClientOrRespond(res);
+    if (!client) return;
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Service role indisponível' });
+    let runId: number | null = null;
+    let syncCustomerId: string | null = null;
+    try {
+      const range = resolveGoogleAdsDateRange({ from: req.body?.from, to: req.body?.to, maxDays: 90, defaultDays: 30 });
+      const context = await getGoogleAdsTenantContext(supabaseAdmin, userId);
+      const link = googleAdsContextOrRespond(context, res);
+      if (!link) return;
+      syncCustomerId = link.customer_id;
+      const remaining = googleAdsCooldownRemaining(context.connection?.last_sync_started_at);
+      if (remaining > 0 || googleAdsSyncLocks.has(userId)) {
+        return res.status(429).json({ error: 'Aguarde antes de sincronizar novamente', retry_after_seconds: Math.max(1, remaining) });
+      }
+      googleAdsSyncLocks.add(userId);
+      const startedAt = new Date().toISOString();
+      if (!await acquireGoogleAdsSync(userId, startedAt)) {
+        googleAdsSyncLocks.delete(userId);
+        return res.status(429).json({ error: 'Aguarde antes de sincronizar novamente', retry_after_seconds: 300 });
+      }
+      runId = await createGoogleAdsSyncRun(userId, link.customer_id, range, startedAt);
+      const [account, metrics] = await Promise.all([
+        fetchGoogleAdsAccount(client, link.customer_id),
+        fetchGoogleAdsDailyMetrics({ client, userId, customerId: link.customer_id, range, syncedAt: startedAt }),
+      ]);
+      await ensureGoogleAdsLinkUnchanged(userId, link.customer_id);
+      const finishedAt = new Date().toISOString();
+      await replaceGoogleAdsMetricsRange(userId, link.customer_id, range, metrics, account, finishedAt);
+      await finishGoogleAdsSyncRun(runId, 'success', { rows_synced: metrics.length });
+      res.json({
+        ok: true,
+        state: 'healthy',
+        synced_rows: metrics.length,
+        date_range: range,
+        account: {
+          customer_id_masked: maskGoogleAdsCustomerId(account.customerId),
+          name: account.descriptiveName,
+          currency_code: account.currencyCode,
+          time_zone: account.timeZone,
+        },
+        last_synced_at: finishedAt,
+      });
+    } catch (error) {
+      if (error instanceof GoogleAdsValidationError) {
+        return res.status(400).json({ error: error.message });
+      }
+      const failure = googleAdsSafeFailure(error);
+      const message = failure.message;
+      logGoogleAdsError('sync', error);
+      const finishedAt = new Date().toISOString();
+      if (syncCustomerId) {
+        await markGoogleAdsSyncError(userId, syncCustomerId, message, finishedAt)
+          .catch((markError) => logGoogleAdsError('sync-error-state', markError));
+      }
+      if (runId !== null) {
+        await finishGoogleAdsSyncRun(runId, 'error', {
+          error_code: failure.code,
+          error_message: message,
+        }).catch((runError) => logGoogleAdsError('sync-run-finish', runError));
+      }
+      res.status(502).json({ error: message, state: 'sync_error' });
+    } finally {
+      googleAdsSyncLocks.delete(userId);
+    }
+  });
+
+  app.get('/api/platform/google-ads/hierarchy', requireAuth, requireSuperAdmin, requireDirectPlatformAdmin, async (_req, res) => {
+    const client = googleAdsClientOrRespond(res);
+    if (!client) return;
+    try {
+      const accounts = await fetchGoogleAdsHierarchy(client);
+      res.json({
+        manager_customer_id: client.config.loginCustomerId,
+        accounts: accounts.map((account) => ({
+          customer_id: account.customerId,
+          descriptive_name: account.descriptiveName,
+          currency_code: account.currencyCode,
+          time_zone: account.timeZone,
+          status: account.status,
+          manager: account.manager,
+          test_account: account.testAccount,
+        })),
+      });
+    } catch (error) {
+      logGoogleAdsError('hierarchy', error);
+      res.status(502).json({ error: 'Não foi possível consultar as contas acessíveis pelo MCC' });
+    }
+  });
+
+  app.get('/api/platform/tenants/:ownerId/google-ads-account', requireAuth, requireSuperAdmin, requireDirectPlatformAdmin, async (req, res) => {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Service role indisponível' });
+    try {
+      const context = await getGoogleAdsTenantContext(supabaseAdmin, req.params.ownerId);
+      res.json(context.link
+        ? { linked: true, account: platformGoogleAdsAccount(context.link) }
+        : { linked: false, account: null });
+    } catch (error) {
+      handleGoogleAdsRouteError(res, 'admin-link-get', error);
+    }
+  });
+
+  app.put('/api/platform/tenants/:ownerId/google-ads-account', requireAuth, requireSuperAdmin, requireDirectPlatformAdmin, async (req, res) => {
+    const client = googleAdsClientOrRespond(res);
+    if (!client) return;
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Service role indisponível' });
+    const customerId = normalizeGoogleAdsCustomerId(req.body?.customer_id);
+    if (!customerId) return res.status(400).json({ error: 'customer_id deve conter exatamente 10 dígitos' });
+    const ownerId = req.params.ownerId;
+    const adminId = (req as any).realUserId as string;
+    try {
+      const [ownerResult, memberResult] = await Promise.all([
+        supabaseAdmin.auth.admin.getUserById(ownerId),
+        supabaseAdmin.from('team_members').select('id').eq('member_user_id', ownerId).maybeSingle(),
+      ]);
+      if (ownerResult.error) throw ownerResult.error;
+      if (memberResult.error) throw memberResult.error;
+      const owner = ownerResult.data;
+      const member = memberResult.data;
+      if (!owner?.user || member) return res.status(404).json({ error: 'Dono da empresa não encontrado' });
+      const hierarchy = await fetchGoogleAdsHierarchy(client);
+      const hierarchyAccount = hierarchy.find((candidate) => candidate.customerId === customerId);
+      if (!hierarchyAccount) {
+        return res.status(400).json({ error: 'A conta não é cliente direta do MCC configurado' });
+      }
+      if (hierarchyAccount.manager) {
+        return res.status(400).json({ error: 'Vincule uma conta cliente, não outra conta administradora' });
+      }
+      const account = await fetchGoogleAdsAccount(client, customerId);
+      const testedAt = new Date().toISOString();
+      const { error: linkError } = await supabaseAdmin.rpc('link_google_ads_customer_to_tenant', {
+        p_user_id: ownerId,
+        p_customer_id: customerId,
+        p_descriptive_name: account.descriptiveName,
+        p_currency_code: account.currencyCode,
+        p_time_zone: account.timeZone,
+        p_account_status: account.status,
+        p_linked_by_user_id: adminId,
+        p_tested_at: testedAt,
+      });
+      if (linkError?.code === '23505') return res.status(409).json({ error: 'Esta conta Google Ads já está vinculada a outra empresa' });
+      if (linkError) throw linkError;
+      await logAdminAction(adminId, 'google_ads_account_linked', ownerId, { customer_id: customerId }, req.ip ?? null);
+      res.json({ linked: true, account: googleAdsAccountResponse(account, testedAt) });
+    } catch (error) {
+      logGoogleAdsError('admin-link-put', error);
+      res.status(error instanceof GoogleAdsApiError ? 502 : 500).json({
+        error: error instanceof GoogleAdsApiError
+          ? 'A conta não está acessível pelo MCC configurado'
+          : 'Não foi possível vincular a conta Google Ads',
+      });
+    }
+  });
+
+  app.delete('/api/platform/tenants/:ownerId/google-ads-account', requireAuth, requireSuperAdmin, requireDirectPlatformAdmin, async (req, res) => {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Service role indisponível' });
+    const ownerId = req.params.ownerId;
+    const adminId = (req as any).realUserId as string;
+    try {
+      const { data: customerId, error } = await supabaseAdmin.rpc(
+        'unlink_google_ads_customer_from_tenant',
+        { p_user_id: ownerId },
+      );
+      if (error) throw error;
+      await logAdminAction(adminId, 'google_ads_account_unlinked', ownerId, {
+        customer_id: typeof customerId === 'string' ? customerId : null,
+      }, req.ip ?? null);
+      res.json({ success: true, linked: false });
+    } catch (error) {
+      handleGoogleAdsRouteError(res, 'admin-link-delete', error);
+    }
+  });
+
+  app.post('/api/platform/tenants/:ownerId/google-ads-account/test', requireAuth, requireSuperAdmin, requireDirectPlatformAdmin, async (req, res) => {
+    const client = googleAdsClientOrRespond(res);
+    if (!client) return;
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Service role indisponível' });
+    const ownerId = req.params.ownerId;
+    try {
+      const context = await getGoogleAdsTenantContext(supabaseAdmin, ownerId);
+      if (!context.link) return res.status(404).json({ error: 'Nenhuma conta Google Ads vinculada', state: 'unlinked' });
+      const account = await fetchGoogleAdsAccount(client, context.link.customer_id);
+      const testedAt = new Date().toISOString();
+      const { data: updatedLink, error } = await supabaseAdmin.from('google_ads_customer_links')
+        .update(googleAdsMetadata(account, testedAt))
+        .eq('user_id', ownerId)
+        .eq('customer_id', context.link.customer_id)
+        .select('user_id')
+        .maybeSingle();
+      if (error) throw error;
+      if (!updatedLink) return res.status(409).json({ error: 'O vínculo mudou durante o teste' });
+      res.json({ ok: true, account: googleAdsAccountResponse(account, testedAt) });
+    } catch (error) {
+      logGoogleAdsError('admin-link-test', error);
+      res.status(error instanceof GoogleAdsApiError ? 502 : 500).json({ error: 'Não foi possível testar a conta Google Ads' });
+    }
+  });
 
   // ============ WHATSAPP ROUTES (Z-API OU EVOLUTION) ============
   const getInstanceName = (userId: string) => `user_${userId.replace(/-/g, '_')}`;

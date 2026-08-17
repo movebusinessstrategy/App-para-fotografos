@@ -7,7 +7,7 @@ const TrilhaLogo = () => <img src="/logo-dark.png" alt="CRM Trilha" className="h
 export default function DataDeletionPage() {
   const [email, setEmail] = useState("");
   const [reason, setReason] = useState("");
-  const [scope, setScope] = useState<"all" | "whatsapp_only">("all");
+  const [scope, setScope] = useState<"all" | "whatsapp_only" | "google_ads_only">("all");
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; ticketId?: string; message: string } | null>(null);
 
@@ -27,7 +27,7 @@ export default function DataDeletionPage() {
         setResult({
           ok: true,
           ticketId: data.ticket_id,
-          message: data.message || "Solicitação registrada. Você receberá confirmação por e-mail em até 15 dias úteis.",
+          message: data.message || "Solicitação registrada. Guarde o protocolo para identificar o pedido.",
         });
         setEmail("");
         setReason("");
@@ -60,7 +60,7 @@ export default function DataDeletionPage() {
         <div className="bg-white/5 border border-white/10 rounded-2xl p-8 md:p-12 text-white/90">
           <h1 className="text-3xl font-bold text-white mb-2">Exclusão de Dados</h1>
           <p className="text-white/50 text-sm mb-8">
-            Solicite a exclusão dos seus dados da CRM Trilha em conformidade com a LGPD e com a Política de Dados da Meta.
+            Solicite a exclusão dos seus dados da CRM Trilha em conformidade com a LGPD e com as políticas de dados aplicáveis às integrações Meta e Google.
           </p>
 
           <div className="space-y-6 text-sm leading-relaxed text-white/80">
@@ -68,14 +68,14 @@ export default function DataDeletionPage() {
             <section>
               <h2 className="text-lg font-semibold text-white mb-3">Como funciona</h2>
               <p className="mb-3">
-                Você tem o direito de solicitar a exclusão completa dos seus dados ou apenas dos dados coletados via integração WhatsApp Cloud API.
+                Você tem o direito de solicitar a exclusão completa dos seus dados ou somente dos dados de uma integração disponível. A exclusão completa inclui credenciais de integração, métricas Google Ads sincronizadas, identificadores de clique e vínculos de atribuição associados ao seu tenant.
                 Após receber sua solicitação:
               </p>
               <ul className="list-disc list-inside space-y-1.5 pl-2">
-                <li>Confirmaremos o recebimento por e-mail em até <strong className="text-white">48 horas úteis</strong>.</li>
-                <li>A exclusão é processada em até <strong className="text-white">15 dias úteis</strong>, conforme prazo da LGPD.</li>
+                <li>O sistema registra o pedido como <strong className="text-white">pendente</strong> e apresenta um protocolo imediatamente.</li>
+                <li>O envio do formulário não apaga dados automaticamente; a equipe responsável analisa o escopo e a identidade do solicitante.</li>
                 <li>Dados que precisam ser retidos por obrigação legal (ex: registros fiscais) serão informados e mantidos pelo prazo mínimo exigido.</li>
-                <li>Você receberá um <strong className="text-white">código de confirmação</strong> ao final do processo.</li>
+                <li>Guarde o protocolo para identificar a solicitação em qualquer contato com a equipe responsável.</li>
               </ul>
             </section>
 
@@ -144,7 +144,23 @@ export default function DataDeletionPage() {
                         <div>
                           <p className="font-semibold text-white text-sm">Todos os meus dados</p>
                           <p className="text-xs text-white/60 mt-0.5">
-                            Exclui conta, clientes, trabalhos, mensagens, integrações e histórico completo. <strong>Irreversível.</strong>
+                            Solicita a exclusão de conta, clientes, trabalhos, mensagens, integrações, métricas de anúncios, identificadores de clique, atribuições e histórico completo. Depois de processada, a exclusão é <strong>irreversível.</strong>
+                          </p>
+                        </div>
+                      </label>
+                      <label className="flex items-start gap-3 p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer transition-colors">
+                        <input
+                          type="radio"
+                          name="scope"
+                          value="google_ads_only"
+                          checked={scope === "google_ads_only"}
+                          onChange={() => setScope("google_ads_only")}
+                          className="mt-0.5 accent-[#D4A94A]"
+                        />
+                        <div>
+                          <p className="font-semibold text-white text-sm">Apenas dados Google Ads</p>
+                          <p className="text-xs text-white/60 mt-0.5">
+                            Solicita a exclusão de métricas sincronizadas, identificadores de clique e vínculos de atribuição. Sua conta CRM permanece ativa.
                           </p>
                         </div>
                       </label>
@@ -160,7 +176,7 @@ export default function DataDeletionPage() {
                         <div>
                           <p className="font-semibold text-white text-sm">Apenas dados WhatsApp</p>
                           <p className="text-xs text-white/60 mt-0.5">
-                            Exclui mensagens, tokens e identificadores Meta (waba_id, phone_number_id). Sua conta CRM permanece ativa.
+                            Solicita a exclusão de mensagens, tokens e identificadores Meta (waba_id, phone_number_id). Sua conta CRM permanece ativa.
                           </p>
                         </div>
                       </label>
@@ -175,6 +191,7 @@ export default function DataDeletionPage() {
                       id="reason"
                       value={reason}
                       onChange={(e) => setReason(e.target.value)}
+                      maxLength={1000}
                       rows={3}
                       placeholder="Conte rapidamente o motivo da exclusão. Não é obrigatório, mas ajuda a melhorar o serviço."
                       className="w-full px-3.5 py-2.5 rounded-lg bg-white/5 border border-white/15 text-white placeholder:text-white/30 focus:border-[#D4A94A] focus:outline-none transition-colors resize-none"
@@ -201,8 +218,8 @@ export default function DataDeletionPage() {
             <section className="pt-4 border-t border-white/10">
               <h2 className="text-base font-semibold text-white mb-2">Alternativas</h2>
               <p className="text-xs text-white/60">
-                Se você é cliente ativo, pode desconectar somente a integração desejada em{" "}
-                <strong className="text-white">Configurações → Integrações → WhatsApp ou Google Calendar → Desconectar</strong>, sem precisar deste formulário. Para dúvidas:{" "}
+                Se você é cliente ativo, pode desconectar WhatsApp ou Google Agenda em{" "}
+                <strong className="text-white">Configurações → Integrações → integração desejada → Desconectar</strong>, sem precisar deste formulário. Para Google Ads, solicite a desvinculação à equipe da plataforma. Você também pode remover o acesso diretamente na Meta ou no Google. Para dúvidas:{" "}
                 <a href="mailto:contato@movebusiness.com.br" className="text-[#D4A94A] hover:underline">
                   contato@movebusiness.com.br
                 </a>
