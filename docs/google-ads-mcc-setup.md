@@ -2,11 +2,13 @@
 
 Este documento descreve a configuração do Google Ads usada pelo CRM Trilha para **relatórios em modo somente leitura**. Ele não contém credenciais e não autoriza alterações em campanhas. Atribuição de vendas é uma etapa separada e permanece indisponível até existir vínculo verificável entre clique, conta, campanha e negócio.
 
+Os valores entre `<...>` são placeholders operacionais. Substitua-os somente no gerenciador de segredos ou no procedimento administrativo autorizado; não grave IDs ou e-mails reais neste arquivo.
+
 ## Estado conhecido
 
-- Projeto Google Cloud dedicado: `crm-trilha-ads-producao`.
+- Projeto Google Cloud dedicado: `<GOOGLE_CLOUD_PROJECT_ID_ADS>`.
 - Google Ads API: ativada no projeto.
-- Conta técnica criada: `crm-trilha-ads-reader@crm-trilha-ads-producao.iam.gserviceaccount.com`.
+- Conta técnica dedicada criada: `<GOOGLE_ADS_SERVICE_ACCOUNT_EMAIL>`.
 - MCC central `Move Business Strategy`: criado e confirmado como conta administradora, com Brasil, fuso de São Paulo e BRL.
 - O ID do MCC foi identificado na interface, mas ainda não foi instalado no gerenciador de segredos da produção.
 - API Center: aberto e preparado; o formulário, os termos e a solicitação do developer token ainda não foram enviados.
@@ -15,8 +17,8 @@ Este documento descreve a configuração do Google Ads usada pelo CRM Trilha par
 
 ## Separação do Google Agenda
 
-- O Google Ads usa exclusivamente o projeto `crm-trilha-ads-producao`.
-- A integração Google Agenda usa o projeto dedicado `crm-trilha-producao-move` e credenciais próprias.
+- O Google Ads usa exclusivamente o projeto `<GOOGLE_CLOUD_PROJECT_ID_ADS>`.
+- A integração Google Agenda usa o projeto dedicado `<GOOGLE_CLOUD_PROJECT_ID_CALENDAR>` e credenciais próprias.
 - Não reutilizar client ID, client secret, conta técnica, tokens, consentimento OAuth ou variáveis de ambiente entre as duas integrações.
 - A revogação ou falha do Google Ads não pode desconectar o Google Agenda, e o inverso também não.
 - O escopo restrito do Google Ads não deve ser adicionado à tela de consentimento usada pelo Google Agenda.
@@ -76,7 +78,7 @@ Referências oficiais:
 ### 3. Autorizar a identidade técnica
 
 - [ ] No Google Ads, abrir **Administrador → Acesso e segurança** no MCC.
-- [ ] Adicionar `crm-trilha-ads-reader@crm-trilha-ads-producao.iam.gserviceaccount.com` como usuário com acesso **Somente leitura**.
+- [ ] Adicionar `<GOOGLE_ADS_SERVICE_ACCOUNT_EMAIL>` como usuário com acesso **Somente leitura**.
 - [ ] Confirmar que a identidade aparece como ativa no MCC e que o acesso herdado às contas filhas é somente leitura.
 - [ ] Não promover a identidade técnica a Administrador ou Padrão.
 - [ ] Gerar a credencial da conta de serviço somente no ambiente administrativo aprovado e instalá-la diretamente no gerenciador de segredos; não salvar uma cópia no repositório ou em uma pasta compartilhada.

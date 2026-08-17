@@ -344,7 +344,7 @@ export default function DashboardPage() {
         <>
           <DashboardSectionHeading
             eyebrow="Aquisição"
-            title="Desempenho do Google Ads"
+            title="Métricas nativas e campanhas"
             description="Investimento, alcance e conversões nativas das campanhas. Atribuição a vendas do CRM só aparece quando houver vínculo verificável."
           />
           <GoogleAdsPanel from={dateRange.from} to={dateRange.to} hideValues={hideValues} />
