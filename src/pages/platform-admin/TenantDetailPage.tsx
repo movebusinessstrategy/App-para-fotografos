@@ -4,6 +4,7 @@ import { ArrowLeft, Calendar, CheckCircle2, FileSignature, LogIn, Mail, MessageC
 import { authFetch } from "../../utils/authFetch";
 import { useImpersonation } from "../../contexts/ImpersonationContext";
 import { ConfirmModal } from "../../components/ui/ConfirmModal";
+import GoogleAdsAccountManager from "../../components/platform-admin/GoogleAdsAccountManager";
 
 type Detail = {
   owner_user_id: string;
@@ -266,6 +267,8 @@ export default function TenantDetailPage() {
           </div>
         </div>
       )}
+
+      <GoogleAdsAccountManager ownerId={data.owner_user_id} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="bg-white dark:bg-gray-900 rounded-xl p-5 border border-gray-200 dark:border-gray-800">

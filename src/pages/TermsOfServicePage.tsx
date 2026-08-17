@@ -38,7 +38,7 @@ export default function TermsOfServicePage() {
             <section>
               <h2 className="text-lg font-semibold text-white mb-3">2. Descrição do Serviço</h2>
               <p>
-                A CRM Trilha é uma plataforma de CRM (Customer Relationship Management) desenvolvida para fotógrafos e estúdios fotográficos. O serviço oferece funcionalidades de gestão de clientes, controle de trabalhos, funil de vendas, agenda, controle financeiro, produção e automações de comunicação.
+                A CRM Trilha é uma plataforma de CRM (Customer Relationship Management) desenvolvida para fotógrafos e estúdios fotográficos. O serviço oferece funcionalidades de gestão de clientes, controle de trabalhos, funil de vendas, agenda, controle financeiro, produção, automações de comunicação e, quando habilitado, relatórios de mídia. A atribuição depende de validação técnica específica e não integra automaticamente todo relatório de anúncios.
               </p>
             </section>
 
@@ -63,6 +63,7 @@ export default function TermsOfServicePage() {
                 <li>Sobrecarregar ou interromper os servidores da plataforma.</li>
                 <li>Enviar comunicações não solicitadas (spam) através das integrações de mensagens.</li>
                 <li>Usar a plataforma para violar as políticas de uso do WhatsApp Business ou Meta.</li>
+                <li>Vincular, consultar ou atribuir a si uma conta Google Ads sem autorização do respectivo titular.</li>
               </ul>
             </section>
 
@@ -105,7 +106,20 @@ export default function TermsOfServicePage() {
                 <li>Você é responsável por conferir data, horário, participante e conteúdo antes de concluir o agendamento.</li>
                 <li>O tratamento dos dados Google é detalhado na nossa <Link to="/privacidade" className="text-[#D4A94A] hover:underline">Política de Privacidade</Link>.</li>
               </ul>
-              <h3 className="text-base font-semibold text-white mt-4 mb-2">6.3. Outros serviços</h3>
+              <h3 className="text-base font-semibold text-white mt-4 mb-2">6.3. Google Ads</h3>
+              <p className="mb-3">
+                Quando disponível, a integração opcional com o Google Ads usa acesso somente leitura para consultar dados das contas de anunciante autorizadas e compor dashboards de desempenho no CRM Trilha. A integração é destinada a relatórios e não à criação ou alteração de campanhas.
+              </p>
+              <ul className="list-disc list-inside space-y-2 pl-2">
+                <li>Somente o titular da conta CRM ou pessoa com permissão equivalente pode autorizar e solicitar a vinculação ou desvinculação. O mapeamento da conta ao tenant é realizado pela equipe autorizada da plataforma.</li>
+                <li>Você declara ter autorização para disponibilizar ao CRM Trilha os dados das contas Google Ads vinculadas.</li>
+                <li>Os dados são usados para relatórios internos ao seu tenant. Eles não são vendidos, usados para remarketing (retargeting) de terceiros nem para treinamento de modelos de inteligência artificial.</li>
+                <li>As métricas nativas do Google Ads, como investimento, impressões, cliques, CPC e conversões, podem ser exibidas após a sincronização. Vendas atribuídas, CAC e ROAS permanecem indisponíveis até que exista vínculo verificável entre identificador de clique, conta, campanha e negócio no CRM.</li>
+                <li>Conversões exibidas pelo Google Ads e vendas registradas no CRM são fontes diferentes. Diferenças de janela, modelo de atribuição, consentimento e cobertura de identificadores podem produzir totais distintos.</li>
+                <li>Os relatórios podem sofrer atraso, indisponibilidade ou revisão decorrente do processamento e das políticas do Google. Você deve validar os dados antes de tomar decisões financeiras.</li>
+                <li>Você pode solicitar a desvinculação da conta. A equipe autorizada remove o vínculo no CRM e interrompe novas sincronizações; a autorização da conta técnica compartilhada é administrada separadamente no Google Ads ou no MCC. Exclusão e retenção dos dados já sincronizados seguem a nossa <Link to="/privacidade" className="text-[#D4A94A] hover:underline">Política de Privacidade</Link>.</li>
+              </ul>
+              <h3 className="text-base font-semibold text-white mt-4 mb-2">6.4. Outros serviços</h3>
               <p>
                 Outras integrações disponíveis (Asaas para cobrança e serviços de armazenamento de mídia) seguem o mesmo princípio: você é responsável pelo uso adequado e pela aceitação dos termos do respectivo terceiro. Detalhes específicos de cada integração são apresentados no momento da ativação.
               </p>

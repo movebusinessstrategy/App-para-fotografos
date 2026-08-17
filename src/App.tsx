@@ -50,6 +50,7 @@ const EmpresaTab = lazy(() => import("./pages/configuracoes/EmpresaTab"));
 const PlanoTab = lazy(() => import("./pages/configuracoes/PlanoTab"));
 const IntegracoesTab = lazy(() => import("./pages/configuracoes/IntegracoesTab"));
 const IntegracaoCalendar = lazy(() => import("./pages/configuracoes/IntegracaoCalendar"));
+const IntegracaoGoogleAds = lazy(() => import("./pages/configuracoes/IntegracaoGoogleAds"));
 const IntegracaoWhatsApp = lazy(() => import("./pages/configuracoes/IntegracaoWhatsApp"));
 const IntegracaoExtensao = lazy(() => import("./pages/configuracoes/IntegracaoExtensao"));
 const IntegracaoAutentique = lazy(() => import("./pages/configuracoes/IntegracaoAutentique"));
@@ -156,6 +157,7 @@ export default function App() {
                   <Route path="plano" element={<PermissionRoute ownerOnly><PlanoTab /></PermissionRoute>} />
                   <Route path="integracoes" element={<IntegracoesTab />} />
                   <Route path="integracoes/calendar" element={<IntegracaoCalendar />} />
+                  <Route path="integracoes/google-ads" element={<PermissionRoute module="finance"><IntegracaoGoogleAds /></PermissionRoute>} />
                   <Route path="integracoes/whatsapp" element={<IntegracaoWhatsApp />} />
                   <Route path="integracoes/extensao" element={<IntegracaoExtensao />} />
                   <Route path="integracoes/autentique" element={<PermissionRoute ownerOnly><IntegracaoAutentique /></PermissionRoute>} />

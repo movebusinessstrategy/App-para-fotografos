@@ -22,6 +22,7 @@ import { authFetch } from "../utils/authFetch";
 import { cn } from "../utils/cn";
 import { Client, Opportunity } from "../types";
 import { useAuth } from "../contexts/AuthContext";
+import GoogleAdsPanel from "../components/dashboard/GoogleAdsPanel";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -338,6 +339,17 @@ export default function DashboardPage() {
         periodDelta={periodDelta}
         onNavigate={navigate}
       />
+
+      {canSeeFinance && (
+        <>
+          <DashboardSectionHeading
+            eyebrow="Aquisição"
+            title="Desempenho do Google Ads"
+            description="Investimento, alcance e conversões nativas das campanhas. Atribuição a vendas do CRM só aparece quando houver vínculo verificável."
+          />
+          <GoogleAdsPanel from={dateRange.from} to={dateRange.to} hideValues={hideValues} />
+        </>
+      )}
 
       <DashboardSectionHeading
         eyebrow="Leitura do período"
