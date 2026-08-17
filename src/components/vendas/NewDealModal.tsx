@@ -49,11 +49,29 @@ const CATALOG_ICONS: Record<CatalogType, React.ReactNode> = {
   servico: <Tag size={11} />,
 };
 
+async function requireCreatedDeal(response: Response): Promise<{ id: number | string }> {
+  const body = await response.json().catch(() => null) as {
+    id?: number | string;
+    error?: string;
+    message?: string;
+  } | null;
+
+  if (!response.ok) {
+    throw new Error(body?.message || body?.error || `Não foi possível criar o negócio (HTTP ${response.status}).`);
+  }
+  if (!body?.id) throw new Error("O servidor não confirmou a criação do negócio.");
+  return { id: body.id };
+}
+
 export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewDealModalProps) {
   const { sellers, currentMemberId } = useSellers();
   const { canAccess } = useAuth();
   const canSeeFinance = canAccess('finance'); // funcionário sem permissão não define valor/itens
   const tiposEnsaio = useTiposEnsaio();
+  const initialStages = useMemo(
+    () => stages.filter((stage) => !stage.is_final && !stage.is_won),
+    [stages],
+  );
   const [form, setForm] = useState({
     title: "",
     phone: "",
@@ -63,14 +81,29 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
     value: "",
     expected_close_date: "",
     priority: "medium" as DealPriority,
-    stage: stages[0]?.id || "",
+    stage: initialStages[0]?.id || "",
     notes: "",
     assigned_to: null as string | null,
     campaign_id: "",
   });
   const [items, setItems] = useState<PendingItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [submitError, setSubmitError] = useState("");
   const [campaigns, setCampaigns] = useState<SaleCampaign[]>([]);
+
+  // Etapas finais passam obrigatoriamente pelo fluxo "Fechar venda", que
+  // coleta cliente, data e horário do ensaio antes de sincronizar a agenda.
+  // Também corrige o estado quando as etapas chegam depois da abertura.
+  useEffect(() => {
+    if (!open) return;
+    setForm((current) => initialStages.some((stage) => stage.id === current.stage)
+      ? current
+      : { ...current, stage: initialStages[0]?.id || "" });
+  }, [initialStages, open]);
+
+  useEffect(() => {
+    if (open) setSubmitError("");
+  }, [open]);
 
   // Carrega as campanhas (venda especial) quando o modal abre
   useEffect(() => {
@@ -141,9 +174,10 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.title.trim()) return;
+    if (!form.title.trim() || !form.stage) return;
 
     setLoading(true);
+    setSubmitError("");
     try {
       // Tipo de ensaio vai como meta nas notas — mesmo formato que a extensão
       // já usa/lê ("Tipo de ensaio: X" na primeira linha, via getDealShootType)
@@ -167,7 +201,7 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
           value: valueToUse,
         }),
       });
-      const created = dealRes.ok ? await dealRes.json() : null;
+      const created = await requireCreatedDeal(dealRes);
 
       // 2. Adiciona itens (em paralelo)
       if (created?.id && items.length > 0) {
@@ -187,7 +221,7 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
         value: "",
         expected_close_date: "",
         priority: "medium",
-        stage: stages[0]?.id || "",
+        stage: initialStages[0]?.id || "",
         notes: "",
         assigned_to: currentMemberId || null,
         campaign_id: "",
@@ -197,6 +231,7 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
       onClose();
     } catch (error) {
       console.error("Erro ao criar negócio:", error);
+      setSubmitError(error instanceof Error ? error.message : "Não foi possível criar o negócio. Tente novamente.");
     } finally {
       setLoading(false);
     }
@@ -216,6 +251,11 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
         </div>
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4 overflow-y-auto">
+          {submitError && (
+            <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">
+              {submitError}
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Nome do Negócio *
@@ -480,7 +520,7 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
                 onChange={(e) => setForm({ ...form, stage: e.target.value })}
                 className="w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white outline-none focus:border-gray-400 dark:focus:border-gray-600 focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-600"
               >
-                {stages.map((s) => (
+                {initialStages.map((s) => (
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
               </select>

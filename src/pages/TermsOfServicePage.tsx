@@ -1,19 +1,7 @@
 import { Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 
-const FotoMoveLogo = () => (
-  <div className="flex items-center gap-2.5">
-    <svg width="32" height="32" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M17 4C17 4 7 5.5 4.5 17H17V4Z" fill="#F1C665"/>
-      <path d="M19 4C19 4 29 5.5 31.5 17H19V4Z" fill="#D4A94A"/>
-      <path d="M17 32C17 32 7 30.5 4.5 19H17V32Z" fill="#D4A94A"/>
-      <path d="M19 32C19 32 29 30.5 31.5 19H19V32Z" fill="#F1C665"/>
-    </svg>
-    <span className="text-xl font-extrabold tracking-tight text-white">
-      Foto<span style={{ color: "#D4A94A" }}>MOVE</span>
-    </span>
-  </div>
-);
+const TrilhaLogo = () => <img src="/logo-dark.png" alt="CRM Trilha" className="h-8 w-auto" />;
 
 export default function TermsOfServicePage() {
   return (
@@ -21,7 +9,7 @@ export default function TermsOfServicePage() {
       {/* Header */}
       <div className="sticky top-0 z-10 border-b border-white/10 bg-black/20 backdrop-blur-sm">
         <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
-          <FotoMoveLogo />
+          <TrilhaLogo />
           <Link
             to="/login"
             className="flex items-center gap-1.5 text-sm text-white/60 hover:text-white transition-colors"
@@ -36,7 +24,7 @@ export default function TermsOfServicePage() {
       <div className="max-w-4xl mx-auto px-6 py-12">
         <div className="bg-white/5 border border-white/10 rounded-2xl p-8 md:p-12 text-white/90">
           <h1 className="text-3xl font-bold text-white mb-2">Termos de Serviço</h1>
-          <p className="text-white/50 text-sm mb-10">Última atualização: 10 de abril de 2026</p>
+          <p className="text-white/50 text-sm mb-10">Última atualização: 16 de agosto de 2026</p>
 
           <div className="space-y-8 text-sm leading-relaxed text-white/80">
 
@@ -79,7 +67,7 @@ export default function TermsOfServicePage() {
             </section>
 
             <section>
-              <h2 className="text-lg font-semibent text-white mb-3">5. Dados e Propriedade</h2>
+              <h2 className="text-lg font-semibold text-white mb-3">5. Dados e Propriedade</h2>
               <p>
                 Os dados inseridos por você na plataforma (clientes, trabalhos, negociações, etc.) são de sua propriedade. A CRM Trilha não reivindica propriedade sobre seu conteúdo. Ao usar o serviço, você nos concede uma licença limitada para armazenar e processar esses dados com o único objetivo de fornecer o serviço a você.
               </p>
@@ -107,9 +95,19 @@ export default function TermsOfServicePage() {
                 <li>A Meta pode suspender, limitar ou banir números que violem suas políticas. A CRM Trilha <strong className="text-white">não tem ingerência</strong> sobre decisões da Meta e não é responsável por essas suspensões.</li>
                 <li>Em caso de uso comprovadamente abusivo da integração (spam massivo, denúncias recorrentes de usuários finais, violação manifesta das políticas Meta), a CRM Trilha reserva-se o direito de suspender a integração WhatsApp da sua conta independentemente de ação da Meta.</li>
               </ul>
-              <h3 className="text-base font-semibold text-white mt-4 mb-2">6.2. Outros serviços</h3>
+              <h3 className="text-base font-semibold text-white mt-4 mb-2">6.2. Google Agenda</h3>
+              <p className="mb-3">
+                A integração opcional com o Google Agenda usa a autorização da conta conectada para consultar, criar, atualizar e excluir eventos relacionados aos ensaios do CRM. Quando você informa o e-mail do cliente, ele é adicionado como participante e o Google pode enviar o convite ou a atualização do evento.
+              </p>
+              <ul className="list-disc list-inside space-y-2 pl-2">
+                <li>Somente o titular da conta CRM pode conectar ou desconectar o Google Agenda.</li>
+                <li>A autorização permanece ativa até que você desconecte a integração ou revogue o acesso na sua Conta Google.</li>
+                <li>Você é responsável por conferir data, horário, participante e conteúdo antes de concluir o agendamento.</li>
+                <li>O tratamento dos dados Google é detalhado na nossa <Link to="/privacidade" className="text-[#D4A94A] hover:underline">Política de Privacidade</Link>.</li>
+              </ul>
+              <h3 className="text-base font-semibold text-white mt-4 mb-2">6.3. Outros serviços</h3>
               <p>
-                Outras integrações disponíveis (Google Calendar, Asaas para cobrança, serviços de armazenamento de mídia) seguem o mesmo princípio: você é responsável pelo uso adequado e pela aceitação dos termos do respectivo terceiro. Detalhes específicos de cada integração são apresentados no momento da ativação.
+                Outras integrações disponíveis (Asaas para cobrança e serviços de armazenamento de mídia) seguem o mesmo princípio: você é responsável pelo uso adequado e pela aceitação dos termos do respectivo terceiro. Detalhes específicos de cada integração são apresentados no momento da ativação.
               </p>
             </section>
 

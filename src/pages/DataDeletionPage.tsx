@@ -2,19 +2,7 @@ import { type FormEvent, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft, AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 
-const FotoMoveLogo = () => (
-  <div className="flex items-center gap-2.5">
-    <svg width="32" height="32" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M17 4C17 4 7 5.5 4.5 17H17V4Z" fill="#F1C665"/>
-      <path d="M19 4C19 4 29 5.5 31.5 17H19V4Z" fill="#D4A94A"/>
-      <path d="M17 32C17 32 7 30.5 4.5 19H17V32Z" fill="#D4A94A"/>
-      <path d="M19 32C19 32 29 30.5 31.5 19H19V32Z" fill="#F1C665"/>
-    </svg>
-    <span className="text-xl font-extrabold tracking-tight text-white">
-      Foto<span style={{ color: "#D4A94A" }}>MOVE</span>
-    </span>
-  </div>
-);
+const TrilhaLogo = () => <img src="/logo-dark.png" alt="CRM Trilha" className="h-8 w-auto" />;
 
 export default function DataDeletionPage() {
   const [email, setEmail] = useState("");
@@ -57,7 +45,7 @@ export default function DataDeletionPage() {
     <div className="min-h-screen" style={{ background: "linear-gradient(135deg, #1a1207 0%, #2d1f08 40%, #1a1207 100%)" }}>
       <div className="sticky top-0 z-10 border-b border-white/10 bg-black/20 backdrop-blur-sm">
         <div className="max-w-3xl mx-auto px-6 py-4 flex items-center justify-between">
-          <FotoMoveLogo />
+          <TrilhaLogo />
           <Link
             to="/login"
             className="flex items-center gap-1.5 text-sm text-white/60 hover:text-white transition-colors"
@@ -213,8 +201,8 @@ export default function DataDeletionPage() {
             <section className="pt-4 border-t border-white/10">
               <h2 className="text-base font-semibold text-white mb-2">Alternativas</h2>
               <p className="text-xs text-white/60">
-                Se você é cliente ativo, pode desconectar apenas a integração WhatsApp diretamente em{" "}
-                <strong className="text-white">Configurações → Integrações → WhatsApp → Desconectar</strong>, sem precisar deste formulário. Para dúvidas:{" "}
+                Se você é cliente ativo, pode desconectar somente a integração desejada em{" "}
+                <strong className="text-white">Configurações → Integrações → WhatsApp ou Google Calendar → Desconectar</strong>, sem precisar deste formulário. Para dúvidas:{" "}
                 <a href="mailto:contato@movebusiness.com.br" className="text-[#D4A94A] hover:underline">
                   contato@movebusiness.com.br
                 </a>

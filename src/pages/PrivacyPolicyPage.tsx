@@ -1,19 +1,7 @@
 import { Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 
-const FotoMoveLogo = () => (
-  <div className="flex items-center gap-2.5">
-    <svg width="32" height="32" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M17 4C17 4 7 5.5 4.5 17H17V4Z" fill="#F1C665"/>
-      <path d="M19 4C19 4 29 5.5 31.5 17H19V4Z" fill="#D4A94A"/>
-      <path d="M17 32C17 32 7 30.5 4.5 19H17V32Z" fill="#D4A94A"/>
-      <path d="M19 32C19 32 29 30.5 31.5 19H19V32Z" fill="#F1C665"/>
-    </svg>
-    <span className="text-xl font-extrabold tracking-tight text-white">
-      Foto<span style={{ color: "#D4A94A" }}>MOVE</span>
-    </span>
-  </div>
-);
+const TrilhaLogo = () => <img src="/logo-dark.png" alt="CRM Trilha" className="h-8 w-auto" />;
 
 export default function PrivacyPolicyPage() {
   return (
@@ -21,7 +9,7 @@ export default function PrivacyPolicyPage() {
       {/* Header */}
       <div className="sticky top-0 z-10 border-b border-white/10 bg-black/20 backdrop-blur-sm">
         <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
-          <FotoMoveLogo />
+          <TrilhaLogo />
           <Link
             to="/login"
             className="flex items-center gap-1.5 text-sm text-white/60 hover:text-white transition-colors"
@@ -36,7 +24,7 @@ export default function PrivacyPolicyPage() {
       <div className="max-w-4xl mx-auto px-6 py-12">
         <div className="bg-white/5 border border-white/10 rounded-2xl p-8 md:p-12 text-white/90">
           <h1 className="text-3xl font-bold text-white mb-2">Política de Privacidade</h1>
-          <p className="text-white/50 text-sm mb-10">Última atualização: 10 de abril de 2026</p>
+          <p className="text-white/50 text-sm mb-10">Última atualização: 16 de agosto de 2026</p>
 
           <div className="space-y-8 text-sm leading-relaxed text-white/80">
 
@@ -55,6 +43,7 @@ export default function PrivacyPolicyPage() {
                 <li><strong className="text-white">Dados de clientes e trabalhos:</strong> informações que você insere na plataforma sobre seus clientes, sessões fotográficas e negociações.</li>
                 <li><strong className="text-white">Dados de uso:</strong> registros de acesso, ações realizadas e preferências de configuração.</li>
                 <li><strong className="text-white">Dados da integração WhatsApp Cloud API (Meta):</strong> quando você conecta uma conta WhatsApp Business via Embedded Signup, coletamos: identificador da WABA (waba_id), identificador do número de telefone (phone_number_id), número exibido (display_phone_number), nome verificado (verified_name), token de acesso criptografado, conteúdo de mensagens trocadas (texto, mídia, metadados como timestamps e IDs), nome de contato fornecido pelo remetente e status de qualidade do número.</li>
+                <li><strong className="text-white">Dados da integração Google Agenda:</strong> quando você conecta sua Conta Google, acessamos o e-mail da conta, os eventos do calendário necessários à sincronização e os tokens OAuth que mantêm a integração ativa.</li>
               </ul>
             </section>
 
@@ -82,8 +71,9 @@ export default function PrivacyPolicyPage() {
               <h2 className="text-lg font-semibold text-white mb-3">5. Compartilhamento de dados</h2>
               <p className="mb-3">Podemos compartilhar seus dados apenas com:</p>
               <ul className="list-disc list-inside space-y-2 pl-2">
-                <li><strong className="text-white">Provedores de infraestrutura:</strong> Supabase (banco de dados e autenticação), Vercel (hospedagem).</li>
+                <li><strong className="text-white">Provedores de infraestrutura:</strong> Supabase (banco de dados e autenticação), Render (processamento do servidor) e Vercel (hospedagem da interface).</li>
                 <li><strong className="text-white">APIs de comunicação:</strong> Meta (WhatsApp Business API), quando a integração for habilitada por você.</li>
+                <li><strong className="text-white">Google Calendar API:</strong> somente quando você habilita a integração, para sincronizar ensaios e enviar convites aos participantes informados por você.</li>
                 <li><strong className="text-white">Autoridades competentes:</strong> quando exigido por lei ou ordem judicial.</li>
               </ul>
             </section>
@@ -110,14 +100,31 @@ export default function PrivacyPolicyPage() {
             </section>
 
             <section>
-              <h2 className="text-lg font-semibold text-white mb-3">7. Retenção de dados</h2>
+              <h2 className="text-lg font-semibold text-white mb-3">7. Integração com o Google Agenda</h2>
+              <p className="mb-3">
+                A integração com o <strong className="text-white">Google Agenda</strong> é opcional e só é ativada após sua autorização no fluxo OAuth do Google. Ela é usada para criar, consultar, atualizar e excluir eventos de ensaios no calendário conectado e para adicionar como participantes os e-mails de clientes que você informar.
+              </p>
+              <ul className="list-disc list-inside space-y-2 pl-2 mb-3">
+                <li><strong className="text-white">Dados acessados:</strong> e-mail da Conta Google conectada e dados dos eventos necessários à sincronização, como título, descrição, data, horário e participantes.</li>
+                <li><strong className="text-white">Finalidade:</strong> manter os ensaios do CRM e do calendário alinhados, evitar cadastro duplicado e enviar o convite do agendamento ao cliente.</li>
+                <li><strong className="text-white">Dados armazenados:</strong> tokens de acesso e atualização OAuth, validade da autorização e o identificador do evento Google vinculado ao ensaio. Os tokens são protegidos com controles de acesso e criptografia.</li>
+                <li><strong className="text-white">Compartilhamento:</strong> não vendemos nem usamos dados do Google para publicidade, perfilamento ou treinamento de modelos. Os dados são enviados apenas ao Google Calendar API e aos participantes adicionados ao evento por você.</li>
+                <li><strong className="text-white">Revogação:</strong> você pode desconectar a integração em <strong className="text-white">Configurações → Integrações → Google Calendar</strong>. Ao desconectar, removemos os tokens salvos e solicitamos a revogação da autorização no Google.</li>
+              </ul>
+              <p>
+                O uso e a transferência de informações recebidas das APIs do Google pela CRM Trilha seguem a <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener noreferrer" className="text-[#D4A94A] hover:underline">Política de Dados do Usuário dos Serviços de API do Google</a>, inclusive os requisitos de Uso Limitado.
+              </p>
+            </section>
+
+            <section>
+              <h2 className="text-lg font-semibold text-white mb-3">8. Retenção de dados</h2>
               <p>
                 Mantemos seus dados enquanto sua conta estiver ativa. Após o encerramento da conta, os dados são retidos por até 90 dias para fins de backup, sendo então excluídos permanentemente, exceto quando a retenção for exigida por lei.
               </p>
             </section>
 
             <section>
-              <h2 className="text-lg font-semibold text-white mb-3">8. Seus direitos</h2>
+              <h2 className="text-lg font-semibold text-white mb-3">9. Seus direitos</h2>
               <p className="mb-3">De acordo com a Lei Geral de Proteção de Dados (LGPD - Lei nº 13.709/2018), você tem direito a:</p>
               <ul className="list-disc list-inside space-y-2 pl-2">
                 <li>Confirmar a existência de tratamento de seus dados.</li>
@@ -133,21 +140,21 @@ export default function PrivacyPolicyPage() {
             </section>
 
             <section>
-              <h2 className="text-lg font-semibold text-white mb-3">9. Cookies</h2>
+              <h2 className="text-lg font-semibold text-white mb-3">10. Cookies</h2>
               <p>
                 Utilizamos cookies essenciais para manter sua sessão autenticada e cookies de preferência para salvar configurações como tema (claro/escuro). Não utilizamos cookies de rastreamento de terceiros para fins publicitários.
               </p>
             </section>
 
             <section>
-              <h2 className="text-lg font-semibold text-white mb-3">10. Alterações nesta política</h2>
+              <h2 className="text-lg font-semibold text-white mb-3">11. Alterações nesta política</h2>
               <p>
                 Podemos atualizar esta Política de Privacidade periodicamente. Quando realizarmos mudanças significativas, notificaremos você por e-mail ou por aviso na plataforma. O uso continuado do serviço após a notificação implica na aceitação das alterações.
               </p>
             </section>
 
             <section>
-              <h2 className="text-lg font-semibold text-white mb-3">11. Contato</h2>
+              <h2 className="text-lg font-semibold text-white mb-3">12. Contato</h2>
               <p>
                 Para dúvidas, solicitações ou exercício de direitos relacionados à privacidade, entre em contato conosco:
               </p>

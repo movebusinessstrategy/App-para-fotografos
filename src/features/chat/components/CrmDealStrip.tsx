@@ -1,14 +1,17 @@
 import React, { useState, useEffect, useRef } from "react";
 import { ChevronDown, ExternalLink, Loader2, Trophy, X, ListChecks } from "lucide-react";
 import { Link } from "react-router-dom";
-import { Deal, PipelineStage } from "../../../types";
+import { Client, Deal, PipelineStage } from "../../../types";
 import { useAuth } from "../../../contexts/AuthContext";
 import { authFetch } from "../../../utils/authFetch";
+import { DealConversionModal } from "../../../components/pipeline/DealConversionModal";
+import { celebrateSale } from "../../../utils/saleCelebration";
 
 interface Props {
   phone: string;
   deals: Deal[];
   stages: PipelineStage[];
+  clients: Client[];
   onUpdate: () => void;
 }
 
@@ -17,8 +20,9 @@ interface Props {
 // Sem deal, o header da conversa renderiza só o FunnelStatusButton existente.
 //
 // Membros não veem valor — alinhado com a decisão de 2026-05-29.
-export function CrmDealStrip({ phone, deals, stages, onUpdate }: Props) {
+export function CrmDealStrip({ phone, deals, stages, clients, onUpdate }: Props) {
   const { canAccess } = useAuth();
+  const [showConversion, setShowConversion] = useState(false);
   const canSeeFinance = canAccess('finance'); // dono ou funcionário com permissão "Financeiro"
 
   // Match com várias normalizações (com/sem 55, só dígitos) — mesmo padrão
@@ -38,20 +42,28 @@ export function CrmDealStrip({ phone, deals, stages, onUpdate }: Props) {
   const stage = stages.find(s => s.id === deal.stage);
   const stageColor = stage?.color || "#10b981";
 
+  const handleConverted = () => {
+    celebrateSale();
+    setShowConversion(false);
+    onUpdate();
+  };
+
   return (
-    <div
-      className="flex items-center gap-3 px-4 py-2 flex-shrink-0 border-b"
-      style={{
-        background: "var(--wa-bg-secondary, rgba(255,255,255,0.03))",
-        borderColor: "var(--wa-border)",
-      }}
-    >
+    <>
+      <div
+        className="flex items-center gap-3 px-4 py-2 flex-shrink-0 border-b"
+        style={{
+          background: "var(--wa-bg-secondary, rgba(255,255,255,0.03))",
+          borderColor: "var(--wa-border)",
+        }}
+      >
       {/* Selector de etapa */}
       <StageSelector
         deal={deal}
         stages={stages}
         stageColor={stageColor}
         onChanged={onUpdate}
+        onWon={() => setShowConversion(true)}
       />
 
       {/* Valor — só dono/admin vê */}
@@ -72,7 +84,12 @@ export function CrmDealStrip({ phone, deals, stages, onUpdate }: Props) {
       <div className="flex-1" />
 
       {/* Ações terminais */}
-      <DealActions deal={deal} stages={stages} onChanged={onUpdate} />
+      <DealActions
+        deal={deal}
+        stages={stages}
+        onChanged={onUpdate}
+        onWon={() => setShowConversion(true)}
+      />
 
       {/* Link pra abrir no funil */}
       <Link
@@ -84,19 +101,31 @@ export function CrmDealStrip({ phone, deals, stages, onUpdate }: Props) {
         <ExternalLink size={11} />
         Funil
       </Link>
-    </div>
+      </div>
+      {showConversion && (
+        <DealConversionModal
+          deal={deal}
+          clients={clients}
+          preferredClientId={deal.client_id ?? undefined}
+          preferredInviteEmail={deal.contact_email}
+          onClose={() => setShowConversion(false)}
+          onConverted={handleConverted}
+        />
+      )}
+    </>
   );
 }
 
 // ─── Stage selector (dropdown) ────────────────────────────────────────────────
 
 function StageSelector({
-  deal, stages, stageColor, onChanged,
+  deal, stages, stageColor, onChanged, onWon,
 }: {
   deal: Deal;
   stages: PipelineStage[];
   stageColor: string;
   onChanged: () => void;
+  onWon: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -117,6 +146,12 @@ function StageSelector({
   const handlePick = async (stageId: string) => {
     if (stageId === deal.stage || updating) {
       setOpen(false);
+      return;
+    }
+    const targetStage = stages.find(stage => stage.id === stageId);
+    if (targetStage?.is_won) {
+      setOpen(false);
+      onWon();
       return;
     }
     setUpdating(true);
@@ -275,7 +310,17 @@ function MarkDealModal({ kind, dealTitle, onConfirm, onCancel }: {
   );
 }
 
-function DealActions({ deal, stages, onChanged }: { deal: Deal; stages: PipelineStage[]; onChanged: () => void }) {
+function DealActions({
+  deal,
+  stages,
+  onChanged,
+  onWon,
+}: {
+  deal: Deal;
+  stages: PipelineStage[];
+  onChanged: () => void;
+  onWon: () => void;
+}) {
   const [busy, setBusy] = useState<"won" | "lost" | null>(null);
   const [modal, setModal] = useState<"won" | "lost" | null>(null);
 
@@ -316,7 +361,7 @@ function DealActions({ deal, stages, onChanged }: { deal: Deal; stages: Pipeline
   return (
     <div className="flex items-center gap-1">
       <button
-        onClick={() => setModal("won")}
+        onClick={onWon}
         disabled={!!busy}
         className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium disabled:opacity-60"
         style={{ background: "rgba(16, 185, 129, 0.15)", color: "#10b981" }}

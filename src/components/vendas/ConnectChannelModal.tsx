@@ -295,7 +295,7 @@ export function ConnectChannelModal({ open, onClose, onStatusChange }: ConnectCh
               onDisconnect={handleDisconnectWhatsApp}
               onResync={handleResyncWhatsApp}
               onRefresh={() => handleConnectWhatsApp(false)}
-              onGoToSettings={() => { onClose(); navigate("/settings"); }}
+              onGoToSettings={() => { onClose(); navigate("/configuracoes/integracoes/whatsapp"); }}
               onMethodChange={handleMethodChange}
               onPairingPhoneChange={setPairingPhone}
               onRequestPairingCode={handlePairingCode}

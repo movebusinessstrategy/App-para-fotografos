@@ -37,6 +37,7 @@ interface DealConversionModalProps {
   deal: Deal | null;
   clients?: Client[];
   preferredClientId?: number | null;
+  preferredInviteEmail?: string | null;
   preferredItems?: DealItem[];
   onClose: () => void;
   onConverted: () => void;
@@ -54,6 +55,31 @@ interface DuplicateJob {
 interface DuplicateWarning {
   message: string;
   existing: DuplicateJob[];
+}
+
+type CalendarSyncStatus = "synced" | "already_synced" | "not_connected" | "skipped" | "failed";
+
+interface ConversionResponse {
+  calendar_sync_status?: CalendarSyncStatus | null;
+  calendar_synced?: boolean | null;
+  google_event_id?: string | null;
+  invite_email?: string | null;
+  invite_requested?: boolean | null;
+  invite_sent?: boolean | null;
+  google_calendar_connected?: boolean | null;
+}
+
+interface CompletionFeedback {
+  tone: "success" | "warning";
+  title: string;
+  message: string;
+}
+
+interface RequiredJobSchedule {
+  job_type: string;
+  job_date: string;
+  job_time: string;
+  job_end_time?: string;
 }
 
 function inferJobType(types: string[], names: Array<string | null | undefined>): string | null {
@@ -74,10 +100,102 @@ function formatDuplicateDate(value?: string | null): string {
   return String(value).slice(0, 10).split("-").reverse().join("/");
 }
 
+function isValidIsoDate(value: string): boolean {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!parts) return false;
+  const [, year, month, day] = parts.map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day;
+}
+
+function isValidTime(value: string): boolean {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+}
+
+function hasRequiredJobSchedule(schedule: RequiredJobSchedule): boolean {
+  if (!schedule.job_type.trim()) return false;
+  if (!isValidIsoDate(schedule.job_date)) return false;
+  if (!isValidTime(schedule.job_time)) return false;
+  if (!schedule.job_end_time) return true;
+  return isValidTime(schedule.job_end_time) && schedule.job_end_time > schedule.job_time;
+}
+
+function syncedCalendarFeedback(conversion: ConversionResponse): CompletionFeedback {
+  const inviteEmail = conversion.invite_email?.trim();
+  const inviteRequested = conversion.invite_requested ?? conversion.invite_sent;
+  if (inviteRequested === true && inviteEmail) {
+    return {
+      tone: "success",
+      title: "Ensaio confirmado no Google Agenda",
+      message: `O agendamento foi sincronizado e o Google recebeu a solicitação para enviar o convite a ${inviteEmail}.`,
+    };
+  }
+  if (!inviteEmail) {
+    return {
+      tone: "success",
+      title: "Ensaio confirmado no Google Agenda",
+      message: "O agendamento foi sincronizado. Como o cliente não tem e-mail cadastrado, nenhum convite foi enviado.",
+    };
+  }
+  return {
+    tone: "warning",
+    title: "Ensaio sincronizado; convite pendente",
+    message: `O agendamento entrou no Google Agenda, mas o envio do convite para ${inviteEmail} não foi confirmado.`,
+  };
+}
+
+function buildCompletionFeedback(conversion: ConversionResponse, createdJob: boolean): CompletionFeedback {
+  if (!createdJob) {
+    return { tone: "success", title: "Venda convertida", message: "A venda foi concluída com sucesso." };
+  }
+
+  const status = conversion.calendar_sync_status;
+  if (status === "failed") {
+    return {
+      tone: "warning",
+      title: "Venda convertida; sincronização pendente",
+      message: "A venda e o ensaio foram salvos, mas a sincronização com o Google Agenda falhou. Tente novamente na Produção.",
+    };
+  }
+  if (status === "not_connected" || (!status && conversion.google_calendar_connected === false)) {
+    return {
+      tone: "warning",
+      title: "Venda convertida; Google não conectado",
+      message: "A venda e o ensaio foram salvos no aplicativo. Conecte o Google Agenda para sincronizar o agendamento.",
+    };
+  }
+  if (status === "already_synced" && conversion.calendar_synced === true) {
+    return {
+      tone: "success",
+      title: "Ensaio já sincronizado",
+      message: "O agendamento já estava vinculado ao Google Agenda; nenhum novo convite foi solicitado.",
+    };
+  }
+  if (status === "synced" && conversion.calendar_synced === true) return syncedCalendarFeedback(conversion);
+  if (status === "synced") {
+    return {
+      tone: "warning",
+      title: "Venda convertida; confirmação pendente",
+      message: "O Google aceitou a sincronização, mas o aplicativo não conseguiu confirmar o vínculo do evento. Tente novamente na Produção.",
+    };
+  }
+  if (!status && (conversion.calendar_synced === true || Boolean(conversion.google_event_id))) {
+    return syncedCalendarFeedback(conversion);
+  }
+  return {
+    tone: "success",
+    title: "Venda convertida",
+    message: "A venda e o ensaio foram salvos no aplicativo.",
+  };
+}
+
 export function DealConversionModal({ 
   deal, 
   clients = [],
   preferredClientId,
+  preferredInviteEmail,
   preferredItems,
   onClose, 
   onConverted 
@@ -89,7 +207,9 @@ export function DealConversionModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [duplicateWarning, setDuplicateWarning] = useState<DuplicateWarning | null>(null);
   const [submitError, setSubmitError] = useState("");
+  const [completionFeedback, setCompletionFeedback] = useState<CompletionFeedback | null>(null);
   const [completionWarnings, setCompletionWarnings] = useState<string[]>([]);
+  const [existingInviteEmail, setExistingInviteEmail] = useState("");
   const [showClientPicker, setShowClientPicker] = useState(false);
   const [jobTypeTouched, setJobTypeTouched] = useState(false);
   const [sinalAmount, setSinalAmount] = useState(0);
@@ -229,6 +349,7 @@ export function DealConversionModal({
       setCampaignId(deal.campaign_id || "");
       setDuplicateWarning(null);
       setSubmitError("");
+      setCompletionFeedback(null);
       setCompletionWarnings([]);
       setShowClientPicker(false);
       setJobTypeTouched(false);
@@ -238,6 +359,25 @@ export function DealConversionModal({
     // tudo que o usuário estava digitando no meio da conversão.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deal?.id, preferredClientId]);
+
+  const selectedClient = useMemo(
+    () => selectedClientId ? clients.find(client => client.id === selectedClientId) : undefined,
+    [clients, selectedClientId],
+  );
+  const selectedClientEmail = selectedClient?.email?.trim() || "";
+
+  useEffect(() => {
+    if (conversionMode !== "existing" || !selectedClientId) {
+      setExistingInviteEmail("");
+      return;
+    }
+    const preferredId = preferredClientId !== undefined ? preferredClientId : deal?.client_id ?? null;
+    const normalizedPreferredEmail = preferredInviteEmail?.trim() || "";
+    const usePreferredEmail = selectedClientId === preferredId
+      && !selectedClientEmail
+      && Boolean(normalizedPreferredEmail);
+    setExistingInviteEmail(usePreferredEmail ? normalizedPreferredEmail : selectedClientEmail);
+  }, [conversionMode, deal?.client_id, preferredClientId, preferredInviteEmail, selectedClientEmail, selectedClientId]);
 
   const suggestedJobType = useMemo(() => inferJobType(
     tiposEnsaio,
@@ -298,10 +438,7 @@ export function DealConversionModal({
     ? preferredClientId
     : deal.client_id ?? null;
   const hasPreselectedClient = preselectedClientId !== null;
-  const selectedClient = selectedClientId
-    ? clients.find(client => client.id === selectedClientId)
-    : undefined;
-  const closeModal = () => completionWarnings.length > 0 ? onConverted() : onClose();
+  const closeModal = () => completionFeedback ? onConverted() : onClose();
 
   const toggleSection = (section: "client" | "job") => {
     setExpandedSections((prev) => ({
@@ -333,6 +470,7 @@ export function DealConversionModal({
       createClient: conversionMode === "new" && createClient,
       createJob,
       client: conversionMode === "new" && createClient ? clientData : undefined,
+      inviteEmail: conversionMode === "existing" ? existingInviteEmail.trim() : undefined,
       job: buildJobPayload(),
       campaign_id: campaignId || undefined,
       sinalAmount: sinalAmount > 0 ? sinalAmount : undefined,
@@ -385,17 +523,11 @@ export function DealConversionModal({
         throw new Error(error?.message || error?.error || `Erro ao converter (HTTP ${response.status})`);
       }
 
-      const conversion: { google_calendar_connected?: boolean | null } = await response.json().catch(() => ({}));
+      const conversion: ConversionResponse = await response.json().catch(() => ({}));
       setDuplicateWarning(null);
       const warnings = await persistNewItems();
-      if (createJob && conversion.google_calendar_connected === false) {
-        warnings.push("O Google Calendar não está conectado. O ensaio ficou somente na agenda do sistema.");
-      }
-      if (warnings.length > 0) {
-        setCompletionWarnings(warnings);
-        return;
-      }
-      onConverted();
+      setCompletionWarnings(warnings);
+      setCompletionFeedback(buildCompletionFeedback(conversion, createJob));
     } catch (error) {
       console.error("Erro ao converter deal:", error);
       setSubmitError(`Não deu pra converter a venda: ${error instanceof Error ? error.message : "erro desconhecido"}`);
@@ -429,9 +561,11 @@ export function DealConversionModal({
   // Tipos de ensaio: lista mestre configurável (Configurações → Oportunidades)
   const jobTypes = tiposComValorAtual(tiposEnsaio, jobData.job_type);
 
-  const canSubmit = conversionMode === "existing" 
+  const hasRequiredClient = conversionMode === "existing"
     ? selectedClientId !== null 
     : (createClient ? (clientData.name && clientData.phone) : true);
+  const hasCompleteJobSchedule = hasRequiredJobSchedule(jobData);
+  const canSubmit = Boolean(hasRequiredClient) && (!createJob || hasCompleteJobSchedule);
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[90] flex items-center justify-center p-4">
@@ -815,6 +949,26 @@ export function DealConversionModal({
                   />
                 </>
               )}
+              {selectedClientId && (
+                <div className="mt-3 border-t border-blue-100 pt-3 dark:border-blue-900/40">
+                  <label className={labelClasses}>E-mail do convite</label>
+                  <input
+                    type="email"
+                    value={existingInviteEmail}
+                    onChange={(event) => setExistingInviteEmail(event.target.value)}
+                    className={inputClasses}
+                    placeholder="email@exemplo.com"
+                  />
+                  <p className={`mt-1 text-[11px] ${existingInviteEmail.trim()
+                    ? "text-emerald-700 dark:text-emerald-300"
+                    : "text-amber-700 dark:text-amber-300"
+                  }`}>
+                    {existingInviteEmail.trim()
+                      ? <>O convite será solicitado para <span className="font-semibold">{existingInviteEmail.trim()}</span>. Se você alterar este campo, o cadastro do cliente também será atualizado.</>
+                      : "Sem e-mail, este cliente não receberá o convite."}
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
@@ -1099,7 +1253,7 @@ export function DealConversionModal({
                       />
                     </div>
                     <div>
-                      <label className={labelClasses}>Início</label>
+                      <label className={labelClasses}>Início *</label>
                       <input
                         type="time"
                         value={jobData.job_time}
@@ -1209,13 +1363,27 @@ export function DealConversionModal({
 
         {/* Footer Actions */}
         <div className="border-t border-gray-100 bg-gray-50/50 p-4 dark:border-gray-800 dark:bg-gray-800/30">
-          {completionWarnings.length > 0 ? (
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-800 dark:bg-emerald-950/25">
-              <h4 className="text-sm font-bold text-emerald-900 dark:text-emerald-100">Venda convertida</h4>
-              <p className="mt-1 text-xs text-emerald-800 dark:text-emerald-200">A conversão foi concluída, com estes avisos:</p>
-              <ul className="mt-2 space-y-1 text-xs text-amber-700 dark:text-amber-300">
-                {completionWarnings.map(warning => <li key={warning}>• {warning}</li>)}
-              </ul>
+          {completionFeedback ? (
+            <div className={`rounded-xl border p-4 ${completionFeedback.tone === "success"
+              ? "border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/25"
+              : "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/25"
+            }`}>
+              <h4 className={`text-sm font-bold ${completionFeedback.tone === "success"
+                ? "text-emerald-900 dark:text-emerald-100"
+                : "text-amber-900 dark:text-amber-100"
+              }`}>{completionFeedback.title}</h4>
+              <p className={`mt-1 text-xs ${completionFeedback.tone === "success"
+                ? "text-emerald-800 dark:text-emerald-200"
+                : "text-amber-800 dark:text-amber-200"
+              }`}>{completionFeedback.message}</p>
+              {completionWarnings.length > 0 && (
+                <>
+                  <p className="mt-3 text-xs font-semibold text-amber-800 dark:text-amber-200">Também vale revisar:</p>
+                  <ul className="mt-1 space-y-1 text-xs text-amber-700 dark:text-amber-300">
+                    {completionWarnings.map(warning => <li key={warning}>• {warning}</li>)}
+                  </ul>
+                </>
+              )}
               <div className="mt-3 flex justify-end">
                 <button
                   type="button"
@@ -1287,11 +1455,15 @@ export function DealConversionModal({
               )}
               <div className="flex items-center justify-between">
                 <p className="text-xs text-gray-400 dark:text-gray-500">
-                  {conversionMode === "existing" && selectedClientId && `Venda vinculada a ${selectedClient?.name || "cliente selecionado"}`}
-                  {conversionMode === "existing" && !selectedClientId && "Selecione um cliente para continuar"}
-                  {conversionMode === "new" && createClient && createJob && "Novo cliente e trabalho serão criados"}
-                  {conversionMode === "new" && createClient && !createJob && "Apenas o novo cliente será cadastrado"}
-                  {conversionMode === "new" && !createClient && createJob && "Apenas o trabalho será criado"}
+                  {createJob && !hasCompleteJobSchedule
+                    ? "Preencha tipo, data e horário do ensaio para continuar"
+                    : <>
+                      {conversionMode === "existing" && selectedClientId && `Venda vinculada a ${selectedClient?.name || "cliente selecionado"}`}
+                      {conversionMode === "existing" && !selectedClientId && "Selecione um cliente para continuar"}
+                      {conversionMode === "new" && createClient && createJob && "Novo cliente e trabalho serão criados"}
+                      {conversionMode === "new" && createClient && !createJob && "Apenas o novo cliente será cadastrado"}
+                      {conversionMode === "new" && !createClient && createJob && "Apenas o trabalho será criado"}
+                    </>}
                 </p>
                 <div className="flex gap-2">
                   <button

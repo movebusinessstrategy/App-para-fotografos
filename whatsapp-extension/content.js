@@ -6926,6 +6926,27 @@
     return el.value?.trim() || '';
   }
 
+  function calendarConversionNotice(result) {
+    if (result?.calendar_sync_status === 'not_connected' || result?.google_calendar_connected === false) {
+      return { error: true, message: 'Google Calendar não conectado — o ensaio ficou só na agenda do sistema. Conecte no app: Configurações → Integrações → Google Calendar.' };
+    }
+    if (result?.calendar_sync_status === 'failed') {
+      return { error: true, message: 'Venda salva, mas a sincronização com o Google Agenda falhou. Revise a integração no app.' };
+    }
+    if (result?.calendar_sync_status === 'already_synced') return null;
+    if (result?.calendar_sync_status !== 'synced' || result?.calendar_synced !== true) {
+      return { error: true, message: 'Venda salva, mas o vínculo do evento no Google Agenda não foi confirmado.' };
+    }
+    const inviteRequested = result?.invite_requested ?? result?.invite_sent;
+    if (inviteRequested && result?.invite_email) {
+      return { error: false, message: `Google Agenda sincronizado — o Google recebeu a solicitação de convite para ${result.invite_email}.` };
+    }
+    if (!result?.invite_email) {
+      return { error: false, message: 'Google Agenda sincronizado. Sem e-mail no cadastro, nenhum convite foi solicitado.' };
+    }
+    return { error: false, message: 'Google Agenda sincronizado; nenhum novo convite foi confirmado.' };
+  }
+
   async function saveWonConversion(deal, modal) {
     const mode = modal.querySelector('input[name="fp-win-mode"]:checked')?.value || 'new';
     const createJob = !!modal.querySelector('#fp-win-create-job')?.checked;
@@ -7075,10 +7096,10 @@
       // "não converteu", levando o usuário a converter DE NOVO.
       celebrateSale();
       toast('Venda convertida com sucesso!');
-      // Google Calendar desconectado = o ensaio ficou SÓ na agenda do sistema.
       // Aviso atrasado pra não atropelar o toast de sucesso (toast é único).
-      if (createJob && convRes?.google_calendar_connected === false) {
-        setTimeout(() => toast('Google Calendar não conectado — o ensaio ficou só na agenda do sistema. Conecte no app: Configurações → Integrações → Google Calendar.', true), 2800);
+      const calendarNotice = createJob ? calendarConversionNotice(convRes) : null;
+      if (calendarNotice) {
+        setTimeout(() => toast(calendarNotice.message, calendarNotice.error), 2800);
       }
       try {
         await loadKanban();

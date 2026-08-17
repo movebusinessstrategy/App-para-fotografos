@@ -21,7 +21,6 @@ const ClientsPage = lazy(() => import("./pages/ClientsPage"));
 const JobsPage = lazy(() => import("./pages/JobsPage"));
 const VendasPage = lazy(() => import("./pages/VendasPage"));
 const CalendarPage = lazy(() => import("./pages/CalendarPage"));
-const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const FinancePage = lazy(() => import("./pages/FinancePage"));
 const FiscalPage = lazy(() => import("./pages/FiscalPage"));
 const PipelineSettings = lazy(() => import("./pages/PipelineSettings"));
@@ -137,7 +136,6 @@ export default function App() {
                 <Route path="whatsapp" element={<PermissionRoute module="whatsapp"><WhatsappPage /></PermissionRoute>} />
                 <Route path="pos-venda" element={<PermissionRoute module="posvenda"><PosVendaPage /></PermissionRoute>} />
                 <Route path="calendar" element={<PermissionRoute module="calendar"><CalendarPage /></PermissionRoute>} />
-                <Route path="settings" element={<SettingsPage />} />
                 <Route path="finance" element={<PermissionRoute module="finance"><FinancePage /></PermissionRoute>} />
                 <Route path="fiscal" element={<PermissionRoute module="finance"><FiscalPage /></PermissionRoute>} />
                 <Route
@@ -169,7 +167,7 @@ export default function App() {
                 </Route>
 
                 {/* Redirects das URLs antigas para preservar bookmarks */}
-                <Route path="settings"    element={<Navigate to="/configuracoes/oportunidades" replace />} />
+                <Route path="settings"    element={<Navigate to="/configuracoes/integracoes/calendar" replace />} />
                 <Route path="admin"       element={<Navigate to="/configuracoes/equipe" replace />} />
                 <Route path="assinatura"  element={<Navigate to="/configuracoes/plano" replace />} />
               </Route>
