@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Calendar, MessageCircle, CheckCircle2, ChevronRight, Circle, Chrome, FileSignature } from "lucide-react";
+import { AlertCircle, Calendar, MessageCircle, CheckCircle2, ChevronRight, Circle, Chrome, FileSignature } from "lucide-react";
 import { authFetch } from "../../utils/authFetch";
 import { useAuth } from "../../contexts/AuthContext";
 
@@ -9,14 +9,15 @@ interface IntegrationCardProps {
   title: string;
   description: string;
   connected?: boolean;
+  reconnectRequired?: boolean;
   loading?: boolean;
   badge?: string;
   icon: React.ReactNode;
   iconBg: string;
 }
 
-function IntegrationCard({ to, title, description, connected, loading, badge, icon, iconBg }: IntegrationCardProps) {
-  const hasConnectionState = connected !== undefined || loading;
+function IntegrationCard({ to, title, description, connected, reconnectRequired, loading, badge, icon, iconBg }: IntegrationCardProps) {
+  const hasConnectionState = connected !== undefined || reconnectRequired !== undefined || loading;
   return (
     <Link
       to={to}
@@ -36,6 +37,10 @@ function IntegrationCard({ to, title, description, connected, loading, badge, ic
             loading ? (
               <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500">
                 Verificando…
+              </span>
+            ) : reconnectRequired ? (
+              <span className="flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
+                <AlertCircle size={10} /> Reconexão necessária
               </span>
             ) : connected ? (
               <span className="flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300">
@@ -59,12 +64,17 @@ export default function IntegracoesTab() {
   const { isMember, isPlatformAdmin } = useAuth();
   const isOwner = !isMember || isPlatformAdmin;
   const [googleConnected, setGoogleConnected] = useState(false);
+  const [googleReconnectRequired, setGoogleReconnectRequired] = useState(false);
   const [waConnected, setWaConnected] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     Promise.all([
-      authFetch("/api/auth/google/status").then(r => r.json()).then(d => setGoogleConnected(!!d.connected)).catch(() => {}),
+      authFetch("/api/auth/google/status").then(r => r.json()).then(d => {
+        const reconnectRequired = Boolean(d.reconnect_required || (d.connected && d.healthy === false));
+        setGoogleReconnectRequired(reconnectRequired);
+        setGoogleConnected(Boolean(d.connected && d.healthy !== false && !reconnectRequired));
+      }).catch(() => {}),
       authFetch("/api/meta/whatsapp/status").then(r => r.json()).then(d => setWaConnected(!!d.connected)).catch(() => {}),
     ]).finally(() => setLoading(false));
   }, []);
@@ -91,8 +101,11 @@ export default function IntegracoesTab() {
         <IntegrationCard
           to="/configuracoes/integracoes/calendar"
           title="Google Calendar"
-          description="Sincronize seus ensaios automaticamente com o calendário."
+          description={googleReconnectRequired
+            ? "A autorização do Google expirou ou foi revogada. Reconecte para voltar a sincronizar."
+            : "Sincronize seus ensaios automaticamente com o calendário."}
           connected={googleConnected}
+          reconnectRequired={googleReconnectRequired}
           loading={loading}
           icon={<Calendar size={22} className="text-gold-600 dark:text-gold-400" />}
           iconBg="bg-gold-50 dark:bg-gold-900/20"

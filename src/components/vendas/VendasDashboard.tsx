@@ -207,6 +207,7 @@ export function VendasDashboard() {
               <InboxView
                 deals={deals}
                 stages={stages}
+                clients={clients}
                 initialPhone={initialPhone}
                 onDealUpdated={() => fetchData({ silent: true })}
               />

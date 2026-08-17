@@ -615,7 +615,7 @@ function FeatureGrid() {
   const features = [
     { icon: Workflow,      title: "Pipeline visual de vendas", desc: "Arraste cada lead entre as etapas e veja quem está parado tempo demais." },
     { icon: FileSignature, title: "Contratos digitais",        desc: "Contrato preenchido em 1 clique, assinado pelo celular, com validade jurídica." },
-    { icon: Calendar,      title: "Agenda integrada ao Google", desc: "Marcou no app, aparece no Google e vice-versa. Sem cadastrar duas vezes." },
+    { icon: Calendar,      title: "Agenda integrada ao Google", desc: "Fechou a venda: o ensaio entra no Google Agenda e o cliente recebe o convite por e-mail." },
     { icon: MessageCircle, title: "Inbox de WhatsApp",         desc: "Todas as conversas dentro do app, com templates e respostas rápidas." },
     { icon: Users,         title: "Equipe com permissões",     desc: "Vendedores e assistentes, cada um vendo exatamente o que pode." },
     { icon: TrendingUp,    title: "Relatórios que importam",   desc: "Quanto faturou, qual etapa trava, qual fonte traz mais cliente." },
@@ -641,6 +641,9 @@ function FeatureGrid() {
             </FadeIn>
           ))}
         </div>
+        <p className="mt-7 text-center text-xs leading-relaxed text-gray-500 max-w-3xl mx-auto">
+          A integração com o Google é opcional. Após sua autorização, o CRM Trilha usa o e-mail da conta e os eventos do calendário para sincronizar ensaios e convidados, com acesso offline até você desconectar. Saiba mais na nossa <Link to="/privacidade" className="font-semibold text-gold-700 hover:underline">Política de Privacidade</Link>.
+        </p>
       </div>
     </section>
   );

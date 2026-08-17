@@ -55,6 +55,24 @@ import {
   uploadObject,
 } from './object-storage.js';
 import { captureMetaWhatsAppTouchpoint } from './marketing-attribution.js';
+import {
+  InviteEmailValidationError,
+  JobScheduleValidationError,
+  inviteEmailUpdateForExistingClient,
+  normalizeInviteEmail,
+  normalizeRequiredJobSchedule,
+  requiresConversionToEnterWonStage,
+  syncConversionCalendarJob,
+  type CalendarSyncStatus,
+  type ExistingClientInviteEmailUpdate,
+} from './calendar-conversion.js';
+import {
+  buildCalendarEventPayload,
+  ensureCalendarEvent,
+  hasValidCalendarStart,
+  normalizeCalendarClockTime,
+  type CalendarEventPayload,
+} from './calendar-sync.js';
 
 dotenv.config();
 
@@ -897,33 +915,217 @@ const getGoogleAuth = async (supabase: SupabaseClient, userId: string) => {
 
   if (!auth || !auth.access_token) return null;
 
+  // Em produção, nunca transforma a ausência da chave em autorização para
+  // usar credencial legada em texto puro. Sem a chave, também não é possível
+  // decifrar tokens protegidos; a conexão fica indisponível até a configuração
+  // ser restaurada, sem expor nem migrar o segredo silenciosamente.
+  if (process.env.NODE_ENV === 'production' && !isEncryptionConfigured()) {
+    console.error('[google-auth] WA_TOKEN_ENCRYPTION_KEY ausente — credencial Google recusada em produção.');
+    return null;
+  }
+
+  const accessToken = decryptIfNeeded(auth.access_token);
+  const refreshToken = decryptIfNeeded(auth.refresh_token || '');
+  if (!accessToken) return null;
+
+  const hasLegacyPlaintext = isEncryptionConfigured()
+    && (!String(auth.access_token).startsWith('enc:v1:')
+      || (auth.refresh_token && !String(auth.refresh_token).startsWith('enc:v1:')));
+  if (hasLegacyPlaintext) {
+    const { error } = await supabase
+      .from('google_auth')
+      .update({
+        access_token: encryptIfNeeded(accessToken),
+        refresh_token: encryptIfNeeded(refreshToken || ''),
+      })
+      .eq('id', auth.id)
+      .eq('user_id', userId);
+    if (error) console.warn('[google-auth] Falha na migração de token legado:', error.message);
+  }
+
   const client = getOAuth2Client();
   client.setCredentials({
-    access_token: auth.access_token,
-    refresh_token: auth.refresh_token,
+    access_token: accessToken,
+    refresh_token: refreshToken,
     expiry_date: auth.expiry_date
   });
 
   return client;
 };
 
-const deleteGoogleCalendarEvent = async (supabase: SupabaseClient, eventId: string, userId: string) => {
-  const auth = await getGoogleAuth(supabase, userId);
-  if (!auth) return;
-
-  const calendar = google.calendar({ version: 'v3', auth });
+const revokeGoogleAuthCredentials = async (auth: Awaited<ReturnType<typeof getGoogleAuth>>) => {
+  const token = auth?.credentials.refresh_token || auth?.credentials.access_token;
+  if (!auth || !token) return;
   try {
-    await calendar.events.delete({ calendarId: 'primary', eventId });
+    await auth.revokeToken(token);
   } catch (error: any) {
-    if (error.code !== 410 && error.code !== 404) {
-      console.error('Error deleting Google Calendar event:', error);
+    console.warn('[google-auth] Não foi possível revogar o token no Google:', error?.message || error);
+  }
+};
+
+const pendingGoogleCalendarInviteCount = async (supabase: SupabaseClient, userId: string) => {
+  const today = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const { count, error } = await supabase
+    .from('jobs')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .is('google_event_id', null)
+    .not('job_date', 'is', null)
+    .not('job_time', 'is', null)
+    .gte('job_date', today)
+    .not('status', 'in', '(cancelled,pre_reserved)');
+  if (error) throw error;
+  return count ?? 0;
+};
+
+const missingGoogleCalendarTimeCount = async (supabase: SupabaseClient, userId: string) => {
+  const today = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const { count, error } = await supabase
+    .from('jobs')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .is('google_event_id', null)
+    .not('job_date', 'is', null)
+    .is('job_time', null)
+    .gte('job_date', today)
+    .not('status', 'in', '(cancelled,pre_reserved)');
+  if (error) throw error;
+  return count ?? 0;
+};
+
+const inspectGoogleCalendarConnection = async (supabase: SupabaseClient, userId: string) => {
+  const auth = await getGoogleAuth(supabase, userId);
+  if (!auth) return { connected: false, healthy: false, reconnect_required: false };
+
+  try {
+    const oauth = google.oauth2({ version: 'v2', auth });
+    const { data } = await oauth.userinfo.get();
+    return {
+      connected: true,
+      healthy: true,
+      reconnect_required: false,
+      account_email: data.email || null,
+      calendar_name: data.name || null,
+    };
+  } catch {
+    try {
+      // Compatibilidade com conexões antigas, criadas antes de pedirmos o
+      // escopo básico de e-mail: nelas, o calendário primário identifica a conta.
+      const calendar = google.calendar({ version: 'v3', auth });
+      const { data } = await calendar.calendarList.get({ calendarId: 'primary' });
+      return {
+        connected: true,
+        healthy: true,
+        reconnect_required: false,
+        account_email: data.id || null,
+        calendar_name: data.summary || null,
+      };
+    } catch (error: any) {
+      console.warn('[google-auth] A conexão salva precisa ser refeita:', error?.message || 'falha ao validar calendário');
+      return { connected: true, healthy: false, reconnect_required: true };
     }
   }
 };
 
-const syncJobToGoogleCalendar = async (supabase: SupabaseClient, jobId: number, userId: string) => {
+const isGoogleEventGone = (error: any) => (
+  [404, 410].includes(Number(error?.code))
+  || [404, 410].includes(Number(error?.response?.status))
+);
+
+const isGoogleEventMissing = (error: any) => (
+  isGoogleEventGone(error)
+  || String(error?.message || '').includes('Event type cannot be changed')
+);
+
+const isGoogleEventConflict = (error: any) => error?.code === 409 || error?.response?.status === 409;
+
+const deterministicGoogleEventId = (userId: string, jobId: number) => (
+  `crmtrilha${crypto.createHash('sha256').update(`${userId}:${jobId}`).digest('hex').slice(0, 40)}`
+);
+
+type CalendarDeleteStatus = 'deleted' | 'already_missing' | 'not_connected' | 'failed';
+type CalendarDeleteResult = {
+  deleted: boolean;
+  status: CalendarDeleteStatus;
+  retryable: boolean;
+};
+
+const persistGoogleEventId = async (
+  supabase: SupabaseClient,
+  userId: string,
+  jobId: number,
+  eventId: string,
+) => {
+  const { error } = await supabase
+    .from('jobs')
+    .update({ google_event_id: eventId })
+    .eq('id', jobId)
+    .eq('user_id', userId);
+  if (error) throw new Error(`Falha ao vincular o evento Google ao ensaio: ${error.message}`);
+};
+
+const deleteGoogleCalendarEvent = async (
+  supabase: SupabaseClient,
+  eventId: string,
+  userId: string,
+): Promise<CalendarDeleteResult> => {
   const auth = await getGoogleAuth(supabase, userId);
-  if (!auth) return;
+  if (!auth) return { deleted: false, status: 'not_connected', retryable: true };
+
+  const calendar = google.calendar({ version: 'v3', auth });
+  try {
+    await calendar.events.delete({ calendarId: 'primary', eventId, sendUpdates: 'all' });
+    return { deleted: true, status: 'deleted', retryable: false };
+  } catch (error: any) {
+    if (isGoogleEventGone(error)) {
+      return { deleted: true, status: 'already_missing', retryable: false };
+    }
+    console.error('Error deleting Google Calendar event:', error);
+    return { deleted: false, status: 'failed', retryable: true };
+  }
+};
+
+const calendarDeleteRetryPayload = (result: CalendarDeleteResult) => ({
+  error: 'google_calendar_delete_pending',
+  message: result.status === 'not_connected'
+    ? 'Reconecte o Google Agenda antes de cancelar ou excluir este ensaio.'
+    : 'O Google Agenda não confirmou a remoção. Nada foi apagado no aplicativo; tente novamente.',
+  calendar_delete_status: result.status,
+  retryable: result.retryable,
+});
+
+const googleCalendarEventGateway = (calendar: any) => ({
+  get: async (eventId: string) => {
+    const response = await calendar.events.get({ calendarId: 'primary', eventId });
+    return response.data;
+  },
+  insert: async (eventId: string, event: CalendarEventPayload) => {
+    const response = await calendar.events.insert({
+      calendarId: 'primary',
+      requestBody: { ...event, id: eventId },
+      sendUpdates: 'all',
+    });
+    return response.data.id || eventId;
+  },
+  patch: async (eventId: string, event: CalendarEventPayload) => {
+    await calendar.events.patch({
+      calendarId: 'primary',
+      eventId,
+      requestBody: event,
+      sendUpdates: 'all',
+    });
+  },
+  isConflict: (error: unknown) => isGoogleEventConflict(error),
+  isMissing: (error: unknown) => isGoogleEventMissing(error),
+});
+
+const syncJobToGoogleCalendar = async (
+  supabase: SupabaseClient,
+  jobId: number,
+  userId: string,
+): Promise<CalendarSyncStatus> => {
+  const auth = await getGoogleAuth(supabase, userId);
+  if (!auth) return 'not_connected';
 
   const { data: job } = await supabase
     .from('jobs')
@@ -932,76 +1134,94 @@ const syncJobToGoogleCalendar = async (supabase: SupabaseClient, jobId: number, 
     .eq('user_id', userId)
     .single();
 
-  if (!job || !job.job_date) return;
+  if (!job || !job.job_date) return 'skipped';
 
   if (job.status === 'cancelled' && job.google_event_id) {
-    await deleteGoogleCalendarEvent(supabase, job.google_event_id, userId);
-    await supabase.from('jobs').update({ google_event_id: null }).eq('id', jobId);
-    return;
+    const deletion = await deleteGoogleCalendarEvent(supabase, job.google_event_id, userId);
+    if (!deletion.deleted) return 'failed';
+    const { error } = await supabase
+      .from('jobs')
+      .update({ google_event_id: null })
+      .eq('id', jobId)
+      .eq('user_id', userId);
+    if (error) return 'failed';
+    return 'synced';
   }
 
-  if (job.status === 'cancelled') return;
+  if (job.status === 'cancelled') return 'skipped';
 
   const calendar = google.calendar({ version: 'v3', auth });
   const client = job.clients as any;
-
-  // CRÍTICO: NÃO usar new Date(...).toISOString() aqui — o Render roda em UTC,
-  // e Date("YYYY-MM-DDTHH:MM:SS") sem timezone é interpretado como UTC local.
-  // Resultado: 09:00 BRT virava 09:00 UTC = 06:00 BRT (3h mais cedo no Calendar).
-  // Solução: passar a string YYYY-MM-DDTHH:MM:SS DIRETO + timeZone — o Google
-  // interpreta o horário na timezone informada.
-  const startTime = job.job_time || '09:00';
-  const startDateTime = `${job.job_date}T${startTime}:00`;
-
-  let endDateTime: string;
-  if (job.job_end_time) {
-    endDateTime = `${job.job_date}T${job.job_end_time}:00`;
-  } else {
-    // +1 hora sem conversão de timezone — parse manual da string HH:MM
-    const [hh, mm] = startTime.split(':').map(Number);
-    let endH = hh + 1;
-    let endM = mm;
-    if (endH >= 24) { endH = 23; endM = 59; }
-    endDateTime = `${job.job_date}T${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}:00`;
-  }
-
-  const summary = client?.name
-    ? `${client.name} - ${job.job_type}`
-    : (job.job_name || job.job_type);
-
-  const event = {
-    summary,
-    description: job.notes || (client?.name ? `Ensaio ${job.job_type} para ${client.name}` : job.job_type),
-    start: { dateTime: startDateTime, timeZone: 'America/Sao_Paulo' },
-    end: { dateTime: endDateTime, timeZone: 'America/Sao_Paulo' },
-    attendees: client?.email ? [{ email: client.email }] : [],
-  };
+  const event = buildCalendarEventPayload(job, client);
+  if (!event) return 'skipped';
 
   // sendUpdates:'all' faz o Google ENVIAR o convite/atualização por e-mail pro
-  // cliente (attendee). Sem isso, o attendee é adicionado mas ninguém recebe nada.
+  // cliente apenas quando o GET acima apontar divergência ou houver criação.
   try {
-    if (job.google_event_id) {
-      try {
-        await calendar.events.patch({ calendarId: 'primary', eventId: job.google_event_id, requestBody: event, sendUpdates: 'all' });
-      } catch (patchError: any) {
-        if (patchError.message?.includes('Event type cannot be changed') || patchError.code === 404) {
-          const res = await calendar.events.insert({ calendarId: 'primary', requestBody: event, sendUpdates: 'all' });
-          if (res.data.id) {
-            await supabase.from('jobs').update({ google_event_id: res.data.id }).eq('id', jobId);
-          }
-        } else {
-          throw patchError;
-        }
-      }
-    } else {
-      const res = await calendar.events.insert({ calendarId: 'primary', requestBody: event, sendUpdates: 'all' });
-      if (res.data.id) {
-        await supabase.from('jobs').update({ google_event_id: res.data.id }).eq('id', jobId);
-      }
+    const ensured = await ensureCalendarEvent(
+      job.google_event_id || null,
+      deterministicGoogleEventId(userId, jobId),
+      event,
+      googleCalendarEventGateway(calendar),
+    );
+    if (ensured.eventId !== job.google_event_id) {
+      await persistGoogleEventId(supabase, userId, jobId, ensured.eventId);
     }
+    return ensured.status;
   } catch (error) {
     console.error('Error syncing to Google Calendar:', error);
+    return 'failed';
   }
+};
+
+const syncConvertedJobCalendar = (
+  supabase: SupabaseClient,
+  jobId: number | null,
+  userId: string,
+) => syncConversionCalendarJob(jobId, {
+  syncJob: (targetJobId) => syncJobToGoogleCalendar(supabase, targetJobId, userId),
+  loadJob: async (targetJobId) => {
+    const { data, error } = await supabase
+      .from('jobs')
+      .select('google_event_id, clients(email)')
+      .eq('id', targetJobId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) throw error;
+    return data;
+  },
+  reportError: (message, error) => console.error(`[convert] ${message}`, error),
+});
+
+const persistExistingClientInviteEmail = async (
+  supabase: SupabaseClient,
+  userId: string,
+  update: ExistingClientInviteEmailUpdate | null,
+): Promise<string | null> => {
+  if (!update) return null;
+  const { data, error } = await supabase
+    .from('clients')
+    .update({ email: update.email })
+    .eq('id', update.clientId)
+    .eq('user_id', userId)
+    .select('id')
+    .maybeSingle();
+  if (error) return error.message;
+  return data ? null : 'Cliente não encontrado nesta conta.';
+};
+
+const validateTenantClient = async (
+  supabase: SupabaseClient,
+  userId: string,
+  clientId: number,
+): Promise<{ valid: boolean; error: string | null }> => {
+  const { data, error } = await supabase
+    .from('clients')
+    .select('id')
+    .eq('id', clientId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  return { valid: Boolean(data), error: error?.message || null };
 };
 
 // Extrai dígitos do telefone, retorna últimos 10-11 chars (ignora DDI)
@@ -3903,6 +4123,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // ============ GOOGLE AUTH ROUTES ============
+  const canManageGoogleCalendarConnection = (req: any) => (
+    !req.isMember
+    && !req.isImpersonating
+    && (!req.realUserId || req.realUserId === req.userId)
+  );
+
   app.get('/api/auth/google/config-check', (req, res) => {
     const clientId = cleanCredential(process.env.GOOGLE_CLIENT_ID) || '';
     res.json({
@@ -3921,8 +4147,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // PESSOAL do funcionário por cima da conexão do estúdio — a agenda do dono
     // passaria a empurrar ensaios pro calendário particular do funcionário.
     // É exatamente o "conectar numa conta desconecta a outra". Só o dono conecta.
-    if ((req as any).isMember && !(req as any).isPlatformAdmin) {
-      return res.status(403).json({ error: 'Só o dono da conta pode conectar o Google Calendar.' });
+    if (!canManageGoogleCalendarConnection(req)) {
+      return res.status(403).json({ error: 'Somente o dono real da conta pode conectar o Google Calendar. Saia do modo de visualização administrativa.' });
     }
     const redirectUri = getRedirectUri(req);
     const client = getOAuth2Client(redirectUri);
@@ -3930,7 +4156,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const url = client.generateAuthUrl({
       access_type: 'offline',
-      scope: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar.readonly'],
+      scope: ['openid', 'email', 'https://www.googleapis.com/auth/calendar.events'],
       prompt: 'consent',
       redirect_uri: redirectUri,
       // state assinado (userId.exp.hmac) em vez do userId cru — ver helpers
@@ -3956,19 +4182,30 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     try {
       const client = getOAuth2Client(redirectUri);
+      if (process.env.NODE_ENV === 'production' && !isEncryptionConfigured()) {
+        console.error('[google-auth] CRÍTICO: WA_TOKEN_ENCRYPTION_KEY ausente — recusando salvar token Google em plaintext.');
+        return res.status(503).send('Proteção de credenciais indisponível. Tente novamente mais tarde.');
+      }
       const { tokens } = await client.getToken({ code: code as string, redirect_uri: redirectUri });
+      if (!tokens.access_token) {
+        return res.status(502).send('O Google não retornou uma credencial de acesso. Tente conectar novamente.');
+      }
 
       // Usa supabaseAdmin (service_role) pra bypassar RLS — callback é anônimo.
-      // delete+insert garante 1 linha por conta SEM depender da constraint da
-      // migration 061 (que pode ainda não ter rodado) nem do comportamento de
-      // conflito do upsert. Idempotente: reconectar substitui a conexão.
-      await supabaseAdmin.from('google_auth').delete().eq('user_id', userId);
-      const { error: upsertError } = await supabaseAdmin.from('google_auth').insert({
+      // A migration 061 garante user_id único e a 062 gera o id. O upsert evita
+      // apagar uma conexão válida antes de sabermos se a nova pôde ser salva.
+      const { data: currentAuth } = await supabaseAdmin
+        .from('google_auth')
+        .select('refresh_token')
+        .eq('user_id', userId)
+        .maybeSingle();
+      const refreshToken = tokens.refresh_token || decryptIfNeeded(currentAuth?.refresh_token || '') || '';
+      const { error: upsertError } = await supabaseAdmin.from('google_auth').upsert({
         user_id: userId,
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
+        access_token: encryptIfNeeded(tokens.access_token),
+        refresh_token: encryptIfNeeded(refreshToken),
         expiry_date: tokens.expiry_date
-      });
+      }, { onConflict: 'user_id' });
       if (upsertError) {
         console.error('[google-auth] Erro ao salvar token:', upsertError);
         return res.status(500).send('Erro ao salvar credenciais Google.');
@@ -3993,13 +4230,22 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.get('/api/auth/google/status', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    // count em vez de .single(): defensivo contra 2+ linhas (antes da UNIQUE da
-    // 061), que fariam o .single() errar e mostrar "Desconectado" com token salvo.
-    const { count } = await supabase
-      .from('google_auth')
-      .select('user_id', { count: 'exact', head: true })
-      .eq('user_id', userId);
-    res.json({ connected: (count ?? 0) > 0 });
+    const [connection, pendingInvites, pendingMissingTime] = await Promise.all([
+      inspectGoogleCalendarConnection(supabase, userId),
+      pendingGoogleCalendarInviteCount(supabase, userId).catch((error: any) => {
+        console.warn('[google-calendar] Falha ao contar ensaios pendentes:', error?.message || error);
+        return null;
+      }),
+      missingGoogleCalendarTimeCount(supabase, userId).catch((error: any) => {
+        console.warn('[google-calendar] Falha ao contar ensaios sem horário:', error?.message || error);
+        return null;
+      }),
+    ]);
+    res.json({
+      ...connection,
+      pending_invites: pendingInvites,
+      pending_missing_time: pendingMissingTime,
+    });
   });
 
   app.post('/api/auth/google/disconnect', requireAuth, async (req, res) => {
@@ -4009,8 +4255,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // qualquer funcionário conseguia apagar a conexão Google da conta INTEIRA
     // (as telas /settings e /configuracoes/integracoes/calendar nem eram
     // bloqueadas por URL). Provável causa do sumiço da conexão da Pitori.
-    if ((req as any).isMember && !(req as any).isPlatformAdmin) {
-      return res.status(403).json({ error: 'Só o dono da conta pode desconectar o Google Calendar.' });
+    if (!canManageGoogleCalendarConnection(req)) {
+      return res.status(403).json({ error: 'Somente o dono real da conta pode desconectar o Google Calendar.' });
     }
     // Rastro de QUEM desconectou — a ausência disso impediu a perícia de 07/2026.
     await logAdminAction(
@@ -4020,6 +4266,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       { isMember: !!(req as any).isMember, isImpersonating: !!(req as any).isImpersonating },
       req.ip ?? null,
     );
+    await revokeGoogleAuthCredentials(await getGoogleAuth(supabase, userId));
     await supabase.from('google_auth').delete().eq('user_id', userId);
     res.json({ success: true });
   });
@@ -4027,6 +4274,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.post('/api/auth/google/sync-all', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
+    if (!canManageGoogleCalendarConnection(req)) {
+      return res.status(403).json({ error: 'Somente o dono real da conta pode sincronizar ensaios antigos.' });
+    }
     const auth = await getGoogleAuth(supabase, userId);
     if (!auth) return res.status(401).json({ error: 'Google account not connected' });
 
@@ -4046,19 +4296,31 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const PUSH_BATCH = 25;
       const { data: pendentes } = await supabase
         .from('jobs')
-        .select('id')
+        .select('id, job_time')
         .eq('user_id', userId)
         .is('google_event_id', null)
         .not('job_date', 'is', null)
+        .not('job_time', 'is', null)
         .gte('job_date', today)
         .not('status', 'in', '(cancelled,pre_reserved)')
         .order('job_date', { ascending: true })
-        .limit(PUSH_BATCH + 1);
-      const allPending = (pendentes || []).map((j: any) => j.id);
-      const ids = allPending.slice(0, PUSH_BATCH);
-      const remaining = Math.max(0, allPending.length - ids.length);
+        .limit(PUSH_BATCH);
+      const invalidSelectedTimes = (pendentes || [])
+        .filter((job: any) => !normalizeCalendarClockTime(job.job_time))
+        .length;
+      const ids = (pendentes || [])
+        .filter((job: any) => normalizeCalendarClockTime(job.job_time))
+        .map((job: any) => job.id);
+      const syncCounts: Record<CalendarSyncStatus, number> = {
+        synced: 0,
+        already_synced: 0,
+        not_connected: 0,
+        skipped: 0,
+        failed: 0,
+      };
       for (const id of ids) {
-        await syncJobToGoogleCalendar(supabase, id, userId);
+        const status = await syncJobToGoogleCalendar(supabase, id, userId);
+        syncCounts[status] += 1;
       }
       // Conta o que REALMENTE entrou no Google (o sync engole erro por design)
       let pushed = 0;
@@ -4070,8 +4332,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           .not('google_event_id', 'is', null);
         pushed = ok?.length || 0;
       }
+      const [remaining, skippedMissingTime] = await Promise.all([
+        pendingGoogleCalendarInviteCount(supabase, userId),
+        missingGoogleCalendarTimeCount(supabase, userId),
+      ]);
       const pullResult = await pullFromGoogleCalendar(supabase, userId);
-      res.json({ success: true, pushed, remaining, ...pullResult });
+      res.json({
+        success: true,
+        pushed,
+        remaining,
+        skipped_missing_time: skippedMissingTime + invalidSelectedTimes,
+        skipped: syncCounts.skipped + invalidSelectedTimes,
+        failed: syncCounts.failed,
+        already_synced: syncCounts.already_synced,
+        ...pullResult,
+      });
     } catch (error) {
       console.error('Error syncing all jobs:', error);
       res.status(500).json({ error: 'Internal server error' });
@@ -4333,9 +4608,28 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     if (!existing) return res.status(404).json({ error: 'Client not found' });
 
-    await supabase.from('opportunities').delete().eq('client_id', req.params.id);
-    await supabase.from('jobs').delete().eq('client_id', req.params.id);
-    await supabase.from('clients').delete().eq('id', req.params.id);
+    // A exclusão em cascata antiga apagava jobs locais sem tentar remover os
+    // eventos externos. Obriga passar pela exclusão individual do ensaio,
+    // que confirma o Google antes de remover qualquer registro do CRM.
+    const { data: calendarLinkedJobs, error: linkedJobsError } = await supabase
+      .from('jobs')
+      .select('id')
+      .eq('client_id', req.params.id)
+      .eq('user_id', userId)
+      .not('google_event_id', 'is', null)
+      .limit(1);
+    if (linkedJobsError) return res.status(500).json({ error: linkedJobsError.message });
+    if (calendarLinkedJobs?.length) {
+      return res.status(409).json({
+        error: 'calendar_linked_jobs_exist',
+        message: 'Exclua primeiro os ensaios deste cliente para confirmar a remoção no Google Agenda.',
+        retryable: true,
+      });
+    }
+
+    await supabase.from('opportunities').delete().eq('client_id', req.params.id).eq('user_id', userId);
+    await supabase.from('jobs').delete().eq('client_id', req.params.id).eq('user_id', userId);
+    await supabase.from('clients').delete().eq('id', req.params.id).eq('user_id', userId);
     res.json({ success: true });
   });
 
@@ -4412,6 +4706,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const { client_id, job_type, job_date, job_time, job_end_time, job_name, amount, payment_method, payment_status, status, notes } = req.body;
 
+    if (job_date && !hasValidCalendarStart(job_date, job_time)) {
+      return res.status(400).json({
+        error: 'job_time_required',
+        message: 'Informe um horário de início válido (HH:MM) para agendar o ensaio.',
+      });
+    }
+
     // Sanitize amount — empty string from form becomes 0
     const amountNum = (amount === '' || amount == null) ? 0 : Number(amount);
 
@@ -4442,9 +4743,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (client_id) {
       await generateOpportunities(supabase, client_id, job_type, job_date, userId, data.id);
     }
-    syncJobToGoogleCalendar(supabase, data.id, userId);
+    const calendarSyncStatus = await syncJobToGoogleCalendar(supabase, data.id, userId);
 
-    res.json({ id: data.id });
+    res.json({ id: data.id, calendar_sync_status: calendarSyncStatus });
   });
 
   // ============ PRÉ-RESERVA DE DATA (extensão) ============
@@ -4661,6 +4962,29 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     if (!oldJob) return res.status(404).json({ error: 'Job not found' });
 
+    const scheduleChanged = job_date !== undefined || job_time !== undefined;
+    const effectiveJobDate = job_date !== undefined ? job_date : oldJob.job_date;
+    const effectiveJobTime = job_time !== undefined ? job_time : oldJob.job_time;
+    if (status !== 'cancelled' && scheduleChanged && effectiveJobDate
+      && !hasValidCalendarStart(effectiveJobDate, effectiveJobTime)) {
+      return res.status(400).json({
+        error: 'job_time_required',
+        message: 'Informe um horário de início válido (HH:MM) para agendar o ensaio.',
+      });
+    }
+
+    let cancellationDeletion: CalendarDeleteResult | null = null;
+    if (status === 'cancelled' && oldJob.google_event_id) {
+      cancellationDeletion = await deleteGoogleCalendarEvent(
+        supabase,
+        oldJob.google_event_id,
+        userId,
+      );
+      if (!cancellationDeletion.deleted) {
+        return res.status(502).json(calendarDeleteRetryPayload(cancellationDeletion));
+      }
+    }
+
     // Only include fields that were explicitly sent — avoids wiping fields on partial updates (e.g. moving stages)
     const updatePayload: any = {};
     if (client_id !== undefined) updatePayload.client_id = client_id || null;
@@ -4685,8 +5009,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (position !== undefined) updatePayload.position = Number(position) || 0;
     if (cover_image_url !== undefined) updatePayload.cover_image_url = cover_image_url || null;
     if (labels !== undefined) updatePayload.labels = Array.isArray(labels) ? labels : null;
+    if (cancellationDeletion?.deleted) updatePayload.google_event_id = null;
 
-    await supabase.from('jobs').update(updatePayload).eq('id', req.params.id).eq('user_id', userId);
+    const { error: updateJobError } = await supabase
+      .from('jobs')
+      .update(updatePayload)
+      .eq('id', req.params.id)
+      .eq('user_id', userId);
+    if (updateJobError) {
+      return res.status(500).json({ error: updateJobError.message, retryable: true });
+    }
 
     // Track stage history when production_stage changes
     if (production_stage !== undefined && production_stage !== oldJob.production_stage) {
@@ -4751,8 +5083,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
     }
 
-    syncJobToGoogleCalendar(supabase, jobId, userId);
-    res.json({ success: true });
+    const calendarSyncStatus = status === 'cancelled'
+      ? (cancellationDeletion ? 'synced' : 'skipped')
+      : await syncJobToGoogleCalendar(supabase, jobId, userId);
+    res.json({ success: true, calendar_sync_status: calendarSyncStatus });
   });
 
   // Reordenar jobs em uma etapa. Body: { stage_id, job_ids: [in order] }
@@ -4858,11 +5192,24 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       if (!job) return res.status(404).json({ error: 'Job not found' });
 
       if (job.google_event_id) {
-        await deleteGoogleCalendarEvent(supabase, job.google_event_id, userId);
+        const deletion = await deleteGoogleCalendarEvent(supabase, job.google_event_id, userId);
+        if (!deletion.deleted) {
+          return res.status(502).json(calendarDeleteRetryPayload(deletion));
+        }
       }
 
-      await supabase.from('opportunities').delete().eq('trigger_job_id', req.params.id);
-      await supabase.from('jobs').delete().eq('id', req.params.id);
+      await supabase.from('opportunities').delete().eq('trigger_job_id', req.params.id).eq('user_id', userId);
+      const { error: deleteJobError } = await supabase
+        .from('jobs')
+        .delete()
+        .eq('id', req.params.id)
+        .eq('user_id', userId);
+      if (deleteJobError) {
+        return res.status(500).json({
+          error: `Falha ao excluir o ensaio: ${deleteJobError.message}`,
+          retryable: true,
+        });
+      }
       await logActivity(req, {
         action: 'job_delete',
         entityType: 'job',
@@ -14712,7 +15059,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const { client_id, title, value, stage, priority, expected_close_date, next_follow_up, notes, assigned_to, contact_name, contact_phone, contact_email, lead_source, campaign_id } = req.body;
     const nowIso = new Date().toISOString();
     const stageId = stageIdOrDefault(stages, stage);
-    const stageName = stages.find((s) => s.id === stageId)?.name || stageId;
+    const targetStage = stages.find((s) => s.id === stageId);
+    const stageName = targetStage?.name || stageId;
+    if (requiresConversionToEnterWonStage(Boolean(targetStage?.is_won), false, null)) {
+      return res.status(409).json({
+        error: 'conversion_required',
+        message: 'Crie o negócio em uma etapa aberta e use “Fechar venda” para informar cliente, data e horário.',
+      });
+    }
 
     // DEDUP: telefone já tem um lead aberto? Vincula a ele em vez de criar
     // outro card (mata a duplicação na raiz, independente do cliente).
@@ -14800,6 +15154,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     // Stage solicitado (drag direto pra coluna específica) > primeira stage
     const targetStage = (requestedStage && stages.find((s) => s.id === requestedStage)) || firstStage;
+    if (requiresConversionToEnterWonStage(Boolean(targetStage.is_won), false, null)) {
+      return res.status(409).json({
+        error: 'conversion_required',
+        message: 'Crie o negócio em uma etapa aberta e use “Fechar venda” para informar cliente, data e horário.',
+      });
+    }
 
     // DEDUP: telefone já tem um lead aberto? Vincula em vez de criar outro card.
     // 14+ dígitos = LID do WhatsApp/lixo, não telefone (mesma guarda da rota acima).
@@ -15134,6 +15494,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (stageChanged) {
       const stages = await ensurePipelineStages(supabase, userId);
       const newStage = stages.find((s) => s.id === updates.stage);
+      if (requiresConversionToEnterWonStage(
+        Boolean(newStage?.is_won),
+        Boolean(existing.converted),
+        existing.converted_job_id,
+      )) {
+        return res.status(409).json({
+          error: 'conversion_required',
+          message: 'Para marcar como ganho, conclua o fechamento com cliente, data e horário do ensaio.',
+        });
+      }
       if ((existing.converted || existing.converted_job_id) && !newStage?.is_won) {
         return res.status(409).json({
           error: 'converted_deal_cannot_move',
@@ -15145,12 +15515,6 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       updates.stage_entered_at = nowIso;
       updates.current_stage_entered_at = nowIso;
       updates.stage_history = appendStageHistory(existing.stage_history, updates.stage, stageName, nowIso);
-      // Ganho por ARRASTO (sem passar pela conversão): grava a data da venda
-      // pra aparecer no relatório de vendas por vendedor. Respeita converted_at
-      // que já venha no body ou que já exista.
-      if (newStage?.is_won && !(existing as any).converted_at && updates.converted_at === undefined) {
-        updates.converted_at = nowIso;
-      }
       await recordStageEvent(
         supabase, userId, dealId,
         existing.stage, updates.stage,
@@ -15361,7 +15725,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // ficavam sem is_won → o negócio ia pra uma etapa 'won' órfã e sumia).
     stages = await ensureWonLostStages(supabase, userId, stages);
     const wonStage = stages.find((s) => s.is_won) || DEFAULT_STAGES.find((s) => s.is_won);
-    const { createClient, createJob, client, job, sinalAmount, existingClientId, existingJobId, converted_at, campaign_id } = req.body;
+    const {
+      createClient,
+      createJob,
+      client,
+      job,
+      sinalAmount,
+      existingClientId,
+      existingJobId,
+      converted_at,
+      campaign_id,
+      inviteEmail,
+    } = req.body;
     const nowIso = new Date().toISOString();
     // Data da venda retroativa: aceita 'YYYY-MM-DD' (ou ISO) e usa como
     // converted_at do deal. Inválida ou no futuro → agora. O meio-dia evita
@@ -15385,9 +15760,79 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (existingConversion?.status) {
       return res.status(existingConversion.status).json({ error: existingConversion.error });
     }
-    if (existingConversion) return res.json(existingConversion);
 
-    let clientId = (existingClientId as number | null) || (deal.client_id as number | null);
+    let clientId = existingConversion
+      ? (existingConversion.client_id as number | null)
+      : ((existingClientId as number | null) || (deal.client_id as number | null));
+    if (!existingConversion && !createClient && !clientId) {
+      return res.status(400).json({
+        error: 'client_required',
+        message: 'Selecione um cliente existente ou cadastre um novo antes de fechar a venda.',
+      });
+    }
+    if (clientId && !(createClient && !existingConversion)) {
+      const normalizedClientId = Number(clientId);
+      if (!Number.isInteger(normalizedClientId) || normalizedClientId <= 0) {
+        return res.status(400).json({ error: 'invalid_client', message: 'Cliente selecionado inválido.' });
+      }
+      const clientValidation = await validateTenantClient(supabase, userId, normalizedClientId);
+      if (clientValidation.error) {
+        return res.status(500).json({ error: `Falha ao validar o cliente: ${clientValidation.error}` });
+      }
+      if (!clientValidation.valid) {
+        return res.status(404).json({
+          error: 'client_not_found',
+          message: 'O cliente selecionado não pertence a esta conta.',
+        });
+      }
+      clientId = normalizedClientId;
+    }
+    let existingClientEmailUpdate: ExistingClientInviteEmailUpdate | null;
+    let newClientInviteEmail: string | null = null;
+    try {
+      if (createClient && !existingConversion) {
+        const submittedEmail = client?.email !== undefined ? client.email : deal.contact_email;
+        newClientInviteEmail = normalizeInviteEmail(submittedEmail);
+      }
+      existingClientEmailUpdate = inviteEmailUpdateForExistingClient(
+        Boolean(createClient && !existingConversion),
+        clientId,
+        inviteEmail,
+      );
+    } catch (error) {
+      if (error instanceof InviteEmailValidationError) {
+        return res.status(400).json({ error: 'invalid_invite_email', message: error.message });
+      }
+      throw error;
+    }
+
+    if (existingConversion) {
+      const inviteEmailError = await persistExistingClientInviteEmail(
+        supabase,
+        userId,
+        existingClientEmailUpdate,
+      );
+      if (inviteEmailError) {
+        return res.status(500).json({ error: `Falha ao atualizar o e-mail do cliente: ${inviteEmailError}` });
+      }
+      const calendarResult = await syncConvertedJobCalendar(
+        supabase,
+        existingConversion.job_id,
+        userId,
+      );
+      return res.json({ ...existingConversion, ...calendarResult });
+    }
+
+    if (createJob) {
+      try {
+        Object.assign(job || {}, normalizeRequiredJobSchedule(job));
+      } catch (error) {
+        if (error instanceof JobScheduleValidationError) {
+          return res.status(400).json({ error: 'invalid_job_schedule', message: error.message });
+        }
+        throw error;
+      }
+    }
 
     if (createClient) {
       const c = client || {};
@@ -15397,7 +15842,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const clientPayload = {
         name: c.name || deal.title,
         phone: c.phone || deal.contact_phone || null,
-        email: c.email || deal.contact_email || null,
+        email: newClientInviteEmail,
         cpf: c.document || c.cpf || null,
         birth_date: c.birth_date || null,
         address: c.address || null,
@@ -15490,6 +15935,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
     }
 
+    const inviteEmailError = await persistExistingClientInviteEmail(
+      supabase,
+      userId,
+      existingClientEmailUpdate,
+    );
+    if (inviteEmailError) {
+      return res.status(500).json({ error: `Falha ao atualizar o e-mail do cliente: ${inviteEmailError}` });
+    }
+
     let jobId: number | null = reusableJob?.id || null;
     let jobResolution: 'reused' | 'linked' | 'pre_reserved' | 'created' | null = reusableJob
       ? (reusableJob.deal_id ? 'linked' : 'reused')
@@ -15506,16 +15960,6 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
 
     if (!reusableJob && createJob && job) {
-      // Guardas com mensagem CLARA — sem isso a falha do insert no Supabase
-      // voltava enigmática e o usuário só via "não converteu".
-      const jobDate = String(job.job_date || '').slice(0, 10);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(jobDate)) {
-        return res.status(400).json({ error: 'Data do ensaio inválida — selecione a data no calendário.' });
-      }
-      job.job_date = jobDate;
-      if (!String(job.job_type || '').trim()) {
-        return res.status(400).json({ error: 'Tipo de ensaio é obrigatório.' });
-      }
       // Determina a etapa de entrada da produção: primeira etapa do primeiro
       // processo não-especial (tipicamente "Ensaios Vendidos" → "Vendido").
       // Se a config não existir, o job nasce fora da produção (production_stage null).
@@ -15629,7 +16073,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         payment_method: job?.payment_method || 'Pix',
       }).select();
     }
-    if (jobId && !reusedExistingJob) syncJobToGoogleCalendar(supabase, jobId, userId);
+    const calendarResult = await syncConvertedJobCalendar(supabase, jobId, userId);
 
     if (jobId) {
       await logActivity(req, {
@@ -15673,20 +16117,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     generateAlignmentDossier(userId, Number(req.params.id)).catch((e: any) =>
       console.warn('[dossie] geração no convert falhou:', e?.message || e));
 
-    // Se criou ensaio mas o Google Calendar não está conectado, o push acima
-    // vira no-op SILENCIOSO — a venda ia só pra agenda do sistema e o usuário
-    // achava que tinha ido pro Google. O front usa esse flag pra avisar na hora.
-    let googleCalendarConnected: boolean | null = null;
-    if (jobId && !reusedExistingJob) {
-      const { data: ga } = await supabase
-        .from('google_auth')
-        .select('user_id')
-        .eq('user_id', userId)
-        .maybeSingle();
-      googleCalendarConnected = !!ga;
-    }
-
-    res.json({ success: true, client_id: clientId, job_id: jobId, google_calendar_connected: googleCalendarConnected });
+    res.json({
+      success: true,
+      client_id: clientId,
+      job_id: jobId,
+      ...calendarResult,
+    });
     } finally {
       releaseConversionLock();
     }
@@ -17009,10 +17445,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         .maybeSingle();
 
       if (job?.google_event_id) {
-        try {
-          await deleteGoogleCalendarEvent(supabase, job.google_event_id, userId);
-        } catch (e: any) {
-          console.warn('[cancel-sale] falha apagando evento do Calendar:', e?.message);
+        const deletion = await deleteGoogleCalendarEvent(supabase, job.google_event_id, userId);
+        if (!deletion.deleted) {
+          console.warn('[cancel-sale] remoção do Calendar pendente:', deletion.status);
+          return res.status(502).json(calendarDeleteRetryPayload(deletion));
         }
       }
 
@@ -17331,6 +17767,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('user_id', userId)
       .single();
     if (!deal) return res.status(404).json({ error: 'Deal não encontrado' });
+    if (requiresConversionToEnterWonStage(
+      Boolean(targetStage.is_won),
+      Boolean(deal.converted),
+      deal.converted_job_id,
+    )) {
+      return res.status(409).json({
+        error: 'conversion_required',
+        message: 'Para marcar como ganho, conclua o fechamento com cliente, data e horário do ensaio.',
+      });
+    }
     if ((deal.converted || deal.converted_job_id) && !targetStage.is_won) {
       return res.status(409).json({
         error: 'converted_deal_cannot_move',

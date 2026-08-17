@@ -20,12 +20,15 @@ import { BulkFollowupModal } from './BulkFollowupModal';
 import { WhatsAppConnectionModal } from './WhatsAppConnectionModal';
 import { NewConversationModal } from './NewConversationModal';
 import { WhatsAppTemplatesManager } from '../../../components/settings/WhatsAppTemplatesManager';
+import { DealConversionModal } from '../../../components/pipeline/DealConversionModal';
 import { supabase } from '../../../integrations/supabase/client';
-import { Deal, PipelineStage } from '../../../types';
+import { Client, Deal, PipelineStage } from '../../../types';
+import { celebrateSale } from '../../../utils/saleCelebration';
 
 interface Props {
   deals: Deal[];
   stages: PipelineStage[];
+  clients: Client[];
   initialPhone?: string;
   onDealUpdated: () => void;
   /** 'main' = WhatsApp de vendas (padrão) | 'posvenda' = página do 2º número */
@@ -61,7 +64,7 @@ function dateLabel(iso: string): string {
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
 }
 
-export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = 'main', onSlotChange }: Props) {
+export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated, slot = 'main', onSlotChange }: Props) {
   const { waTheme, toggleWaTheme } = useTheme();
   const { canAccess } = useAuth();
   // Página DEDICADA por número (equipes diferentes): /whatsapp = Vendas,
@@ -836,6 +839,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
                 phone={selectedPhone}
                 deals={deals}
                 stages={stages}
+                clients={clients}
                 onUpdate={onDealUpdated}
               />
             )}
@@ -1166,6 +1170,7 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
           about={infoData?.about || null}
           deals={deals}
           stages={stages}
+          clients={clients}
           onClose={() => setInfoOpen(false)}
           onDealUpdated={onDealUpdated}
         />
@@ -1223,13 +1228,14 @@ export function InboxView({ initialPhone, deals, stages, onDealUpdated, slot = '
 // Painel "Informações do contato" — o feijão com arroz EDITÁVEL sem sair do
 // chat: nome, e-mail, observações, etapa do funil e marcar como ganho.
 // Sem lead no funil, oferece "Adicionar ao funil".
-function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages, onClose, onDealUpdated }: {
+function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages, clients, onClose, onDealUpdated }: {
   phone: string;
   displayName: string;
   avatarUrl: string | null;
   about: string | null;
   deals: Deal[];
   stages: PipelineStage[];
+  clients: Client[];
   onClose: () => void;
   onDealUpdated: () => void;
 }) {
@@ -1239,10 +1245,12 @@ function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages,
   const [email, setEmail] = useState((deal as any)?.contact_email || '');
   const [notes, setNotes] = useState((deal as any)?.notes || '');
   const [stageId, setStageId] = useState((deal as any)?.stage || '');
-  const [busy, setBusy] = useState<false | 'save' | 'won' | 'add'>(false);
+  const [busy, setBusy] = useState<false | 'save' | 'add'>(false);
   const [saved, setSaved] = useState(false);
-  const wonStage = stages.find(s => (s as any).is_won);
-  const isWonNow = !!(stageId && wonStage && stageId === wonStage.id);
+  const [conversionDeal, setConversionDeal] = useState<Deal | null>(null);
+  const wonStage = stages.find(stage => stage.is_won);
+  const selectedStage = stages.find(stage => stage.id === stageId);
+  const isWonNow = !!selectedStage?.is_won;
 
   const authedFetch = async (url: string, init?: RequestInit) => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -1253,8 +1261,32 @@ function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages,
     });
   };
 
+  const openConversion = () => {
+    if (!deal || !wonStage) return;
+    setConversionDeal({
+      ...deal,
+      contact_name: nome.trim() || null,
+      contact_email: email.trim() || null,
+      notes,
+    });
+  };
+
+  const handleStageChange = (nextStageId: string) => {
+    const nextStage = stages.find(stage => stage.id === nextStageId);
+    if (nextStage?.is_won) {
+      openConversion();
+      return;
+    }
+    setStageId(nextStageId);
+  };
+
   const salvar = async () => {
     if (!deal) return;
+    const stageChanged = !!stageId && stageId !== deal.stage;
+    if (stageChanged && selectedStage?.is_won) {
+      openConversion();
+      return;
+    }
     setBusy('save');
     try {
       const body: any = { contact_name: nome.trim() || null, contact_email: email.trim() || null, notes };
@@ -1271,19 +1303,12 @@ function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages,
     }
   };
 
-  const marcarGanho = async () => {
-    if (!deal || !wonStage) return;
-    setBusy('won');
-    try {
-      const r = await authedFetch(`/api/deals/${(deal as any).id}`, { method: 'PUT', body: JSON.stringify({ stage: wonStage.id }) });
-      if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || 'Falha ao marcar ganho'); }
-      setStageId(wonStage.id);
-      onDealUpdated();
-    } catch (e: any) {
-      alert(e.message);
-    } finally {
-      setBusy(false);
-    }
+  const handleConverted = () => {
+    setConversionDeal(null);
+    if (wonStage) setStageId(wonStage.id);
+    celebrateSale();
+    onDealUpdated();
+    onClose();
   };
 
   const adicionarAoFunil = async () => {
@@ -1308,8 +1333,9 @@ function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages,
   const labelStyle = { color: 'var(--wa-text-muted)' } as React.CSSProperties;
 
   return (
-    <div className="fixed inset-0 z-[75] flex justify-end bg-black/40 backdrop-blur-sm" onClick={onClose}>
-      <div
+    <>
+      <div className="fixed inset-0 z-[75] flex justify-end bg-black/40 backdrop-blur-sm" onClick={onClose}>
+        <div
         className="w-full max-w-sm h-full flex flex-col shadow-2xl"
         style={{ background: 'var(--wa-bg-secondary)' }}
         onClick={(e) => e.stopPropagation()}
@@ -1341,7 +1367,7 @@ function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages,
                 <label className={labelCls} style={labelStyle}>Etapa do funil</label>
                 <select
                   value={stageId}
-                  onChange={(e) => setStageId(e.target.value)}
+                  onChange={(e) => handleStageChange(e.target.value)}
                   className={inputCls}
                   style={inputStyle}
                 >
@@ -1349,12 +1375,12 @@ function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages,
                 </select>
                 {wonStage && !isWonNow && (
                   <button
-                    onClick={marcarGanho}
+                    onClick={openConversion}
                     disabled={!!busy}
                     className="mt-2 w-full py-2.5 rounded-xl text-sm font-bold text-white transition-colors disabled:opacity-60"
                     style={{ background: 'var(--wa-accent-green)' }}
                   >
-                    {busy === 'won' ? 'Marcando…' : '🏆 Marcar como Ganho'}
+                    🏆 Marcar como Ganho
                   </button>
                 )}
                 {isWonNow && (
@@ -1410,8 +1436,18 @@ function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages,
             </div>
           )}
         </div>
+        </div>
       </div>
-    </div>
+      {conversionDeal && (
+        <DealConversionModal
+          deal={conversionDeal}
+          clients={clients}
+          preferredInviteEmail={email}
+          onClose={() => setConversionDeal(null)}
+          onConverted={handleConverted}
+        />
+      )}
+    </>
   );
 }
 

@@ -1,7 +1,7 @@
 import React, { Suspense, lazy, useEffect, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useApi, refreshApi } from "../utils/useApi";
-import { Deal, PipelineStage } from "../types";
+import { Client, Deal, PipelineStage } from "../types";
 
 // InboxView é o componente que já existia dentro de /vendas?tab=inbox.
 // Esta página dá uma rota dedicada (/whatsapp) pra ele rodar em tela cheia,
@@ -33,12 +33,15 @@ export default function WhatsappPage() {
   // então quem já abriu /vendas antes não paga nada aqui.
   const { data: dealsData, mutate: mutateDeals } = useApi<Deal[]>("/api/deals");
   const { data: stagesData } = useApi<PipelineStage[]>("/api/pipeline/stages");
+  const { data: clientsData, mutate: mutateClients } = useApi<Client[]>("/api/clients");
 
   const deals = useMemo(() => Array.isArray(dealsData) ? dealsData : [], [dealsData]);
   const stages = useMemo(() => Array.isArray(stagesData) ? stagesData : [], [stagesData]);
+  const clients = useMemo(() => Array.isArray(clientsData) ? clientsData : [], [clientsData]);
 
   const onDealUpdated = () => {
     mutateDeals();
+    mutateClients();
     refreshApi("/api/pipeline/stages");
   };
 
@@ -63,6 +66,7 @@ export default function WhatsappPage() {
           key={setor}
           deals={deals}
           stages={stages}
+          clients={clients}
           initialPhone={phoneOverride ?? initialPhone}
           onDealUpdated={onDealUpdated}
           slot={setor}
