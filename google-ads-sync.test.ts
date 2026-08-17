@@ -140,26 +140,28 @@ test('agregações preservam custo inteiro em micros e calculam CTR/CPC', () => 
   assert.equal(aggregateGoogleAdsCampaigns(rows)[0].cost_micros, '3000003');
 });
 
-test('CAC e ROAS só são publicados quando a atribuição CRM é válida', () => {
+test('atribuição permanece fail-closed mesmo se o chamador tentar validá-la', () => {
   assert.deepEqual(computeCrmAttribution({
-    valid: true, verifiedClickMapping: true,
+    valid: true, click_mapping_verified: true,
     attributedSales: 2, attributedRevenueMicros: '900000000', costMicros: '300000000',
   }), {
-    valid: true,
-    click_mapping_verified: true,
-    attributed_sales: 2,
-    attributed_revenue_micros: '900000000',
-    cac_micros: '150000000',
-    roas: 3,
+    valid: false,
+    click_mapping_verified: false,
+    attributed_sales: 0,
+    attributed_revenue_micros: '0',
+    cac_micros: null,
+    roas: null,
   });
   assert.equal(computeCrmAttribution({
-    valid: false, attributedSales: 2, attributedRevenueMicros: '900000000', costMicros: '300000000',
+    valid: false, click_mapping_verified: false,
+    attributedSales: 2, attributedRevenueMicros: '900000000', costMicros: '300000000',
   }).cac_micros, null);
 });
 
 test('CAC e ROAS ficam indisponíveis sem prova clique -> customer/campaign', () => {
   assert.deepEqual(computeCrmAttribution({
     valid: true,
+    click_mapping_verified: false,
     attributedSales: 4,
     attributedRevenueMicros: '1200000000',
     costMicros: '300000000',
@@ -181,6 +183,7 @@ test('rotas tenant leem tabelas Ads só pelo service role com escopo explícito'
   const tenantRoutes = source.slice(start, end);
   assert.doesNotMatch(tenantRoutes, /\(req as any\)\.supabase/);
   assert.doesNotMatch(tenantRoutes, /marketing_touchpoints/);
+  assert.match(tenantRoutes, /click_mapping_verified:\s*false/);
   assert.match(tenantRoutes, /getGoogleAdsTenantContext\(supabaseAdmin, userId\)/);
   assert.match(tenantRoutes, /listGoogleAdsMetricRows\(supabaseAdmin, userId, link\.customer_id, range\)/);
 });

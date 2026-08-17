@@ -2552,7 +2552,7 @@ async function startServer() {
         totals,
         crm_attribution: computeCrmAttribution({
           valid: false,
-          verifiedClickMapping: false,
+          click_mapping_verified: false,
           attributedSales: 0,
           attributedRevenueMicros: '0',
           costMicros: totals.cost_micros,

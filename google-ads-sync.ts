@@ -351,14 +351,28 @@ export function aggregateGoogleAdsCampaigns(rows: any[]): GoogleAdsCampaignSumma
   });
 }
 
+export type GoogleAdsCrmAttribution = {
+  valid: boolean;
+  click_mapping_verified: boolean;
+  attributed_sales: number;
+  attributed_revenue_micros: string;
+  cac_micros: string | null;
+  roas: number | null;
+};
+
 export function computeCrmAttribution(input: {
   valid: boolean;
-  verifiedClickMapping?: boolean;
+  click_mapping_verified: boolean;
   attributedSales: number;
   attributedRevenueMicros: string;
   costMicros: string;
-}) {
-  const valid = input.valid && input.verifiedClickMapping === true;
+}): GoogleAdsCrmAttribution {
+  // O MVP ainda não possui o produtor auditável da cadeia
+  // clique -> customer/campaign -> lead/negócio -> venda. Mesmo que um
+  // chamador tente declarar a atribuição como válida, a resposta permanece
+  // fail-closed até essa cadeia existir e for verificada no backend.
+  const clickMappingVerified = false;
+  const valid = input.valid && clickMappingVerified;
   const cost = integer(input.costMicros);
   const attributedSales = valid ? input.attributedSales : 0;
   const revenue = valid ? integer(input.attributedRevenueMicros) : 0n;
@@ -366,7 +380,7 @@ export function computeCrmAttribution(input: {
   const roas = valid && cost > 0n ? Number(revenue) / Number(cost) : null;
   return {
     valid,
-    click_mapping_verified: valid,
+    click_mapping_verified: clickMappingVerified,
     attributed_sales: attributedSales,
     attributed_revenue_micros: revenue.toString(),
     cac_micros: cac?.toString() || null,
