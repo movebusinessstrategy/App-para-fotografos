@@ -73,6 +73,7 @@ import {
   normalizeCalendarClockTime,
   type CalendarEventPayload,
 } from './calendar-sync.js';
+import pitoriContractTemplates2026 from './src/data/contract-templates-pitori-2026.json' with { type: 'json' };
 
 dotenv.config();
 
@@ -20869,6 +20870,80 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return { body: tBody, default_data: { ...(defaultData || {}), ...defaults } };
   }
 
+  const PITORI_CONTRACT_BUNDLE_VERSION = String(pitoriContractTemplates2026.version || '2026-08-17');
+  const PITORI_CONTRACT_BUNDLE_SOURCE = 'studio-pitori-contracts';
+
+  function contractTemplateKey(name: string, category: string): string {
+    return `${category}|${name}`
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^A-Z0-9]+/gi, ' ')
+      .trim()
+      .toUpperCase();
+  }
+
+  function isPitoriContractBundleTemplate(template: any): boolean {
+    return template?.default_data?.source_bundle === PITORI_CONTRACT_BUNDLE_SOURCE
+      && template?.default_data?.source_bundle_version === PITORI_CONTRACT_BUNDLE_VERSION;
+  }
+
+  // Sincroniza uma única vez os contratos 2026 do Estúdio Pitori. O conteúdo
+  // vem dos Google Docs enviados pelo estúdio; apenas dados variáveis foram
+  // substituídos pelos placeholders já suportados pelo CRM.
+  async function syncPitoriContractTemplates2026(userId: string, supabase: SupabaseClient) {
+    const sourceTemplates = Array.isArray(pitoriContractTemplates2026.templates)
+      ? pitoriContractTemplates2026.templates
+      : [];
+    const { data: existing, error: existingError } = await supabase
+      .from('contract_templates')
+      .select('id, name, category, body, default_data, archived')
+      .eq('user_id', userId);
+    if (existingError) throw existingError;
+
+    const byKey = new Map<string, any>();
+    for (const template of existing || []) {
+      byKey.set(contractTemplateKey(template.name || '', template.category || ''), template);
+    }
+
+    const created: string[] = [];
+    const updated: string[] = [];
+    for (const source of sourceTemplates) {
+      const defaults = {
+        ...(source.default_data || {}),
+        source_bundle: PITORI_CONTRACT_BUNDLE_SOURCE,
+        source_bundle_version: PITORI_CONTRACT_BUNDLE_VERSION,
+      };
+      const repaired = repairContractTemplate(String(source.body || ''), defaults);
+      const payload = {
+        name: String(source.name || '').trim(),
+        category: String(source.category || '').trim(),
+        body: repaired?.body || String(source.body || ''),
+        default_data: repaired?.default_data || defaults,
+        is_default: !!source.is_default,
+        is_legacy: false,
+        archived: false,
+        updated_at: new Date().toISOString(),
+      };
+      const current = byKey.get(contractTemplateKey(payload.name, payload.category));
+      if (current) {
+        const { error } = await supabase
+          .from('contract_templates')
+          .update(payload)
+          .eq('user_id', userId)
+          .eq('id', current.id);
+        if (error) throw error;
+        updated.push(payload.name);
+      } else {
+        const { error } = await supabase
+          .from('contract_templates')
+          .insert({ user_id: userId, ...payload });
+        if (error) throw error;
+        created.push(payload.name);
+      }
+    }
+    return { created, updated };
+  }
+
   // GET studio settings (returns null if user has none yet)
   app.get('/api/studio-settings', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
@@ -21139,7 +21214,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // depois, NÃO recria (a flag continua true).
     const { data: settings } = await supabase
       .from('studio_settings')
-      .select('default_template_provisioned')
+      .select('default_template_provisioned, studio_name')
       .eq('user_id', userId)
       .maybeSingle();
     if (!settings?.default_template_provisioned) {
@@ -21161,7 +21236,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
     }
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('contract_templates')
       .select('*')
       .eq('user_id', userId)
@@ -21169,6 +21244,34 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .order('category', { ascending: true })
       .order('name', { ascending: true });
     if (error) return res.status(500).json({ error: error.message });
+
+    // A atualização é restrita ao tenant do Estúdio Pitori e idempotente:
+    // depois que os 16 modelos recebem a versão atual, GETs futuros não
+    // sobrescrevem eventuais edições feitas no CRM.
+    if (/pitori/i.test(String(settings?.studio_name || ''))) {
+      const syncedCount = (data || []).filter(isPitoriContractBundleTemplate).length;
+      if (syncedCount < pitoriContractTemplates2026.templates.length) {
+        try {
+          const result = await syncPitoriContractTemplates2026(userId, supabase);
+          console.log(
+            `[contracts] bundle Pitori ${PITORI_CONTRACT_BUNDLE_VERSION} sincronizado user=${userId} `
+            + `created=${result.created.length} updated=${result.updated.length}`,
+          );
+          const refreshed = await supabase
+            .from('contract_templates')
+            .select('*')
+            .eq('user_id', userId)
+            .eq('archived', false)
+            .order('category', { ascending: true })
+            .order('name', { ascending: true });
+          if (refreshed.error) return res.status(500).json({ error: refreshed.error.message });
+          data = refreshed.data;
+        } catch (syncError: any) {
+          console.error('[contracts] falha ao sincronizar bundle Pitori:', syncError?.message || syncError);
+          return res.status(500).json({ error: 'Não foi possível atualizar os contratos do estúdio.' });
+        }
+      }
+    }
 
     // Saneamento LGPD + templatização do pacote: persiste corpo e default_data
     const templates = data || [];
