@@ -9,6 +9,7 @@ import Papa from 'papaparse';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import { Readable } from 'stream';
+import { TextDecoder } from 'node:util';
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 import * as BaileysManager from './baileys-manager.js';
@@ -74,6 +75,17 @@ import {
   type CalendarEventPayload,
 } from './calendar-sync.js';
 import pitoriContractTemplates2026 from './src/data/contract-templates-pitori-2026.json' with { type: 'json' };
+import {
+  decideProcessorSettlement,
+  decideReconciliation,
+  detectInternalTransfers,
+  fingerprintOfxTransaction,
+  normalizePaymentMethod,
+  parseOfx,
+  planLegacyAccountCorrection,
+  projectJobPaymentsToReceitas,
+  scoreReconciliationCandidate,
+} from './financial-reconciliation.js';
 
 dotenv.config();
 
@@ -5575,28 +5587,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       payments = data || [];
     } catch { payments = []; }
 
-    // Fallback: se não há pagamentos mas há sinal nas notas, cria o registro automaticamente
-    if (payments.length === 0 && job.notes) {
-      const match = job.notes.match(/Sinal pago:\s*R\$\s*([\d.,]+)/i);
-      if (match) {
-        const sinalStr = match[1].replace(/\./g, '').replace(',', '.');
-        const sinalValue = parseFloat(sinalStr);
-        if (sinalValue > 0) {
-          try {
-            const { data: created } = await adminClient.from('job_payments').insert({
-              job_id: jobId,
-              amount: sinalValue,
-              description: 'Sinal',
-              payment_date: new Date().toISOString().slice(0, 10),
-              payment_method: job.payment_method || 'Pix',
-            }).select();
-            if (created && created.length > 0) payments = created;
-          } catch { /* ignora se job_payments ainda não existe */ }
-        }
-      }
-    }
-
-    const totalPago = payments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
+    // Compatibilidade somente-leitura: versões antigas guardavam o sinal nas
+    // notas. Abrir este GET nunca deve criar pagamento nem inventar a data de
+    // recebimento. O valor legado participa do resumo até ser migrado por uma
+    // ação explícita, e a resposta deixa essa pendência visível para a UI.
+    const legacySignalMatch = payments.length === 0 && job.notes
+      ? job.notes.match(/Sinal pago:\s*R\$\s*([\d.,]+)/i)
+      : null;
+    const legacySignalAmount = legacySignalMatch
+      ? Number.parseFloat(legacySignalMatch[1].replace(/\./g, '').replace(',', '.')) || 0
+      : 0;
+    const registeredTotal = payments.reduce((sum: number, payment: any) => sum + (Number(payment.amount) || 0), 0);
+    const totalPago = registeredTotal + Math.max(0, legacySignalAmount);
 
     // Recalcula o total real a partir dos itens (auto-corrige payment_status desatualizado)
     const dealItemsTotal = dealItems.reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
@@ -5612,16 +5614,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       : job.amount + jobItemsTotal;
     const correctStatus = totalPago <= 0 ? 'pending' : (realTotal > 0 && totalPago >= realTotal) ? 'paid' : 'partial';
 
-    // Corrige silenciosamente se o status ou amount estiver desatualizado
+    // O GET é estritamente somente-leitura. Divergências são devolvidas como
+    // aviso e só podem ser persistidas por uma ação explícita de escrita.
     const statusChanged = correctStatus !== job.payment_status;
-    // Para deal jobs: atualiza job.amount com o total recalculado
-    // Para non-deal jobs: NÃO sobrescreve job.amount (base manual imutável)
     const dealAmountChanged = deal?.id && Math.abs(realTotal - job.amount) > 0.01;
-    if (dealAmountChanged || statusChanged) {
-      const upd: any = { payment_status: correctStatus };
-      if (dealAmountChanged) upd.amount = realTotal;
-      await supabase.from('jobs').update(upd).eq('id', jobId).eq('user_id', userId);
-    }
 
     // Item do pacote/valor mostrado na seção "Itens do negócio":
     // - deal jobs sem deal_items → pacote sintético (nome/valor/desconto, source 'deal')
@@ -5645,7 +5641,23 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       };
     }
 
-    res.json({ dealItems, jobItems, payments, totalPago, jobAmount: realTotal, payment_status: correctStatus, packageItem });
+    res.json({
+      dealItems,
+      jobItems,
+      payments,
+      totalPago,
+      jobAmount: realTotal,
+      payment_status: correctStatus,
+      packageItem,
+      legacy_signal_amount: legacySignalAmount > 0 ? legacySignalAmount : null,
+      financial_warnings: [
+        ...(legacySignalAmount > 0
+          ? ['Sinal legado encontrado nas notas; registre-o explicitamente para permitir conciliação bancária.']
+          : []),
+        ...(statusChanged ? ['O status de pagamento salvo diverge do total calculado.'] : []),
+        ...(dealAmountChanged ? ['O valor salvo do trabalho diverge dos itens atuais.'] : []),
+      ],
+    });
   });
 
   // PUT /api/jobs/:id/package — edita o pacote/valor base do trabalho.
@@ -16324,13 +16336,640 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   const finClient = (req: any) => (req as any).supabase as SupabaseClient;
   const finUser = (req: any) => (req as any).userId as string;
 
+  const finNumber = (value: any) => Number(value) || 0;
+  const finReceiptCashDate = (row: any) => row.data_recebimento_real || row.data_pagamento || null;
+  const finExpenseCashDate = (row: any) => row.data_pagamento || null;
+
+  function finProjectedAccountBalance(account: any, receitas: any[], despesas: any[], transactions: any[] = []) {
+    const entradas = receitas
+      .filter((row: any) => row.conta_id === account.id && row.status === 'recebido')
+      .reduce((sum: number, row: any) => sum + finNumber(row.valor_liquido ?? row.valor_bruto), 0);
+    const saidas = despesas
+      .filter((row: any) => row.conta_id === account.id && row.status === 'pago')
+      .reduce((sum: number, row: any) => sum + finNumber(row.valor), 0);
+    const transferNet = transactions
+      .filter((row: any) => (
+        row.conta_id === account.id
+        && row.status_conciliacao === 'transferencia'
+        && Boolean(row.transferencia_par_id)
+      ))
+      .reduce((sum: number, row: any) => (
+        sum + (row.tipo === 'credito' ? finNumber(row.valor) : -finNumber(row.valor))
+      ), 0);
+    return finNumber(account.saldo_inicial) + entradas - saidas + transferNet;
+  }
+
+  function finStatementMovementAfterBalance(account: any, transactions: any[]) {
+    const balanceDate = String(account.saldo_extrato_em || '').slice(0, 10);
+    if (!balanceDate) return { amount: 0, referenceDate: null };
+    const laterMovements = transactions.filter((row: any) => (
+      row.conta_id === account.id
+      && String(row.data || '').slice(0, 10) > balanceDate
+      && !finIsBalanceSnapshot(row)
+    ));
+    const amount = laterMovements.reduce((sum: number, row: any) => (
+      sum + (row.tipo === 'credito' ? finNumber(row.valor) : -finNumber(row.valor))
+    ), 0);
+    const dates = laterMovements.map((row: any) => String(row.data || '').slice(0, 10)).filter(Boolean).sort();
+    return { amount: finRoundMoney(amount), referenceDate: dates[dates.length - 1] || null };
+  }
+
+  function finAccountBalance(account: any, receitas: any[], despesas: any[], transactions: any[] = []) {
+    const hasStatementBalance = account.saldo_extrato !== null && account.saldo_extrato !== undefined;
+    const projected = finProjectedAccountBalance(account, receitas, despesas, transactions);
+    const laterStatement = hasStatementBalance
+      ? finStatementMovementAfterBalance(account, transactions)
+      : { amount: 0, referenceDate: null };
+    const statementBalance = finRoundMoney(finNumber(account.saldo_extrato) + laterStatement.amount);
+    return {
+      saldo_atual: hasStatementBalance ? statementBalance : projected,
+      saldo_projetado: projected,
+      saldo_fonte: hasStatementBalance ? 'extrato' : 'projetado',
+      saldo_movimentos_posteriores: hasStatementBalance ? laterStatement.amount : null,
+      saldo_referencia_em: hasStatementBalance
+        ? laterStatement.referenceDate || account.saldo_extrato_em || null
+        : null,
+    };
+  }
+
+  function finDashboardBalanceSource(accounts: any[]) {
+    if (!accounts.length) return 'projetado';
+    const statementCount = accounts.filter((account: any) => account.saldo_fonte === 'extrato').length;
+    if (statementCount === 0) return 'projetado';
+    return statementCount === accounts.length ? 'extrato' : 'misto';
+  }
+
+  function finMigrationMissing(error: any, column?: string) {
+    const message = String(error?.message || '');
+    const missingCodes = new Set(['42703', '42P01', 'PGRST204', 'PGRST205']);
+    const missingSchema = missingCodes.has(String(error?.code || '')) || /schema cache|does not exist/i.test(message);
+    return missingSchema && (!column || message.includes(column));
+  }
+
+  function finRequiresMigration(error: any, column?: string) {
+    const message = String(error?.message || '');
+    const missingConflictKey = error?.code === '42P10' || /no unique or exclusion constraint/i.test(message);
+    return missingConflictKey || finMigrationMissing(error, column);
+  }
+
+  const finRoundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+
+  function finAddDays(date: string | null, days: number) {
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+    const parsed = new Date(`${date}T12:00:00Z`);
+    if (Number.isNaN(parsed.getTime())) return date;
+    parsed.setUTCDate(parsed.getUTCDate() + Math.max(0, Math.trunc(days || 0)));
+    return parsed.toISOString().slice(0, 10);
+  }
+
+  function finIsValidCivilDate(value: any) {
+    if (value === null || value === undefined || value === '') return true;
+    const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return false;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return date.getUTCFullYear() === year
+      && date.getUTCMonth() === month - 1
+      && date.getUTCDate() === day;
+  }
+
+  function finFinancialDatesValid(body: any, fields: string[]) {
+    return fields.every((field) => (
+      !Object.prototype.hasOwnProperty.call(body || {}, field) || finIsValidCivilDate(body[field])
+    ));
+  }
+
+  function finGroupByNumber(rows: any[], column: string) {
+    const grouped = new Map<number, any[]>();
+    rows.forEach((row: any) => {
+      const key = Number(row[column]);
+      const values = grouped.get(key) || [];
+      values.push(row);
+      grouped.set(key, values);
+    });
+    return grouped;
+  }
+
+  async function finLoadRowsByIds(
+    client: SupabaseClient,
+    table: string,
+    columns: string,
+    column: string,
+    ids: Array<string | number>,
+    userId?: string,
+  ) {
+    const rows: any[] = [];
+    const batchSize = 200;
+    const pageSize = 1000;
+    for (let offset = 0; offset < ids.length; offset += batchSize) {
+      const batch = ids.slice(offset, offset + batchSize);
+      for (let from = 0; ; from += pageSize) {
+        let query: any = client
+          .from(table)
+          .select(columns)
+          .in(column, batch)
+          .order('id', { ascending: true });
+        if (userId) query = query.eq('user_id', userId);
+        const { data, error } = await query.range(from, from + pageSize - 1);
+        if (error) throw error;
+        const page = data || [];
+        rows.push(...page);
+        if (page.length < pageSize) break;
+      }
+    }
+    return rows;
+  }
+
+  const finComparableName = (value: any) => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+
+  const finIsInfinitePay = (value: any) => {
+    const normalized = finComparableName(value);
+    return normalized.includes('infinitepay')
+      || normalized.includes('infinitypay')
+      || normalized.includes('cloudwalk');
+  };
+
+  const finBankKey = (value: any) => {
+    const comparable = finComparableName(value);
+    return /^\d+$/.test(comparable) ? comparable.replace(/^0+(?=\d)/, '') : comparable;
+  };
+
+  const finIsBalanceSnapshot = (transaction: any) => {
+    const metadataReason = transaction?.metadata?.ignoredReason || transaction?.metadata?.ignored_reason;
+    if (metadataReason === 'balance_snapshot' || transaction?.metadata?.legacy_balance_snapshot === true) return true;
+    const description = String(transaction?.descricao || transaction?.description || '')
+      .toUpperCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+    const compact = finComparableName(description).toUpperCase();
+    return /^SALDO(?:$|TOTAL|ANTERIOR|EMCONTA|FINAL|INICIAL|ATUAL|DISPONIVEL|DODIA|DIA|CONTABIL|BLOQUEADO)/.test(compact)
+      || /^BALANCE(?:$|TOTAL|AVAILABLE|CURRENT|OPENING|CLOSING|PREVIOUS|FORWARD|BROUGHTFORWARD|ACCOUNT|ASOF|END|BEGINNING)/.test(compact);
+  };
+
+  const finIsRevertedOfx = (transaction: any) => Boolean(transaction?.revertido_em);
+  const finActiveOfxRows = (transactions: any[]) => transactions.filter((row: any) => !finIsRevertedOfx(row));
+
+  function finCanonicalValue(value: any): any {
+    if (Array.isArray(value)) return value.map(finCanonicalValue);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(
+      Object.keys(value).sort().map((key) => [key, finCanonicalValue(value[key])]),
+    );
+  }
+
+  const finPreviewToken = (scope: string, value: any) => crypto
+    .createHash('sha256')
+    .update(`${scope}:${JSON.stringify(finCanonicalValue(value))}`)
+    .digest('hex');
+
+  const finInDateRange = (date: any, from?: string, to?: string) => {
+    const day = String(date || '').slice(0, 10);
+    if (!day) return false;
+    if (from && day < from) return false;
+    return !to || day <= to;
+  };
+
+  const finEffectiveOfxStatus = (transaction: any) => (
+    finIsBalanceSnapshot(transaction) ? 'ignorado' : transaction.status_conciliacao
+  );
+
+  const finOfxTransactionForResponse = (transaction: any) => ({
+    ...transaction,
+    status_conciliacao: finEffectiveOfxStatus(transaction),
+  });
+
+  function finTransactionSummary(transactions: any[]) {
+    const movements = transactions.filter((transaction: any) => (
+      !finIsRevertedOfx(transaction) && !finIsBalanceSnapshot(transaction)
+    ));
+    const pending = movements.filter((transaction: any) => ['pendente', 'sugerido'].includes(transaction.status_conciliacao));
+    const sum = (rows: any[], type: string) => rows
+      .filter((transaction: any) => transaction.tipo === type)
+      .reduce((total: number, transaction: any) => total + finNumber(transaction.valor), 0);
+    return {
+      total: movements.length,
+      pendentes: pending.length,
+      sugeridas: movements.filter((transaction: any) => transaction.status_conciliacao === 'sugerido').length,
+      conciliadas: movements.filter((transaction: any) => transaction.status_conciliacao === 'conciliado').length,
+      transferencias: movements.filter((transaction: any) => transaction.status_conciliacao === 'transferencia').length,
+      ignoradas: movements.filter((transaction: any) => transaction.status_conciliacao === 'ignorado').length,
+      entradas: sum(movements, 'credito'),
+      saidas: sum(movements, 'debito'),
+      entradas_pendentes: sum(pending, 'credito'),
+      saidas_pendentes: sum(pending, 'debito'),
+      valor_a_revisar: pending.reduce((total: number, transaction: any) => total + finNumber(transaction.valor), 0),
+    };
+  }
+
+  async function finOwnedRow(
+    supabase: SupabaseClient,
+    table: string,
+    id: string,
+    userId: string,
+    columns = '*',
+  ): Promise<any> {
+    if (!id) return null;
+    const { data, error } = await supabase
+      .from(table)
+      .select(columns)
+      .eq('id', id)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) throw error;
+    return data;
+  }
+
+  async function finOwnedOfxTransaction(
+    supabase: SupabaseClient,
+    userId: string,
+    id: string,
+  ) {
+    const transaction = await finOwnedRow(supabase, 'fin_transacoes_ofx', id, userId);
+    return transaction && !finIsRevertedOfx(transaction) ? transaction : null;
+  }
+
+  async function finHasLinkedOfx(
+    supabase: SupabaseClient,
+    userId: string,
+    type: 'receita' | 'despesa',
+    id: string,
+  ) {
+    const column = type === 'receita' ? 'receita_id' : 'despesa_id';
+    const { data, error } = await supabase.from('fin_transacoes_ofx')
+      .select('id')
+      .eq('user_id', userId)
+      .eq(column, id)
+      .is('revertido_em', null)
+      .limit(1);
+    if (error) throw error;
+    return Boolean(data?.length);
+  }
+
+  async function finLoadReceiptAllocations(
+    supabase: SupabaseClient,
+    userId: string,
+    receiptIds?: string[],
+  ) {
+    try {
+      if (receiptIds && !receiptIds.length) return [];
+      if (receiptIds?.length) {
+        return await finLoadRowsByIds(
+          supabase,
+          'fin_conciliacao_alocacoes',
+          'id,receita_id,transacao_id',
+          'receita_id',
+          receiptIds,
+          userId,
+        );
+      }
+      return await loadAllUserRows(
+        supabase,
+        'fin_conciliacao_alocacoes',
+        'id,receita_id,transacao_id',
+        userId,
+      );
+    } catch (error: any) {
+      if (finMigrationMissing(error)) return [];
+      throw error;
+    }
+  }
+
+  async function finHasReceiptAllocation(
+    supabase: SupabaseClient,
+    userId: string,
+    receiptId: string,
+  ) {
+    const allocations = await finLoadReceiptAllocations(supabase, userId, [receiptId]);
+    return allocations.length > 0;
+  }
+
+  async function finHasFinancialBankLink(
+    supabase: SupabaseClient,
+    userId: string,
+    type: 'receita' | 'despesa',
+    id: string,
+  ) {
+    if (type === 'despesa') return finHasLinkedOfx(supabase, userId, type, id);
+    const [direct, allocated] = await Promise.all([
+      finHasLinkedOfx(supabase, userId, type, id),
+      finHasReceiptAllocation(supabase, userId, id),
+    ]);
+    return direct || allocated;
+  }
+
+  function finChangesManagedFields(body: any, current: any, fields: string[]) {
+    return fields.some((field) => {
+      if (!Object.prototype.hasOwnProperty.call(body || {}, field)) return false;
+      const requested = body[field] === '' || body[field] === undefined ? null : body[field];
+      const saved = current[field] === '' || current[field] === undefined ? null : current[field];
+      if (typeof requested === 'number' || typeof saved === 'number') {
+        return finRoundMoney(finNumber(requested)) !== finRoundMoney(finNumber(saved));
+      }
+      return requested !== saved;
+    });
+  }
+
+  function finSanitizeFinancialUpdate(body: any) {
+    const allowedFields = new Set([
+      'cliente_id', 'cliente_nome', 'descricao', 'valor_bruto', 'taxa_meio', 'valor_liquido',
+      'data_vencimento', 'data_pagamento', 'data_recebimento_real', 'status', 'parcela',
+      'total_parcelas', 'recorrente', 'frequencia_recorrencia', 'recorrencia_tipo',
+      'recorrencia_qtd', 'meio_id', 'conta_id', 'categoria_id',
+    ]);
+    const result: any = Object.fromEntries(Object.entries(body || {}).filter(([key]) => allowedFields.has(key)));
+    if (!result.frequencia_recorrencia && result.recorrencia_tipo) {
+      result.frequencia_recorrencia = result.recorrencia_tipo;
+    }
+    delete result.recorrencia_tipo;
+    delete result.recorrencia_qtd;
+    return result;
+  }
+
+  function finPickFields(body: any, fields: string[]) {
+    return Object.fromEntries(fields
+      .filter((field) => Object.prototype.hasOwnProperty.call(body || {}, field))
+      .map((field) => [field, body[field]]));
+  }
+
+  function finAccountEditableInput(body: any) {
+    return finPickFields(body, ['nome', 'tipo', 'banco', 'saldo_inicial', 'banco_codigo', 'conta_ref']);
+  }
+
+  function finAccountInputError(input: any) {
+    if (Object.prototype.hasOwnProperty.call(input, 'nome') && !String(input.nome || '').trim()) return 'Informe o nome da conta.';
+    const accountTypes = ['corrente', 'poupanca', 'investimento', 'carteira', 'caixa', 'intermediador'];
+    if (input.tipo !== undefined && !accountTypes.includes(String(input.tipo))) return 'Tipo de conta financeira inválido.';
+    if (Object.prototype.hasOwnProperty.call(input, 'saldo_inicial') && !Number.isFinite(Number(input.saldo_inicial))) {
+      return 'Saldo inicial inválido.';
+    }
+    return null;
+  }
+
+  function finMethodEditableInput(body: any) {
+    return finPickFields(body, ['nome', 'tipo', 'taxa_percentual', 'taxa_fixa', 'prazo_recebimento']);
+  }
+
+  function finMethodInputError(input: any) {
+    if (Object.prototype.hasOwnProperty.call(input, 'nome') && !String(input.nome || '').trim()) return 'Informe o nome do meio.';
+    const methodTypes = ['pix', 'dinheiro', 'transferencia', 'debito', 'credito', 'boleto', 'link_pagamento'];
+    if (input.tipo !== undefined && !methodTypes.includes(String(input.tipo))) return 'Tipo de meio de recebimento inválido.';
+    const percentage = Number(input.taxa_percentual);
+    if (input.taxa_percentual !== undefined && (!Number.isFinite(percentage) || percentage < 0 || percentage > 100)) {
+      return 'A taxa percentual deve ficar entre 0 e 100.';
+    }
+    const fixed = Number(input.taxa_fixa);
+    if (input.taxa_fixa !== undefined && (!Number.isFinite(fixed) || fixed < 0)) return 'A taxa fixa não pode ser negativa.';
+    const delay = Number(input.prazo_recebimento);
+    if (input.prazo_recebimento !== undefined && (!Number.isInteger(delay) || delay < 0 || delay > 3650)) {
+      return 'O prazo de recebimento deve ser um número inteiro válido.';
+    }
+    return null;
+  }
+
+  function finCategoryEditableInput(body: any) {
+    return finPickFields(body, ['nome', 'tipo', 'cor', 'ordem', 'grupo_dre_id']);
+  }
+
+  function finCategoryInputError(input: any) {
+    if (Object.prototype.hasOwnProperty.call(input, 'nome') && !String(input.nome || '').trim()) return 'Informe o nome da categoria.';
+    if (input.tipo !== undefined && !['receita', 'despesa'].includes(String(input.tipo))) {
+      return 'O tipo da categoria deve ser receita ou despesa.';
+    }
+    return null;
+  }
+
+  const finCategoryMatchesDreGroup = (categoryType: string, groupType: string) => (
+    categoryType === 'receita' ? groupType === 'receita' : groupType !== 'receita'
+  );
+
+  async function finOwnedCompatibleDreGroup(
+    supabase: SupabaseClient,
+    userId: string,
+    groupId: any,
+    categoryType: string,
+  ) {
+    if (!groupId) return null;
+    const group = await finOwnedRow(supabase, 'fin_grupos_dre', String(groupId), userId, 'id,tipo');
+    return group && finCategoryMatchesDreGroup(categoryType, group.tipo) ? group : null;
+  }
+
+  function finDreGroupEditableInput(body: any) {
+    const input: any = finPickFields(
+      body,
+      ['nome', 'tipo', 'operacao', 'ordem', 'total_parcial_apos', 'campos_automaticos'],
+    );
+    if (input.total_parcial_apos === '') input.total_parcial_apos = null;
+    return input;
+  }
+
+  function finDreGroupInputError(input: any) {
+    if (Object.prototype.hasOwnProperty.call(input, 'nome') && !String(input.nome || '').trim()) return 'Informe o nome do grupo.';
+    const groupTypes = ['receita', 'deducao', 'custo', 'despesa', 'imposto'];
+    if (input.tipo !== undefined && !groupTypes.includes(String(input.tipo))) return 'Tipo de grupo da DRE inválido.';
+    if (input.operacao !== undefined && !['soma', 'subtrai'].includes(String(input.operacao))) return 'Operação da DRE inválida.';
+    if (input.ordem !== undefined && !Number.isInteger(Number(input.ordem))) return 'A ordem deve ser um número inteiro.';
+    if (input.campos_automaticos !== undefined) {
+      const valid = Array.isArray(input.campos_automaticos)
+        && input.campos_automaticos.every((field: any) => field === 'taxas_recebimento');
+      if (!valid) return 'Campo automático da DRE inválido.';
+    }
+    return null;
+  }
+
+  async function finOptionalImportBatches(supabase: SupabaseClient, userId: string) {
+    try {
+      return await loadAllUserRows(supabase, 'fin_importacoes_extrato', 'id,conta_id,status', userId);
+    } catch (error: any) {
+      if (finMigrationMissing(error)) return [];
+      throw error;
+    }
+  }
+
+  async function finOptionalTransferTransactions(supabase: SupabaseClient, userId: string) {
+    try {
+      return await loadAllUserRows(
+        supabase,
+        'fin_transacoes_ofx',
+        'conta_id,tipo,valor,data,descricao,metadata,status_conciliacao,transferencia_par_id,revertido_em',
+        userId,
+      ).then((rows: any[]) => rows.filter((row: any) => !finIsRevertedOfx(row)));
+    } catch (error: any) {
+      if (finMigrationMissing(error, 'transferencia_par_id')) {
+        return loadAllUserRows(
+          supabase,
+          'fin_transacoes_ofx',
+          'conta_id,tipo,valor,data,descricao,status_conciliacao',
+          userId,
+        );
+      }
+      throw error;
+    }
+  }
+
+  function finReceiptAmounts(grossValue: any, method: any) {
+    const gross = Math.max(0, finRoundMoney(finNumber(grossValue)));
+    const percentage = finNumber(method?.taxa_percentual);
+    const fixed = finNumber(method?.taxa_fixa);
+    const fee = method
+      ? Math.min(gross, Math.max(0, finRoundMoney(gross * percentage / 100 + fixed)))
+      : 0;
+    return {
+      valor_bruto: gross,
+      taxa_meio: fee,
+      valor_liquido: finRoundMoney(Math.max(0, gross - fee)),
+    };
+  }
+
+  async function finOwnedReceiptMethod(
+    supabase: SupabaseClient,
+    userId: string,
+    methodId: any,
+  ) {
+    if (!methodId) return null;
+    return finOwnedRow(
+      supabase,
+      'fin_meios',
+      String(methodId),
+      userId,
+      'id,taxa_percentual,taxa_fixa,prazo_recebimento,ativo',
+    );
+  }
+
+  function finAccountFileMismatch(account: any, metadata: any) {
+    const expectedBank = finBankKey(account?.banco_codigo);
+    const expectedAccount = finComparableName(account?.conta_ref);
+    const fileBank = finBankKey(metadata?.bankId);
+    const fileAccount = finComparableName(metadata?.accountId);
+    const missingFileIdentity = !fileBank && !fileAccount;
+    const identityConflict = account?.identidade_extrato_bloqueada === true;
+    const bankMismatch = !!expectedBank && expectedBank !== fileBank;
+    const accountMismatch = !!expectedAccount && expectedAccount !== fileAccount;
+    const requiresConfirmation = (!expectedBank && !!fileBank) || (!expectedAccount && !!fileAccount);
+    const warnings: string[] = [];
+    if (!expectedBank && fileBank) warnings.push('Esta conta ainda não estava vinculada ao banco informado no arquivo.');
+    if (!expectedAccount && fileAccount) warnings.push('Esta conta ainda não estava vinculada ao número informado no arquivo.');
+    if (expectedBank && !fileBank) warnings.push('O arquivo não informa o banco exigido pela conta selecionada.');
+    if (expectedAccount && !fileAccount) warnings.push('O arquivo não informa o número exigido pela conta selecionada.');
+    if (bankMismatch) warnings.push('O banco do arquivo não corresponde à conta selecionada.');
+    if (accountMismatch) warnings.push('O número da conta no arquivo não corresponde à conta selecionada.');
+    if (missingFileIdentity) warnings.push('O arquivo não informa banco nem número de conta para validar a origem.');
+    if (identityConflict) warnings.push('Esta conta possui um conflito legado de identidade bancária e precisa de revisão administrativa.');
+    return {
+      blocked: identityConflict || missingFileIdentity || bankMismatch || accountMismatch,
+      identityConflict,
+      missingFileIdentity,
+      bankMismatch,
+      accountMismatch,
+      requiresConfirmation,
+      warnings,
+    };
+  }
+
+  function finReconciliationTarget(transaction: any, receitaId: any, despesaId: any) {
+    const hasReceita = !!receitaId;
+    const hasDespesa = !!despesaId;
+    if (hasReceita === hasDespesa) return null;
+    if (transaction.tipo === 'credito' && hasReceita) {
+      return { table: 'fin_receitas', id: String(receitaId), linkColumn: 'receita_id', type: 'receita' };
+    }
+    if (transaction.tipo === 'debito' && hasDespesa) {
+      return { table: 'fin_despesas', id: String(despesaId), linkColumn: 'despesa_id', type: 'despesa' };
+    }
+    return null;
+  }
+
+  const finTargetAmount = (target: any, type: string) => type === 'receita'
+    ? finNumber(target.valor_liquido ?? target.valor_bruto)
+    : finNumber(target.valor);
+
+  function finReconciledTargetPatch(type: string, transaction: any, target?: any) {
+    const cashPatch = type === 'receita'
+      ? {
+          status: 'recebido',
+          data_recebimento_real: transaction.data,
+          conta_id: transaction.conta_id,
+          updated_at: new Date().toISOString(),
+        }
+      : {
+          status: 'pago',
+          data_pagamento: transaction.data,
+          conta_id: transaction.conta_id,
+          updated_at: new Date().toISOString(),
+        };
+    if (!target) return cashPatch;
+    return type === 'receita'
+      ? {
+          ...cashPatch,
+          valor_bruto: target.valor_bruto,
+          taxa_meio: target.taxa_meio,
+          valor_liquido: target.valor_liquido,
+        }
+      : { ...cashPatch, valor: target.valor };
+  }
+
+  async function finAttachTransaction(
+    supabase: SupabaseClient,
+    userId: string,
+    transaction: any,
+    target: any,
+    targetInfo: { table: string; id: string; linkColumn: string; type: string },
+  ) {
+    const amountDifference = Math.abs(finNumber(transaction.valor) - finTargetAmount(target, targetInfo.type));
+    if (amountDifference >= 0.005) {
+      return { status: 409, error: 'O valor do lançamento não corresponde ao valor da transação bancária.' };
+    }
+    const { error } = await supabase.rpc('fin_reconcile_ofx_transaction', {
+      p_user_id: userId,
+      p_transacao_id: transaction.id,
+      p_receita_id: targetInfo.type === 'receita' ? targetInfo.id : null,
+      p_despesa_id: targetInfo.type === 'despesa' ? targetInfo.id : null,
+    });
+    if (!error) return { status: 200, success: true };
+    const code = String(error.message || '');
+    const messages: Record<string, string> = {
+      RECONCILIATION_AMOUNT_MISMATCH: 'O valor do lançamento não corresponde ao valor da transação bancária.',
+      RECONCILIATION_TARGET_ALREADY_LINKED: 'Este lançamento já está conciliado com outra transação.',
+      RECONCILIATION_CONFLICT: 'Esta transação acabou de receber outra conciliação.',
+      RECONCILIATION_TARGET_NOT_FOUND: 'O lançamento não está mais disponível para conciliação.',
+      RECONCILIATION_DIRECTION_MISMATCH: 'O tipo do lançamento não corresponde à movimentação bancária.',
+    };
+    const knownCode = Object.keys(messages).find((candidate) => code.includes(candidate));
+    if (knownCode || error.code === '23505') {
+      return {
+        status: 409,
+        error: knownCode ? messages[knownCode] : 'Este lançamento acabou de ser conciliado com outra transação.',
+      };
+    }
+    throw error;
+  }
+
   // ─── Helpers ───────────────────────────────────────────────────────────────
-  async function atualizarStatusAtrasados(supabase: SupabaseClient, userId: string) {
-    const hoje = new Date().toISOString().slice(0, 10);
-    await supabase.from('fin_receitas').update({ status: 'atrasado' })
-      .eq('user_id', userId).eq('status', 'pendente').lt('data_vencimento', hoje);
-    await supabase.from('fin_despesas').update({ status: 'atrasado' })
-      .eq('user_id', userId).eq('status', 'pendente').lt('data_vencimento', hoje);
+  function finTodayInSaoPaulo() {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date());
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${values.year}-${values.month}-${values.day}`;
+  }
+
+  function finSaoPauloMonthParts() {
+    const [year, month] = finTodayInSaoPaulo().split('-').map(Number);
+    return { year, month };
+  }
+
+  function finWithEffectiveStatus(row: any) {
+    const today = finTodayInSaoPaulo();
+    const overdue = row.status === 'pendente' && row.data_vencimento && row.data_vencimento < today;
+    return overdue ? { ...row, status: 'atrasado' } : row;
   }
 
   // ─── Mount global: TODAS as rotas /api/fin/* exigem requireAuth +
@@ -16344,71 +16983,180 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // ─── Categorias ────────────────────────────────────────────────────────────
   app.get('/api/fin/categorias', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const { data } = await supabase.from('fin_categorias').select('*').eq('user_id', userId).eq('ativo', true).order('ordem');
+    const requestedType = String(req.query.tipo || '').trim();
+    if (requestedType && !['receita', 'despesa'].includes(requestedType)) {
+      return res.status(400).json({ error: 'tipo deve ser receita ou despesa' });
+    }
+    const type = requestedType;
+    let query = supabase.from('fin_categorias').select('*').eq('user_id', userId).eq('ativo', true).order('ordem');
+    if (type) query = query.eq('tipo', type);
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
     res.json(data || []);
   });
 
   app.post('/api/fin/categorias', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const { nome, tipo, cor, ordem } = req.body;
-    const { data, error } = await supabase.from('fin_categorias').insert({ user_id: userId, nome, tipo, cor: cor || '#6366f1', ordem: ordem || 0 }).select().single();
+    const input: any = finCategoryEditableInput(req.body);
+    if (!String(input.nome || '').trim()) return res.status(400).json({ error: 'Informe o nome da categoria.' });
+    const invalid = finCategoryInputError(input);
+    if (invalid) return res.status(400).json({ error: invalid });
+    const categoryType = String(input.tipo || 'despesa');
+    if (input.grupo_dre_id && !await finOwnedCompatibleDreGroup(
+      supabase, userId, input.grupo_dre_id, categoryType,
+    )) {
+      return res.status(400).json({ error: 'Grupo da DRE incompatível com o tipo da categoria.' });
+    }
+    const { data, error } = await supabase.from('fin_categorias').insert({
+      ...input,
+      user_id: userId,
+      cor: input.cor || '#6366f1',
+      ordem: Number(input.ordem) || 0,
+    }).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
   });
 
   app.put('/api/fin/categorias/:id', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const { error } = await supabase.from('fin_categorias').update(req.body).eq('id', req.params.id).eq('user_id', userId);
+    const category = await finOwnedRow(supabase, 'fin_categorias', req.params.id, userId, 'id,tipo,grupo_dre_id');
+    if (!category) return res.status(404).json({ error: 'Categoria não encontrada' });
+    const input = finCategoryEditableInput(req.body);
+    const invalid = finCategoryInputError(input);
+    if (invalid) return res.status(400).json({ error: invalid });
+    const categoryType = String(input.tipo || category.tipo);
+    const groupId = Object.prototype.hasOwnProperty.call(input, 'grupo_dre_id')
+      ? input.grupo_dre_id
+      : category.grupo_dre_id;
+    if (groupId && !await finOwnedCompatibleDreGroup(
+      supabase, userId, groupId, categoryType,
+    )) {
+      return res.status(400).json({ error: 'Grupo da DRE incompatível com o tipo da categoria.' });
+    }
+    const { error } = await supabase.from('fin_categorias').update(input).eq('id', req.params.id).eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
   });
 
   app.delete('/api/fin/categorias/:id', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const [{ count: cr }, { count: dp }] = await Promise.all([
+    const category = await finOwnedRow(supabase, 'fin_categorias', req.params.id, userId, 'id');
+    if (!category) return res.status(404).json({ error: 'Categoria não encontrada' });
+    const [receiptCount, expenseCount] = await Promise.all([
       supabase.from('fin_receitas').select('id', { count: 'exact', head: true }).eq('categoria_id', req.params.id).eq('user_id', userId),
       supabase.from('fin_despesas').select('id', { count: 'exact', head: true }).eq('categoria_id', req.params.id).eq('user_id', userId),
     ]);
-    if ((cr || 0) + (dp || 0) > 0) return res.status(400).json({ error: 'Categoria em uso. Migre os lançamentos primeiro.' });
-    await supabase.from('fin_categorias').update({ ativo: false }).eq('id', req.params.id).eq('user_id', userId);
+    if (receiptCount.error || expenseCount.error) {
+      return res.status(500).json({ error: receiptCount.error?.message || expenseCount.error?.message });
+    }
+    if ((receiptCount.count || 0) + (expenseCount.count || 0) > 0) {
+      return res.status(409).json({ error: 'Categoria em uso. Migre os lançamentos primeiro.' });
+    }
+    const { data, error } = await supabase.from('fin_categorias').update({ ativo: false })
+      .eq('id', category.id).eq('user_id', userId).select('id');
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data?.length) return res.status(409).json({ error: 'A categoria mudou durante a operação.' });
     res.json({ success: true });
   });
 
   // ─── Contas bancárias ───────────────────────────────────────────────────────
   app.get('/api/fin/contas', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const { data: contas } = await supabase.from('fin_contas').select('*').eq('user_id', userId).eq('ativo', true).order('created_at');
-    // Calcular saldo atual para cada conta
-    const result = await Promise.all((contas || []).map(async (c: any) => {
-      const [{ data: rec }, { data: dep }] = await Promise.all([
-        supabase.from('fin_receitas').select('valor_bruto').eq('conta_id', c.id).eq('status', 'recebido').eq('user_id', userId),
-        supabase.from('fin_despesas').select('valor').eq('conta_id', c.id).eq('status', 'pago').eq('user_id', userId),
-      ]);
-      const entradas = (rec || []).reduce((s: number, r: any) => s + r.valor_bruto, 0);
-      const saidas = (dep || []).reduce((s: number, d: any) => s + d.valor, 0);
-      return { ...c, saldo_atual: c.saldo_inicial + entradas - saidas };
+    const [contasRows, receitas, despesas, transactions, importBatches] = await Promise.all([
+      loadAllUserRows(supabase, 'fin_contas', '*', userId),
+      loadAllUserRows(supabase, 'fin_receitas', 'conta_id,status,valor_bruto,valor_liquido', userId),
+      loadAllUserRows(supabase, 'fin_despesas', 'conta_id,status,valor', userId),
+      finOptionalTransferTransactions(supabase, userId),
+      finOptionalImportBatches(supabase, userId),
+    ]);
+    const accountsWithStatement = new Set([
+      ...transactions.map((transaction: any) => String(transaction.conta_id || '')).filter(Boolean),
+      ...importBatches
+        .filter((batch: any) => batch.status === 'concluida')
+        .map((batch: any) => String(batch.conta_id || ''))
+        .filter(Boolean),
+    ]);
+    const contas = contasRows
+      .filter((account: any) => account.ativo !== false)
+      .sort((a: any, b: any) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+    const result = contas.map((account: any) => ({
+      ...account,
+      tem_extrato: accountsWithStatement.has(String(account.id)),
+      ...finAccountBalance(account, receitas, despesas, transactions),
     }));
     res.json(result);
   });
 
   app.post('/api/fin/contas', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const { data, error } = await supabase.from('fin_contas').insert({ ...req.body, user_id: userId }).select().single();
+    const input = finAccountEditableInput(req.body);
+    if (!String(input.nome || '').trim()) return res.status(400).json({ error: 'Informe o nome da conta.' });
+    const invalid = finAccountInputError(input);
+    if (invalid) return res.status(400).json({ error: invalid });
+    const bankKey = finBankKey(input.banco_codigo);
+    const accountKey = finComparableName(input.conta_ref);
+    if (bankKey && accountKey) {
+      const accounts = await loadAllUserRows(supabase, 'fin_contas', 'id,banco_codigo,conta_ref,ativo', userId);
+      const duplicate = accounts.some((account: any) => (
+        finBankKey(account.banco_codigo) === bankKey
+        && finComparableName(account.conta_ref) === accountKey
+      ));
+      if (duplicate) return res.status(409).json({ error: 'Este banco e número já pertencem a outra conta, inclusive no histórico.' });
+    }
+    const { data, error } = await supabase.from('fin_contas').insert({ ...input, user_id: userId }).select().single();
+    if (error?.code === '23505') return res.status(409).json({ error: 'Este banco e número já pertencem a outra conta.' });
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
   });
 
   app.put('/api/fin/contas/:id', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const { error } = await supabase.from('fin_contas').update(req.body).eq('id', req.params.id).eq('user_id', userId);
-    if (error) return res.status(500).json({ error: error.message });
-    res.json({ success: true });
+    try {
+      const account = await finOwnedRow(supabase, 'fin_contas', req.params.id, userId);
+      if (!account) return res.status(404).json({ error: 'Conta não encontrada' });
+      const input = finAccountEditableInput(req.body);
+      const invalid = finAccountInputError(input);
+      if (invalid) return res.status(400).json({ error: invalid });
+      const identityChanged = finChangesManagedFields(input, account, ['banco_codigo', 'conta_ref']);
+      if (identityChanged) {
+        const [transactions, batches] = await Promise.all([
+          finLoadRowsByIds(supabase, 'fin_transacoes_ofx', 'id', 'conta_id', [account.id], userId),
+          finOptionalImportBatches(supabase, userId),
+        ]);
+        const hasBatch = batches.some((batch: any) => (
+          batch.status === 'concluida' && String(batch.conta_id) === String(account.id)
+        ));
+        if (transactions.length || hasBatch) {
+          return res.status(409).json({ error: 'A identidade bancária não pode ser alterada depois do primeiro extrato. Crie outra conta.' });
+        }
+      }
+      const nextBank = finBankKey(input.banco_codigo ?? account.banco_codigo);
+      const nextAccount = finComparableName(input.conta_ref ?? account.conta_ref);
+      if (nextBank && nextAccount) {
+        const accounts = await loadAllUserRows(supabase, 'fin_contas', 'id,banco_codigo,conta_ref,ativo', userId);
+        const duplicate = accounts.some((candidate: any) => (
+          String(candidate.id) !== String(account.id)
+          && finBankKey(candidate.banco_codigo) === nextBank
+          && finComparableName(candidate.conta_ref) === nextAccount
+        ));
+        if (duplicate) return res.status(409).json({ error: 'Este banco e número já pertencem a outra conta, inclusive no histórico.' });
+      }
+      const { error } = await supabase.from('fin_contas').update(input).eq('id', account.id).eq('user_id', userId);
+      if (error?.code === '23505') return res.status(409).json({ error: 'Este banco e número já pertencem a outra conta.' });
+      if (error) throw error;
+      return res.json({ success: true });
+    } catch (error: any) {
+      return res.status(500).json({ error: error?.message || 'Falha ao atualizar a conta' });
+    }
   });
 
   app.delete('/api/fin/contas/:id', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    await supabase.from('fin_contas').update({ ativo: false }).eq('id', req.params.id).eq('user_id', userId);
-    res.json({ success: true });
+    const account = await finOwnedRow(supabase, 'fin_contas', req.params.id, userId, 'id');
+    if (!account) return res.status(404).json({ error: 'Conta não encontrada' });
+    const { error } = await supabase.from('fin_contas').update({ ativo: false }).eq('id', account.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ success: true });
   });
 
   // ─── Meios de recebimento ───────────────────────────────────────────────────
@@ -16420,14 +17168,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   app.post('/api/fin/meios', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const { data, error } = await supabase.from('fin_meios').insert({ ...req.body, user_id: userId }).select().single();
+    const input = finMethodEditableInput(req.body);
+    if (!String(input.nome || '').trim()) return res.status(400).json({ error: 'Informe o nome do meio.' });
+    const invalid = finMethodInputError(input);
+    if (invalid) return res.status(400).json({ error: invalid });
+    const { data, error } = await supabase.from('fin_meios').insert({ ...input, user_id: userId }).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
   });
 
   app.put('/api/fin/meios/:id', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const { error } = await supabase.from('fin_meios').update(req.body).eq('id', req.params.id).eq('user_id', userId);
+    const input = finMethodEditableInput(req.body);
+    const invalid = finMethodInputError(input);
+    if (invalid) return res.status(400).json({ error: invalid });
+    const { error } = await supabase.from('fin_meios').update(input).eq('id', req.params.id).eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
   });
@@ -16441,25 +17196,62 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // ─── Receitas ───────────────────────────────────────────────────────────────
   app.get('/api/fin/receitas', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    await atualizarStatusAtrasados(supabase, userId);
-    const q = supabase.from('fin_receitas').select('*').eq('user_id', userId).order('data_vencimento');
-    if (req.query.status) (q as any).eq('status', req.query.status);
-    const { data } = await q;
-    res.json(data || []);
+    const receiptRows = await loadAllUserRows(supabase, 'fin_receitas', '*', userId);
+    const receiptIds = receiptRows.map((row: any) => String(row.id));
+    const [directLinks, allocations] = await Promise.all([
+      loadAllUserRows(supabase, 'fin_transacoes_ofx', 'id,receita_id,revertido_em', userId),
+      finLoadReceiptAllocations(supabase, userId, receiptIds),
+    ]);
+    const linkedIds = new Set([
+      ...finActiveOfxRows(directLinks).map((row: any) => String(row.receita_id || '')).filter(Boolean),
+      ...allocations.map((row: any) => String(row.receita_id || '')).filter(Boolean),
+    ]);
+    const rows = receiptRows.map((row: any) => ({
+      ...finWithEffectiveStatus(row),
+      ofx_vinculado: linkedIds.has(String(row.id)),
+    }));
+    const status = String(req.query.status || '').trim();
+    const filtered = status ? rows.filter((row: any) => row.status === status) : rows;
+    filtered.sort((a: any, b: any) => String(a.data_vencimento || '').localeCompare(String(b.data_vencimento || '')));
+    res.json(filtered);
   });
 
   app.post('/api/fin/receitas', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const body = { ...req.body, user_id: userId, updated_at: new Date().toISOString() };
-    // Calcular valor_liquido automaticamente se meio informado
-    if (body.meio_id && body.valor_bruto) {
-      const { data: meio } = await supabase.from('fin_meios').select('taxa_percentual,taxa_fixa').eq('id', body.meio_id).single();
-      if (meio) {
-        body.taxa_meio = (body.valor_bruto * meio.taxa_percentual / 100) + meio.taxa_fixa;
-        body.valor_liquido = body.valor_bruto - body.taxa_meio;
-      }
+    if (Number(req.body?.recorrencia_qtd || 1) > 1) {
+      return res.status(422).json({ error: 'RECURRING_NOT_SUPPORTED', message: 'Crie as parcelas explicitamente; a repetição automática ainda não está disponível.' });
     }
-    if (!body.valor_liquido) body.valor_liquido = body.valor_bruto;
+    if (!finFinancialDatesValid(req.body, ['data_vencimento', 'data_pagamento', 'data_recebimento_real'])) {
+      return res.status(400).json({ error: 'Data financeira inválida.' });
+    }
+    const body: any = {
+      ...finSanitizeFinancialUpdate(req.body),
+      user_id: userId,
+      origem_automatica: false,
+      status: 'pendente',
+      data_pagamento: null,
+      data_recebimento_real: null,
+      updated_at: new Date().toISOString(),
+    };
+    if (!String(body.descricao || '').trim()) return res.status(400).json({ error: 'Informe a descrição da receita.' });
+    const method = await finOwnedReceiptMethod(supabase, userId, body.meio_id);
+    if (body.meio_id && (!method || method.ativo === false)) {
+      return res.status(400).json({ error: 'Meio de recebimento inválido.' });
+    }
+    if (body.conta_id && !await finOwnedRow(supabase, 'fin_contas', String(body.conta_id), userId, 'id')) {
+      return res.status(400).json({ error: 'Conta financeira inválida.' });
+    }
+    if (body.categoria_id) {
+      const category = await finOwnedRow(supabase, 'fin_categorias', String(body.categoria_id), userId, 'id,tipo');
+      if (!category || category.tipo !== 'receita') return res.status(400).json({ error: 'Categoria de receita inválida.' });
+    }
+    if (body.cliente_id && !await finOwnedRow(supabase, 'clients', String(body.cliente_id), userId, 'id')) {
+      return res.status(400).json({ error: 'Cliente inválido.' });
+    }
+    delete body.taxa_meio;
+    delete body.valor_liquido;
+    Object.assign(body, finReceiptAmounts(body.valor_bruto, method));
+    if (body.valor_bruto <= 0) return res.status(400).json({ error: 'O valor da receita deve ser maior que zero.' });
     const { data, error } = await supabase.from('fin_receitas').insert(body).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
@@ -16467,32 +17259,119 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   app.put('/api/fin/receitas/:id', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const { error } = await supabase.from('fin_receitas').update({ ...req.body, updated_at: new Date().toISOString() }).eq('id', req.params.id).eq('user_id', userId);
-    if (error) return res.status(500).json({ error: error.message });
-    res.json({ success: true });
+    try {
+      const receipt = await finOwnedRow(supabase, 'fin_receitas', req.params.id, userId);
+      if (!receipt) return res.status(404).json({ error: 'Receita não encontrada' });
+      if (Number(req.body?.recorrencia_qtd || 1) > 1) {
+        return res.status(422).json({ error: 'RECURRING_NOT_SUPPORTED', message: 'A repetição automática ainda não está disponível.' });
+      }
+      if (!finFinancialDatesValid(req.body, ['data_vencimento', 'data_pagamento', 'data_recebimento_real'])) {
+        return res.status(400).json({ error: 'Data financeira inválida.' });
+      }
+      if (req.body?.status && !['pendente', 'atrasado', 'recebido'].includes(String(req.body.status))) {
+        return res.status(400).json({ error: 'Status de receita inválido.' });
+      }
+      const managed = ['valor_bruto', 'valor_liquido', 'taxa_meio', 'status', 'data_vencimento', 'data_pagamento', 'data_recebimento_real', 'conta_id', 'meio_id'];
+      const changesManaged = finChangesManagedFields(req.body, receipt, managed);
+      const linked = await finHasFinancialBankLink(supabase, userId, 'receita', receipt.id);
+      if (changesManaged && linked) {
+        return res.status(409).json({ error: 'Desconcilie a transação bancária antes de alterar valores, status, datas ou conta.' });
+      }
+      if (changesManaged && receipt.origem_automatica === true) {
+        return res.status(409).json({ error: 'Esta receita é gerenciada pelo pagamento do trabalho. Ajuste o pagamento na Produção.' });
+      }
+      if (req.body?.status === 'recebido' && receipt.status !== 'recebido') {
+        return res.status(400).json({ error: 'Use a ação Receber e informe a data e a conta do recebimento.' });
+      }
+      if (receipt.status === 'recebido' && req.body?.status && req.body.status !== 'recebido') {
+        return res.status(409).json({ error: 'Use uma ação de estorno antes de reabrir um recebimento realizado.' });
+      }
+      const update: any = { ...finSanitizeFinancialUpdate(req.body), updated_at: new Date().toISOString() };
+      delete update.taxa_meio;
+      delete update.valor_liquido;
+      const hasGross = Object.prototype.hasOwnProperty.call(req.body || {}, 'valor_bruto');
+      const hasMethod = Object.prototype.hasOwnProperty.call(req.body || {}, 'meio_id');
+      const methodId = hasMethod ? req.body.meio_id || null : receipt.meio_id;
+      const method = await finOwnedReceiptMethod(supabase, userId, methodId);
+      if (methodId && (!method || (hasMethod && method.ativo === false))) {
+        return res.status(400).json({ error: 'Meio de recebimento inválido.' });
+      }
+      if (hasGross || hasMethod) {
+        const gross = hasGross ? req.body.valor_bruto : receipt.valor_bruto;
+        Object.assign(update, finReceiptAmounts(gross, method));
+        if (update.valor_bruto <= 0) return res.status(400).json({ error: 'O valor da receita deve ser maior que zero.' });
+      }
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, 'conta_id') && req.body.conta_id) {
+        const account = await finOwnedRow(supabase, 'fin_contas', String(req.body.conta_id), userId, 'id');
+        if (!account) return res.status(400).json({ error: 'Conta financeira inválida.' });
+      }
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, 'categoria_id') && req.body.categoria_id) {
+        const category = await finOwnedRow(supabase, 'fin_categorias', String(req.body.categoria_id), userId, 'id,tipo');
+        if (!category || category.tipo !== 'receita') return res.status(400).json({ error: 'Categoria de receita inválida.' });
+      }
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, 'cliente_id') && req.body.cliente_id) {
+        const client = await finOwnedRow(supabase, 'clients', String(req.body.cliente_id), userId, 'id');
+        if (!client) return res.status(400).json({ error: 'Cliente inválido.' });
+      }
+      const { error } = await supabase.from('fin_receitas').update(update).eq('id', receipt.id).eq('user_id', userId);
+      if (error) throw error;
+      return res.json({ success: true });
+    } catch (error: any) {
+      return res.status(500).json({ error: error?.message || 'Falha ao atualizar a receita' });
+    }
   });
 
   app.delete('/api/fin/receitas/:id', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    await supabase.from('fin_receitas').delete().eq('id', req.params.id).eq('user_id', userId);
-    res.json({ success: true });
+    try {
+      const receipt = await finOwnedRow(supabase, 'fin_receitas', req.params.id, userId);
+      if (!receipt) return res.status(404).json({ error: 'Receita não encontrada' });
+      if (await finHasFinancialBankLink(supabase, userId, 'receita', receipt.id)) {
+        return res.status(409).json({ error: 'Desconcilie a transação bancária antes de excluir esta receita.' });
+      }
+      if (receipt.origem_automatica === true) {
+        return res.status(409).json({ error: 'Esta receita vem de um pagamento do trabalho e não pode ser excluída aqui.' });
+      }
+      const { error } = await supabase.from('fin_receitas').delete().eq('id', receipt.id).eq('user_id', userId);
+      if (error) throw error;
+      return res.json({ success: true });
+    } catch (error: any) {
+      return res.status(500).json({ error: error?.message || 'Falha ao excluir a receita' });
+    }
   });
 
   app.post('/api/fin/receitas/:id/receber', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const { data_pagamento, conta_id } = req.body;
-    const { data: receita } = await supabase.from('fin_receitas').select('meio_id,valor_bruto').eq('id', req.params.id).eq('user_id', userId).single();
+    const { data_pagamento, data_recebimento_real, conta_id } = req.body;
+    const { data: receita } = await supabase.from('fin_receitas')
+      .select('id,meio_id,valor_bruto,origem_automatica')
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .single();
     if (!receita) return res.status(404).json({ error: 'Receita não encontrada' });
-    let dataRecebimentoReal = data_pagamento;
-    if (receita.meio_id) {
-      const { data: meio } = await supabase.from('fin_meios').select('prazo_recebimento').eq('id', receita.meio_id).single();
-      if (meio && meio.prazo_recebimento > 0) {
-        const d = new Date(data_pagamento + 'T12:00:00');
-        d.setDate(d.getDate() + meio.prazo_recebimento);
-        dataRecebimentoReal = d.toISOString().slice(0, 10);
-      }
+    if (receita.origem_automatica === true) {
+      return res.status(409).json({ error: 'Esta receita é gerenciada pelo pagamento do trabalho. Ajuste o pagamento na Produção.' });
     }
-    const { error } = await supabase.from('fin_receitas').update({ status: 'recebido', data_pagamento, data_recebimento_real: dataRecebimentoReal, conta_id: conta_id || null, updated_at: new Date().toISOString() }).eq('id', req.params.id).eq('user_id', userId);
+    if (await finHasFinancialBankLink(supabase, userId, 'receita', receita.id)) {
+      return res.status(409).json({ error: 'Esta receita já está conciliada com o banco.' });
+    }
+    if (!data_pagamento || !finIsValidCivilDate(data_pagamento)) {
+      return res.status(400).json({ error: 'Informe uma data de recebimento válida.' });
+    }
+    const cashDate = data_recebimento_real || data_pagamento;
+    if (!finIsValidCivilDate(cashDate) || cashDate < data_pagamento) {
+      return res.status(400).json({ error: 'A entrada efetiva deve ter uma data válida e não pode anteceder o pagamento do cliente.' });
+    }
+    if (conta_id && !await finOwnedRow(supabase, 'fin_contas', String(conta_id), userId, 'id')) {
+      return res.status(400).json({ error: 'Conta financeira inválida.' });
+    }
+    const { error } = await supabase.from('fin_receitas').update({
+      status: 'recebido',
+      data_pagamento,
+      data_recebimento_real: cashDate,
+      conta_id: conta_id || null,
+      updated_at: new Date().toISOString(),
+    }).eq('id', req.params.id).eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
   });
@@ -16500,22 +17379,48 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // ─── Despesas ───────────────────────────────────────────────────────────────
   app.get('/api/fin/despesas', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    await atualizarStatusAtrasados(supabase, userId);
-    const { data } = await supabase.from('fin_despesas').select('*').eq('user_id', userId).order('data_vencimento');
-    res.json(data || []);
+    const rows = (await loadAllUserRows(supabase, 'fin_despesas', '*', userId)).map(finWithEffectiveStatus);
+    rows.sort((a: any, b: any) => String(a.data_vencimento || '').localeCompare(String(b.data_vencimento || '')));
+    res.json(rows);
   });
 
   app.post('/api/fin/despesas', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
     try {
       const { recorrencia_tipo, recorrencia_qtd, tipo_pessoa, ...rest } = req.body;
+      if (Number(recorrencia_qtd || 1) > 1) {
+        return res.status(422).json({ error: 'RECURRING_NOT_SUPPORTED', message: 'Crie as parcelas explicitamente; a repetição automática ainda não está disponível.' });
+      }
+      if (!finFinancialDatesValid(rest, ['data_vencimento', 'data_pagamento'])) {
+        return res.status(400).json({ error: 'Data financeira inválida.' });
+      }
+      if (!Number.isFinite(Number(rest.valor)) || Number(rest.valor) <= 0) {
+        return res.status(400).json({ error: 'O valor da despesa deve ser maior que zero.' });
+      }
+      if (!String(rest.descricao || '').trim()) return res.status(400).json({ error: 'Informe a descrição da despesa.' });
+      if (String(rest.observacoes || '').trim()) {
+        return res.status(422).json({
+          error: 'UNSUPPORTED_FINANCIAL_FIELD',
+          message: 'Observações de despesa ainda não possuem campo persistente; remova o texto antes de salvar.',
+        });
+      }
+      if (rest.categoria_id) {
+        const category = await finOwnedRow(supabase, 'fin_categorias', String(rest.categoria_id), userId, 'id,tipo');
+        if (!category || category.tipo !== 'despesa') return res.status(400).json({ error: 'Categoria de despesa inválida.' });
+      }
+      if (rest.meio_id && !await finOwnedRow(supabase, 'fin_meios', String(rest.meio_id), userId, 'id')) {
+        return res.status(400).json({ error: 'Meio de pagamento inválido.' });
+      }
+      if (rest.conta_id && !await finOwnedRow(supabase, 'fin_contas', String(rest.conta_id), userId, 'id')) {
+        return res.status(400).json({ error: 'Conta financeira inválida.' });
+      }
       // Colunas base garantidas
       const insertBody: any = {
         descricao: rest.descricao,
         valor: rest.valor,
         status: 'pendente',
         data_vencimento: rest.data_vencimento || null,
-        data_pagamento: rest.data_pagamento || null,
+        data_pagamento: null,
         recorrente: rest.recorrente ?? false,
         user_id: userId,
         updated_at: new Date().toISOString(),
@@ -16526,24 +17431,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         categoria_id: rest.categoria_id || null,
         meio_id: rest.meio_id || null,
         fornecedor: rest.fornecedor || null,
-        observacoes: rest.observacoes || null,
         frequencia_recorrencia: recorrencia_tipo || null,
         conta_id: rest.conta_id || null,
       };
-      // Tenta inserir com todos os campos; se falhar por coluna inexistente,
-      // remove o campo problemático e tenta novamente
-      let { data, error } = await supabase.from('fin_despesas').insert({ ...insertBody, ...optionals }).select().single();
-      if (error?.message?.includes('Could not find')) {
-        // Detecta qual coluna está faltando e remove do objeto
-        const colMatch = error.message.match(/Could not find the '(\w+)' column/);
-        if (colMatch) {
-          delete optionals[colMatch[1]];
-          ({ data, error } = await supabase.from('fin_despesas').insert({ ...insertBody, ...optionals }).select().single());
-        }
-        // Se ainda falhar, fallback com campos base apenas
-        if (error?.message?.includes('Could not find')) {
-          ({ data, error } = await supabase.from('fin_despesas').insert(insertBody).select().single());
-        }
+      const { data, error } = await supabase.from('fin_despesas')
+        .insert({ ...insertBody, ...optionals })
+        .select()
+        .single();
+      if (finMigrationMissing(error)) {
+        return res.status(422).json({ error: 'MIGRATION_NEEDED', message: 'A estrutura financeira precisa ser atualizada antes de salvar esta despesa.' });
       }
       if (error) return res.status(500).json({ error: error.message });
       res.json(data);
@@ -16554,7 +17450,38 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   app.put('/api/fin/despesas/:id', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const { descricao, valor, status, data_vencimento, data_pagamento, categoria_id, meio_id, fornecedor, observacoes, recorrente, frequencia_recorrencia, conta_id } = req.body;
+    const expense = await finOwnedRow(supabase, 'fin_despesas', req.params.id, userId);
+    if (!expense) return res.status(404).json({ error: 'Despesa não encontrada' });
+    if (Number(req.body?.recorrencia_qtd || 1) > 1) {
+      return res.status(422).json({ error: 'RECURRING_NOT_SUPPORTED', message: 'A repetição automática ainda não está disponível.' });
+    }
+    if (!finFinancialDatesValid(req.body, ['data_vencimento', 'data_pagamento'])) {
+      return res.status(400).json({ error: 'Data financeira inválida.' });
+    }
+    if (req.body?.valor !== undefined && (!Number.isFinite(Number(req.body.valor)) || Number(req.body.valor) <= 0)) {
+      return res.status(400).json({ error: 'O valor da despesa deve ser maior que zero.' });
+    }
+    if (String(req.body?.observacoes || '').trim()) {
+      return res.status(422).json({
+        error: 'UNSUPPORTED_FINANCIAL_FIELD',
+        message: 'Observações de despesa ainda não possuem campo persistente.',
+      });
+    }
+    if (req.body?.status && !['pendente', 'atrasado', 'pago'].includes(String(req.body.status))) {
+      return res.status(400).json({ error: 'Status de despesa inválido.' });
+    }
+    const managed = ['valor', 'status', 'data_vencimento', 'data_pagamento', 'conta_id', 'meio_id'];
+    if (finChangesManagedFields(req.body, expense, managed)
+      && await finHasLinkedOfx(supabase, userId, 'despesa', expense.id)) {
+      return res.status(409).json({ error: 'Desconcilie a transação bancária antes de alterar valor, status, datas ou conta.' });
+    }
+    if (req.body?.status === 'pago' && expense.status !== 'pago') {
+      return res.status(400).json({ error: 'Use a ação Pagar e informe a data e a conta do pagamento.' });
+    }
+    if (expense.status === 'pago' && req.body?.status && req.body.status !== 'pago') {
+      return res.status(409).json({ error: 'Use uma ação de estorno antes de reabrir um pagamento realizado.' });
+    }
+    const { descricao, valor, status, data_vencimento, data_pagamento, categoria_id, meio_id, fornecedor, recorrente, frequencia_recorrencia, conta_id } = req.body;
     const updateBody: any = { updated_at: new Date().toISOString() };
     if (descricao !== undefined) updateBody.descricao = descricao;
     if (valor !== undefined) updateBody.valor = valor;
@@ -16564,260 +17491,792 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (categoria_id !== undefined) updateBody.categoria_id = categoria_id || null;
     if (meio_id !== undefined) updateBody.meio_id = meio_id || null;
     if (fornecedor !== undefined) updateBody.fornecedor = fornecedor || null;
-    if (observacoes !== undefined) updateBody.observacoes = observacoes || null;
     if (recorrente !== undefined) updateBody.recorrente = recorrente;
     if (frequencia_recorrencia !== undefined) updateBody.frequencia_recorrencia = frequencia_recorrencia || null;
     if (conta_id !== undefined) updateBody.conta_id = conta_id || null;
-    const { error } = await supabase.from('fin_despesas').update(updateBody).eq('id', req.params.id).eq('user_id', userId);
+    if (updateBody.conta_id && !await finOwnedRow(supabase, 'fin_contas', String(updateBody.conta_id), userId, 'id')) {
+      return res.status(400).json({ error: 'Conta financeira inválida.' });
+    }
+    if (updateBody.meio_id && !await finOwnedRow(supabase, 'fin_meios', String(updateBody.meio_id), userId, 'id')) {
+      return res.status(400).json({ error: 'Meio de pagamento inválido.' });
+    }
+    if (updateBody.categoria_id) {
+      const category = await finOwnedRow(supabase, 'fin_categorias', String(updateBody.categoria_id), userId, 'id,tipo');
+      if (!category || category.tipo !== 'despesa') return res.status(400).json({ error: 'Categoria de despesa inválida.' });
+    }
+    const { error } = await supabase.from('fin_despesas').update(updateBody).eq('id', expense.id).eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
   });
 
   app.delete('/api/fin/despesas/:id', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    await supabase.from('fin_despesas').delete().eq('id', req.params.id).eq('user_id', userId);
-    res.json({ success: true });
+    const expense = await finOwnedRow(supabase, 'fin_despesas', req.params.id, userId);
+    if (!expense) return res.status(404).json({ error: 'Despesa não encontrada' });
+    if (await finHasLinkedOfx(supabase, userId, 'despesa', expense.id)) {
+      return res.status(409).json({ error: 'Desconcilie a transação bancária antes de excluir esta despesa.' });
+    }
+    const { error } = await supabase.from('fin_despesas').delete().eq('id', expense.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ success: true });
   });
 
   app.post('/api/fin/despesas/:id/pagar', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
     const { data_pagamento, conta_id } = req.body;
-    const { error } = await supabase.from('fin_despesas').update({ status: 'pago', data_pagamento, conta_id: conta_id || null, updated_at: new Date().toISOString() }).eq('id', req.params.id).eq('user_id', userId);
+    const expense = await finOwnedRow(supabase, 'fin_despesas', req.params.id, userId, 'id');
+    if (!expense) return res.status(404).json({ error: 'Despesa não encontrada' });
+    if (await finHasLinkedOfx(supabase, userId, 'despesa', expense.id)) {
+      return res.status(409).json({ error: 'Esta despesa já está conciliada com o banco.' });
+    }
+    if (!data_pagamento || !finIsValidCivilDate(data_pagamento)) {
+      return res.status(400).json({ error: 'Informe uma data de pagamento válida.' });
+    }
+    if (conta_id && !await finOwnedRow(supabase, 'fin_contas', String(conta_id), userId, 'id')) {
+      return res.status(400).json({ error: 'Conta financeira inválida.' });
+    }
+    const { error } = await supabase.from('fin_despesas').update({ status: 'pago', data_pagamento, conta_id: conta_id || null, updated_at: new Date().toISOString() }).eq('id', expense.id).eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
   });
 
-  // ─── Sincronizar jobs → receitas (importação automática) ───────────────────
-  app.post('/api/fin/sync-jobs', requireAuth, async (req, res) => {
-    const supabase = finClient(req); const userId = finUser(req);
-    const adminClient = supabaseAdmin || supabase;
+  function finInfinitePaySetup(accounts: any[], methods: any[]) {
+    const activeAccounts = accounts.filter((account: any) => account.ativo !== false);
+    const matchingAccounts = activeAccounts.filter((item: any) => (
+      item.tipo === 'intermediador' && finIsInfinitePay(`${item.nome} ${item.banco || ''}`)
+    ));
+    const activeMethods = methods.filter((method: any) => method.ativo !== false);
+    const matchingMethods = activeMethods.filter((item: any) => (
+      normalizePaymentMethod(item.nome) === 'Link InfinitePay'
+      || (finIsInfinitePay(item.nome) && /link|credito|crédito/i.test(`${item.nome} ${item.tipo || ''}`))
+    ));
+    return {
+      account: matchingAccounts.length === 1 ? matchingAccounts[0] : null,
+      method: matchingMethods.length === 1 ? matchingMethods[0] : null,
+      accountConflict: matchingAccounts.length > 1,
+      methodConflict: matchingMethods.length > 1,
+      methodLinked: matchingAccounts.length === 1
+        && matchingMethods.length === 1
+        && String(matchingMethods[0].conta_id || '') === String(matchingAccounts[0].id),
+    };
+  }
 
-    // Carrega todos os jobs — precisamos saber quais estão em produção
-    const { data: allJobs } = await supabase
-      .from('jobs')
-      .select('id,client_id,job_name,job_date,amount,payment_status,payment_method,production_stage,fin_synced,clients(id,name)')
-      .eq('user_id', userId);
-    if (!allJobs?.length) return res.json({ criadas: 0, atualizadas: 0, removidas: 0 });
+  function finInfinitePaySetupPreview(accounts: any[], methods: any[]) {
+    const setup = finInfinitePaySetup(accounts, methods);
+    const providerAccounts = accounts.filter((account: any) => (
+      account.ativo !== false && finIsInfinitePay(`${account.nome || ''} ${account.banco || ''}`)
+    ));
+    const wrongType = providerAccounts.filter((account: any) => account.tipo !== 'intermediador');
+    const conflicts = [
+      setup.accountConflict ? 'multiplas_contas_intermediadoras' : null,
+      setup.methodConflict ? 'multiplos_meios_link' : null,
+      wrongType.length ? 'conta_infinitepay_tipo_incorreto' : null,
+      !setup.method ? 'meio_link_ausente' : null,
+    ].filter(Boolean);
+    const state = {
+      account_ids: providerAccounts.map((account: any) => String(account.id)).sort(),
+      method: setup.method ? {
+        id: String(setup.method.id),
+        nome: setup.method.nome,
+        taxa_percentual: setup.method.taxa_percentual,
+        taxa_fixa: setup.method.taxa_fixa,
+        prazo_recebimento: setup.method.prazo_recebimento,
+        conta_id: setup.method.conta_id || null,
+      } : null,
+      conflicts,
+    };
+    return {
+      pronto: Boolean(setup.account && setup.method && setup.methodLinked && !conflicts.length),
+      preview_token: finPreviewToken('infinitepay-setup-v1', state),
+      acoes: {
+        criar_conta: !setup.account && !wrongType.length,
+        renomear_meio: Boolean(setup.method && setup.method.nome !== 'Link InfinitePay'),
+        vincular_meio: Boolean(setup.method && (!setup.account || !setup.methodLinked)),
+      },
+      conta: setup.account || null,
+      meio: setup.method || null,
+      conflitos: conflicts,
+      avisos: [
+        !setup.account && !wrongType.length ? 'Será criada uma conta intermediadora InfinitePay com saldo inicial zero.' : null,
+        setup.method && setup.method.nome !== 'Link InfinitePay'
+          ? `O meio “${setup.method.nome}” será renomeado; taxa e prazo serão preservados.`
+          : null,
+        setup.method && setup.account && !setup.methodLinked
+          ? 'O meio de link será vinculado à conta intermediadora InfinitePay.'
+          : null,
+        !setup.method ? 'Cadastre um único meio de link com a taxa e o prazo corretos antes de continuar.' : null,
+      ].filter(Boolean),
+    };
+  }
 
-    // Só sincroniza trabalhos que estão EM PRODUÇÃO (têm etapa definida).
-    // Espelha a Produção: o que não está lá não vira conta a receber.
-    const jobs = (allJobs as any[]).filter((j) => j.production_stage);
-    const productionJobIds = new Set(jobs.map((j: any) => Number(j.id)));
-
-    // ── Limpeza da conciliação ──────────────────────────────────────────────
-    // Remove TODAS as receitas automáticas de trabalhos fora da produção
-    // (recebidas ou não); e deduplica as contas a receber dos que estão.
-    // Lançamentos manuais (origem_automatica = false) nunca são tocados.
-    let removidas = 0;
-    const { data: autoReceitas } = await supabase
-      .from('fin_receitas')
-      .select('id,job_id,status,valor_bruto')
-      .eq('user_id', userId)
-      .eq('origem_automatica', true)
-      .not('job_id', 'is', null);
-    const idsParaRemover: string[] = [];
-    const pendProdPorJob = new Map<number, any[]>();
-    for (const r of (autoReceitas || [])) {
-      const jid = Number(r.job_id);
-      if (!productionJobIds.has(jid)) {
-        // Fora da produção → remove a receita automática (qualquer status)
-        idsParaRemover.push(r.id);
-      } else if (r.status === 'pendente' || r.status === 'atrasado') {
-        // Em produção → guarda pra deduplicar as contas a receber
-        const list = pendProdPorJob.get(jid) || [];
-        list.push(r);
-        pendProdPorJob.set(jid, list);
-      }
-    }
-    // Cada trabalho em produção deve ter no máximo 1 conta a receber automática
-    for (const [, list] of pendProdPorJob) {
-      if (list.length > 1) {
-        list.sort((a: any, b: any) => (b.valor_bruto || 0) - (a.valor_bruto || 0));
-        for (const r of list.slice(1)) idsParaRemover.push(r.id);
-      }
-    }
-    if (idsParaRemover.length > 0) {
-      // Apaga em lotes — uma lista enorme de IDs numa só requisição estoura
-      // o limite de tamanho da URL e a remoção falha silenciosamente.
-      for (let i = 0; i < idsParaRemover.length; i += 100) {
-        await supabase
-          .from('fin_receitas')
-          .delete()
-          .in('id', idsParaRemover.slice(i, i + 100))
-          .eq('user_id', userId);
-      }
-      removidas = idsParaRemover.length;
-    }
-
-    if (!jobs.length) return res.json({ criadas: 0, atualizadas: 0, removidas });
-
-    const jobIds = jobs.map((j: any) => j.id);
-
-    // Carrega receitas (já sem as removidas) e pagamentos em paralelo
-    const [{ data: todasReceitas }, { data: todosPayments }] = await Promise.all([
-      supabase
-        .from('fin_receitas')
-        .select('id,job_id,status,valor_bruto')
-        .eq('user_id', userId)
-        .not('job_id', 'is', null),
-      adminClient
-        .from('job_payments')
-        .select('*')
-        .in('job_id', jobIds)
-        .order('created_at'),
+  async function finLoadInfinitePaySetupData(supabase: SupabaseClient, userId: string) {
+    return Promise.all([
+      loadAllUserRows(supabase, 'fin_contas', '*', userId),
+      loadAllUserRows(supabase, 'fin_meios', '*', userId),
     ]);
+  }
 
-    // Agrupa por job_id — normaliza para Number para evitar mismatch string/int
-    const receitasPorJob = new Map<number, any[]>();
-    for (const r of (todasReceitas || [])) {
-      const jid = Number(r.job_id);
-      const list = receitasPorJob.get(jid) || [];
-      list.push(r);
-      receitasPorJob.set(jid, list);
+  app.get('/api/fin/infinitepay/setup/preview', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    try {
+      const [accounts, methods] = await finLoadInfinitePaySetupData(supabase, userId);
+      return res.json(finInfinitePaySetupPreview(accounts, methods));
+    } catch (error: any) {
+      return res.status(500).json({ error: error?.message || 'Falha ao analisar a configuração InfinitePay' });
     }
-    const paymentsPorJob = new Map<number, any[]>();
-    for (const p of (todosPayments || [])) {
-      const jid = Number(p.job_id);
-      const list = paymentsPorJob.get(jid) || [];
-      list.push(p);
-      paymentsPorJob.set(jid, list);
-    }
-
-    let criadas = 0;
-    let atualizadas = 0;
-    const hoje = new Date().toISOString().slice(0, 10);
-
-    for (const job of jobs) {
-      const jid = Number(job.id);
-      const receitasExistentes = receitasPorJob.get(jid) || [];
-      const paymentsArr = paymentsPorJob.get(jid) || [];
-      const temReceita = receitasExistentes.length > 0;
-      const dataVencimento = job.job_date || hoje;
-      const clienteNome = (job.clients as any)?.name || job.job_name || `Job #${job.id}`;
-      const descricaoBase = job.job_name || clienteNome;
-
-      if (!temReceita) {
-        // Sem receitas no momento. Se o job JÁ foi sincronizado uma vez, foi o
-        // usuário que apagou — não recria. Só cria pra job nunca sincronizado.
-        if (!job.fin_synced) {
-          // ── Job nunca sincronizado: criar receitas do zero ──
-          if (paymentsArr.length > 0) {
-            for (const pay of paymentsArr) {
-              await supabase.from('fin_receitas').insert({
-                user_id: userId, job_id: job.id,
-                cliente_id: job.client_id, cliente_nome: clienteNome,
-                descricao: `${descricaoBase} — ${pay.description || 'Pagamento'}`,
-                valor_bruto: pay.amount, taxa_meio: 0, valor_liquido: pay.amount,
-                data_vencimento: pay.payment_date || dataVencimento,
-                data_pagamento: pay.payment_date,
-                status: 'recebido', parcela: 1, total_parcelas: 1,
-                origem_automatica: true, updated_at: new Date().toISOString(),
-              });
-              criadas++;
-            }
-            const totalPago = paymentsArr.reduce((s: number, p: any) => s + (p.amount || 0), 0);
-            const restante = (job.amount || 0) - totalPago;
-            if (restante > 1 && job.payment_status !== 'paid') {
-              const st = dataVencimento < hoje ? 'atrasado' : 'pendente';
-              await supabase.from('fin_receitas').insert({
-                user_id: userId, job_id: job.id, cliente_id: job.client_id, cliente_nome: clienteNome,
-                descricao: `${descricaoBase} — Saldo restante`,
-                valor_bruto: restante, taxa_meio: 0, valor_liquido: restante,
-                data_vencimento: dataVencimento, status: st,
-                parcela: 1, total_parcelas: 1, origem_automatica: true, updated_at: new Date().toISOString(),
-              });
-              criadas++;
-            }
-          } else if ((job.amount || 0) > 0) {
-            const st = job.payment_status === 'paid' ? 'recebido' : (dataVencimento < hoje ? 'atrasado' : 'pendente');
-            await supabase.from('fin_receitas').insert({
-              user_id: userId, job_id: job.id, cliente_id: job.client_id, cliente_nome: clienteNome,
-              descricao: descricaoBase,
-              valor_bruto: job.amount, taxa_meio: 0, valor_liquido: job.amount,
-              data_vencimento: dataVencimento,
-              data_pagamento: st === 'recebido' ? hoje : null,
-              status: st, parcela: 1, total_parcelas: 1,
-              origem_automatica: true, updated_at: new Date().toISOString(),
-            });
-            criadas++;
-          }
-          // Marca o job como sincronizado — não recria se o usuário apagar depois
-          await supabase.from('jobs').update({ fin_synced: true }).eq('id', job.id).eq('user_id', userId);
-        }
-      } else {
-        // ── Job já existente: reconciliar com estado atual ────────────────────
-        if (job.payment_status === 'paid') {
-          // Marca TODA receita pendente/atrasada como recebido.
-          // Usa a data do último pagamento real (não "hoje") pra o
-          // faturamento cair no mês certo, não misturar com o atual.
-          const dataRecebida = paymentsArr.length > 0
-            ? (paymentsArr[paymentsArr.length - 1].payment_date || dataVencimento || hoje)
-            : (dataVencimento || hoje);
-          const pendentes = receitasExistentes.filter((r: any) =>
-            r.status === 'pendente' || r.status === 'atrasado'
-          );
-          for (const r of pendentes) {
-            await supabase.from('fin_receitas')
-              .update({ status: 'recebido', data_pagamento: dataRecebida, cliente_nome: clienteNome, updated_at: new Date().toISOString() })
-              .eq('id', r.id).eq('user_id', userId);
-            atualizadas++;
-          }
-          // Corrige cliente_nome nas recebidas também
-          const recebidas = receitasExistentes.filter((r: any) => r.status === 'recebido');
-          for (const r of recebidas) {
-            await supabase.from('fin_receitas')
-              .update({ cliente_nome: clienteNome, updated_at: new Date().toISOString() })
-              .eq('id', r.id).eq('user_id', userId);
-          }
-        } else if (job.payment_status === 'partial' && paymentsArr.length > 0) {
-          // Para cada pagamento real, insere receita se ainda não existe como recebido
-          for (const pay of paymentsArr) {
-            const jaExiste = receitasExistentes.some(
-              (r: any) => r.status === 'recebido' && Math.abs(r.valor_bruto - pay.amount) < 0.01
-            );
-            if (!jaExiste) {
-              await supabase.from('fin_receitas').insert({
-                user_id: userId, job_id: job.id,
-                cliente_id: job.client_id, cliente_nome: clienteNome,
-                descricao: `${descricaoBase} — ${pay.description || 'Pagamento parcial'}`,
-                valor_bruto: pay.amount, taxa_meio: 0, valor_liquido: pay.amount,
-                data_vencimento: pay.payment_date || dataVencimento,
-                data_pagamento: pay.payment_date,
-                status: 'recebido', parcela: 1, total_parcelas: 1,
-                origem_automatica: true, updated_at: new Date().toISOString(),
-              });
-              criadas++;
-            } else {
-              // Corrige cliente_nome se estava errado
-              const r = receitasExistentes.find((r: any) => r.status === 'recebido' && Math.abs(r.valor_bruto - pay.amount) < 0.01);
-              if (r) {
-                await supabase.from('fin_receitas')
-                  .update({ cliente_nome: clienteNome, updated_at: new Date().toISOString() })
-                  .eq('id', r.id).eq('user_id', userId);
-              }
-            }
-          }
-          // Corrige cliente_nome nas receitas pendentes
-          const pendentes = receitasExistentes.filter((r: any) => r.status === 'pendente' || r.status === 'atrasado');
-          for (const r of pendentes) {
-            await supabase.from('fin_receitas')
-              .update({ cliente_nome: clienteNome, updated_at: new Date().toISOString() })
-              .eq('id', r.id).eq('user_id', userId);
-          }
-        } else {
-          // pending — só corrige o cliente_nome
-          for (const r of receitasExistentes) {
-            await supabase.from('fin_receitas')
-              .update({ cliente_nome: clienteNome, updated_at: new Date().toISOString() })
-              .eq('id', r.id).eq('user_id', userId);
-          }
-        }
-      }
-    }
-
-    res.json({ criadas, atualizadas, removidas });
   });
 
+  app.post('/api/fin/infinitepay/setup', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    try {
+      if (req.body?.confirmar !== true || !String(req.body?.preview_token || '').trim()) {
+        return res.status(428).json({
+          error: 'INFINITEPAY_SETUP_CONFIRMATION_REQUIRED',
+          message: 'Revise e confirme a configuração antes de aplicá-la.',
+        });
+      }
+      const [accounts, methods] = await finLoadInfinitePaySetupData(supabase, userId);
+      const preview = finInfinitePaySetupPreview(accounts, methods);
+      if (preview.preview_token !== req.body.preview_token) {
+        return res.status(409).json({
+          error: 'INFINITEPAY_SETUP_PREVIEW_STALE',
+          message: 'A configuração mudou. Revise uma nova prévia.',
+          preview,
+        });
+      }
+      if (preview.conflitos.length) {
+        return res.status(409).json({
+          error: 'INFINITEPAY_SETUP_CONFLICT',
+          message: 'Resolva os conflitos de configuração antes de continuar.',
+          preview,
+        });
+      }
+      const { data, error } = await supabase.rpc('fin_setup_infinitepay', { p_user_id: userId });
+      if (error) throw error;
+      return res.json({
+        success: true,
+        pronto: data?.ready === true,
+        conta: data?.account || null,
+        meio: data?.method || null,
+        criada_conta: data?.account_created === true,
+        meio_renomeado: data?.method_renamed === true,
+        meio_vinculado: data?.method_linked === true,
+      });
+    } catch (error: any) {
+      if (finRequiresMigration(error)) {
+        return res.status(422).json({ error: 'MIGRATION_NEEDED' });
+      }
+      return res.status(409).json({ error: error?.message || 'Falha ao configurar a InfinitePay' });
+    }
+  });
+
+  function finProjectedJobInput(job: any, userId: string) {
+    const client = Array.isArray(job.clients) ? job.clients[0] : job.clients;
+    const clientName = client?.name || job.job_name || `Job #${job.id}`;
+    return {
+      userId,
+      id: Number(job.id),
+      amount: job.amount,
+      dueDate: job.job_date,
+      clientId: job.client_id,
+      clientName,
+      description: job.job_name || clientName,
+      paymentMethod: job.payment_method,
+    };
+  }
+
+  const finProjectedPayments = (job: any, payments: any[]) => payments.map((payment: any) => ({
+    id: payment.id,
+    amount: payment.amount,
+    paymentDate: payment.payment_date,
+    description: payment.description,
+    paymentMethod: payment.payment_method || job.payment_method,
+  }));
+
+  function finConfiguredRevenueRow(
+    row: any,
+    paymentMethod: string | null,
+    setup: {
+      account: any;
+      method: any;
+      accountConflict?: boolean;
+      methodConflict?: boolean;
+      methodLinked?: boolean;
+    },
+    existing: any,
+    isLinked: boolean,
+  ) {
+    const next: any = { ...row, updated_at: new Date().toISOString() };
+    if (!finIsInfinitePay(paymentMethod)) {
+      next.meio_id = existing?.meio_id || null;
+      next.conta_id = existing?.conta_id || null;
+      if (isLinked && existing?.status === 'recebido') {
+        next.status = existing.status;
+        next.data_pagamento = existing.data_pagamento;
+        next.data_recebimento_real = existing.data_recebimento_real;
+      }
+      return next;
+    }
+
+    next.conta_id = isLinked && existing?.conta_id
+      ? existing.conta_id
+      : setup.account?.id || existing?.conta_id || null;
+    next.meio_id = setup.method?.id || existing?.meio_id || null;
+    if (isLinked && existing?.data_recebimento_real) {
+      next.data_recebimento_real = existing.data_recebimento_real;
+    }
+    if (!setup.method) return next;
+    const gross = finNumber(next.valor_bruto);
+    const percentage = finNumber(setup.method.taxa_percentual);
+    const fixed = finNumber(setup.method.taxa_fixa);
+    const fee = Math.min(gross, Math.max(0, finRoundMoney(gross * percentage / 100 + fixed)));
+    next.taxa_meio = fee;
+    next.valor_liquido = finRoundMoney(Math.max(0, gross - fee));
+    next.data_recebimento_real = isLinked && existing?.data_recebimento_real
+      ? existing.data_recebimento_real
+      : finAddDays(next.data_pagamento, finNumber(setup.method.prazo_recebimento));
+    return next;
+  }
+
+  function finJobProjection(
+    job: any,
+    payments: any[],
+    existing: any[],
+    userId: string,
+    setup: {
+      account: any;
+      method: any;
+      accountConflict?: boolean;
+      methodConflict?: boolean;
+      methodLinked?: boolean;
+    },
+    linkedReceiptIds: Set<string>,
+  ) {
+    const projected = projectJobPaymentsToReceitas(
+      finProjectedJobInput(job, userId),
+      finProjectedPayments(job, payments),
+      existing,
+      { today: finTodayInSaoPaulo() },
+    );
+    const activeBalance = Boolean(job.production_stage) && job.status !== 'cancelled';
+    const rows = projected.rows.filter((row: any) => activeBalance || !row.origem_ref.startsWith('job_balance:'));
+    const existingByRef = new Map(existing.filter((row: any) => row.origem_ref).map((row: any) => [row.origem_ref, row]));
+    const configuredRows = rows.map((row: any) => {
+      const current = existingByRef.get(row.origem_ref);
+      const method = projected.paymentMethodsByOriginRef[row.origem_ref] || null;
+      return finConfiguredRevenueRow(row, normalizePaymentMethod(method), setup, current, linkedReceiptIds.has(String(current?.id || '')));
+    });
+    const desiredRefs = new Set(configuredRows.map((row: any) => row.origem_ref));
+    const managedExisting = existing.filter((row: any) => (
+      row.origem_automatica !== false
+      && row.origem_ref
+      && (row.origem_ref.startsWith('job_payment:') || row.origem_ref === `job_balance:${job.id}`)
+    ));
+    const staleOriginRefs = managedExisting
+      .map((row: any) => row.origem_ref)
+      .filter((originRef: string) => !desiredRefs.has(originRef));
+    const hasInfinitePay = Object.values(projected.paymentMethodsByOriginRef).some(finIsInfinitePay);
+    const warnings = [
+      hasInfinitePay && setup.accountConflict ? 'Há mais de uma conta intermediadora InfinitePay ativa.' : null,
+      hasInfinitePay && setup.methodConflict ? 'Há mais de um meio Link InfinitePay ativo.' : null,
+      hasInfinitePay && !setup.method ? 'Link InfinitePay sem meio de recebimento configurado.' : null,
+      hasInfinitePay && !setup.account ? 'Link InfinitePay sem conta intermediadora configurada.' : null,
+      hasInfinitePay && setup.account && setup.method && !setup.methodLinked
+        ? 'O meio Link InfinitePay ainda não está vinculado à conta intermediadora.'
+        : null,
+    ].filter(Boolean) as string[];
+    return {
+      ...projected,
+      rows: configuredRows,
+      staleOriginRefs,
+      warnings,
+      configurationConflict: hasInfinitePay && (
+        setup.accountConflict || setup.methodConflict || !setup.account || !setup.method || !setup.methodLinked
+      ),
+      configurationMissing: hasInfinitePay && (!setup.account || !setup.method || !setup.methodLinked),
+    };
+  }
+
+  function finLegacySignalFromNotes(job: any) {
+    const match = String(job?.notes || '').match(/Sinal pago:\s*R\$\s*([\d.,]+)/i);
+    return match ? Math.max(0, Number.parseFloat(match[1].replace(/\./g, '').replace(',', '.')) || 0) : 0;
+  }
+
+  const finRevenueGrossTotal = (rows: any[]) => finRoundMoney(
+    rows.reduce((sum: number, row: any) => sum + finNumber(row.valor_bruto), 0),
+  );
+
+  const finReceivedGrossTotal = (rows: any[]) => finRoundMoney(
+    rows.filter((row: any) => row.status === 'recebido')
+      .reduce((sum: number, row: any) => sum + finNumber(row.valor_bruto), 0),
+  );
+
+  function finLegacyProjectionEquivalent(legacyRows: any[], projectedRows: any[]) {
+    return Math.abs(finRevenueGrossTotal(legacyRows) - finRevenueGrossTotal(projectedRows)) <= 0.01
+      && Math.abs(finReceivedGrossTotal(legacyRows) - finReceivedGrossTotal(projectedRows)) <= 0.01;
+  }
+
+  const FIN_PROJECTED_REVENUE_MANAGED_FIELDS = [
+    'valor_bruto', 'valor_liquido', 'taxa_meio', 'status', 'data_vencimento',
+    'data_pagamento', 'data_recebimento_real', 'conta_id', 'meio_id',
+  ];
+
+  function finLinkedProjectionConflict(
+    existingRows: any[],
+    projectedRows: any[],
+    staleOriginRefs: string[],
+    linkedReceiptIds: Set<string>,
+  ) {
+    const existingByRef = new Map(existingRows
+      .filter((row: any) => row.origem_ref)
+      .map((row: any) => [row.origem_ref, row]));
+    const changed = projectedRows.some((row: any) => {
+      const existing: any = existingByRef.get(row.origem_ref);
+      return existing
+        && linkedReceiptIds.has(String(existing.id))
+        && finChangesManagedFields(row, existing, FIN_PROJECTED_REVENUE_MANAGED_FIELDS);
+    });
+    if (changed) return 'lancamento_conciliado_divergente';
+    const staleLinked = staleOriginRefs.some((originRef: string) => {
+      const existing: any = existingByRef.get(originRef);
+      return existing && linkedReceiptIds.has(String(existing.id));
+    });
+    return staleLinked ? 'lancamento_conciliado_obsoleto' : null;
+  }
+
+  function finJobSyncConflict(
+    job: any,
+    payments: any[],
+    existingRows: any[],
+    projection: any,
+    linkedReceiptIds: Set<string>,
+  ) {
+    const legacyRows = existingRows.filter((row: any) => (
+      row.origem_automatica === true && !row.origem_ref && row.status !== 'cancelado'
+    ));
+    const hasLegacyPaymentSource = payments.length === 0 && (
+      ['paid', 'partial'].includes(String(job.payment_status || '')) || finLegacySignalFromNotes(job) > 0
+    );
+    if (hasLegacyPaymentSource) return { code: 'fonte_pagamento_legada', legacyRows };
+    if (projection.configurationMissing) return { code: 'configuracao_infinitepay_ausente', legacyRows };
+    if (projection.configurationConflict) return { code: 'configuracao_infinitepay_ambigua', legacyRows };
+    if (projection.overpaidAmount > 0) return { code: 'pagamentos_acima_do_contrato', legacyRows };
+    if (projection.rejectedPaymentIds.length) return { code: 'pagamentos_invalidos', legacyRows };
+    if (projection.duplicatePaymentIds.length) return { code: 'pagamentos_duplicados', legacyRows };
+    if (legacyRows.length && payments.length === 0) return { code: 'receitas_legadas_sem_fonte', legacyRows };
+    if (legacyRows.length && !finLegacyProjectionEquivalent(legacyRows, projection.rows)) {
+      return { code: 'receitas_legadas_divergentes', legacyRows };
+    }
+    if (legacyRows.some((row: any) => linkedReceiptIds.has(String(row.id)))) {
+      return { code: 'receita_legada_conciliada', legacyRows };
+    }
+    const linkedConflict = finLinkedProjectionConflict(
+      existingRows,
+      projection.rows,
+      projection.staleOriginRefs,
+      linkedReceiptIds,
+    );
+    return linkedConflict ? { code: linkedConflict, legacyRows } : null;
+  }
+
+  async function finCurrentProjectedRevenue(
+    supabase: SupabaseClient,
+    userId: string,
+    originRef: string,
+  ) {
+    const { data, error } = await supabase.from('fin_receitas')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('origem_ref', originRef)
+      .maybeSingle();
+    if (error) throw error;
+    return data;
+  }
+
+  async function finUpdateProjectedRevenueCas(
+    supabase: SupabaseClient,
+    userId: string,
+    current: any,
+    row: any,
+  ) {
+    let update: any = supabase.from('fin_receitas').update(row)
+      .eq('id', current.id)
+      .eq('user_id', userId);
+    update = current.updated_at
+      ? update.eq('updated_at', current.updated_at)
+      : update.is('updated_at', null);
+    const { data, error } = await update.select('id,origem_ref');
+    if (error) throw error;
+    return data?.[0] || null;
+  }
+
+  async function finSaveProjectedRevenue(
+    supabase: SupabaseClient,
+    userId: string,
+    row: any,
+    attempt = 0,
+  ): Promise<any> {
+    const current = await finCurrentProjectedRevenue(supabase, userId, row.origem_ref);
+    if (!current) {
+      const { data, error } = await supabase.from('fin_receitas').insert(row).select('id,origem_ref').single();
+      if (error?.code === '23505' && attempt < 2) {
+        return finSaveProjectedRevenue(supabase, userId, row, attempt + 1);
+      }
+      if (error) throw error;
+      return { created: 1, updated: 0, skipped: 0, saved: data, conflict: null };
+    }
+    const linked = await finHasFinancialBankLink(supabase, userId, 'receita', String(current.id));
+    if (linked) {
+      const changed = finChangesManagedFields(row, current, FIN_PROJECTED_REVENUE_MANAGED_FIELDS);
+      return {
+        created: 0,
+        updated: 0,
+        skipped: 1,
+        saved: current,
+        conflict: changed ? {
+          job_id: row.job_id,
+          origem_ref: row.origem_ref,
+          codigo: 'lancamento_conciliado_divergente',
+        } : null,
+      };
+    }
+    const updated = await finUpdateProjectedRevenueCas(supabase, userId, current, row);
+    if (updated) return { created: 0, updated: 1, skipped: 0, saved: updated, conflict: null };
+    if (attempt < 2) return finSaveProjectedRevenue(supabase, userId, row, attempt + 1);
+    return {
+      created: 0,
+      updated: 0,
+      skipped: 1,
+      saved: current,
+      conflict: {
+        job_id: row.job_id,
+        origem_ref: row.origem_ref,
+        codigo: 'receita_alterada_durante_sync',
+      },
+    };
+  }
+
+  async function finUpsertProjectedRevenues(
+    supabase: SupabaseClient,
+    userId: string,
+    rows: any[],
+  ) {
+    const result = { created: 0, updated: 0, skipped: 0, conflicts: [] as any[] };
+    for (const row of rows) {
+      const saved = await finSaveProjectedRevenue(supabase, userId, row);
+      result.created += saved.created;
+      result.updated += saved.updated;
+      result.skipped += saved.skipped;
+      if (saved.conflict) result.conflicts.push(saved.conflict);
+    }
+    return result;
+  }
+
+  async function finArchiveAutomaticRevenues(
+    supabase: SupabaseClient,
+    userId: string,
+    revenues: any[],
+    originRefs: Set<string>,
+    archiveLegacy: boolean,
+    legacyJobIds = new Set<number>(),
+  ) {
+    const candidates = revenues.filter((row: any) => {
+      if (row.origem_automatica !== true || row.status === 'cancelado') return false;
+      if (row.origem_ref && originRefs.has(row.origem_ref)) return true;
+      return archiveLegacy && !row.origem_ref && legacyJobIds.has(Number(row.job_id));
+    });
+    const ids = candidates.map((row: any) => String(row.id));
+    if (!ids.length) {
+      return { archived: 0, legacyArchived: 0, reopenedIds: [] as string[], protectedIds: [] as string[] };
+    }
+    const [directLinks, allocations] = await Promise.all([
+      finLoadRowsByIds(supabase, 'fin_transacoes_ofx', 'id,receita_id', 'receita_id', ids, userId),
+      finLoadReceiptAllocations(supabase, userId, ids),
+    ]);
+    const protectedIds = new Set([
+      ...directLinks.map((row: any) => String(row.receita_id || '')).filter(Boolean),
+      ...allocations.map((row: any) => String(row.receita_id || '')).filter(Boolean),
+    ]);
+    const archivable = candidates.filter((row: any) => !protectedIds.has(String(row.id)));
+    const archivableIds = archivable.map((row: any) => String(row.id));
+    for (let offset = 0; offset < archivableIds.length; offset += 100) {
+      const { error } = await supabase.from('fin_receitas').update({
+        status: 'cancelado',
+        updated_at: new Date().toISOString(),
+      }).eq('user_id', userId).in('id', archivableIds.slice(offset, offset + 100));
+      if (error) throw error;
+    }
+    return {
+      archived: archivableIds.length,
+      legacyArchived: archivable.filter((row: any) => !row.origem_ref).length,
+      reopenedIds: [] as string[],
+      protectedIds: [...protectedIds],
+    };
+  }
+
+  async function finUpdateProjectedJobStatuses(
+    supabase: SupabaseClient,
+    userId: string,
+    statuses: Map<string, number[]>,
+  ) {
+    for (const [paymentStatus, ids] of statuses) {
+      for (let offset = 0; offset < ids.length; offset += 100) {
+        const { error } = await supabase.from('jobs').update({
+          payment_status: paymentStatus,
+          fin_synced: true,
+        }).eq('user_id', userId).in('id', ids.slice(offset, offset + 100));
+        if (error) throw error;
+      }
+    }
+  }
+
+  const FIN_JOB_SYNC_PREVIEW_VERSION = 'jobs-sync-v2';
+
+  function finJobSyncCounts(existingRows: any[], projection: any, legacyRows: any[]) {
+    const existingByRef = new Map(existingRows
+      .filter((row: any) => row.origem_ref)
+      .map((row: any) => [String(row.origem_ref), row]));
+    const created = projection.rows.filter((row: any) => !existingByRef.has(String(row.origem_ref))).length;
+    const updated = projection.rows.filter((row: any) => existingByRef.has(String(row.origem_ref))).length;
+    const stale = new Set(projection.staleOriginRefs);
+    const staleRows = existingRows.filter((row: any) => row.status !== 'cancelado' && stale.has(row.origem_ref));
+    return { criadas: created, atualizadas: updated, arquivadas: staleRows.length + legacyRows.length };
+  }
+
+  function finSyncPreviewToken(
+    jobs: any[], payments: any[], revenues: any[], linkedTransactions: any[], allocations: any[], setup: any,
+  ) {
+    const byId = (rows: any[]) => [...rows].sort((left: any, right: any) => String(left.id).localeCompare(String(right.id)));
+    return finPreviewToken(FIN_JOB_SYNC_PREVIEW_VERSION, {
+      jobs: byId(jobs),
+      payments: byId(payments),
+      revenues: byId(revenues),
+      linked_transactions: byId(finActiveOfxRows(linkedTransactions)),
+      allocations: byId(allocations),
+      setup: {
+        account: setup.account || null,
+        method: setup.method || null,
+        accountConflict: setup.accountConflict,
+        methodConflict: setup.methodConflict,
+      },
+    });
+  }
+
+  function finCategorizeJobConflict(plan: any, item: any) {
+    if (item.codigo.includes('conciliad')) plan.linkedConflicts.push(item);
+    else if (item.codigo.includes('legad') || item.codigo === 'fonte_pagamento_legada') {
+      plan.legacyConflicts.push(item);
+    } else plan.paymentConflicts.push(item);
+  }
+
+  function finAddSafeJobToSyncPlan(plan: any, job: any, existingRows: any[], projection: any) {
+    const legacyRows = existingRows.filter((row: any) => (
+      row.origem_automatica === true && !row.origem_ref && row.status !== 'cancelado'
+    ));
+    const counts = finJobSyncCounts(existingRows, projection, legacyRows);
+    plan.desiredRows.push(...projection.rows);
+    projection.staleOriginRefs.forEach((ref: string) => plan.staleRefs.add(ref));
+    projection.warnings.forEach((warning: string) => plan.warnings.add(warning));
+    const ids = plan.statuses.get(projection.paymentStatus) || [];
+    ids.push(Number(job.id));
+    plan.statuses.set(projection.paymentStatus, ids);
+    if (legacyRows.length) plan.safeLegacyJobIds.add(Number(job.id));
+    plan.jobPreviews.push({
+      job_id: job.id,
+      ...counts,
+      conflitos: [],
+      overpaid_amount: finNumber(projection.overpaidAmount),
+      warnings: projection.warnings,
+    });
+  }
+
+  function finBuildJobSyncPlan(input: any) {
+    const paymentsByJob = finGroupByNumber(input.payments, 'job_id');
+    const revenuesByJob = finGroupByNumber(
+      input.revenues.filter((row: any) => row.job_id !== null), 'job_id',
+    );
+    const linkedReceiptIds = new Set([
+      ...finActiveOfxRows(input.linkedTransactions)
+        .map((tx: any) => String(tx.receita_id || '')).filter(Boolean),
+      ...input.allocations.map((row: any) => String(row.receita_id || '')).filter(Boolean),
+    ]);
+    const setup = finInfinitePaySetup(input.accounts, input.methods);
+    const plan: any = {
+      desiredRows: [], staleRefs: new Set<string>(), warnings: new Set<string>(),
+      rejectedPaymentIds: [], duplicatePaymentIds: [], statuses: new Map<string, number[]>(),
+      safeLegacyJobIds: new Set<number>(), legacyConflicts: [], linkedConflicts: [],
+      paymentConflicts: [], jobPreviews: [],
+    };
+    input.jobs.forEach((job: any) => {
+      const jobPayments = paymentsByJob.get(Number(job.id)) || [];
+      const existingRows = revenuesByJob.get(Number(job.id)) || [];
+      const projection = finJobProjection(job, jobPayments, existingRows, input.userId, setup, linkedReceiptIds);
+      plan.rejectedPaymentIds.push(...projection.rejectedPaymentIds);
+      plan.duplicatePaymentIds.push(...projection.duplicatePaymentIds);
+      const conflict = finJobSyncConflict(job, jobPayments, existingRows, projection, linkedReceiptIds);
+      if (!conflict) return finAddSafeJobToSyncPlan(plan, job, existingRows, projection);
+      const item = {
+        job_id: job.id,
+        codigo: conflict.code,
+        pagamentos_acima_do_contrato: finNumber(projection.overpaidAmount),
+        payment_ids_invalidos: projection.rejectedPaymentIds,
+        payment_ids_duplicados: projection.duplicatePaymentIds,
+        receitas_legadas: conflict.legacyRows.length,
+      };
+      finCategorizeJobConflict(plan, item);
+      plan.warnings.add(`Job ${job.id}: sincronização preservada para revisão (${conflict.code}).`);
+      plan.jobPreviews.push({
+        job_id: job.id, criadas: 0, atualizadas: 0, arquivadas: 0,
+        conflitos: [item], overpaid_amount: finNumber(projection.overpaidAmount), warnings: projection.warnings,
+      });
+    });
+    plan.previewToken = finSyncPreviewToken(
+      input.jobs, input.payments, input.revenues,
+      input.linkedTransactions, input.allocations, setup,
+    );
+    return plan;
+  }
+
+  function finJobSyncPreviewResponse(plan: any) {
+    const sum = (field: string) => plan.jobPreviews
+      .reduce((total: number, job: any) => total + finNumber(job[field]), 0);
+    const conflicts = plan.legacyConflicts.length + plan.linkedConflicts.length + plan.paymentConflicts.length;
+    return {
+      dry_run: true,
+      preview_token: plan.previewToken,
+      preview_versao: FIN_JOB_SYNC_PREVIEW_VERSION,
+      resumo: {
+        jobs_analisados: plan.jobPreviews.length,
+        criadas: sum('criadas'),
+        atualizadas: sum('atualizadas'),
+        arquivadas: sum('arquivadas'),
+        conflitos: conflicts,
+        overpaid: finRoundMoney(plan.jobPreviews.reduce(
+          (total: number, job: any) => total + finNumber(job.overpaid_amount), 0,
+        )),
+      },
+      jobs: plan.jobPreviews,
+      warnings: [...plan.warnings],
+      conflitos_legado: plan.legacyConflicts,
+      conflitos_conciliados: plan.linkedConflicts,
+      conflitos_pagamentos: plan.paymentConflicts,
+      conflitos_total: conflicts,
+    };
+  }
+
+  async function finLoadJobSyncInput(
+    supabase: SupabaseClient,
+    adminClient: SupabaseClient,
+    userId: string,
+  ) {
+    const [jobs, revenues, accounts, methods] = await Promise.all([
+      loadAllUserRows(
+        supabase,
+        'jobs',
+        'id,status,client_id,job_name,job_date,amount,payment_status,payment_method,production_stage,fin_synced,notes,clients(id,name)',
+        userId,
+      ),
+      loadAllUserRows(supabase, 'fin_receitas', '*', userId),
+      loadAllUserRows(supabase, 'fin_contas', '*', userId),
+      loadAllUserRows(supabase, 'fin_meios', '*', userId),
+    ]);
+    const jobIds = jobs.map((job: any) => job.id);
+    const [payments, linkedTransactions, allocations] = await Promise.all([
+      jobIds.length ? finLoadRowsByIds(adminClient, 'job_payments', '*', 'job_id', jobIds) : [],
+      loadAllUserRows(supabase, 'fin_transacoes_ofx', 'id,receita_id,revertido_em', userId),
+      loadAllUserRows(supabase, 'fin_conciliacao_alocacoes', 'id,receita_id,transacao_id', userId),
+    ]);
+    return { userId, jobs, revenues, accounts, methods, payments, linkedTransactions, allocations };
+  }
+
+  async function finSyncJobsHandler(req: any, res: any) {
+    const supabase = finClient(req); const userId = finUser(req);
+    const adminClient = supabaseAdmin || supabase;
+    try {
+      const { error: schemaError } = await supabase.from('fin_receitas')
+        .select('id,origem_ref').eq('user_id', userId).limit(1);
+      if (schemaError) throw schemaError;
+      const input = await finLoadJobSyncInput(supabase, adminClient, userId);
+      const plan = finBuildJobSyncPlan(input);
+      const preview = finJobSyncPreviewResponse(plan);
+      if (req.body?.dry_run === true) return res.json(preview);
+      if (req.body?.confirmar !== true
+        || req.body?.preview_versao !== FIN_JOB_SYNC_PREVIEW_VERSION
+        || !String(req.body?.preview_token || '').trim()) {
+        return res.status(428).json({
+          error: 'SYNC_PREVIEW_REQUIRED',
+          message: 'Gere a prévia e confirme a mesma versão antes de atualizar os recebimentos.',
+          preview,
+        });
+      }
+      if (req.body.preview_token !== plan.previewToken) {
+        return res.status(409).json({
+          error: 'SYNC_PREVIEW_STALE',
+          message: 'Pagamentos ou conciliações mudaram. Revise uma nova prévia.',
+          preview,
+        });
+      }
+      const upserted = await finUpsertProjectedRevenues(supabase, userId, plan.desiredRows);
+      const racedJobIds = new Set<number>(
+        upserted.conflicts.map((conflict: any) => Number(conflict.job_id)).filter(Number.isFinite),
+      );
+      upserted.conflicts.forEach((conflict: any) => plan.linkedConflicts.push(conflict));
+      if (racedJobIds.size) {
+        plan.warnings.add('Alguns trabalhos mudaram durante a sincronização e foram preservados para revisão.');
+        for (const [status, ids] of plan.statuses) {
+          plan.statuses.set(status, ids.filter((id: number) => !racedJobIds.has(Number(id))));
+        }
+        racedJobIds.forEach((jobId) => plan.safeLegacyJobIds.delete(jobId));
+        input.revenues.forEach((row: any) => {
+          if (racedJobIds.has(Number(row.job_id)) && row.origem_ref) plan.staleRefs.delete(row.origem_ref);
+        });
+      }
+      const archived = await finArchiveAutomaticRevenues(
+        supabase,
+        userId,
+        input.revenues,
+        plan.staleRefs,
+        true,
+        plan.safeLegacyJobIds,
+      );
+      await finUpdateProjectedJobStatuses(supabase, userId, plan.statuses);
+      if (archived.protectedIds.length) {
+        plan.linkedConflicts.push({
+          codigo: 'conciliacao_criada_durante_sync',
+          receita_ids: archived.protectedIds,
+        });
+        plan.warnings.add('Alguns lançamentos foram conciliados durante a sincronização e permaneceram preservados.');
+      }
+      return res.json({
+        dry_run: false,
+        preview_token: plan.previewToken,
+        preview_versao: FIN_JOB_SYNC_PREVIEW_VERSION,
+        criadas: upserted.created,
+        atualizadas: upserted.updated,
+        preservadas: upserted.skipped,
+        arquivadas: archived.archived,
+        legacy_archived: archived.legacyArchived,
+        reabertas: archived.reopenedIds.length,
+        warnings: [...plan.warnings],
+        rejected_payment_ids: plan.rejectedPaymentIds,
+        duplicate_payment_ids: plan.duplicatePaymentIds,
+        conflitos_legado: plan.legacyConflicts,
+        conflitos_conciliados: plan.linkedConflicts,
+        conflitos_pagamentos: plan.paymentConflicts,
+        conflitos_total: plan.legacyConflicts.length + plan.linkedConflicts.length + plan.paymentConflicts.length,
+      });
+    } catch (error: any) {
+      if (finRequiresMigration(error)) {
+        return res.status(422).json({ error: 'MIGRATION_NEEDED', message: 'A atualização da conciliação financeira ainda não foi aplicada.' });
+      }
+      return res.status(500).json({ error: error?.message || 'Falha ao sincronizar os pagamentos' });
+    }
+  }
+
+  // ─── Sincronizar jobs → receitas (importação automática) ───────────────────
+  app.post('/api/fin/sync-jobs', requireAuth, async (req, res) => (
+    finSyncJobsHandler(req, res)
+  ));
   // ─── Diagnóstico do sync ────────────────────────────────────────────────────
   app.get('/api/fin/sync-jobs/debug', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
@@ -16902,24 +18361,25 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // ─── Dashboard financeiro ───────────────────────────────────────────────────
   app.get('/api/fin/dashboard', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    await atualizarStatusAtrasados(supabase, userId);
-    const hoje = new Date();
-    const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
+    const currentMonth = finSaoPauloMonthParts();
+    const mesAtual = `${currentMonth.year}-${String(currentMonth.month).padStart(2, '0')}`;
 
-    const [{ data: receitas }, { data: despesas }, { data: contas }] = await Promise.all([
-      supabase.from('fin_receitas').select('*').eq('user_id', userId),
-      supabase.from('fin_despesas').select('*').eq('user_id', userId),
-      supabase.from('fin_contas').select('*').eq('user_id', userId).eq('ativo', true),
+    const [receitaRows, despesaRows, contasRows, transactionRows] = await Promise.all([
+      loadAllUserRows(supabase, 'fin_receitas', '*', userId),
+      loadAllUserRows(supabase, 'fin_despesas', '*', userId),
+      loadAllUserRows(supabase, 'fin_contas', '*', userId),
+      finOptionalTransferTransactions(supabase, userId),
     ]);
-
-    const r = receitas || []; const d = despesas || [];
+    const r = receitaRows.map(finWithEffectiveStatus);
+    const d = despesaRows.map(finWithEffectiveStatus);
+    const contas = contasRows.filter((account: any) => account.ativo !== false);
 
     // KPIs do mês atual
     const receita_mes = r
-      .filter((x: any) => x.status === 'recebido' && (x.data_pagamento || x.data_vencimento)?.startsWith(mesAtual))
+      .filter((x: any) => x.status === 'recebido' && finReceiptCashDate(x)?.startsWith(mesAtual))
       .reduce((s: number, x: any) => s + (x.valor_liquido || 0), 0);
     const despesa_mes = d
-      .filter((x: any) => x.status === 'pago' && (x.data_pagamento || x.data_vencimento)?.startsWith(mesAtual))
+      .filter((x: any) => x.status === 'pago' && finExpenseCashDate(x)?.startsWith(mesAtual))
       .reduce((s: number, x: any) => s + (x.valor || 0), 0);
     const receitas_pendentes = r
       .filter((x: any) => x.status === 'pendente')
@@ -16934,24 +18394,28 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .filter((x: any) => x.status === 'atrasado')
       .reduce((s: number, x: any) => s + (x.valor || 0), 0);
 
-    // Saldo total das contas
-    const saldo_contas = (contas || []).reduce((s: number, c: any) => {
-      const entradas = r.filter((x: any) => x.conta_id === c.id && x.status === 'recebido').reduce((a: number, x: any) => a + (x.valor_liquido || 0), 0);
-      const saidas = d.filter((x: any) => x.conta_id === c.id && x.status === 'pago').reduce((a: number, x: any) => a + (x.valor || 0), 0);
-      return s + (c.saldo_inicial || 0) + entradas - saidas;
-    }, 0);
+    // O último saldo confirmado pelo extrato prevalece. Contas ainda sem
+    // extrato usam a projeção do ledger, e a resposta explicita a composição.
+    const saldos_contas = contas.map((account: any) => ({
+      conta_id: account.id,
+      nome: account.nome,
+      saldo_extrato_em: account.saldo_extrato_em || null,
+      ...finAccountBalance(account, r, d, transactionRows),
+    }));
+    const saldo_contas = saldos_contas.reduce((sum: number, account: any) => sum + account.saldo_atual, 0);
+    const saldo_fonte = finDashboardBalanceSource(saldos_contas);
 
     // Fluxo de caixa — últimos 12 meses (passado → presente)
     const fluxo_12m: any[] = [];
     for (let i = 11; i >= 0; i--) {
-      const dt = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
-      const mes = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
-      const label = dt.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' });
+      const dt = new Date(Date.UTC(currentMonth.year, currentMonth.month - 1 - i, 1));
+      const mes = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}`;
+      const label = dt.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit', timeZone: 'UTC' });
       const receiMes = r
-        .filter((x: any) => x.status === 'recebido' && (x.data_pagamento || x.data_vencimento)?.startsWith(mes))
+        .filter((x: any) => x.status === 'recebido' && finReceiptCashDate(x)?.startsWith(mes))
         .reduce((s: number, x: any) => s + (x.valor_liquido || 0), 0);
       const despMes = d
-        .filter((x: any) => x.status === 'pago' && (x.data_pagamento || x.data_vencimento)?.startsWith(mes))
+        .filter((x: any) => x.status === 'pago' && finExpenseCashDate(x)?.startsWith(mes))
         .reduce((s: number, x: any) => s + (x.valor || 0), 0);
       fluxo_12m.push({ mes: label, receitas: receiMes, despesas: despMes, lucro: receiMes - despMes });
     }
@@ -16971,7 +18435,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .map((x: any) => ({ id: x.id, descricao: x.descricao, valor: x.valor, data_vencimento: x.data_vencimento, status: x.status }));
 
     res.json({
-      kpis: { receita_mes, despesa_mes, lucro_mes: receita_mes - despesa_mes, saldo_contas, receitas_pendentes, despesas_pendentes, receitas_atrasadas, despesas_atrasadas },
+      kpis: { receita_mes, despesa_mes, lucro_mes: receita_mes - despesa_mes, saldo_contas, saldo_fonte, receitas_pendentes, despesas_pendentes, receitas_atrasadas, despesas_atrasadas },
+      saldos_contas,
       fluxo_12m,
       proximos_recebimentos,
       proximas_despesas,
@@ -16982,49 +18447,62 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.get('/api/fin/dre', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
     const { mes, ano } = req.query;
-
-    // Filtro de período: "YYYY-MM" ou "YYYY"
-    const periodoFiltro = mes
-      ? `${ano}-${String(mes).padStart(2, '0')}`
-      : String(ano);
+    const year = Number(ano);
+    const month = mes ? Number(mes) : null;
+    if (!Number.isInteger(year) || year < 2000 || year > 2200 || (month !== null && (!Number.isInteger(month) || month < 1 || month > 12))) {
+      return res.status(400).json({ error: 'Período da DRE inválido.' });
+    }
+    const periodStart = month === null
+      ? `${year}-01-01`
+      : `${year}-${String(month).padStart(2, '0')}-01`;
+    const periodEnd = month === null
+      ? `${year}-12-31`
+      : new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
     const periodoLabel = mes
-      ? new Date(Number(ano), Number(mes) - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
-      : `Ano ${ano}`;
+      ? new Date(year, Number(month) - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
+      : `Ano ${year}`;
 
-    const [{ data: grupos }, { data: categorias }, { data: receitas }, { data: despesas }] = await Promise.all([
+    const [groupsResult, categoriesResult, receiptsResult, expensesResult] = await Promise.all([
       supabase.from('fin_grupos_dre').select('*').eq('user_id', userId).order('ordem'),
       supabase.from('fin_categorias').select('*').eq('user_id', userId).eq('ativo', true),
-      supabase.from('fin_receitas').select('*').eq('user_id', userId).like('data_vencimento', `${periodoFiltro}%`).eq('status', 'recebido'),
-      supabase.from('fin_despesas').select('*').eq('user_id', userId).like('data_vencimento', `${periodoFiltro}%`).eq('status', 'pago'),
+      supabase.from('fin_receitas').select('*').eq('user_id', userId)
+        .gte('data_vencimento', periodStart).lte('data_vencimento', periodEnd).eq('status', 'recebido'),
+      supabase.from('fin_despesas').select('*').eq('user_id', userId)
+        .gte('data_vencimento', periodStart).lte('data_vencimento', periodEnd).eq('status', 'pago'),
     ]);
+    const queryError = groupsResult.error || categoriesResult.error || receiptsResult.error || expensesResult.error;
+    if (queryError) return res.status(500).json({ error: queryError.message });
+    const grupos = groupsResult.data || [];
+    const categorias = categoriesResult.data || [];
+    const receitas = receiptsResult.data || [];
+    const despesas = expensesResult.data || [];
 
-    const receitaBruta = (receitas || []).reduce((s: number, r: any) => s + (r.valor_bruto || 0), 0);
-    const taxasTotal = (receitas || []).reduce((s: number, r: any) => s + (r.taxa_meio || 0), 0);
+    const taxasTotal = receitas.reduce((s: number, r: any) => s + finNumber(r.taxa_meio), 0);
 
     // "Catch-all": lançamentos cuja categoria NÃO está ligada a nenhum grupo da
     // DRE (ou sem categoria) somem do relatório. Pior: despesas assim nunca eram
     // subtraídas → resultado inflado. Aqui captamos esses como "Outros".
-    const grupoIds = new Set((grupos || []).map((g: any) => g.id));
+    const grupoIds = new Set(grupos.map((g: any) => g.id));
     const catMapeada = new Set(
-      (categorias || []).filter((c: any) => c.grupo_dre_id && grupoIds.has(c.grupo_dre_id)).map((c: any) => c.id)
+      categorias.filter((c: any) => c.grupo_dre_id && grupoIds.has(c.grupo_dre_id)).map((c: any) => c.id)
     );
     const ehMapeada = (catId: any) => !!catId && catMapeada.has(catId);
-    const receitasNaoMapeadas = (receitas || []).filter((r: any) => !ehMapeada(r.categoria_id)).reduce((s: number, r: any) => s + (r.valor_bruto || 0), 0);
-    const despesasNaoMapeadas = (despesas || []).filter((d: any) => !ehMapeada(d.categoria_id)).reduce((s: number, d: any) => s + (d.valor || 0), 0);
+    const receitasNaoMapeadas = receitas.filter((r: any) => !ehMapeada(r.categoria_id)).reduce((s: number, r: any) => s + finNumber(r.valor_bruto), 0);
+    const despesasNaoMapeadas = despesas.filter((d: any) => !ehMapeada(d.categoria_id)).reduce((s: number, d: any) => s + finNumber(d.valor), 0);
     // Onde encaixar os "Outros": receita bruta (entradas) e despesas operacionais (saídas).
-    const grupoReceitaBrutaId = ((grupos || []).find((g: any) => g.nome === '(+) Receita Bruta') || (grupos || []).find((g: any) => g.tipo === 'receita'))?.id ?? null;
+    const grupoReceitaBrutaId = (grupos.find((g: any) => g.nome === '(+) Receita Bruta') || grupos.find((g: any) => g.tipo === 'receita'))?.id ?? null;
     const grupoOutrasDespesasId = (
-      (grupos || []).find((g: any) => g.nome === '(-) Despesas Operacionais') ||
-      (grupos || []).find((g: any) => g.tipo === 'despesa' && g.operacao === 'subtrai') ||
-      (grupos || []).find((g: any) => g.operacao === 'subtrai' && !(g.campos_automaticos || []).includes('taxas_recebimento'))
+      grupos.find((g: any) => g.nome === '(-) Despesas Operacionais') ||
+      grupos.find((g: any) => g.tipo === 'despesa' && g.operacao === 'subtrai') ||
+      grupos.find((g: any) => g.operacao === 'subtrai' && !(g.campos_automaticos || []).includes('taxas_recebimento'))
     )?.id ?? null;
 
     const linhas: any[] = [];
     const totais_parciais: Record<string, number> = {};
-    let acumulado = receitaBruta;
+    let acumulado = 0;
 
-    for (const grupo of (grupos || [])) {
-      const catsDeste = (categorias || []).filter((c: any) => c.grupo_dre_id === grupo.id);
+    for (const grupo of grupos) {
+      const catsDeste = categorias.filter((c: any) => c.grupo_dre_id === grupo.id);
       const categoriasLinha: any[] = [];
       let total_grupo = 0;
 
@@ -17037,8 +18515,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       for (const cat of catsDeste) {
         const isReceita = cat.tipo === 'receita';
         const total = isReceita
-          ? (receitas || []).filter((r: any) => r.categoria_id === cat.id).reduce((s: number, r: any) => s + (r.valor_bruto || 0), 0)
-          : (despesas || []).filter((d: any) => d.categoria_id === cat.id).reduce((s: number, d: any) => s + (d.valor || 0), 0);
+          ? receitas.filter((r: any) => r.categoria_id === cat.id).reduce((s: number, r: any) => s + finNumber(r.valor_bruto), 0)
+          : despesas.filter((d: any) => d.categoria_id === cat.id).reduce((s: number, d: any) => s + finNumber(d.valor), 0);
         categoriasLinha.push({ categoria_id: cat.id, categoria_nome: cat.nome, total });
         total_grupo += total;
       }
@@ -17067,14 +18545,58 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       });
 
       if (grupo.operacao === 'subtrai') acumulado -= total_grupo;
-      else if (grupo.nome !== '(+) Receita Bruta') acumulado += total_grupo; // Receita Bruta já é o acumulado inicial
+      else acumulado += total_grupo;
 
       if (grupo.total_parcial_apos) {
         totais_parciais[grupo.total_parcial_apos] = acumulado;
       }
     }
 
-    res.json({ periodo: periodoLabel, linhas, totais_parciais, resultado_liquido: acumulado });
+    const hasAutomaticFees = grupos.some((grupo: any) => (
+      (grupo.campos_automaticos || []).includes('taxas_recebimento')
+    ));
+    if (!hasAutomaticFees && taxasTotal > 0) {
+      linhas.push({
+        grupo_id: null,
+        grupo_nome: '(-) Taxas de recebimento',
+        tipo: 'deducao',
+        operacao: 'subtrai',
+        ordem: Number.MAX_SAFE_INTEGER - 1,
+        total_parcial_apos: null,
+        categorias: [{ categoria_id: null, categoria_nome: 'Taxas de recebimento', total: taxasTotal }],
+        total_grupo: taxasTotal,
+      });
+      acumulado -= taxasTotal;
+    }
+
+    if (!grupoReceitaBrutaId && receitasNaoMapeadas > 0) {
+      linhas.unshift({
+        grupo_id: null,
+        grupo_nome: '(+) Outras receitas',
+        tipo: 'receita',
+        operacao: 'soma',
+        ordem: -1,
+        total_parcial_apos: null,
+        categorias: [{ categoria_id: null, categoria_nome: 'Sem grupo da DRE', total: receitasNaoMapeadas }],
+        total_grupo: receitasNaoMapeadas,
+      });
+      acumulado += receitasNaoMapeadas;
+    }
+    if (!grupoOutrasDespesasId && despesasNaoMapeadas > 0) {
+      linhas.push({
+        grupo_id: null,
+        grupo_nome: '(-) Outras despesas',
+        tipo: 'despesa',
+        operacao: 'subtrai',
+        ordem: Number.MAX_SAFE_INTEGER,
+        total_parcial_apos: null,
+        categorias: [{ categoria_id: null, categoria_nome: 'Sem grupo da DRE', total: despesasNaoMapeadas }],
+        total_grupo: despesasNaoMapeadas,
+      });
+      acumulado -= despesasNaoMapeadas;
+    }
+
+    res.json({ periodo: periodoLabel, regime: 'competencia', linhas, totais_parciais, resultado_liquido: acumulado });
   });
 
   // ─── Relatórios ────────────────────────────────────────────────────────────
@@ -17093,15 +18615,17 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       inicio = `${ano}-${String(mes_inicio).padStart(2, '0')}-01`;
       fim = `${ano}-${String(mes_fim).padStart(2, '0')}-31`;
     }
+    const inCashRange = (date: string | null) => !!date && date >= inicio && date <= fim;
 
     if (tipo === 'receitas_categoria') {
-      const [{ data: receitas }, { data: categorias }] = await Promise.all([
-        supabase.from('fin_receitas').select('categoria_id, valor_liquido').eq('user_id', userId).eq('status', 'recebido').gte('data_vencimento', inicio).lte('data_vencimento', fim),
-        supabase.from('fin_categorias').select('id, nome').eq('user_id', userId),
+      const [receitasRows, categorias] = await Promise.all([
+        loadAllUserRows(supabase, 'fin_receitas', 'id,categoria_id,valor_liquido,data_pagamento,data_recebimento_real,status', userId),
+        loadAllUserRows(supabase, 'fin_categorias', 'id,nome', userId),
       ]);
-      const catMap = new Map((categorias || []).map((c: any) => [c.id, c.nome]));
+      const receitas = receitasRows.filter((row: any) => row.status === 'recebido' && inCashRange(finReceiptCashDate(row)));
+      const catMap = new Map(categorias.map((c: any) => [c.id, c.nome]));
       const map = new Map<string, number>();
-      (receitas || []).forEach((r: any) => {
+      receitas.forEach((r: any) => {
         const cat = catMap.get(r.categoria_id) || 'Sem categoria';
         map.set(cat, (map.get(cat) || 0) + (r.valor_liquido || 0));
       });
@@ -17109,13 +18633,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
 
     if (tipo === 'despesas_categoria') {
-      const [{ data: despesas }, { data: categorias }] = await Promise.all([
-        supabase.from('fin_despesas').select('categoria_id, valor').eq('user_id', userId).eq('status', 'pago').gte('data_vencimento', inicio).lte('data_vencimento', fim),
-        supabase.from('fin_categorias').select('id, nome').eq('user_id', userId),
+      const [despesasRows, categorias] = await Promise.all([
+        loadAllUserRows(supabase, 'fin_despesas', 'id,categoria_id,valor,data_pagamento,status', userId),
+        loadAllUserRows(supabase, 'fin_categorias', 'id,nome', userId),
       ]);
-      const catMap = new Map((categorias || []).map((c: any) => [c.id, c.nome]));
+      const despesas = despesasRows.filter((row: any) => row.status === 'pago' && inCashRange(finExpenseCashDate(row)));
+      const catMap = new Map(categorias.map((c: any) => [c.id, c.nome]));
       const map = new Map<string, number>();
-      (despesas || []).forEach((d: any) => {
+      despesas.forEach((d: any) => {
         const cat = catMap.get(d.categoria_id) || 'Sem categoria';
         map.set(cat, (map.get(cat) || 0) + (d.valor || 0));
       });
@@ -17123,9 +18648,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
 
     if (tipo === 'receitas_cliente') {
-      const { data: receitas } = await supabase.from('fin_receitas').select('cliente_nome, valor_liquido').eq('user_id', userId).eq('status', 'recebido').gte('data_vencimento', inicio).lte('data_vencimento', fim);
+      const receitasRows = await loadAllUserRows(
+        supabase,
+        'fin_receitas',
+        'id,cliente_nome,valor_liquido,data_pagamento,data_recebimento_real,status',
+        userId,
+      );
+      const receitas = receitasRows.filter((row: any) => row.status === 'recebido' && inCashRange(finReceiptCashDate(row)));
       const map = new Map<string, number>();
-      (receitas || []).forEach((r: any) => {
+      receitas.forEach((r: any) => {
         const cli = r.cliente_nome || 'Sem cliente';
         map.set(cli, (map.get(cli) || 0) + (r.valor_liquido || 0));
       });
@@ -17133,20 +18664,22 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
 
     if (tipo === 'fluxo_mensal') {
-      const [{ data: receitas }, { data: despesas }] = await Promise.all([
-        supabase.from('fin_receitas').select('data_vencimento, valor_liquido').eq('user_id', userId).eq('status', 'recebido').gte('data_vencimento', inicio).lte('data_vencimento', fim),
-        supabase.from('fin_despesas').select('data_vencimento, valor').eq('user_id', userId).eq('status', 'pago').gte('data_vencimento', inicio).lte('data_vencimento', fim),
+      const [receitasRows, despesasRows] = await Promise.all([
+        loadAllUserRows(supabase, 'fin_receitas', 'id,valor_liquido,data_pagamento,data_recebimento_real,status', userId),
+        loadAllUserRows(supabase, 'fin_despesas', 'id,valor,data_pagamento,status', userId),
       ]);
+      const receitas = receitasRows.filter((row: any) => row.status === 'recebido' && inCashRange(finReceiptCashDate(row)));
+      const despesas = despesasRows.filter((row: any) => row.status === 'pago' && inCashRange(finExpenseCashDate(row)));
       const mesesMap = new Map<string, { Receitas: number; Despesas: number; Lucro: number }>();
-      (receitas || []).forEach((r: any) => {
-        const mes = r.data_vencimento?.slice(0, 7) || '';
+      receitas.forEach((r: any) => {
+        const mes = finReceiptCashDate(r)?.slice(0, 7) || '';
         const e = mesesMap.get(mes) || { Receitas: 0, Despesas: 0, Lucro: 0 };
         e.Receitas += (r.valor_liquido || 0);
         e.Lucro += (r.valor_liquido || 0);
         mesesMap.set(mes, e);
       });
-      (despesas || []).forEach((d: any) => {
-        const mes = d.data_vencimento?.slice(0, 7) || '';
+      despesas.forEach((d: any) => {
+        const mes = finExpenseCashDate(d)?.slice(0, 7) || '';
         const e = mesesMap.get(mes) || { Receitas: 0, Despesas: 0, Lucro: 0 };
         e.Despesas += (d.valor || 0);
         e.Lucro -= (d.valor || 0);
@@ -17159,115 +18692,1628 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // ─── OFX ───────────────────────────────────────────────────────────────────
-  // Tenta conciliar automaticamente uma transação recém-importada do extrato
-  // com um lançamento já baixado: MESMO banco, MESMO valor e MESMA data (exata).
-  // Crédito → receita recebida (valor_liquido); débito → despesa paga.
-  async function autoConciliarOfxTx(supabase: any, userId: string, tx: any): Promise<boolean> {
-    if (!tx?.conta_id) return false;
-    const valorBate = (v: any) => Math.abs(Number(v) - Number(tx.valor)) < 0.005;
-    if (tx.tipo === 'credito') {
-      const { data: rs } = await supabase.from('fin_receitas')
-        .select('id, valor_liquido, valor_bruto')
-        .eq('user_id', userId).eq('conta_id', tx.conta_id)
-        .eq('status', 'recebido').eq('data_recebimento_real', tx.data);
-      for (const r of rs || []) {
-        if (!valorBate(r.valor_liquido ?? r.valor_bruto)) continue;
-        const { data: ja } = await supabase.from('fin_transacoes_ofx')
-          .select('id').eq('user_id', userId).eq('receita_id', r.id).limit(1);
-        if (ja && ja.length) continue; // já ligada a outra transação
-        await supabase.from('fin_transacoes_ofx')
-          .update({ status_conciliacao: 'conciliado', receita_id: r.id })
-          .eq('id', tx.id).eq('user_id', userId);
-        return true;
-      }
-      return false;
-    }
-    const { data: ds } = await supabase.from('fin_despesas')
-      .select('id, valor')
-      .eq('user_id', userId).eq('conta_id', tx.conta_id)
-      .eq('status', 'pago').eq('data_pagamento', tx.data);
-    for (const d of ds || []) {
-      if (!valorBate(d.valor)) continue;
-      const { data: ja } = await supabase.from('fin_transacoes_ofx')
-        .select('id').eq('user_id', userId).eq('despesa_id', d.id).limit(1);
-      if (ja && ja.length) continue;
-      await supabase.from('fin_transacoes_ofx')
-        .update({ status_conciliacao: 'conciliado', despesa_id: d.id })
-        .eq('id', tx.id).eq('user_id', userId);
-      return true;
-    }
-    return false;
+  const FIN_OFX_MAX_BYTES = 10 * 1024 * 1024;
+
+  function finOfxRequestError(status: number, code: string, message: string) {
+    const error: any = new Error(message);
+    error.status = status;
+    error.code = code;
+    return error;
   }
 
-  app.post('/api/fin/ofx/import', requireAuth, async (req, res) => {
+  function finDecodeOfxBuffer(buffer: Buffer) {
+    if (!buffer.length) throw finOfxRequestError(400, 'EMPTY_FILE', 'O arquivo está vazio.');
+    if (buffer.length > FIN_OFX_MAX_BYTES) {
+      throw finOfxRequestError(413, 'FILE_TOO_LARGE', 'O arquivo OFX deve ter no máximo 10 MB.');
+    }
+    const header = buffer.subarray(0, Math.min(buffer.length, 4096)).toString('latin1');
+    const declaredLegacy = /CHARSET\s*:\s*(?:1252|WINDOWS-1252|ISO-8859-1|LATIN-?1)/i.test(header);
+    const utf8 = new TextDecoder('utf-8').decode(buffer);
+    const replacementCount = (utf8.match(/\uFFFD/g) || []).length;
+    const useLegacy = declaredLegacy || replacementCount > 0;
+    return useLegacy ? new TextDecoder('windows-1252').decode(buffer) : utf8;
+  }
+
+  function finDecodeOfxContent(body: any) {
+    const base64 = typeof body?.conteudo_base64 === 'string'
+      ? body.conteudo_base64
+      : body?.encoding === 'base64' && typeof body?.conteudo === 'string' ? body.conteudo : null;
+    if (base64) return finDecodeOfxBuffer(Buffer.from(base64, 'base64'));
+    if (Buffer.isBuffer(body?.conteudo)) return finDecodeOfxBuffer(body.conteudo);
+    if (body?.conteudo?.type === 'Buffer' && Array.isArray(body.conteudo.data)) {
+      return finDecodeOfxBuffer(Buffer.from(body.conteudo.data));
+    }
+    const content = typeof body?.conteudo === 'string' ? body.conteudo : '';
+    if (!content.trim()) throw finOfxRequestError(400, 'EMPTY_FILE', 'O arquivo está vazio.');
+    if (Buffer.byteLength(content, 'utf8') > FIN_OFX_MAX_BYTES) {
+      throw finOfxRequestError(413, 'FILE_TOO_LARGE', 'O arquivo OFX deve ter no máximo 10 MB.');
+    }
+    const declaredLegacy = /CHARSET\s*:\s*(?:1252|WINDOWS-1252|ISO-8859-1|LATIN-?1)/i.test(content.slice(0, 4096));
+    if (declaredLegacy && !content.includes('\uFFFD')) {
+      return finDecodeOfxBuffer(Buffer.from(content, 'latin1'));
+    }
+    return content;
+  }
+
+  function finParseUploadedOfx(body: any) {
+    const content = finDecodeOfxContent(body);
+    const plausible = /(?:OFXHEADER\s*:|<\s*OFX\b)/i.test(content) && /<\s*STMTTRN\b/i.test(content);
+    if (!plausible) throw finOfxRequestError(400, 'INVALID_OFX', 'O conteúdo não parece ser um arquivo OFX/QFX válido.');
+    const parsed = parseOfx(content);
+    if (!parsed.transactions.length) {
+      throw finOfxRequestError(400, 'NO_VALID_TRANSACTIONS', 'Nenhuma transação válida foi encontrada no arquivo.');
+    }
+    const currency = String(parsed.metadata.currency || '').trim().toUpperCase();
+    if (currency && currency !== 'BRL') {
+      throw finOfxRequestError(422, 'UNSUPPORTED_CURRENCY', `O arquivo está em ${currency}. Importe somente extratos em BRL.`);
+    }
+    return parsed;
+  }
+
+  function finParsedPeriod(parsed: any) {
+    const dates = parsed.transactions.map((transaction: any) => transaction.date).filter(Boolean).sort();
+    return {
+      inicio: parsed.metadata.dateStart || dates[0] || null,
+      fim: parsed.metadata.dateEnd || dates[dates.length - 1] || null,
+    };
+  }
+
+  function finPreviewPayload(parsed: any, mismatch: any) {
+    const warnings = [...mismatch.warnings];
+    const period = finParsedPeriod(parsed);
+    if (!parsed.metadata.currency) warnings.push('O arquivo não informa a moeda; os valores serão tratados como BRL.');
+    if (parsed.rejected.length) warnings.push(`${parsed.rejected.length} linha(s) inválida(s) não serão importadas.`);
+    if (parsed.ignoredBalance) warnings.push(`${parsed.ignoredBalance} foto(s) de saldo foram ignoradas como movimentação.`);
+    return {
+      transacoes: parsed.transactions.map((transaction: any) => ({
+        fit_id: transaction.sourceFitId || `AUTO:${transaction.fingerprint}`,
+        fingerprint: transaction.fingerprint,
+        tipo: transaction.type,
+        trn_type: transaction.trnType,
+        valor: transaction.amount,
+        data: transaction.date,
+        descricao: transaction.description,
+        nome_contraparte: transaction.counterpartyName,
+        documento_contraparte: transaction.counterpartyDocument,
+        metadata: transaction.metadata,
+      })),
+      resumo: {
+        entradas: parsed.totals.credits,
+        saidas: parsed.totals.debits,
+        total: parsed.totals.count,
+      },
+      saldo_extrato: parsed.metadata.balanceAmount === null
+        ? null
+        : { valor: parsed.metadata.balanceAmount, data: parsed.metadata.balanceDate || period.fim },
+      periodo: period,
+      banco_detectado: parsed.metadata.bankId,
+      conta_detectada: parsed.metadata.accountId,
+      avisos: warnings,
+      bloqueado: mismatch.blocked || parsed.rejected.length > 0,
+      confirmacao_conta_necessaria: mismatch.requiresConfirmation,
+      rejeitadas: parsed.rejected,
+      ignoradas_saldo: parsed.ignoredBalance,
+      hash_arquivo: parsed.fileFingerprint,
+    };
+  }
+
+  function finImportBatchValues(parsed: any, body: any, account: any, userId: string) {
+    const finalBalance = parsed.metadata.balanceAmount;
+    const initialBalance = finalBalance === null
+      ? null
+      : finRoundMoney(finalBalance - parsed.totals.credits + parsed.totals.debits);
+    const fileName = String(body.nome_arquivo || body.filename || 'extrato.ofx').slice(0, 255);
+    const period = finParsedPeriod(parsed);
+    return {
+      user_id: userId,
+      conta_id: account.id,
+      nome_arquivo: fileName,
+      formato: /\.qfx$/i.test(fileName) ? 'qfx' : 'ofx',
+      hash_arquivo: parsed.fileFingerprint,
+      banco_codigo: parsed.metadata.bankId,
+      conta_ref: parsed.metadata.accountId,
+      data_inicio: period.inicio,
+      data_fim: period.fim,
+      saldo_inicial: initialBalance,
+      saldo_final: finalBalance,
+      total_creditos: parsed.totals.credits,
+      total_debitos: parsed.totals.debits,
+      total_transacoes: parsed.totals.count,
+      metadata: {
+        currency: parsed.metadata.currency,
+        accountType: parsed.metadata.accountType,
+        availableBalanceAmount: parsed.metadata.availableBalanceAmount,
+        rejected: parsed.rejected,
+        ignoredBalance: parsed.ignoredBalance,
+      },
+      status: 'processando',
+      erro: null,
+    };
+  }
+
+  function finOfxTransactionRow(transaction: any, parsed: any, batch: any, account: any, userId: string) {
+    const fingerprint = transaction.fingerprint || fingerprintOfxTransaction({
+      bankId: parsed.metadata.bankId,
+      accountId: parsed.metadata.accountId,
+      fitId: transaction.sourceFitId,
+      date: transaction.date,
+      signedAmount: transaction.signedAmount,
+      description: transaction.description,
+      trnType: transaction.trnType,
+    });
+    return {
+      user_id: userId,
+      conta_id: account.id,
+      fit_id: transaction.sourceFitId || `AUTO:${fingerprint}`,
+      tipo: transaction.type,
+      trn_type: transaction.trnType,
+      valor: transaction.amount,
+      data: transaction.date,
+      descricao: transaction.description,
+      importacao_id: batch?.id || null,
+      fingerprint,
+      nome_contraparte: transaction.counterpartyName,
+      documento_contraparte: transaction.counterpartyDocument,
+      metadata: {
+        ...(transaction.metadata || {}),
+        source_fit_id: transaction.sourceFitId,
+        file_fingerprint: parsed.fileFingerprint,
+      },
+    };
+  }
+
+  function finStatementBalanceDecision(account: any, parsed: any) {
+    if (parsed.metadata.balanceAmount === null) return { update: false, warning: null };
+    if (account.saldo_extrato === null || account.saldo_extrato === undefined) return { update: true, warning: null };
+    if (!account.saldo_extrato_em) return { update: true, warning: null };
+    const incomingDate = parsed.metadata.balanceDate || finParsedPeriod(parsed).fim;
+    if (!incomingDate) {
+      return { update: false, warning: 'O arquivo não informa a data do saldo e não substituiu o saldo bancário atual.' };
+    }
+    if (incomingDate > account.saldo_extrato_em) return { update: true, warning: null };
+    if (incomingDate < account.saldo_extrato_em) {
+      return { update: false, warning: 'O saldo do arquivo é mais antigo e não substituiu o saldo bancário atual.' };
+    }
+    const sameAmount = Math.abs(finNumber(parsed.metadata.balanceAmount) - finNumber(account.saldo_extrato)) <= 0.005;
+    return {
+      update: false,
+      warning: sameAmount
+        ? null
+        : 'Já existe outro saldo confirmado no mesmo dia. Como o OFX não preserva o horário, o saldo atual foi mantido.',
+    };
+  }
+
+  async function finCandidateContext(supabase: SupabaseClient, userId: string) {
+    const [receipts, expenses, transactions, allocations, accounts, methods] = await Promise.all([
+      loadAllUserRows(supabase, 'fin_receitas', '*', userId),
+      loadAllUserRows(supabase, 'fin_despesas', '*', userId),
+      loadAllUserRows(supabase, 'fin_transacoes_ofx', '*', userId),
+      loadAllUserRows(supabase, 'fin_conciliacao_alocacoes', '*', userId),
+      loadAllUserRows(supabase, 'fin_contas', 'id,nome,banco,tipo', userId),
+      loadAllUserRows(supabase, 'fin_meios', 'id,nome,tipo', userId),
+    ]);
+    const activeTransactions = finActiveOfxRows(transactions);
+    const directLinkedReceipts = new Set(
+      activeTransactions.map((tx: any) => String(tx.receita_id || '')).filter(Boolean),
+    );
+    const linkedReceipts = new Set([
+      ...directLinkedReceipts,
+      ...allocations.map((allocation: any) => String(allocation.receita_id || '')).filter(Boolean),
+    ]);
+    return {
+      receipts,
+      expenses,
+      transactions: activeTransactions,
+      allocations,
+      accounts,
+      methods,
+      directLinkedReceipts,
+      linkedReceipts,
+      linkedExpenses: new Set(activeTransactions.map((tx: any) => String(tx.despesa_id || '')).filter(Boolean)),
+    };
+  }
+
+  function finReconciliationTransaction(transaction: any) {
+    return {
+      id: String(transaction.id),
+      type: transaction.tipo,
+      amount: finNumber(transaction.valor),
+      date: transaction.data,
+      description: transaction.descricao,
+      counterpartyName: transaction.nome_contraparte,
+      accountId: transaction.conta_id,
+    };
+  }
+
+  function finReceiptCandidate(row: any) {
+    const cashDate = finReceiptCashDate(row);
+    return {
+      id: String(row.id),
+      kind: 'receita' as const,
+      amount: finNumber(row.valor_liquido ?? row.valor_bruto),
+      date: row.status === 'recebido' ? cashDate : cashDate || row.data_vencimento,
+      name: row.cliente_nome,
+      description: row.descricao,
+      accountId: row.conta_id,
+      raw: row,
+    };
+  }
+
+  function finExpenseCandidate(row: any) {
+    const cashDate = finExpenseCashDate(row);
+    return {
+      id: String(row.id),
+      kind: 'despesa' as const,
+      amount: finNumber(row.valor),
+      date: row.status === 'pago' ? cashDate : cashDate || row.data_vencimento,
+      name: row.fornecedor,
+      description: row.descricao,
+      accountId: row.conta_id,
+      raw: row,
+    };
+  }
+
+  function finIsInfinitePaySettlement(transaction: any, candidate: any) {
+    const transferName = `${transaction.nome_contraparte || ''} ${transaction.descricao || ''}`;
+    return transaction.tipo === 'credito'
+      && finIsInfinitePay(transferName)
+      && Boolean(candidate.raw?.job_id)
+      && candidate.accountId !== transaction.conta_id;
+  }
+
+  function finCandidatesForTransaction(context: any, transaction: any) {
+    const source = transaction.tipo === 'credito'
+      ? context.receipts
+          .filter((row: any) => row.status !== 'cancelado' && !context.linkedReceipts.has(String(row.id)))
+          .map(finReceiptCandidate)
+      : context.expenses
+          .filter((row: any) => row.status !== 'cancelado' && !context.linkedExpenses.has(String(row.id)))
+          .map(finExpenseCandidate);
+    return source.filter((candidate: any) => !finIsInfinitePaySettlement(transaction, candidate));
+  }
+
+  function finDecisionForTransaction(context: any, transaction: any) {
+    const tx = finReconciliationTransaction(transaction);
+    const candidates = finCandidatesForTransaction(context, transaction);
+    const coreCandidates = candidates.map(({ raw: _raw, ...candidate }: any) => candidate);
+    const coreDecision = decideReconciliation(tx, coreCandidates);
+    const suggested: any = candidates.find((candidate: any) => candidate.id === coreDecision.suggestionId);
+    const accountMismatch = Boolean(
+      suggested?.accountId
+      && transaction.conta_id
+      && suggested.accountId !== transaction.conta_id,
+    );
+    const decision = coreDecision.status === 'auto' && accountMismatch
+      ? {
+          ...coreDecision,
+          status: 'review' as const,
+          ambiguous: true,
+          reasons: [...coreDecision.reasons, 'conta_financeira_divergente'],
+        }
+      : coreDecision;
+    const scored = new Map(coreCandidates.map((candidate: any) => {
+      const result = scoreReconciliationCandidate(tx, candidate);
+      return [candidate.id, result];
+    }));
+    const byId = new Map(candidates.map((candidate: any) => [candidate.id, candidate]));
+    const candidateDtos = decision.candidates.map((ranked: any) => {
+      const candidate: any = byId.get(ranked.candidateId);
+      const score: any = scored.get(ranked.candidateId) || ranked;
+      return {
+        id: ranked.candidateId,
+        tipo: ranked.kind,
+        descricao: candidate?.description || null,
+        cliente_nome: candidate?.name || null,
+        valor: candidate?.amount || 0,
+        data: candidate?.date || null,
+        score: score.score,
+        confianca: score.score >= 80 ? 'alta' : score.score >= 50 ? 'media' : 'baixa',
+        motivos: score.reasons,
+      };
+    });
+    return { decision, candidates, candidateDtos };
+  }
+
+  function finProcessorReceiptIsConfigured(context: any, receipt: any) {
+    const account = context.accounts.find((item: any) => item.id === receipt.conta_id);
+    const method = context.methods.find((item: any) => item.id === receipt.meio_id);
+    return finIsInfinitePay(`${account?.nome || ''} ${account?.banco || ''} ${method?.nome || ''}`)
+      || normalizePaymentMethod(method?.nome) === 'Link InfinitePay';
+  }
+
+  function finTransactionUsesProcessorAccount(context: any, transaction: any) {
+    const account = context.accounts.find((item: any) => String(item.id) === String(transaction.conta_id));
+    if (!account) return false;
+    return account.tipo === 'intermediador'
+      || finIsInfinitePay(`${account.nome || ''} ${account.banco || ''}`);
+  }
+
+  function finProcessorReceiptInputs(context: any, transaction: any) {
+    const previousById = new Map(
+      (transaction.metadata?.processor_settlement?.receipts || [])
+        .map((snapshot: any) => [String(snapshot.id), snapshot]),
+    );
+    return context.receipts
+      .filter((receipt: any) => receipt.status === 'recebido' && finProcessorReceiptIsConfigured(context, receipt))
+      .map((receipt: any) => {
+        const previous: any = previousById.get(String(receipt.id));
+        const allocatedElsewhere = context.allocations.some((allocation: any) => (
+          String(allocation.receita_id) === String(receipt.id)
+          && String(allocation.transacao_id) !== String(transaction.id)
+        ));
+        return {
+          id: String(receipt.id),
+          netAmount: receipt.valor_liquido ?? receipt.valor_bruto,
+          expectedDate: previous?.data_recebimento_real || receipt.data_recebimento_real,
+          intermediaryAccountId: previous?.conta_id || receipt.conta_id,
+          allocated: allocatedElsewhere || context.directLinkedReceipts.has(String(receipt.id)),
+          raw: receipt,
+        };
+      });
+  }
+
+  function finProcessorSettlementForTransaction(context: any, transaction: any) {
+    const receipts = finProcessorReceiptInputs(context, transaction)
+      .map(({ raw: _raw, ...receipt }: any) => receipt);
+    const providerText = `${transaction.nome_contraparte || ''} ${transaction.descricao || ''}`;
+    const processorDescription = finIsInfinitePay(providerText)
+      ? `${transaction.descricao || ''} InfinitePay`
+      : transaction.descricao;
+    const decision = decideProcessorSettlement({
+      id: String(transaction.id),
+      type: 'credito',
+      amount: transaction.valor,
+      date: transaction.data,
+      description: processorDescription,
+      counterpartyName: transaction.nome_contraparte,
+      accountId: transaction.conta_id,
+    }, receipts);
+    return decision;
+  }
+
+  const finDateDistanceDays = (left: any, right: any) => Math.abs(
+    Date.parse(`${left}T00:00:00Z`) - Date.parse(`${right}T00:00:00Z`),
+  ) / 86_400_000;
+
+  function finProcessorInputIsEligible(transaction: any, input: any) {
+    const distance = finDateDistanceDays(transaction.data, input.expectedDate);
+    return !input.allocated
+      && (!input.intermediaryAccountId || input.intermediaryAccountId !== transaction.conta_id)
+      && finNumber(input.netAmount) > 0
+      && Number.isFinite(distance)
+      && distance <= 5;
+  }
+
+  const finProcessorReceiptDto = (input: any) => ({
+    id: String(input.id),
+    cliente_nome: input.raw?.cliente_nome || null,
+    descricao: input.raw?.descricao || null,
+    job_id: input.raw?.job_id || null,
+    valor_liquido: finNumber(input.netAmount),
+    data_recebimento_real: input.expectedDate || null,
+    conta_intermediadora_id: input.intermediaryAccountId || null,
+  });
+
+  function finProcessorReviewPayload(context: any, transaction: any, decision: any) {
+    const eligibleInputs = finProcessorReceiptInputs(context, transaction)
+      .filter((input: any) => finProcessorInputIsEligible(transaction, input));
+    const byId = new Map(eligibleInputs.map((input: any) => [String(input.id), input]));
+    const groups = decision.candidateSets.map((set: any) => {
+      const receipts = set.receiptIds.map((id: string) => byId.get(String(id))).filter(Boolean);
+      return {
+        ...set,
+        receita_ids: set.receiptIds,
+        total: set.totalAmount,
+        score: Math.max(0, 100 - finNumber(set.maxDateDistanceDays) * 5),
+        motivos: ['soma_liquida_exata', `datas_ate_${set.maxDateDistanceDays}_dias`],
+        recebimentos: receipts.map(finProcessorReceiptDto),
+      };
+    });
+    return {
+      ...decision,
+      candidateSets: groups,
+      grupos_candidatos: groups,
+      recebimentos_elegiveis: eligibleInputs.slice(0, 100).map(finProcessorReceiptDto),
+      recebimentos_elegiveis_total: eligibleInputs.length,
+      recebimentos_elegiveis_truncados: eligibleInputs.length > 100,
+    };
+  }
+
+  function finValidateManualProcessorGroup(context: any, transaction: any, requestedIds: any[]) {
+    const receiptIds = [...new Set((requestedIds || []).map((id: any) => String(id || '').trim()).filter(Boolean))];
+    if (!receiptIds.length) return { error: 'Selecione pelo menos um recebimento.' };
+    if (receiptIds.length > 100) return { error: 'Selecione no máximo 100 recebimentos por repasse.' };
+    if (transaction.tipo !== 'credito'
+      || finTransactionUsesProcessorAccount(context, transaction)
+      || !finIsInfinitePay(`${transaction.nome_contraparte || ''} ${transaction.descricao || ''}`)) {
+      return { error: 'Esta entrada não foi identificada como um repasse da InfinitePay.' };
+    }
+    const inputs = finProcessorReceiptInputs(context, transaction);
+    const byId = new Map(inputs.map((input: any) => [String(input.id), input]));
+    const selected = receiptIds.map((id) => byId.get(id));
+    if (selected.some((input: any) => !input || !finProcessorInputIsEligible(transaction, input))) {
+      return { error: 'Um dos recebimentos não está elegível ou já foi conciliado.' };
+    }
+    const selectedTotal = (selected as any[])
+      .reduce((sum: number, input: any) => sum + finNumber(input.netAmount), 0);
+    if (Math.round(selectedTotal * 100) !== Math.round(finNumber(transaction.valor) * 100)) {
+      return { error: 'A soma líquida dos recebimentos não corresponde exatamente ao crédito bancário.' };
+    }
+    return { receiptIds };
+  }
+
+  async function finApplyProcessorSettlement(
+    supabase: SupabaseClient,
+    userId: string,
+    transaction: any,
+    context: any,
+    receiptIds: string[],
+  ) {
+    const knownIds = new Set(context.receipts.map((receipt: any) => String(receipt.id)));
+    if (receiptIds.some((id) => !knownIds.has(String(id)))) {
+      throw finOfxRequestError(409, 'SETTLEMENT_CHANGED', 'Os recebimentos do repasse mudaram. Reprocesse o extrato.');
+    }
+    const { error } = await supabase.rpc('fin_apply_processor_settlement', {
+      p_user_id: userId,
+      p_transacao_id: transaction.id,
+      p_receita_ids: receiptIds,
+    });
+    if (!error) return;
+    const code = String(error.message || '');
+    const message = code.includes('PROCESSOR_AMOUNT_MISMATCH')
+      ? 'A soma líquida dos recebimentos não corresponde ao crédito bancário.'
+      : code.includes('PROCESSOR_RECEIPT_NOT_ELIGIBLE')
+        ? 'Um recebimento mudou ou já foi usado em outra conciliação.'
+        : 'Este repasse mudou durante a conciliação. Atualize os dados e tente novamente.';
+    throw finOfxRequestError(409, code || 'PROCESSOR_SETTLEMENT_CONFLICT', message);
+  }
+
+  async function finPersistProcessorReview(
+    supabase: SupabaseClient,
+    userId: string,
+    transaction: any,
+    decision: any,
+  ) {
+    const review = decision.status === 'review';
+    const metadata = {
+      ...(transaction.metadata || {}),
+      processor_settlement_review: decision,
+    };
+    const { data, error } = await supabase.from('fin_transacoes_ofx').update({
+      status_conciliacao: review ? 'sugerido' : 'pendente',
+      sugestao_tipo: review ? 'repasse_infinitepay' : null,
+      sugestao_id: null,
+      sugestao_score: null,
+      sugestao_motivos: ['repasse_infinitepay', decision.reason],
+      metadata,
+    })
+      .eq('id', transaction.id)
+      .eq('user_id', userId)
+      .in('status_conciliacao', ['pendente', 'sugerido'])
+      .is('receita_id', null)
+      .is('despesa_id', null)
+      .is('transferencia_par_id', null)
+      .select('id');
+    if (error) throw error;
+    return data?.length ? (review ? 'sugerido' : 'pendente') : 'inalterado';
+  }
+
+  async function finTryProcessorSettlement(
+    supabase: SupabaseClient,
+    userId: string,
+    transaction: any,
+    context: any,
+  ): Promise<string | null> {
+    if (transaction.tipo !== 'credito' || finTransactionUsesProcessorAccount(context, transaction)) return null;
+    const decision = finProcessorSettlementForTransaction(context, transaction);
+    if (decision.reason === 'not_processor_credit') return null;
+    if (decision.status !== 'auto') {
+      return finPersistProcessorReview(supabase, userId, transaction, decision);
+    }
+    await finApplyProcessorSettlement(
+      supabase,
+      userId,
+      transaction,
+      context,
+      decision.receiptIds,
+    );
+    decision.receiptIds.forEach((receiptId: string) => {
+      context.allocations.push({
+        user_id: userId,
+        transacao_id: transaction.id,
+        receita_id: receiptId,
+      });
+      context.linkedReceipts.add(String(receiptId));
+    });
+    return 'transferencia';
+  }
+
+  async function finUndoProcessorSettlement(
+    supabase: SupabaseClient,
+    userId: string,
+    transaction: any,
+  ) {
+    const { data, error } = await supabase.rpc('fin_undo_processor_settlement', {
+      p_user_id: userId,
+      p_transacao_id: transaction.id,
+    });
+    if (error) {
+      throw finOfxRequestError(
+        409,
+        String(error.message || 'PROCESSOR_UNDO_CONFLICT'),
+        'Não foi possível desfazer o repasse porque o vínculo mudou. Atualize os dados e tente novamente.',
+      );
+    }
+    return Array.isArray(data?.receita_ids) ? data.receita_ids.map(String) : [];
+  }
+
+  async function finPersistDecision(
+    supabase: SupabaseClient,
+    userId: string,
+    transaction: any,
+    context: any,
+  ) {
+    if (finIsBalanceSnapshot(transaction)) {
+      const metadata = { ...(transaction.metadata || {}), ignoredReason: 'balance_snapshot' };
+      const { data, error } = await supabase.from('fin_transacoes_ofx').update({
+        status_conciliacao: 'ignorado',
+        sugestao_tipo: null,
+        sugestao_id: null,
+        sugestao_score: null,
+        sugestao_motivos: [],
+        metadata,
+      })
+        .eq('id', transaction.id)
+        .eq('user_id', userId)
+        .in('status_conciliacao', ['pendente', 'sugerido'])
+        .is('receita_id', null)
+        .is('despesa_id', null)
+        .is('transferencia_par_id', null)
+        .select('id');
+      if (error) throw error;
+      return data?.length ? 'ignorado' : 'inalterado';
+    }
+    const processorStatus = await finTryProcessorSettlement(supabase, userId, transaction, context);
+    if (processorStatus) return processorStatus;
+    const result = finDecisionForTransaction(context, transaction);
+    if (result.decision.status === 'auto' && result.decision.suggestionId) {
+      const candidate: any = result.candidates.find((item: any) => item.id === result.decision.suggestionId);
+      const targetInfo = candidate.kind === 'receita'
+        ? { table: 'fin_receitas', id: candidate.id, linkColumn: 'receita_id', type: 'receita' }
+        : { table: 'fin_despesas', id: candidate.id, linkColumn: 'despesa_id', type: 'despesa' };
+      const attached = await finAttachTransaction(supabase, userId, transaction, candidate.raw, targetInfo);
+      if (!attached.error) {
+        if (candidate.kind === 'receita') context.linkedReceipts.add(candidate.id);
+        else context.linkedExpenses.add(candidate.id);
+        return 'conciliado';
+      }
+    }
+    const review = result.decision.status !== 'unmatched' && Boolean(result.decision.suggestionId);
+    const { data, error } = await supabase.from('fin_transacoes_ofx').update({
+      status_conciliacao: review ? 'sugerido' : 'pendente',
+      sugestao_tipo: review ? result.decision.suggestionType : null,
+      sugestao_id: review ? result.decision.suggestionId : null,
+      sugestao_score: review ? result.decision.score : null,
+      sugestao_motivos: review ? result.decision.reasons : [],
+    })
+      .eq('id', transaction.id)
+      .eq('user_id', userId)
+      .in('status_conciliacao', ['pendente', 'sugerido'])
+      .is('receita_id', null)
+      .is('despesa_id', null)
+      .is('transferencia_par_id', null)
+      .select('id');
+    if (error) throw error;
+    return data?.length ? (review ? 'sugerido' : 'pendente') : 'inalterado';
+  }
+
+  async function finApplyDetectedTransfers(supabase: SupabaseClient, userId: string, transactions: any[]) {
+    const accounts = await loadAllUserRows(supabase, 'fin_contas', 'id,nome,banco', userId);
+    const accountNames = new Map(accounts.map((account: any) => [account.id, account.nome || account.banco || '']));
+    const eligible = transactions.filter((transaction: any) => (
+      ['pendente', 'sugerido'].includes(transaction.status_conciliacao)
+      && !transaction.receita_id
+      && !transaction.despesa_id
+      && !transaction.transferencia_par_id
+      && transaction.conta_id
+    ));
+    const detected = detectInternalTransfers(eligible.map((transaction: any) => ({
+      id: String(transaction.id),
+      accountId: String(transaction.conta_id),
+      accountName: accountNames.get(transaction.conta_id) || null,
+      type: transaction.tipo,
+      amount: finNumber(transaction.valor),
+      date: transaction.data,
+      description: transaction.descricao,
+    })));
+    const byId = new Map(eligible.map((transaction: any) => [String(transaction.id), transaction]));
+    const savedPairs: any[] = [];
+    for (const pair of detected.pairs) {
+      const outgoing = byId.get(pair.outgoingTransactionId);
+      const incoming = byId.get(pair.incomingTransactionId);
+      if (!outgoing || !incoming) continue;
+      try {
+        await finSaveTransferPair(supabase, userId, outgoing, incoming);
+        savedPairs.push(pair);
+      } catch (error: any) {
+        if (error?.code !== 'TRANSFER_RACE') throw error;
+      }
+    }
+    return { ...detected, pairs: savedPairs };
+  }
+
+  async function finReevaluateTransactions(
+    supabase: SupabaseClient,
+    userId: string,
+    transactionIds?: string[],
+    accountId?: string,
+  ) {
+    const allTransactions = finActiveOfxRows(
+      await loadAllUserRows(supabase, 'fin_transacoes_ofx', '*', userId),
+    );
+    const idSet = transactionIds?.length ? new Set(transactionIds.map(String)) : null;
+    const scoped = allTransactions.filter((transaction: any) => {
+      if (idSet && !idSet.has(String(transaction.id))) return false;
+      return !accountId || transaction.conta_id === accountId;
+    });
+    const detected = await finApplyDetectedTransfers(supabase, userId, allTransactions);
+    const transferIds = new Set(detected.pairs.flatMap((pair: any) => [pair.outgoingTransactionId, pair.incomingTransactionId]));
+    const scopedIds = new Set(scoped.map((transaction: any) => String(transaction.id)));
+    const context = await finCandidateContext(supabase, userId);
+    const counters: Record<string, number> = { conciliado: 0, sugerido: 0, pendente: 0, ignorado: 0 };
+    for (const transaction of scoped) {
+      if (transferIds.has(String(transaction.id))) continue;
+      if (!['pendente', 'sugerido'].includes(transaction.status_conciliacao)) continue;
+      const status = await finPersistDecision(supabase, userId, transaction, context);
+      counters[status] = (counters[status] || 0) + 1;
+    }
+    return {
+      conciliado: counters.conciliado,
+      sugerido: counters.sugerido,
+      pendente: counters.pendente,
+      ignorado: counters.ignorado,
+      transferencias: [...transferIds].filter((id: string) => scopedIds.has(id)).length + (counters.transferencia || 0),
+      repasses_processador: counters.transferencia || 0,
+      ambiguas: detected.ambiguousTransactionIds.filter((id: string) => scopedIds.has(id)).length,
+    };
+  }
+
+  function finManualTransferCandidates(context: any, transaction: any) {
+    if (!transaction.conta_id || !['pendente', 'sugerido'].includes(transaction.status_conciliacao)) return [];
+    const accountNames = new Map(context.accounts.map((account: any) => [String(account.id), account.nome || account.banco || null]));
+    return context.transactions
+      .filter((candidate: any) => (
+        String(candidate.id) !== String(transaction.id)
+        && candidate.tipo !== transaction.tipo
+        && candidate.conta_id
+        && candidate.conta_id !== transaction.conta_id
+        && ['pendente', 'sugerido'].includes(candidate.status_conciliacao)
+        && !candidate.receita_id
+        && !candidate.despesa_id
+        && !candidate.transferencia_par_id
+        && Math.abs(finNumber(candidate.valor) - finNumber(transaction.valor)) <= 0.01
+        && Number.isFinite(finDateDistanceDays(candidate.data, transaction.data))
+        && finDateDistanceDays(candidate.data, transaction.data) <= 5
+      ))
+      .map((candidate: any) => {
+        const distance = finDateDistanceDays(candidate.data, transaction.data);
+        return {
+          id: String(candidate.id),
+          conta_id: candidate.conta_id,
+          conta_nome: accountNames.get(String(candidate.conta_id)) || null,
+          data: candidate.data,
+          descricao: candidate.descricao,
+          valor: finNumber(candidate.valor),
+          tipo: candidate.tipo,
+          score: Math.max(0, 90 - distance * 10),
+          motivos: ['mesmo_valor', 'conta_diferente', `datas_${distance}_dias`],
+        };
+      })
+      .sort((left: any, right: any) => right.score - left.score || left.data.localeCompare(right.data));
+  }
+
+  function finSendOfxError(res: any, error: any, fallback: string) {
+    if (finRequiresMigration(error)) {
+      return res.status(422).json({ error: 'MIGRATION_NEEDED', message: 'A atualização da conciliação financeira ainda não foi aplicada.' });
+    }
+    const status = Number(error?.status ?? error?.statusCode) || 500;
+    return res.status(status).json({
+      error: error?.code || fallback,
+      message: error?.message || fallback,
+      ...(error?.multipleAccounts ? {
+        multiple_accounts: true,
+        account_identities: error.accountIdentities || [],
+        hash_arquivo: error.fileFingerprint || null,
+      } : {}),
+      ...(error?.incompleteAccountIdentity ? {
+        incomplete_account_identity: true,
+        account_identities: error.accountIdentities || [],
+        hash_arquivo: error.fileFingerprint || null,
+      } : {}),
+      ...(error?.details ? { details: error.details } : {}),
+    });
+  }
+
+  function finLegacyCorrectionToken(targetAccountId: string, fileFingerprint: string, plan: any) {
+    const fields = [
+      'legacy-account-correction-v1',
+      targetAccountId,
+      fileFingerprint,
+      [...plan.sourceAccountIds].sort().join(','),
+      [...plan.reassignTransactionIds].sort().join(','),
+      [...plan.linkedTransactionIds].sort().join(','),
+      [...plan.balanceSnapshotIds].sort().join(','),
+      [...plan.missingIncomingFitIds].sort().join(','),
+    ];
+    return crypto.createHash('sha256').update(fields.join('|')).digest('hex');
+  }
+
+  async function finLegacyAccountCorrectionPreview(
+    supabase: SupabaseClient,
+    userId: string,
+    targetAccount: any,
+    parsed: any,
+  ) {
+    const [transactions, allocations, accounts] = await Promise.all([
+      loadAllUserRows(supabase, 'fin_transacoes_ofx', '*', userId),
+      loadAllUserRows(supabase, 'fin_conciliacao_alocacoes', 'id,transacao_id', userId),
+      loadAllUserRows(supabase, 'fin_contas', 'id,nome,banco,tipo', userId),
+    ]);
+    const allocatedIds = new Set(allocations.map((row: any) => String(row.transacao_id)));
+    const incoming = parsed.transactions.map((row: any) => ({
+      fitId: row.sourceFitId || `AUTO:${row.fingerprint}`,
+      type: row.type,
+      amount: row.amount,
+      date: row.date,
+    }));
+    const existing = transactions.map((row: any) => ({
+      id: String(row.id),
+      fitId: String(row.fit_id),
+      accountId: String(row.conta_id),
+      type: row.tipo,
+      amount: finNumber(row.valor),
+      date: row.data,
+      description: row.descricao,
+      status: row.status_conciliacao,
+      receiptId: row.receita_id,
+      expenseId: row.despesa_id,
+      transferPairId: row.transferencia_par_id,
+      allocated: allocatedIds.has(String(row.id)),
+      reverted: finIsRevertedOfx(row),
+      legacyUnconfirmed: row.metadata?.legacy_identity_unconfirmed === true,
+    }));
+    const plan = planLegacyAccountCorrection(String(targetAccount.id), incoming, existing);
+    const accountById = new Map(accounts.map((account: any) => [String(account.id), account]));
+    return {
+      correcao_necessaria: plan.requiresCorrection,
+      pode_corrigir: plan.requiresCorrection && plan.blockedReasons.length === 0,
+      preview_token: finLegacyCorrectionToken(String(targetAccount.id), parsed.fileFingerprint, plan),
+      conta_destino: {
+        id: String(targetAccount.id),
+        nome: targetAccount.nome,
+        banco: targetAccount.banco,
+        banco_detectado: parsed.metadata.bankId,
+        conta_detectada: parsed.metadata.accountId,
+      },
+      contas_origem: plan.sourceAccountIds.map((id) => accountById.get(id) || { id }),
+      resumo: {
+        reassociar: plan.reassignTransactionIds.length,
+        conciliadas_preservadas: plan.linkedTransactionIds.length,
+        snapshots_saldo_arquivar: plan.balanceSnapshotIds.length,
+        inserir_faltantes: plan.missingIncomingFitIds.length,
+        legadas_preservadas: plan.preservedLegacyIds.length,
+      },
+      transacoes_reassociar: plan.reassignTransactionIds,
+      transacoes_conciliadas: plan.linkedTransactionIds,
+      snapshots_saldo: plan.balanceSnapshotIds,
+      colisoes: plan.immutableCollisions,
+      bloqueios: plan.blockedReasons,
+      avisos: [
+        plan.requiresCorrection
+          ? 'O mesmo extrato foi associado a outra conta no legado. A correção exige confirmação explícita.'
+          : null,
+        plan.linkedTransactionIds.length
+          ? `${plan.linkedTransactionIds.length} conciliação(ões) será(ão) preservada(s) e alinhada(s) à conta correta.`
+          : null,
+        plan.balanceSnapshotIds.length
+          ? `${plan.balanceSnapshotIds.length} foto(s) de saldo indevida(s) será(ão) arquivada(s), nunca apagada(s).`
+          : null,
+      ].filter(Boolean),
+    };
+  }
+
+  app.post('/api/fin/ofx/preview', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const { conteudo, conta_id } = req.body;
-    if (!conteudo || !conta_id) return res.status(400).json({ error: 'conteudo e conta_id obrigatórios' });
-
-    // Parser OFX simples
-    const transacoes: any[] = [];
-    let ignoradasSaldo = 0;
-    const stmtMatches = conteudo.matchAll(/<STMTTRN>([\s\S]*?)<\/STMTTRN>/g);
-    for (const match of stmtMatches) {
-      const block = match[1];
-      const get = (tag: string) => { const m = block.match(new RegExp(`<${tag}>([^<\\n]+)`)); return m ? m[1].trim() : ''; };
-      const fitId = get('FITID'); if (!fitId) continue;
-      const trnType = get('TRNTYPE');
-      const dtPosted = get('DTPOSTED');
-      const trnAmt = parseFloat(get('TRNAMT').replace(',', '.')) || 0;
-      const memo = get('MEMO') || get('NAME') || '';
-      // Linhas de SALDO (ex: "SALDO TOTAL DISPONÍVEL DIA", "S A L D O") são fotos
-      // do saldo do dia, NÃO movimentação. Importá-las inflaria a conciliação.
-      const memoNorm = memo.toUpperCase().replace(/\s+/g, ' ').trim();
-      if (/^SALDO\b/.test(memoNorm) || memoNorm.replace(/\s/g, '').startsWith('SALDO')) { ignoradasSaldo++; continue; }
-      const data = dtPosted ? `${dtPosted.slice(0,4)}-${dtPosted.slice(4,6)}-${dtPosted.slice(6,8)}` : new Date().toISOString().slice(0,10);
-      const tipo = trnAmt >= 0 ? 'credito' : 'debito';
-      transacoes.push({ user_id: userId, conta_id, fit_id: fitId, tipo, valor: Math.abs(trnAmt), data, descricao: memo });
+    try {
+      const accountId = String(req.body?.conta_id || '').trim();
+      if (!accountId) return res.status(400).json({ error: 'conta_id obrigatório' });
+      const account = await finOwnedRow(supabase, 'fin_contas', accountId, userId);
+      if (!account || account.ativo === false) return res.status(404).json({ error: 'Conta não encontrada' });
+      const parsed = finParseUploadedOfx(req.body);
+      const correction = await finLegacyAccountCorrectionPreview(supabase, userId, account, parsed);
+      return res.json({
+        ...finPreviewPayload(parsed, finAccountFileMismatch(account, parsed.metadata)),
+        correcao_legado: correction,
+      });
+    } catch (error: any) {
+      return finSendOfxError(res, error, 'Falha ao analisar o arquivo');
     }
+  });
 
-    let importadas = 0; let duplicadas = 0; let conciliadas = 0;
-    for (const t of transacoes) {
-      const { data: ins, error } = await supabase
-        .from('fin_transacoes_ofx').insert(t).select('id,conta_id,tipo,valor,data').single();
-      if (error?.code === '23505') { duplicadas++; continue; }
-      if (error) continue;
-      importadas++;
-      try { if (await autoConciliarOfxTx(supabase, userId, ins)) conciliadas++; }
-      catch { /* falha de auto-conciliação não derruba o import */ }
+  async function finImportOfxHandler(req: any, res: any) {
+    const supabase = finClient(req); const userId = finUser(req);
+    try {
+      const accountId = String(req.body?.conta_id || '').trim();
+      if (!accountId) return res.status(400).json({ error: 'conta_id obrigatório' });
+      const account = await finOwnedRow(supabase, 'fin_contas', accountId, userId);
+      if (!account || account.ativo === false) return res.status(404).json({ error: 'Conta não encontrada' });
+      const parsed = finParseUploadedOfx(req.body);
+      const mismatch = finAccountFileMismatch(account, parsed.metadata);
+      if (parsed.rejected.length) {
+        return res.status(422).json({
+          error: 'OFX_REJECTED_TRANSACTIONS',
+          message: 'O arquivo contém movimentações inválidas. Corrija ou exporte o OFX novamente antes de importar.',
+          ...finPreviewPayload(parsed, mismatch),
+        });
+      }
+      if (mismatch.blocked) {
+        const missingIdentity = mismatch.missingFileIdentity;
+        const code = mismatch.identityConflict
+          ? 'ACCOUNT_IDENTITY_CONFLICT'
+          : missingIdentity ? 'OFX_ACCOUNT_IDENTITY_MISSING' : 'ACCOUNT_MISMATCH';
+        return res.status(missingIdentity ? 422 : 409).json({
+          error: code,
+          message: mismatch.identityConflict
+            ? 'Esta conta possui identidades bancárias duplicadas no histórico e não pode receber novos extratos.'
+            : missingIdentity
+              ? 'O arquivo não informa banco nem número de conta. Exporte um OFX identificado para evitar misturar contas.'
+              : 'O arquivo pertence a outro banco ou conta.',
+          ...finPreviewPayload(parsed, mismatch),
+        });
+      }
+      if (mismatch.requiresConfirmation && req.body?.confirmar_vinculo_conta !== true) {
+        return res.status(409).json({
+          error: 'ACCOUNT_BINDING_CONFIRMATION_REQUIRED',
+          message: 'Confirme o banco e o número da conta detectados antes de importar este primeiro extrato.',
+          ...finPreviewPayload(parsed, mismatch),
+        });
+      }
+      const correction = await finLegacyAccountCorrectionPreview(supabase, userId, account, parsed);
+      if (correction.bloqueios.length) {
+        return res.status(409).json({
+          error: 'LEGACY_ACCOUNT_CORRECTION_BLOCKED',
+          message: 'O histórico em outra conta não pode ser corrigido automaticamente com segurança.',
+          correcao_legado: correction,
+          ...finPreviewPayload(parsed, mismatch),
+        });
+      }
+      if (correction.correcao_necessaria && req.body?.confirmar_correcao_legado !== true) {
+        return res.status(409).json({
+          error: 'LEGACY_ACCOUNT_CORRECTION_CONFIRMATION_REQUIRED',
+          message: 'Confirme o plano auditável de correção da conta antes de importar.',
+          correcao_legado: correction,
+          ...finPreviewPayload(parsed, mismatch),
+        });
+      }
+      if (correction.correcao_necessaria
+          && req.body?.correcao_preview_token !== correction.preview_token) {
+        return res.status(409).json({
+          error: 'LEGACY_ACCOUNT_CORRECTION_PREVIEW_STALE',
+          message: 'O histórico mudou desde a prévia. Revise o plano atualizado antes de confirmar.',
+          correcao_legado: correction,
+          ...finPreviewPayload(parsed, mismatch),
+        });
+      }
+      const importRows = parsed.transactions.map((transaction: any) => (
+        finOfxTransactionRow(transaction, parsed, null, account, userId)
+      ));
+      const balanceDecision = finStatementBalanceDecision(account, parsed);
+      const batchValues = {
+        ...finImportBatchValues(parsed, req.body, account, userId),
+        confirmar_correcao_legado: correction.correcao_necessaria,
+        correcao_preview_token: correction.preview_token,
+      };
+      const incomingBalanceDate = parsed.metadata.balanceDate || finParsedPeriod(parsed).fim;
+      const { data: importResult, error: importError } = await finAdmin().rpc('fin_import_ofx_batch_v2', {
+        p_user_id: userId,
+        p_conta_id: account.id,
+        p_batch: batchValues,
+        p_rows: importRows,
+        p_bank_code: parsed.metadata.bankId,
+        p_account_ref: parsed.metadata.accountId,
+        p_balance: parsed.metadata.balanceAmount,
+        p_balance_date: incomingBalanceDate,
+      });
+      if (importError) throw importError;
+      if (!importResult?.success) {
+        const code = String(importResult?.error_code || 'OFX_IMPORT_CONFLICT');
+        const collision = code.includes('COLLISION')
+          || code.startsWith('LEGACY_')
+          || code.includes('ACCOUNT_');
+        throw finOfxRequestError(
+          collision ? 409 : 422,
+          code,
+          collision
+            ? 'O banco reutilizou um identificador para outra movimentação. Nada foi sobrescrito.'
+            : 'A importação foi recusada sem alterar os movimentos bancários.',
+        );
+      }
+      const transactionIds = Array.isArray(importResult.transaction_ids)
+        ? importResult.transaction_ids.map(String)
+        : [];
+      let processing: any = {
+        conciliado: 0, sugerido: 0, transferencias: 0, pendente: 0,
+      };
+      let classificationWarning: string | null = null;
+      try {
+        processing = await finReevaluateTransactions(supabase, userId, transactionIds);
+      } catch (classificationError: any) {
+        classificationWarning = 'O extrato foi salvo com segurança, mas a classificação automática ficou pendente. Use Reprocessar.';
+        console.error('Falha ao classificar lote OFX já importado:', classificationError);
+      }
+      const preview = finPreviewPayload(parsed, mismatch);
+      const balanceWarning = balanceDecision.warning || (
+        balanceDecision.update && !importResult.balance_updated
+          ? 'Outro extrato confirmou um saldo igual ou mais recente; o saldo atual foi preservado.'
+          : null
+      );
+      return res.json({
+        lote_id: importResult.batch_id,
+        arquivo_repetido: Boolean(importResult.repeated_file),
+        importadas: finNumber(importResult.imported) + finNumber(importResult.reactivated),
+        reativadas: finNumber(importResult.reactivated),
+        duplicadas: finNumber(importResult.duplicates),
+        conciliadas: processing.conciliado,
+        sugeridas: processing.sugerido,
+        transferencias: processing.transferencias,
+        pendentes: processing.pendente,
+        ignoradas_saldo: parsed.ignoredBalance,
+        rejeitadas: parsed.rejected.length,
+        total: parsed.transactions.length,
+        ...preview,
+        confirmacao_conta_necessaria: false,
+        saldo_atualizado: Boolean(importResult.balance_updated),
+        conta_vinculada: Boolean(importResult.account_linked),
+        correcao_legado_aplicada: finNumber(importResult.legacy_moved) > 0,
+        reassociadas: finNumber(importResult.legacy_moved),
+        conciliadas_preservadas: finNumber(importResult.legacy_linked_moved),
+        snapshots_legado_arquivados: finNumber(importResult.legacy_balance_snapshots_archived),
+        correcao_legado: correction,
+        classificacao_pendente: Boolean(classificationWarning),
+        avisos: [
+          ...preview.avisos,
+          ...(balanceWarning ? [balanceWarning] : []),
+          ...(classificationWarning ? [classificationWarning] : []),
+        ],
+      });
+    } catch (error: any) {
+      return finSendOfxError(res, error, 'Falha ao importar o arquivo');
     }
-    res.json({ importadas, duplicadas, conciliadas, ignoradas_saldo: ignoradasSaldo, total: transacoes.length });
+  }
+
+  async function finLoadTransactionAllocations(
+    supabase: SupabaseClient,
+    userId: string,
+    transactionIds: string[],
+  ) {
+    if (!transactionIds.length) return [];
+    try {
+      return await finLoadRowsByIds(
+        supabase,
+        'fin_conciliacao_alocacoes',
+        'id,transacao_id,receita_id,valor_alocado',
+        'transacao_id',
+        transactionIds,
+        userId,
+      );
+    } catch (error: any) {
+      if (finMigrationMissing(error)) return [];
+      throw error;
+    }
+  }
+
+  const finAllocatedReceiptResponse = (receipt: any, allocation: any) => ({
+    id: String(receipt.id),
+    cliente_nome: receipt.cliente_nome || null,
+    descricao: receipt.descricao || null,
+    job_id: receipt.job_id || null,
+    valor_liquido: finNumber(allocation.valor_alocado ?? receipt.valor_liquido ?? receipt.valor_bruto),
+    data_recebimento_real: receipt.data_recebimento_real || null,
+  });
+
+  async function finEnrichOfxTransactions(
+    supabase: SupabaseClient,
+    userId: string,
+    transactions: any[],
+  ) {
+    const transactionIds = transactions.map((transaction: any) => String(transaction.id));
+    const allocations = await finLoadTransactionAllocations(supabase, userId, transactionIds);
+    const receiptIds = [...new Set([
+      ...transactions.map((transaction: any) => String(transaction.receita_id || '')).filter(Boolean),
+      ...allocations.map((allocation: any) => String(allocation.receita_id || '')).filter(Boolean),
+    ])];
+    const expenseIds = [...new Set(
+      transactions.map((transaction: any) => String(transaction.despesa_id || '')).filter(Boolean),
+    )];
+    const [receipts, expenses] = await Promise.all([
+      finLoadRowsByIds(supabase, 'fin_receitas', '*', 'id', receiptIds, userId),
+      finLoadRowsByIds(supabase, 'fin_despesas', '*', 'id', expenseIds, userId),
+    ]);
+    const receiptById = new Map(receipts.map((receipt: any) => [String(receipt.id), receipt]));
+    const expenseById = new Map(expenses.map((expense: any) => [String(expense.id), expense]));
+    const allocationsByTransaction = new Map<string, any[]>();
+    allocations.forEach((allocation: any) => {
+      const id = String(allocation.transacao_id);
+      const current = allocationsByTransaction.get(id) || [];
+      current.push(allocation);
+      allocationsByTransaction.set(id, current);
+    });
+    return transactions.map((transaction: any) => {
+      const receipt: any = receiptById.get(String(transaction.receita_id || ''));
+      const expense: any = expenseById.get(String(transaction.despesa_id || ''));
+      const allocated = (allocationsByTransaction.get(String(transaction.id)) || [])
+        .map((allocation: any) => {
+          const allocatedReceipt: any = receiptById.get(String(allocation.receita_id));
+          return allocatedReceipt ? finAllocatedReceiptResponse(allocatedReceipt, allocation) : null;
+        })
+        .filter(Boolean);
+      const clientNames = [...new Set(allocated.map((item: any) => item.cliente_nome).filter(Boolean))];
+      return finOfxTransactionForResponse({
+        ...transaction,
+        cliente_nome: receipt?.cliente_nome || null,
+        fornecedor_nome: expense?.fornecedor || null,
+        lancamento_descricao: receipt?.descricao || expense?.descricao || null,
+        clientes_resumo: clientNames.join(', ') || null,
+        recebimentos: allocated,
+      });
+    });
+  }
+
+  app.post('/api/fin/ofx/import', requireAuth, async (req, res) => (
+    finImportOfxHandler(req, res)
+  ));
+  app.post('/api/fin/ofx/importar', requireAuth, async (req, res) => (
+    finImportOfxHandler(req, res)
+  ));
+
+  function finBatchTransactionState(transaction: any, allocatedIds: Set<string>) {
+    const linked = Boolean(
+      transaction.receita_id
+      || transaction.despesa_id
+      || transaction.transferencia_par_id
+      || ['transferencia', 'conciliado'].includes(transaction.status_conciliacao)
+      || allocatedIds.has(String(transaction.id)),
+    );
+    return {
+      id: String(transaction.id),
+      status: transaction.status_conciliacao,
+      tipo: transaction.tipo,
+      valor: finNumber(transaction.valor),
+      data: transaction.data,
+      descricao: transaction.descricao,
+      balance_snapshot: finIsBalanceSnapshot(transaction),
+      revertida: finIsRevertedOfx(transaction),
+      bloqueada: linked,
+      motivo_bloqueio: transaction.receita_id
+        ? 'receita_conciliada'
+        : transaction.despesa_id
+          ? 'despesa_conciliada'
+          : transaction.status_conciliacao === 'conciliado'
+            ? 'conciliacao_sem_destino'
+            : transaction.transferencia_par_id || transaction.status_conciliacao === 'transferencia'
+            ? 'transferencia'
+            : allocatedIds.has(String(transaction.id)) ? 'repasse_alocado' : null,
+    };
+  }
+
+  async function finImportBatchPreview(
+    supabase: SupabaseClient,
+    userId: string,
+    batch: any,
+  ) {
+    const transactions = await finLoadRowsByIds(
+      supabase, 'fin_transacoes_ofx', '*', 'importacao_id', [batch.id], userId,
+    );
+    const activeIds = finActiveOfxRows(transactions).map((row: any) => String(row.id));
+    const allocations = activeIds.length
+      ? await finLoadRowsByIds(
+          supabase,
+          'fin_conciliacao_alocacoes',
+          'id,transacao_id,receita_id,despesa_id,valor_alocado',
+          'transacao_id',
+          activeIds,
+          userId,
+        )
+      : [];
+    const allocatedIds = new Set(allocations.map((row: any) => String(row.transacao_id)));
+    const states = transactions.map((row: any) => finBatchTransactionState(row, allocatedIds));
+    const active = states.filter((row: any) => !row.revertida);
+    const revertible = active.filter((row: any) => !row.bloqueada);
+    const blocked = active.filter((row: any) => row.bloqueada);
+    const snapshots = active.filter((row: any) => row.balance_snapshot);
+    const realMovements = active.filter((row: any) => !row.balance_snapshot);
+    const tokenState = states.map((row: any) => ({
+      id: row.id,
+      status: row.status,
+      revertida: row.revertida,
+      bloqueada: row.bloqueada,
+      motivo: row.motivo_bloqueio,
+    }));
+    return {
+      lote: batch,
+      preview_token: finPreviewToken(`ofx-batch-rollback-v1:${batch.id}`, tokenState),
+      estado_confirmacao: tokenState,
+      resumo: {
+        total: states.length,
+        ativas: active.length,
+        revertidas: states.length - active.length,
+        reversiveis: revertible.length,
+        bloqueadas: blocked.length,
+        balance_snapshots: snapshots.length,
+        valor_balance_snapshots: finRoundMoney(snapshots.reduce((sum: number, row: any) => sum + row.valor, 0)),
+        movimentos_reais: realMovements.length,
+        entradas_reais: finRoundMoney(realMovements
+          .filter((row: any) => row.tipo === 'credito')
+          .reduce((sum: number, row: any) => sum + row.valor, 0)),
+        saidas_reais: finRoundMoney(realMovements
+          .filter((row: any) => row.tipo === 'debito')
+          .reduce((sum: number, row: any) => sum + row.valor, 0)),
+      },
+      conta_legada_nao_confirmada: batch.metadata?.legacy_identity_unconfirmed === true,
+      avisos: [
+        batch.metadata?.legacy_identity_unconfirmed === true
+          ? 'A conta deste lote legado não foi confirmada por BANKID/ACCTID. Não haverá realocação automática.'
+          : null,
+        snapshots.length
+          ? `${snapshots.length} foto(s) de saldo serão arquivadas e não voltarão a inflar entradas/saídas.`
+          : null,
+        blocked.length
+          ? `${blocked.length} movimentação(ões) conciliada(s) serão preservadas até o vínculo ser desfeito explicitamente.`
+          : null,
+      ].filter(Boolean),
+      transacoes_bloqueadas: blocked,
+      amostra_reversiveis: revertible.slice(0, 100),
+    };
+  }
+
+  app.get('/api/fin/ofx/importacoes', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    try {
+      const accountId = String(req.query.conta_id || '').trim();
+      const from = finIsValidCivilDate(req.query.from) ? String(req.query.from) : '';
+      const to = finIsValidCivilDate(req.query.to) ? String(req.query.to) : '';
+      const page = Math.max(1, Number.parseInt(String(req.query.page || '1'), 10) || 1);
+      const pageSize = Math.min(100, Math.max(1, Number.parseInt(String(req.query.page_size || '25'), 10) || 25));
+      if (accountId && !await finOwnedRow(supabase, 'fin_contas', accountId, userId, 'id')) {
+        return res.status(404).json({ error: 'Conta não encontrada' });
+      }
+      const batches = (await loadAllUserRows(supabase, 'fin_importacoes_extrato', '*', userId))
+        .filter((batch: any) => !accountId || String(batch.conta_id) === accountId)
+        .filter((batch: any) => !from || String(batch.data_fim || batch.data_inicio || '') >= from)
+        .filter((batch: any) => !to || String(batch.data_inicio || batch.data_fim || '') <= to)
+        .sort((left: any, right: any) => String(right.created_at || '').localeCompare(String(left.created_at || '')));
+      const offset = (page - 1) * pageSize;
+      const items = batches.slice(offset, offset + pageSize);
+      const previews = await Promise.all(items.map((batch: any) => finImportBatchPreview(supabase, userId, batch)));
+      return res.json({
+        importacoes: previews.map((preview: any) => ({
+          ...preview.lote,
+          resumo_rollback: preview.resumo,
+          conta_legada_nao_confirmada: preview.conta_legada_nao_confirmada,
+        })),
+        paginacao: { pagina: page, por_pagina: pageSize, total: batches.length },
+      });
+    } catch (error: any) {
+      return finSendOfxError(res, error, 'Falha ao listar as importações');
+    }
+  });
+
+  app.get('/api/fin/ofx/importacoes/:id/rollback-preview', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    try {
+      const batch = await finOwnedRow(supabase, 'fin_importacoes_extrato', req.params.id, userId);
+      if (!batch) return res.status(404).json({ error: 'Lote de importação não encontrado' });
+      return res.json(await finImportBatchPreview(supabase, userId, batch));
+    } catch (error: any) {
+      return finSendOfxError(res, error, 'Falha ao preparar a reversão');
+    }
+  });
+
+  app.post('/api/fin/ofx/importacoes/:id/rollback', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    try {
+      if (req.body?.confirmar !== true || !String(req.body?.preview_token || '').trim()) {
+        return res.status(428).json({
+          error: 'ROLLBACK_CONFIRMATION_REQUIRED',
+          message: 'Faça a prévia e confirme a versão exibida antes de reverter o lote.',
+        });
+      }
+      const batch = await finOwnedRow(supabase, 'fin_importacoes_extrato', req.params.id, userId);
+      if (!batch) return res.status(404).json({ error: 'Lote de importação não encontrado' });
+      const preview = await finImportBatchPreview(supabase, userId, batch);
+      if (preview.preview_token !== req.body.preview_token) {
+        return res.status(409).json({
+          error: 'ROLLBACK_PREVIEW_STALE',
+          message: 'Os vínculos deste lote mudaram. Revise uma nova prévia antes de confirmar.',
+          preview,
+        });
+      }
+      const { data, error } = await supabase.rpc('fin_rollback_ofx_import_batch', {
+        p_user_id: userId,
+        p_batch_id: batch.id,
+        p_expected_state: preview.estado_confirmacao,
+      });
+      if (error && String(error.message || '').includes('ROLLBACK_PREVIEW_STALE')) {
+        return res.status(409).json({
+          error: 'ROLLBACK_PREVIEW_STALE',
+          message: 'Os vínculos mudaram durante a confirmação. Revise uma nova prévia.',
+        });
+      }
+      if (error) throw error;
+      return res.json({ ...data, aviso: data?.bloqueadas
+        ? 'As movimentações conciliadas foram preservadas. Desfaça os vínculos e repita a reversão se necessário.'
+        : null });
+    } catch (error: any) {
+      return finSendOfxError(res, error, 'Falha ao reverter a importação');
+    }
   });
 
   app.get('/api/fin/ofx/transacoes', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const q = supabase.from('fin_transacoes_ofx').select('*').eq('user_id', userId).order('data', { ascending: false });
-    if (req.query.conta_id) (q as any).eq('conta_id', req.query.conta_id);
-    const { data } = await q;
-    res.json(data || []);
+    const contaId = String(req.query.conta_id || '').trim();
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.from || '')) ? String(req.query.from) : '';
+    const to = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.to || '')) ? String(req.query.to) : '';
+    const status = String(req.query.status || '').trim();
+    const account = contaId ? await finOwnedRow(supabase, 'fin_contas', contaId, userId) : null;
+    if (contaId && !account) return res.status(404).json({ error: 'Conta não encontrada' });
+
+    let transactions: any[];
+    try {
+      transactions = finActiveOfxRows(await loadAllUserRows(supabase, 'fin_transacoes_ofx', '*', userId));
+    } catch (error: any) {
+      return res.status(500).json({ error: error?.message || 'Falha ao carregar o extrato' });
+    }
+
+    transactions = transactions.filter((transaction: any) => {
+      if (contaId && transaction.conta_id !== contaId) return false;
+      if ((from || to) && !finInDateRange(transaction.data, from, to)) return false;
+      const effectiveStatus = finEffectiveOfxStatus(transaction);
+      if (status === 'pendentes') return ['pendente', 'sugerido'].includes(effectiveStatus);
+      return !status || status === 'todas' || effectiveStatus === status;
+    });
+    transactions.sort((a: any, b: any) => {
+      const byDate = String(b.data || '').localeCompare(String(a.data || ''));
+      return byDate || String(b.created_at || '').localeCompare(String(a.created_at || ''));
+    });
+
+    const saldoExtrato = account && account.saldo_extrato !== null && account.saldo_extrato !== undefined
+      ? { valor: finNumber(account.saldo_extrato), data: account.saldo_extrato_em || null, fonte: 'extrato' }
+      : null;
+    const enriched = await finEnrichOfxTransactions(supabase, userId, transactions);
+    res.json({
+      transacoes: enriched,
+      resumo: finTransactionSummary(transactions),
+      saldo_extrato: saldoExtrato,
+    });
+  });
+
+  app.get('/api/fin/ofx/candidatos/:id', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    try {
+      const transaction = await finOwnedOfxTransaction(supabase, userId, req.params.id);
+      if (!transaction) return res.status(404).json({ error: 'Transação não encontrada' });
+      const context = await finCandidateContext(supabase, userId);
+      const result = finDecisionForTransaction(context, transaction);
+      const processorDecision = transaction.tipo === 'credito' && !finTransactionUsesProcessorAccount(context, transaction)
+        ? finProcessorSettlementForTransaction(context, transaction)
+        : null;
+      const processorReview = processorDecision?.reason === 'not_processor_credit'
+        ? null
+        : finProcessorReviewPayload(context, transaction, processorDecision);
+      const transferCandidates = finManualTransferCandidates(context, transaction);
+      return res.json({
+        transacao: transaction,
+        candidatos: result.candidateDtos,
+        transferencias_candidatas: transferCandidates,
+        decisao: {
+          status: result.decision.status,
+          sugestao_tipo: result.decision.suggestionType,
+          sugestao_id: result.decision.suggestionId,
+          score: result.decision.score,
+          motivos: result.decision.reasons,
+          ambigua: result.decision.ambiguous,
+          repasse_infinitepay: processorReview,
+          transferencias_candidatas: transferCandidates,
+        },
+      });
+    } catch (error: any) {
+      if (finRequiresMigration(error)) return res.status(422).json({ error: 'MIGRATION_NEEDED' });
+      return res.status(500).json({ error: error?.message || 'Falha ao buscar candidatos' });
+    }
+  });
+
+  function finTargetPreviousState(type: string, target: any) {
+    return type === 'receita'
+      ? {
+          status: target.status,
+          data_pagamento: target.data_pagamento,
+          data_recebimento_real: target.data_recebimento_real,
+          conta_id: target.conta_id,
+          updated_at: target.updated_at,
+        }
+      : {
+          status: target.status,
+          data_pagamento: target.data_pagamento,
+          conta_id: target.conta_id,
+          updated_at: target.updated_at,
+        };
+  }
+
+  function finDetachTargetPatch(transaction: any, target: any, type: string) {
+    if (target.origem_ref === `ofx:${transaction.id}`) return { status: 'cancelado', updated_at: new Date().toISOString() };
+    const previous = transaction.metadata?.reconciliation_previous;
+    if (!previous || previous.type !== type || String(previous.id) !== String(target.id)) return null;
+    return type === 'receita'
+      ? {
+          status: previous.status,
+          data_pagamento: previous.data_pagamento,
+          data_recebimento_real: previous.data_recebimento_real,
+          conta_id: previous.conta_id,
+          updated_at: new Date().toISOString(),
+        }
+      : {
+          status: previous.status,
+          data_pagamento: previous.data_pagamento,
+          conta_id: previous.conta_id,
+          updated_at: new Date().toISOString(),
+        };
+  }
+
+  async function finDetachTransaction(
+    supabase: SupabaseClient,
+    userId: string,
+    transaction: any,
+    nextStatus: 'pendente' | 'ignorado' = 'pendente',
+    metadataPatch: Record<string, any> = {},
+  ) {
+    const { error } = await supabase.rpc('fin_unreconcile_ofx_transaction', {
+      p_user_id: userId,
+      p_transacao_id: transaction.id,
+      p_next_status: nextStatus,
+      p_metadata_patch: metadataPatch,
+    });
+    if (!error) return;
+    throw finOfxRequestError(
+      409,
+      String(error.message || 'RECONCILIATION_UNDO_CONFLICT'),
+      'Não foi possível desfazer porque o vínculo mudou. Atualize os dados e tente novamente.',
+    );
+  }
+
+  const finTransferDays = (left: any, right: any) => Math.abs(
+    Date.parse(`${left.data}T00:00:00Z`) - Date.parse(`${right.data}T00:00:00Z`),
+  ) / 86_400_000;
+
+  function finValidateTransferPair(left: any, right: any) {
+    if (!right || left.id === right.id) return 'Selecione duas transações diferentes.';
+    if (left.conta_id === right.conta_id) return 'Transferências internas precisam envolver contas diferentes.';
+    if (left.tipo === right.tipo) return 'A transferência precisa ter uma saída e uma entrada.';
+    if (Math.abs(finNumber(left.valor) - finNumber(right.valor)) > 0.01) return 'Os valores da saída e da entrada não correspondem.';
+    const days = finTransferDays(left, right);
+    if (!Number.isFinite(days) || days > 5) return 'As datas estão distantes demais para o mesmo movimento.';
+    if (left.receita_id || left.despesa_id || right.receita_id || right.despesa_id) {
+      return 'Desconcilie os lançamentos antes de marcar a transferência.';
+    }
+    return null;
+  }
+
+  async function finSaveTransferPair(supabase: SupabaseClient, userId: string, left: any, right: any) {
+    const { error } = await supabase.rpc('fin_set_ofx_transfer_pair', {
+      p_user_id: userId,
+      p_left_id: left.id,
+      p_right_id: right.id,
+    });
+    if (!error) return;
+    throw finOfxRequestError(409, 'TRANSFER_RACE', 'Uma das transações acabou de receber outro vínculo.');
+  }
+
+  async function finUndoTransferPair(supabase: SupabaseClient, userId: string, transaction: any) {
+    const { error } = await supabase.rpc('fin_unset_ofx_transfer_pair', {
+      p_user_id: userId,
+      p_transacao_id: transaction.id,
+    });
+    if (!error) return;
+    throw finOfxRequestError(409, 'TRANSFER_UNDO_CONFLICT', 'O pareamento mudou. Atualize os dados e tente novamente.');
+  }
+
+  app.post('/api/fin/ofx/transferencia', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    try {
+      const transactionId = String(req.body?.transacao_id || '').trim();
+      if (!transactionId) return res.status(400).json({ error: 'transacao_id obrigatório' });
+      const transaction = await finOwnedOfxTransaction(supabase, userId, transactionId);
+      if (!transaction) return res.status(404).json({ error: 'Transação não encontrada' });
+      if (req.body?.desfazer) {
+        if (transaction.status_conciliacao !== 'transferencia' && !transaction.transferencia_par_id) {
+          return res.status(409).json({ error: 'Esta transação não está pareada como transferência.' });
+        }
+        if (transaction.metadata?.processor_settlement) {
+          const receiptIds = await finUndoProcessorSettlement(supabase, userId, transaction);
+          return res.json({ success: true, desfeita: true, tipo: 'repasse_infinitepay', receita_ids: receiptIds });
+        }
+        if (!transaction.transferencia_par_id) {
+          return res.status(409).json({ error: 'O histórico desta transferência não foi encontrado.' });
+        }
+        await finUndoTransferPair(supabase, userId, transaction);
+        return res.json({ success: true, desfeita: true });
+      }
+      const requestedReceiptIds = Array.isArray(req.body?.recebimento_ids)
+        ? req.body.recebimento_ids
+        : Array.isArray(req.body?.receita_ids) ? req.body.receita_ids : null;
+      if (requestedReceiptIds) {
+        const currentIds = (transaction.metadata?.processor_settlement?.receipts || [])
+          .map((snapshot: any) => String(snapshot.id)).sort();
+        const requestedIds = [...new Set(requestedReceiptIds.map((id: any) => String(id || '').trim()).filter(Boolean))].sort();
+        if (currentIds.length && currentIds.join('|') === requestedIds.join('|')) {
+          return res.json({ success: true, idempotent: true, tipo: 'repasse_infinitepay', receita_ids: requestedIds });
+        }
+        if (!['pendente', 'sugerido'].includes(transaction.status_conciliacao)) {
+          return res.status(409).json({ error: 'Desfaça a conciliação atual antes de confirmar outro grupo.' });
+        }
+        if (transaction.receita_id || transaction.despesa_id || transaction.transferencia_par_id) {
+          return res.status(409).json({ error: 'Esta transação já possui outro vínculo financeiro.' });
+        }
+        const context = await finCandidateContext(supabase, userId);
+        const validation = finValidateManualProcessorGroup(context, transaction, requestedIds);
+        if (validation.error) return res.status(409).json({ error: validation.error });
+        await finApplyProcessorSettlement(supabase, userId, transaction, context, validation.receiptIds || []);
+        return res.json({
+          success: true,
+          tipo: 'repasse_infinitepay',
+          receita_ids: validation.receiptIds,
+        });
+      }
+      let counterpart: any = null;
+      const counterpartId = String(req.body?.contraparte_id || '').trim();
+      if (counterpartId) counterpart = await finOwnedOfxTransaction(supabase, userId, counterpartId);
+      if (!counterpartId) {
+        const [transactions, accounts] = await Promise.all([
+          loadAllUserRows(supabase, 'fin_transacoes_ofx', '*', userId)
+            .then(finActiveOfxRows),
+          loadAllUserRows(supabase, 'fin_contas', 'id,nome,banco', userId),
+        ]);
+        const accountNames = new Map(accounts.map((account: any) => [account.id, account.nome || account.banco || '']));
+        const detected = detectInternalTransfers(transactions.filter((item: any) => (
+          ['pendente', 'sugerido'].includes(item.status_conciliacao)
+          && !item.receita_id && !item.despesa_id && !item.transferencia_par_id && item.conta_id
+        )).map((item: any) => ({
+          id: String(item.id), accountId: String(item.conta_id), type: item.tipo,
+          accountName: accountNames.get(item.conta_id) || null,
+          amount: finNumber(item.valor), date: item.data, description: item.descricao,
+        })));
+        const pair = detected.pairs.find((item: any) => (
+          item.outgoingTransactionId === transaction.id || item.incomingTransactionId === transaction.id
+        ));
+        const pairedId = pair
+          ? pair.outgoingTransactionId === transaction.id ? pair.incomingTransactionId : pair.outgoingTransactionId
+          : null;
+        if (pairedId) counterpart = await finOwnedOfxTransaction(supabase, userId, pairedId);
+      }
+      if (!counterpart) return res.status(409).json({ error: 'Nenhuma contraparte inequívoca foi encontrada.' });
+      const alreadyPaired = transaction.transferencia_par_id === counterpart.id
+        && counterpart.transferencia_par_id === transaction.id;
+      if (alreadyPaired) return res.json({ success: true, idempotent: true });
+      if (transaction.transferencia_par_id || counterpart.transferencia_par_id) {
+        return res.status(409).json({ error: 'Uma das transações já está pareada. Desfaça o vínculo atual primeiro.' });
+      }
+      if (![transaction.status_conciliacao, counterpart.status_conciliacao]
+        .every((status: string) => ['pendente', 'sugerido'].includes(status))) {
+        return res.status(409).json({ error: 'Somente transações pendentes podem ser pareadas.' });
+      }
+      const invalid = finValidateTransferPair(transaction, counterpart);
+      if (invalid) return res.status(409).json({ error: invalid });
+      await finSaveTransferPair(supabase, userId, transaction, counterpart);
+      return res.json({ success: true, contraparte_id: counterpart.id });
+    } catch (error: any) {
+      return finSendOfxError(res, error, 'Falha ao registrar a transferência');
+    }
+  });
+
+  app.post('/api/fin/ofx/reprocessar', requireAuth, async (req, res) => {
+    const supabase = finClient(req); const userId = finUser(req);
+    try {
+      const accountId = String(req.body?.conta_id || '').trim();
+      if (accountId) {
+        const account = await finOwnedRow(supabase, 'fin_contas', accountId, userId, 'id');
+        if (!account) return res.status(404).json({ error: 'Conta não encontrada' });
+      }
+      const transactions = finActiveOfxRows(
+        await loadAllUserRows(supabase, 'fin_transacoes_ofx', '*', userId),
+      ).filter((transaction: any) => !accountId || transaction.conta_id === accountId);
+      let balanceSnapshots = 0;
+      for (const transaction of transactions.filter(finIsBalanceSnapshot)) {
+        await finDetachTransaction(supabase, userId, transaction, 'ignorado', { ignoredReason: 'balance_snapshot' });
+        balanceSnapshots += 1;
+      }
+      const result = await finReevaluateTransactions(supabase, userId, undefined, accountId || undefined);
+      return res.json({ success: true, saldos_ignorados: balanceSnapshots, ...result });
+    } catch (error: any) {
+      if (finRequiresMigration(error)) return res.status(422).json({ error: 'MIGRATION_NEEDED' });
+      return res.status(500).json({ error: error?.message || 'Falha ao reprocessar o extrato' });
+    }
   });
 
   app.post('/api/fin/ofx/conciliar', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
     const { transacao_id, receita_id, despesa_id, ignorar } = req.body;
-    if (ignorar) {
-      await supabase.from('fin_transacoes_ofx').update({ status_conciliacao: 'ignorado' }).eq('id', transacao_id).eq('user_id', userId);
-      return res.json({ success: true });
+    if (!transacao_id) return res.status(400).json({ error: 'transacao_id obrigatório' });
+    try {
+      const transaction = await finOwnedOfxTransaction(supabase, userId, String(transacao_id));
+      if (!transaction) return res.status(404).json({ error: 'Transação não encontrada' });
+      if (transaction.status_conciliacao === 'transferencia') {
+        return res.status(409).json({ error: 'Desfaça o pareamento da transferência antes de conciliar esta transação.' });
+      }
+      if (ignorar) {
+        if (transaction.receita_id || transaction.despesa_id) {
+          return res.status(409).json({ error: 'Desconcilie a transação antes de ignorá-la.' });
+        }
+        const { data, error } = await supabase.from('fin_transacoes_ofx').update({
+          status_conciliacao: 'ignorado',
+          sugestao_tipo: null,
+          sugestao_id: null,
+          sugestao_score: null,
+          sugestao_motivos: [],
+        })
+          .eq('id', transaction.id)
+          .eq('user_id', userId)
+          .in('status_conciliacao', ['pendente', 'sugerido'])
+          .is('receita_id', null)
+          .is('despesa_id', null)
+          .is('transferencia_par_id', null)
+          .select('id');
+        if (error) throw error;
+        if (!data?.length) return res.status(409).json({ error: 'Esta transação acabou de receber outro vínculo.' });
+        return res.json({ success: true });
+      }
+
+      const targetInfo = finReconciliationTarget(transaction, receita_id, despesa_id);
+      if (!targetInfo) return res.status(400).json({ error: 'Informe exatamente um lançamento compatível com a transação.' });
+      if (transaction.status_conciliacao === 'conciliado') {
+        const sameTarget = transaction[targetInfo.linkColumn] === targetInfo.id;
+        if (sameTarget) return res.json({ success: true, idempotent: true });
+        return res.status(409).json({ error: 'Esta transação já está conciliada. Desconcilie antes de trocar o vínculo.' });
+      }
+      const target = await finOwnedRow(supabase, targetInfo.table, targetInfo.id, userId);
+      if (!target || target.status === 'cancelado') return res.status(404).json({ error: 'Lançamento não encontrado' });
+      const result = await finAttachTransaction(supabase, userId, transaction, target, targetInfo);
+      return res.status(result.status).json(result.error ? { error: result.error } : { success: true });
+    } catch (error: any) {
+      if (finMigrationMissing(error)) return res.status(422).json({ error: 'MIGRATION_NEEDED' });
+      return res.status(500).json({ error: error?.message || 'Falha ao conciliar' });
     }
-    const updates: any = { status_conciliacao: 'conciliado' };
-    const { data: tx } = await supabase.from('fin_transacoes_ofx').select('data,valor,conta_id').eq('id', transacao_id).eq('user_id', userId).single();
-    if (receita_id) {
-      updates.receita_id = receita_id;
-      // Vincula a receita: marca recebida na data/banco do extrato. data_recebimento_real
-      // = data do extrato pra bater com a conciliação automática.
-      await supabase.from('fin_receitas').update({ status: 'recebido', data_pagamento: tx?.data, data_recebimento_real: tx?.data, conta_id: tx?.conta_id || null, updated_at: new Date().toISOString() }).eq('id', receita_id).eq('user_id', userId);
-    }
-    if (despesa_id) {
-      updates.despesa_id = despesa_id;
-      await supabase.from('fin_despesas').update({ status: 'pago', data_pagamento: tx?.data, conta_id: tx?.conta_id || null, updated_at: new Date().toISOString() }).eq('id', despesa_id).eq('user_id', userId);
-    }
-    await supabase.from('fin_transacoes_ofx').update(updates).eq('id', transacao_id).eq('user_id', userId);
-    res.json({ success: true });
   });
+
+  async function finCancelCreatedOfxTarget(
+    supabase: SupabaseClient,
+    userId: string,
+    targetInfo: any,
+    targetId: string,
+    originRef: string,
+    createdByRequest: boolean,
+  ) {
+    if (!createdByRequest) return;
+    const linked = await finHasFinancialBankLink(
+      supabase,
+      userId,
+      targetInfo.type as 'receita' | 'despesa',
+      targetId,
+    );
+    if (linked) return;
+    await supabase.from(targetInfo.table).update({ status: 'cancelado' })
+      .eq('id', targetId)
+      .eq('user_id', userId)
+      .eq('origem_ref', originRef);
+  }
 
   // Cria uma receita/despesa NOVA a partir de uma transação do extrato e já
   // vincula (concilia). Usado quando o lançamento ainda não existe no sistema.
@@ -17275,71 +20321,203 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const supabase = finClient(req); const userId = finUser(req);
     const { transacao_id, descricao, categoria_id } = req.body;
     if (!transacao_id) return res.status(400).json({ error: 'transacao_id obrigatório' });
-    const { data: tx } = await supabase.from('fin_transacoes_ofx').select('*').eq('id', transacao_id).eq('user_id', userId).single();
-    if (!tx) return res.status(404).json({ error: 'Transação não encontrada' });
-    const desc = (descricao && String(descricao).trim()) || tx.descricao || (tx.tipo === 'credito' ? 'Receita (extrato)' : 'Despesa (extrato)');
+    try {
+      const transaction = await finOwnedOfxTransaction(supabase, userId, String(transacao_id));
+      if (!transaction) return res.status(404).json({ error: 'Transação não encontrada' });
+      const originRef = `ofx:${transaction.id}`;
+      if (transaction.status_conciliacao === 'transferencia') {
+        return res.status(409).json({ error: 'Esta transação já possui uma conciliação.' });
+      }
+      if (transaction.status_conciliacao === 'conciliado') {
+        const linkedId = transaction.receita_id || transaction.despesa_id;
+        const linkedTable = transaction.receita_id ? 'fin_receitas' : 'fin_despesas';
+        const linked = linkedId ? await finOwnedRow(supabase, linkedTable, String(linkedId), userId, 'id,origem_ref') : null;
+        if (linked?.origem_ref === originRef) {
+          const linkColumn = transaction.receita_id ? 'receita_id' : 'despesa_id';
+          return res.json({ success: true, idempotent: true, [linkColumn]: linked.id });
+        }
+        return res.status(409).json({ error: 'Esta transação já possui uma conciliação.' });
+      }
+      if (categoria_id) {
+        const category = await finOwnedRow(supabase, 'fin_categorias', String(categoria_id), userId);
+        const expectedType = transaction.tipo === 'credito' ? 'receita' : 'despesa';
+        if (!category || category.tipo !== expectedType) {
+          return res.status(400).json({ error: 'Categoria incompatível com a transação.' });
+        }
+      }
 
-    if (tx.tipo === 'credito') {
-      const { data: rec, error } = await supabase.from('fin_receitas').insert({
-        user_id: userId, descricao: desc,
-        valor_bruto: tx.valor, valor_liquido: tx.valor, status: 'recebido',
-        data_vencimento: tx.data, data_pagamento: tx.data, data_recebimento_real: tx.data,
-        conta_id: tx.conta_id || null, categoria_id: categoria_id || null,
-      }).select('id').single();
-      if (error) return res.status(500).json({ error: error.message });
-      await supabase.from('fin_transacoes_ofx').update({ status_conciliacao: 'conciliado', receita_id: rec.id }).eq('id', transacao_id).eq('user_id', userId);
-      return res.json({ success: true, receita_id: rec.id });
+      const table = transaction.tipo === 'credito' ? 'fin_receitas' : 'fin_despesas';
+      const targetInfo = {
+        table,
+        id: '',
+        linkColumn: transaction.tipo === 'credito' ? 'receita_id' : 'despesa_id',
+        type: transaction.tipo === 'credito' ? 'receita' : 'despesa',
+      };
+      const { data: existing, error: existingError } = await supabase
+        .from(table)
+        .select('*')
+        .eq('user_id', userId)
+        .eq('origem_ref', originRef)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      const desc = (descricao && String(descricao).trim()) || transaction.descricao || (transaction.tipo === 'credito' ? 'Receita (extrato)' : 'Despesa (extrato)');
+      const values = transaction.tipo === 'credito'
+        ? {
+            descricao: desc,
+            valor_bruto: transaction.valor,
+            valor_liquido: transaction.valor,
+            status: 'recebido',
+            data_vencimento: transaction.data,
+            data_pagamento: transaction.data,
+            data_recebimento_real: transaction.data,
+            conta_id: transaction.conta_id,
+            categoria_id: categoria_id || null,
+            origem_ref: originRef,
+          }
+        : {
+            descricao: desc,
+            valor: transaction.valor,
+            status: 'pago',
+            data_vencimento: transaction.data,
+            data_pagamento: transaction.data,
+            conta_id: transaction.conta_id,
+            categoria_id: categoria_id || null,
+            origem_ref: originRef,
+          };
+      let target = existing;
+      let createdByRequest = false;
+      if (target) {
+        const targetType = transaction.tipo === 'credito' ? 'receita' : 'despesa';
+        if (await finHasFinancialBankLink(supabase, userId, targetType, String(target.id))) {
+          return res.status(409).json({ error: 'O lançamento deste extrato já está vinculado a outra transação.' });
+        }
+        if (target.status === 'cancelado') {
+          const { data, error } = await supabase.from(table).update(values).eq('id', target.id).eq('user_id', userId).select().single();
+          if (error) throw error;
+          target = data;
+        }
+      } else {
+        const { data, error } = await supabase.from(table).insert({ ...values, user_id: userId }).select().single();
+        if (error?.code === '23505') {
+          const { data: raced, error: raceError } = await supabase.from(table)
+            .select('*')
+            .eq('user_id', userId)
+            .eq('origem_ref', originRef)
+            .single();
+          if (raceError) throw raceError;
+          target = raced;
+        } else {
+          if (error) throw error;
+          target = data;
+          createdByRequest = true;
+        }
+      }
+      targetInfo.id = String(target.id);
+      let attach: any;
+      try {
+        attach = await finAttachTransaction(supabase, userId, transaction, target, targetInfo);
+      } catch (attachError) {
+        await finCancelCreatedOfxTarget(
+          supabase, userId, targetInfo, String(target.id), originRef, createdByRequest,
+        );
+        throw attachError;
+      }
+      if (attach.error) {
+        await finCancelCreatedOfxTarget(
+          supabase, userId, targetInfo, String(target.id), originRef, createdByRequest,
+        );
+        return res.status(attach.status).json({ error: attach.error });
+      }
+      return res.json({ success: true, [targetInfo.linkColumn]: target.id, reused: !!existing });
+    } catch (error: any) {
+      if (finMigrationMissing(error, 'origem_ref')) return res.status(422).json({ error: 'MIGRATION_NEEDED' });
+      return res.status(500).json({ error: error?.message || 'Falha ao criar lançamento' });
     }
-
-    const { data: desp, error } = await supabase.from('fin_despesas').insert({
-      user_id: userId, descricao: desc,
-      valor: tx.valor, status: 'pago',
-      data_vencimento: tx.data, data_pagamento: tx.data,
-      conta_id: tx.conta_id || null, categoria_id: categoria_id || null,
-    }).select('id').single();
-    if (error) return res.status(500).json({ error: error.message });
-    await supabase.from('fin_transacoes_ofx').update({ status_conciliacao: 'conciliado', despesa_id: desp.id }).eq('id', transacao_id).eq('user_id', userId);
-    return res.json({ success: true, despesa_id: desp.id });
   });
 
-  // Desfaz a conciliação (ou o "ignorar") de uma transação: volta pra pendente e
-  // desfaz os vínculos. NÃO altera o lançamento vinculado — se ele foi marcado
-  // recebido/pago ou criado por engano, isso é ajustado na tela dele (A Receber/Pagar).
+  // Desfaz a conciliação restaurando o estado anterior do lançamento. Quando o
+  // próprio OFX criou o lançamento, ele é arquivado para não reaparecer duplicado.
   app.post('/api/fin/ofx/desconciliar', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
     const { transacao_id } = req.body;
     if (!transacao_id) return res.status(400).json({ error: 'transacao_id obrigatório' });
-    const { error } = await supabase.from('fin_transacoes_ofx')
-      .update({ status_conciliacao: 'pendente', receita_id: null, despesa_id: null })
-      .eq('id', transacao_id).eq('user_id', userId);
-    if (error) return res.status(500).json({ error: error.message });
-    res.json({ success: true });
+    try {
+      const transaction = await finOwnedOfxTransaction(supabase, userId, String(transacao_id));
+      if (!transaction) return res.status(404).json({ error: 'Transação não encontrada' });
+      if (transaction.metadata?.processor_settlement) {
+        const receiptIds = await finUndoProcessorSettlement(supabase, userId, transaction);
+        return res.json({ success: true, tipo: 'repasse_infinitepay', receita_ids: receiptIds });
+      }
+      if (transaction.status_conciliacao === 'transferencia' && transaction.transferencia_par_id) {
+        return res.status(409).json({ error: 'Desfaça o pareamento usando a ação de transferência.' });
+      }
+      if (transaction.status_conciliacao === 'transferencia') {
+        return res.status(409).json({ error: 'O histórico desta transferência não foi encontrado.' });
+      }
+      await finDetachTransaction(supabase, userId, transaction);
+      return res.json({ success: true });
+    } catch (error: any) {
+      if (finMigrationMissing(error)) return res.status(422).json({ error: 'MIGRATION_NEEDED' });
+      return res.status(500).json({ error: error?.message || 'Falha ao desconciliar' });
+    }
   });
 
   // ─── Grupos DRE ────────────────────────────────────────────────────────────
   app.get('/api/fin/grupos-dre', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const { data } = await supabase.from('fin_grupos_dre').select('*').eq('user_id', userId).order('ordem');
+    const { data, error } = await supabase.from('fin_grupos_dre').select('*').eq('user_id', userId).order('ordem');
+    if (error) return res.status(500).json({ error: error.message });
     res.json(data || []);
   });
 
   app.post('/api/fin/grupos-dre', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const { data, error } = await supabase.from('fin_grupos_dre').insert({ ...req.body, user_id: userId }).select().single();
+    const input = finDreGroupEditableInput(req.body);
+    if (!String(input.nome || '').trim()) return res.status(400).json({ error: 'Informe o nome do grupo.' });
+    const invalid = finDreGroupInputError(input);
+    if (invalid) return res.status(400).json({ error: invalid });
+    const { data, error } = await supabase.from('fin_grupos_dre').insert({ ...input, user_id: userId }).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
   });
 
   app.put('/api/fin/grupos-dre/:id', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    const { error } = await supabase.from('fin_grupos_dre').update(req.body).eq('id', req.params.id).eq('user_id', userId);
+    const group = await finOwnedRow(supabase, 'fin_grupos_dre', req.params.id, userId, 'id,tipo');
+    if (!group) return res.status(404).json({ error: 'Grupo da DRE não encontrado' });
+    const input = finDreGroupEditableInput(req.body);
+    const invalid = finDreGroupInputError(input);
+    if (invalid) return res.status(400).json({ error: invalid });
+    if (input.tipo && input.tipo !== group.tipo) {
+      const categories = await finLoadRowsByIds(
+        supabase, 'fin_categorias', 'id,tipo', 'grupo_dre_id', [group.id], userId,
+      );
+      if (categories.some((category: any) => !finCategoryMatchesDreGroup(category.tipo, input.tipo))) {
+        return res.status(409).json({ error: 'O novo tipo é incompatível com categorias ligadas a este grupo.' });
+      }
+    }
+    const { data, error } = await supabase.from('fin_grupos_dre').update(input)
+      .eq('id', group.id).eq('user_id', userId).select('id');
     if (error) return res.status(500).json({ error: error.message });
+    if (!data?.length) return res.status(409).json({ error: 'O grupo mudou durante a operação.' });
     res.json({ success: true });
   });
 
   app.delete('/api/fin/grupos-dre/:id', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
-    await supabase.from('fin_grupos_dre').delete().eq('id', req.params.id).eq('user_id', userId);
+    const group = await finOwnedRow(supabase, 'fin_grupos_dre', req.params.id, userId, 'id');
+    if (!group) return res.status(404).json({ error: 'Grupo da DRE não encontrado' });
+    const linked = await supabase.from('fin_categorias')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('grupo_dre_id', group.id);
+    if (linked.error) return res.status(500).json({ error: linked.error.message });
+    if ((linked.count || 0) > 0) {
+      return res.status(409).json({ error: 'Grupo em uso. Mova as categorias antes de excluí-lo.' });
+    }
+    const { error } = await supabase.from('fin_grupos_dre').delete()
+      .eq('id', group.id).eq('user_id', userId);
+    if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
   });
 

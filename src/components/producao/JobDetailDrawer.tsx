@@ -1587,7 +1587,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                               onChange={e => setNewPayment(p => ({ ...p, payment_method: e.target.value }))}
                               className="w-full border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 rounded-lg px-2 py-1.5 text-sm text-gray-900 dark:text-white outline-none focus:border-emerald-400"
                             >
-                              {['Pix', 'Cartão de Crédito', 'Cartão de Débito', 'Dinheiro', 'Transferência', 'Boleto'].map(m => (
+                              {['Pix', 'Link InfinitePay', 'Cartão de Débito', 'Dinheiro', 'Transferência', 'Boleto'].map(m => (
                                 <option key={m}>{m}</option>
                               ))}
                             </select>

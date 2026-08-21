@@ -207,7 +207,7 @@ export default function JobFormModal({
                   className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-gold-500 dark:focus:ring-gold-400"
                 >
                   <option className="dark:bg-gray-800">Pix</option>
-                  <option className="dark:bg-gray-800">Cartão</option>
+                  <option className="dark:bg-gray-800">Link InfinitePay</option>
                   <option className="dark:bg-gray-800">Dinheiro</option>
                   <option className="dark:bg-gray-800">Boleto</option>
                 </select>

@@ -38,3 +38,8 @@ wa-try-*.mjs
 
 # Backups privados de migração (dados de clientes; nunca versionar)
 private-backups/
+
+# Extratos bancários reais nunca devem entrar no repositório
+*.ofx
+*.qfx
+private-finance/

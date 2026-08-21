@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown, Check, ChevronLeft, ChevronRight, Calendar } from 'lucide-react';
-import { fmtBRL } from './finUtils';
+import { fmtBRL, parseBRLMoney } from './finUtils';
 
 const BASE =
   'w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 ' +
@@ -17,7 +17,7 @@ interface MoneyInputProps extends Omit<React.InputHTMLAttributes<HTMLInputElemen
 
 export function MoneyInput({ value, onChange, className, ...rest }: MoneyInputProps) {
   const [focused, setFocused] = useState(false);
-  const numericVal = parseFloat(value.replace(',', '.')) || 0;
+  const numericVal = parseBRLMoney(value) ?? 0;
 
   return (
     <input
@@ -33,7 +33,10 @@ export function MoneyInput({ value, onChange, className, ...rest }: MoneyInputPr
       }
       placeholder={focused ? '0,00' : rest.placeholder ?? 'R$ 0,00'}
       className={`${BASE} ${className ?? ''}`}
-      onChange={e => onChange(e.target.value.replace(/[^0-9,.]/g, ''))}
+      onChange={e => {
+        const sanitized = e.target.value.replace(/[^0-9,.-]/g, '');
+        onChange(sanitized.replace(/(?!^)-/g, ''));
+      }}
       onFocus={e => {
         setFocused(true);
         if (numericVal === 0) onChange('');
@@ -41,8 +44,7 @@ export function MoneyInput({ value, onChange, className, ...rest }: MoneyInputPr
       }}
       onBlur={() => {
         setFocused(false);
-        const raw = value.replace(',', '.');
-        if (!raw || isNaN(parseFloat(raw))) onChange('0');
+        if (parseBRLMoney(value) === null) onChange('0');
       }}
     />
   );

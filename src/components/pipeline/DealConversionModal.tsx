@@ -1303,7 +1303,7 @@ export function DealConversionModal({
                         className={selectClasses}
                       >
                         <option className="bg-white dark:bg-gray-800">Pix</option>
-                        <option className="bg-white dark:bg-gray-800">Cartão de Crédito</option>
+                        <option className="bg-white dark:bg-gray-800">Link InfinitePay</option>
                         <option className="bg-white dark:bg-gray-800">Cartão de Débito</option>
                         <option className="bg-white dark:bg-gray-800">Dinheiro</option>
                         <option className="bg-white dark:bg-gray-800">Boleto</option>

@@ -347,7 +347,7 @@ export function OportunidadeModal({ op, onClose, onUpdated }: OportunidadeModalP
                   <label className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1 block">Pagamento</label>
                   <select value={jobPayment} onChange={e => setJobPayment(e.target.value)}
                     className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm">
-                    {['PIX', 'Dinheiro', 'Cartão de Crédito', 'Cartão de Débito', 'Boleto', 'Outros'].map(p => (
+                    {['PIX', 'Dinheiro', 'Link InfinitePay', 'Cartão de Débito', 'Boleto', 'Outros'].map(p => (
                       <option key={p} value={p}>{p}</option>
                     ))}
                   </select>
