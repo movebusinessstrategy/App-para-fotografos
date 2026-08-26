@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Mic, CheckCheck, ChevronDown } from 'lucide-react';
+import { Mic, CheckCheck, ChevronDown, UserRound } from 'lucide-react';
 import { Conversation } from '../types';
 import { extractContact, getInitials } from '../utils/contactHelpers';
 import { useContactProfile } from '../hooks/useContactProfile';
@@ -54,6 +54,8 @@ export function ConversationItem({ conv, selected, onClick, onMarkUnread, onMark
   const color = avatarColor(phone);
   const preview = parsePreview(conv.last_message);
   const hasUnread = conv.unread_count > 0;
+  const needsHuman = conv.agent_status === 'needs_human' || (!conv.agent_status && conv.needs_human === true);
+  const humanActive = conv.agent_status === 'human_active';
   const initials = getInitials(name);
   // Menu de ações (marcar não lida / lida) — chevron aparece no hover, como no
   // WhatsApp. Em tela touch não existe hover: chevron fica sempre visível,
@@ -94,8 +96,27 @@ export function ConversationItem({ conv, selected, onClick, onMarkUnread, onMark
       {/* Sem divisória — cards arredondados deixam a lista mais leve */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-2">
-          <span className={`text-sm truncate ${hasUnread ? 'font-bold' : 'font-medium'}`} style={{ color: 'var(--wa-text-primary)' }}>
-            {name}
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className={`text-sm truncate ${hasUnread ? 'font-bold' : 'font-medium'}`} style={{ color: 'var(--wa-text-primary)' }}>
+              {name}
+            </span>
+            {needsHuman && (
+              <span
+                className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+                title="A Lia pausou e esta conversa precisa de atendimento humano"
+              >
+                <UserRound size={10} /> Você
+              </span>
+            )}
+            {humanActive && (
+              <span
+                className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
+                style={{ background: 'var(--wa-bg-tertiary)', color: 'var(--wa-text-secondary)' }}
+                title="Atendimento humano em andamento"
+              >
+                Humano
+              </span>
+            )}
           </span>
           <span
             className="text-[11px] flex-shrink-0"

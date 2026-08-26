@@ -48,6 +48,10 @@ export function LiaSuggestButton({ messages, onSuggested }: Props) {
         setError(data?.error || "Erro ao gerar sugestão.");
         return;
       }
+      if (data?.action?.type === "handoff") {
+        setError("Essa conversa precisa de você. Assuma o atendimento antes de responder.");
+        return;
+      }
 
       const reply = String(data?.reply || "").trim();
       if (!reply) {

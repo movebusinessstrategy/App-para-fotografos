@@ -1,9 +1,4 @@
-import { supabase } from '../../../integrations/supabase/client';
-
-async function getAuthHeader(): Promise<string | null> {
-  const { data: { session } } = await supabase.auth.getSession();
-  return session?.access_token ? `Bearer ${session.access_token}` : null;
-}
+import { authFetch } from '../../../utils/authFetch';
 
 /**
  * Busca foto de perfil via backend (BaileysManager).
@@ -12,9 +7,7 @@ export async function fetchProfilePicture(phone: string): Promise<string | null>
   try {
     const digits = String(phone).replace(/\D/g, '');
     if (!digits) return null;
-    const auth = await getAuthHeader();
-    if (!auth) return null;
-    const res = await fetch(`/api/inbox/profile-picture/${digits}`, { headers: { Authorization: auth } });
+    const res = await authFetch(`/api/inbox/profile-picture/${digits}`);
     if (!res.ok) return null;
     const data = await res.json();
     return data.url || null;
@@ -36,9 +29,7 @@ export async function fetchContactInfo(phone: string): Promise<ContactInfoResult
   try {
     const digits = String(phone).replace(/\D/g, '');
     if (!digits) return { name: null, avatar: null };
-    const auth = await getAuthHeader();
-    if (!auth) return { name: null, avatar: null };
-    const res = await fetch(`/api/inbox/contact-info/${digits}`, { headers: { Authorization: auth } });
+    const res = await authFetch(`/api/inbox/contact-info/${digits}`);
     if (!res.ok) return { name: null, avatar: null };
     const data = await res.json();
     const name = data.contact_name && !/^\d+$/.test(data.contact_name.trim())

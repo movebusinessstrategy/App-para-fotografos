@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic, Sun, Moon, PenSquare, Search, MoreVertical, Smile, Paperclip, ChevronDown, UserPlus, Loader2, CheckCircle2, FileText, X, Megaphone } from 'lucide-react';
+import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic, Sun, Moon, PenSquare, Search, MoreVertical, Smile, Paperclip, ChevronDown, UserPlus, UserRound, Loader2, CheckCircle2, FileText, X, Megaphone } from 'lucide-react';
 import { authFetch } from '../../../utils/authFetch';
 import EmojiPicker, { Theme as EmojiTheme } from 'emoji-picker-react';
 import { useTheme } from '../../../contexts/ThemeContext';
@@ -8,20 +8,20 @@ import { extractContact, formatBrazilianPhone, getInitials } from '../utils/cont
 import { useContactProfile } from '../hooks/useContactProfile';
 import { updateCachedContact } from '../utils/contactCache';
 import { conversationMatchesSearch } from '../utils/conversationSearch';
+import { handoffReasonLabel } from '../utils/agentHandoff';
 import { useConversations } from '../hooks/useConversations';
 import { useMessages } from '../hooks/useMessages';
 import { useWaStatus } from '../hooks/useWaStatus';
 import { ConversationItem } from './ConversationItem';
 import { MessageBubble } from './MessageBubble';
 import { AudioRecorder } from './AudioRecorder';
-import { CrmDealStrip } from './CrmDealStrip';
 import { LiaSuggestButton } from './LiaSuggestButton';
 import { BulkFollowupModal } from './BulkFollowupModal';
 import { WhatsAppConnectionModal } from './WhatsAppConnectionModal';
 import { NewConversationModal } from './NewConversationModal';
 import { WhatsAppTemplatesManager } from '../../../components/settings/WhatsAppTemplatesManager';
 import { DealConversionModal } from '../../../components/pipeline/DealConversionModal';
-import { supabase } from '../../../integrations/supabase/client';
+import { CrmDealStrip } from './CrmDealStrip';
 import { Client, Deal, PipelineStage } from '../../../types';
 import { celebrateSale } from '../../../utils/saleCelebration';
 
@@ -82,11 +82,7 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
     let on = true;
     const check = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session?.access_token) return;
-        const r = await fetch('/api/whatsapp/posvenda/status', {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
+        const r = await authFetch('/api/whatsapp/posvenda/status');
         const d = r.ok ? await r.json() : null;
         if (on && d?.connected) { setPosvendaOn(true); setPvQr(null); }
       } catch { /* silencioso */ }
@@ -99,11 +95,7 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
   const fetchPvQr = async () => {
     setPvQrBusy(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-      const r = await fetch('/api/whatsapp/posvenda/qrcode', {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
+      const r = await authFetch('/api/whatsapp/posvenda/qrcode');
       const d = await r.json().catch(() => ({} as any));
       if (d.base64) setPvQr(d.base64);
       else if (d.state === 'open') setPosvendaOn(true);
@@ -145,23 +137,22 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
   const [movingToVendas, setMovingToVendas] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [infoData, setInfoData] = useState<{ about?: string | null } | null>(null);
+  const [assumingHuman, setAssumingHuman] = useState(false);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
 
   // Fecha o painel de infos ao trocar de conversa; busca "recado" do contato
   useEffect(() => {
     setInfoOpen(false);
     setInfoData(null);
+    setHandoffError(null);
   }, [selectedPhone]);
   useEffect(() => {
     if (!infoOpen || !selectedPhone) return;
     let on = true;
     (async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session?.access_token) return;
         const slotQuery = waSlot === 'posvenda' ? '?slot=posvenda' : '';
-        const r = await fetch(`/api/inbox/contact-info/${selectedPhone.replace(/\D/g, '')}${slotQuery}`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
+        const r = await authFetch(`/api/inbox/contact-info/${selectedPhone.replace(/\D/g, '')}${slotQuery}`);
         if (on && r.ok) setInfoData(await r.json());
       } catch { /* silencioso */ }
     })();
@@ -172,11 +163,8 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
     if (!confirmToVendas) return;
     setMovingToVendas(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-      const r = await fetch('/api/deals/quick', {
+      const r = await authFetch('/api/deals/quick', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: confirmToVendas.name, phone: confirmToVendas.phone, source: 'Pós-venda' }),
       });
       const d = await r.json().catch(() => ({}));
@@ -309,9 +297,6 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
 
   async function sendMediaFile() {
     if (!mediaPreview || !selectedPhone) return;
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) { alert('Sessão expirada'); return; }
-
     setSendingMedia(true);
     try {
       const base64 = await new Promise<string>((resolve, reject) => {
@@ -321,12 +306,8 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
         reader.readAsDataURL(mediaPreview.file);
       });
 
-      const res = await fetch('/api/inbox/send-media', {
+      const res = await authFetch('/api/inbox/send-media', {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({
           phone: selectedPhone.replace(/\D/g, ''),
           ...(waSlot === 'posvenda' ? { slot: waSlot } : {}),
@@ -376,9 +357,24 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
     setRefreshing(false);
   }
 
+  async function assumeHumanService() {
+    if (!selectedPhone || assumingHuman) return;
+    setAssumingHuman(true);
+    setHandoffError(null);
+    try {
+      const phone = selectedPhone.replace(/\D/g, '');
+      const response = await authFetch(`/api/agent/atendimentos/${encodeURIComponent(phone)}/assumir`, { method: 'POST' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error || 'Não foi possível assumir o atendimento.');
+      await refresh();
+    } catch (error) {
+      setHandoffError(error instanceof Error ? error.message : 'Não foi possível assumir o atendimento.');
+    } finally {
+      setAssumingHuman(false);
+    }
+  }
+
   async function handleAudioSend(blob: Blob, durationSec: number) {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) throw new Error('Sessão expirada - faça login novamente');
     if (!selectedPhone) throw new Error('Nenhuma conversa selecionada');
 
     const base64 = await new Promise<string>((resolve, reject) => {
@@ -394,12 +390,8 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
 
     const phone = selectedPhone.replace(/\D/g, '');
 
-    const res = await fetch('/api/inbox/send-media', {
+    const res = await authFetch('/api/inbox/send-media', {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${session.access_token}`,
-        'Content-Type': 'application/json',
-      },
       body: JSON.stringify({
         phone,
         ...(waSlot === 'posvenda' ? { slot: waSlot } : {}),
@@ -431,6 +423,9 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
   }
 
   const selectedConv = conversations.find(c => c.phone === selectedPhone);
+  const selectedNeedsHuman = selectedConv?.agent_status === 'needs_human'
+    || (!selectedConv?.agent_status && selectedConv?.needs_human === true);
+  const selectedHumanActive = selectedConv?.agent_status === 'human_active';
   const { name: baseName, avatar: baseAvatar, phone: convPhone } = selectedConv
     ? extractContact(selectedConv, messages)
     : { name: selectedPhone ? formatBrazilianPhone(selectedPhone) : '', avatar: null, phone: selectedPhone || '' };
@@ -458,8 +453,8 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
 
       {/* ── SIDEBAR ── (min-h-0 permite a lista interna rolar até o fim) */}
       <div
-        className="flex flex-col flex-shrink-0 min-h-0 overflow-hidden"
-        style={{ width: 360, borderRight: '1px solid var(--wa-border)', background: 'var(--wa-bg-secondary)' }}
+        className={`${selectedPhone ? 'hidden md:flex' : 'flex'} w-full flex-col flex-shrink-0 min-h-0 overflow-hidden md:w-[360px]`}
+        style={{ borderRight: '1px solid var(--wa-border)', background: 'var(--wa-bg-secondary)' }}
       >
         {/* Header do sidebar */}
         <div
@@ -723,7 +718,7 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
       </div>
 
       {/* ── ÁREA DE CHAT ── */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <div className={`${selectedPhone ? 'flex' : 'hidden md:flex'} flex-1 flex-col min-w-0 overflow-hidden`}>
         {!selectedPhone ? (
           /* Estado vazio */
           <div className="flex-1 flex flex-col items-center justify-center gap-4 wa-chat-pattern">
@@ -842,6 +837,45 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
                 clients={clients}
                 onUpdate={onDealUpdated}
               />
+            )}
+
+            {selectedNeedsHuman && (
+              <div
+                role="alert"
+                className="flex flex-col gap-3 border-b border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-900/60 dark:bg-amber-950/30 sm:flex-row sm:items-center"
+              >
+                <div className="flex min-w-0 flex-1 items-start gap-3">
+                  <span className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-amber-500 text-white">
+                    <UserRound size={18} />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-amber-950 dark:text-amber-100">A Lia pausou. Esta conversa precisa de você.</p>
+                    <p className="mt-0.5 text-[13px] leading-relaxed text-amber-800 dark:text-amber-200">
+                      {handoffReasonLabel(selectedConv?.handoff_reason)}. O cliente não recebeu aviso de transferência.
+                    </p>
+                    {handoffError && <p className="mt-1 text-xs font-semibold text-red-600">{handoffError}</p>}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={assumeHumanService}
+                  disabled={assumingHuman}
+                  className="inline-flex min-h-10 flex-shrink-0 items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 text-sm font-bold text-white transition-colors hover:bg-amber-700 disabled:opacity-60"
+                >
+                  {assumingHuman ? <Loader2 size={16} className="animate-spin" /> : <UserRound size={16} />}
+                  {assumingHuman ? 'Assumindo…' : 'Assumir atendimento'}
+                </button>
+              </div>
+            )}
+
+            {selectedHumanActive && (
+              <div
+                className="flex items-center gap-2 border-b px-4 py-2 text-xs font-medium"
+                style={{ background: 'var(--wa-bg-secondary)', borderColor: 'var(--wa-border)', color: 'var(--wa-text-secondary)' }}
+              >
+                <UserRound size={14} style={{ color: 'var(--wa-accent-green)' }} />
+                Você assumiu este atendimento. A Lia está pausada nesta conversa.
+              </div>
             )}
 
             {/* Mensagens - fundo e scroll como irmãos para evitar conflito de position CSS */}
@@ -1252,14 +1286,7 @@ function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages,
   const selectedStage = stages.find(stage => stage.id === stageId);
   const isWonNow = !!selectedStage?.is_won;
 
-  const authedFetch = async (url: string, init?: RequestInit) => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) throw new Error('Sessão expirada — faça login de novo.');
-    return fetch(url, {
-      ...init,
-      headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json', ...(init?.headers || {}) },
-    });
-  };
+  const authedFetch = (url: string, init?: RequestInit) => authFetch(url, init);
 
   const openConversion = () => {
     if (!deal || !wonStage) return;
@@ -1334,10 +1361,10 @@ function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages,
 
   return (
     <>
-      <div className="fixed inset-0 z-[75] flex justify-end bg-black/40 backdrop-blur-sm" onClick={onClose}>
-        <div
-        className="w-full max-w-sm h-full flex flex-col shadow-2xl"
-        style={{ background: 'var(--wa-bg-secondary)' }}
+      <div className="fixed inset-0 z-[75] flex justify-end bg-black/40 backdrop-blur-sm lg:static lg:z-auto lg:h-full lg:w-[360px] lg:flex-shrink-0 lg:bg-transparent lg:backdrop-blur-none" onClick={onClose}>
+      <div
+        className="h-full w-full max-w-sm flex flex-col shadow-2xl lg:max-w-none lg:shadow-none"
+        style={{ background: 'var(--wa-bg-secondary)', borderLeft: '1px solid var(--wa-border)' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-3 px-4 py-3 flex-shrink-0" style={{ background: 'var(--wa-bg-tertiary)', borderBottom: '1px solid var(--wa-border)' }}>
@@ -1436,7 +1463,7 @@ function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages,
             </div>
           )}
         </div>
-        </div>
+      </div>
       </div>
       {conversionDeal && (
         <DealConversionModal

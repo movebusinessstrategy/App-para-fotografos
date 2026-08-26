@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { supabase } from '../../../integrations/supabase/client';
+import { authFetch } from '../../../utils/authFetch';
 import { Message } from '../types';
 import { startVisiblePoll } from '../../../utils/poll';
 
@@ -12,15 +12,10 @@ export function useMessages(phone: string | null, slot: 'main' | 'posvenda' = 'm
   async function fetchMessages() {
     if (!phone) return;
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) { console.warn('[useMessages] sem sessão'); return; }
-
       const clean = phone.replace(/\D/g, '');
       // slot na BUSCA também: sem ele o server filtrava pelo número principal
       // e a conversa aberta na aba Pós-venda aparecia vazia
-      const res = await fetch(`/api/inbox/messages/${clean}?limit=80${slot === 'posvenda' ? '&slot=posvenda' : ''}`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
+      const res = await authFetch(`/api/inbox/messages/${clean}?limit=80${slot === 'posvenda' ? '&slot=posvenda' : ''}`);
       if (!res.ok) return;
 
       const data = await res.json();
@@ -44,13 +39,10 @@ export function useMessages(phone: string | null, slot: 'main' | 'posvenda' = 'm
 
     let cancelled = false;
     const syncRecentHistory = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
       const clean = phone.replace(/\D/g, '');
       const suffix = slot === 'posvenda' ? '?slot=posvenda' : '';
-      const response = await fetch(`/api/inbox/messages/${clean}/sync${suffix}`, {
+      const response = await authFetch(`/api/inbox/messages/${clean}/sync${suffix}`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${session.access_token}` },
       });
       if (!response.ok || cancelled) return;
       const result = await response.json().catch(() => ({}));
@@ -70,9 +62,6 @@ export function useMessages(phone: string | null, slot: 'main' | 'posvenda' = 'm
   }, [phone, slot]);
 
   async function sendText(text: string): Promise<void> {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) throw new Error('Sem sessão');
-
     const tmpId = `tmp-${Date.now()}`;
     const tmp: Message = {
       message_id: tmpId,
@@ -85,12 +74,10 @@ export function useMessages(phone: string | null, slot: 'main' | 'posvenda' = 'm
     };
     setMessages(prev => [...prev, tmp]);
 
-    const res = await fetch('/api/inbox/send', {
+    // authFetch: impersonado, o envio tem que sair pelo WhatsApp do TENANT —
+    // fetch cru mandava pela conta do próprio admin.
+    const res = await authFetch('/api/inbox/send', {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${session.access_token}`,
-        'Content-Type': 'application/json',
-      },
       body: JSON.stringify({ phone: phone!.replace(/\D/g, ''), text, ...(slot === 'posvenda' ? { slot } : {}) }),
     });
 

@@ -5,6 +5,13 @@ export interface Conversation {
   last_message_at: string | null;
   unread_count: number;
   last_from_me?: boolean; // última mensagem foi nossa → mostra ✓✓ na lista
+  /** Estado operacional do atendimento. `needs_human` mantém compatibilidade
+   * com conversas gravadas antes da máquina de estados da Lia. */
+  needs_human?: boolean;
+  agent_status?: 'idle' | 'lia_active' | 'quote_sent' | 'needs_human' | 'human_active' | null;
+  handoff_reason?: string | null;
+  handoff_at?: string | null;
+  human_assumed_at?: string | null;
 }
 
 export interface Message {

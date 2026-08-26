@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { supabase } from '../../../integrations/supabase/client';
+import { authFetch } from '../../../utils/authFetch';
 import { Conversation } from '../types';
 import { startVisiblePoll } from '../../../utils/poll';
 
@@ -17,16 +17,14 @@ export function useConversations(slot: 'main' | 'posvenda' = 'main', search = ''
   async function fetchConversations() {
     const seq = ++fetchSeqRef.current;
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-
       const params = new URLSearchParams();
       if (slot === 'posvenda') params.set('slot', 'posvenda');
       if (search.trim()) params.set('search', search.trim());
       const query = params.toString();
-      const res = await fetch(`/api/inbox/conversations${query ? `?${query}` : ''}`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
+      // authFetch: leva os headers de impersonação do painel ADM — fetch cru
+      // aqui fazia o Atendimento mostrar as conversas do PRÓPRIO admin em
+      // qualquer conta impersonada (vazamento entre contas).
+      const res = await authFetch(`/api/inbox/conversations${query ? `?${query}` : ''}`);
       if (!res.ok) return;
 
       const data = await res.json();
