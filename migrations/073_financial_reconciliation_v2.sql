@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS fin_importacoes_extrato (
 );
 
 ALTER TABLE fin_transacoes_ofx
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS trn_type TEXT,
   ADD COLUMN IF NOT EXISTS importacao_id UUID REFERENCES fin_importacoes_extrato(id) ON DELETE SET NULL,
   ADD COLUMN IF NOT EXISTS fingerprint TEXT,
@@ -88,6 +89,44 @@ ALTER TABLE fin_transacoes_ofx
   ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   ADD COLUMN IF NOT EXISTS revertido_em TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS revertido_motivo TEXT;
+
+-- Algumas instalações antigas registram apenas `importado_em`. A v2 usa
+-- `created_at` também ao adotar lotes e ao resolver vínculos duplicados, então
+-- normaliza a coluna antes de qualquer leitura. O fallback pela data do
+-- movimento é determinístico para instalações que não possuam nenhum timestamp.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'fin_transacoes_ofx'
+      AND column_name = 'importado_em'
+  ) THEN
+    EXECUTE $backfill$
+      UPDATE fin_transacoes_ofx
+      SET created_at = coalesce(
+        created_at,
+        importado_em,
+        data::timestamp AT TIME ZONE 'UTC',
+        now()
+      )
+      WHERE created_at IS NULL
+    $backfill$;
+  ELSE
+    UPDATE fin_transacoes_ofx
+    SET created_at = coalesce(
+      created_at,
+      data::timestamp AT TIME ZONE 'UTC',
+      now()
+    )
+    WHERE created_at IS NULL;
+  END IF;
+END;
+$$;
+
+ALTER TABLE fin_transacoes_ofx
+  ALTER COLUMN created_at SET DEFAULT now(),
+  ALTER COLUMN created_at SET NOT NULL;
 
 ALTER TABLE fin_contas
   ADD COLUMN IF NOT EXISTS saldo_extrato NUMERIC(14,2),
@@ -549,7 +588,7 @@ AS $$
     SELECT 1
     FROM job_payments payment
     JOIN jobs job ON job.id = payment.job_id
-    WHERE job.user_id = p_user_id
+    WHERE job.user_id::text = p_user_id
       AND p_ref = 'job_payment:' || payment.id::text
   );
 $$;

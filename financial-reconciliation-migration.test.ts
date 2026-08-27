@@ -3,6 +3,11 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const sql = readFileSync(new URL('./migrations/073_financial_reconciliation_v2.sql', import.meta.url), 'utf8');
+const serverSource = readFileSync(new URL('./server.ts', import.meta.url), 'utf8');
+const dashboardSource = readFileSync(
+  new URL('./src/components/financeiro/VisaoGeral.tsx', import.meta.url),
+  'utf8',
+);
 
 const functionBody = (name: string): string => {
   const start = sql.indexOf(`CREATE OR REPLACE FUNCTION ${name}`);
@@ -19,6 +24,7 @@ test('migration explicita RLS e valida ownership dos vínculos OFX', () => {
   assert.match(sql, /despesa_id IS NULL OR fin_owned_expense\(auth\.uid\(\)::text, despesa_id\)/);
   assert.match(sql, /importacao_id IS NULL OR fin_owned_import_batch\(auth\.uid\(\)::text, importacao_id, conta_id\)/);
   assert.match(functionBody('fin_owned_revenue'), /auth\.uid\(\)::text = p_user_id/);
+  assert.match(functionBody('fin_owned_job_payment_ref'), /job\.user_id::text = p_user_id/);
   assert.match(sql, /REVOKE INSERT, UPDATE, DELETE ON fin_transacoes_ofx FROM authenticated;/);
   assert.match(sql, /CREATE TRIGGER trg_fin_guard_revenue_references/);
   assert.match(sql, /CREATE TRIGGER trg_fin_guard_expense_references/);
@@ -76,6 +82,18 @@ test('legado é adotado por conta e minuto e rollback apenas arquiva linhas segu
   assert.match(rollback, /ROLLBACK_PREVIEW_STALE/);
 });
 
+test('migration normaliza created_at antes de ler o histórico legado', () => {
+  const createdAtGuard = sql.indexOf('ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ');
+  const createdAtReady = sql.indexOf('ALTER COLUMN created_at SET NOT NULL');
+  const firstCreatedAtRead = sql.indexOf('tx.created_at');
+  assert.ok(createdAtGuard >= 0, 'created_at deve existir mesmo no schema legado');
+  assert.ok(firstCreatedAtRead >= 0, 'a adoção deve ler created_at');
+  assert.ok(createdAtGuard < firstCreatedAtRead, 'created_at deve existir antes da primeira leitura');
+  assert.ok(createdAtReady < firstCreatedAtRead, 'created_at deve ser preenchida antes da primeira leitura');
+  assert.match(sql, /SET created_at = coalesce\(\s*created_at,\s*importado_em,/);
+  assert.match(sql, /ALTER COLUMN created_at SET DEFAULT now\(\),\s*ALTER COLUMN created_at SET NOT NULL/);
+});
+
 test('migration é transacional e tabelas auditáveis não aceitam escrita direta', () => {
   assert.match(sql, /^BEGIN;/m);
   assert.match(sql, /COMMIT;\s*$/);
@@ -98,4 +116,28 @@ test('grupo_dre_id é protegido por ownership e compatibilidade de tipo', () => 
   assert.match(sql, /DRE_GROUP_OWNERSHIP_MISMATCH/);
   assert.match(sql, /DRE_GROUP_TYPE_MISMATCH/);
   assert.match(sql, /CREATE TRIGGER trg_fin_guard_dre_group_type/);
+});
+
+test('API financeira mantém leitura no schema legado e encerra erros assíncronos', () => {
+  assert.doesNotMatch(serverSource, /finMigrationMissing\(error, 'transferencia_par_id'\)/);
+  assert.match(
+    serverSource,
+    /if \(finMigrationMissing\(error\)\) \{[\s\S]*?'conta_id,tipo,valor,data,descricao,status_conciliacao'/,
+  );
+  assert.match(serverSource, /async function finOptionalReceiptTransactions/);
+  assert.match(serverSource, /'id,receita_id,revertido_em'[\s\S]*?'id,receita_id'/);
+  ['contas', 'receitas', 'despesas', 'dashboard'].forEach((route) => {
+    assert.ok(
+      serverSource.includes(`app.get('/api/fin/${route}', requireAuth, finAsyncRoute(async`),
+      `${route} deve encaminhar rejeições assíncronas ao Express`,
+    );
+  });
+});
+
+test('visão geral abandona requisição travada e oferece nova tentativa', () => {
+  assert.match(dashboardSource, /const DASHBOARD_TIMEOUT_MS = 15_000/);
+  assert.match(dashboardSource, /new AbortController\(\)/);
+  assert.match(dashboardSource, /authFetch\('\/api\/fin\/dashboard', \{ signal: controller\.signal \}\)/);
+  assert.match(dashboardSource, /demorou para responder\. Tente novamente\./);
+  assert.match(dashboardSource, /> Tentar novamente\s*</);
 });

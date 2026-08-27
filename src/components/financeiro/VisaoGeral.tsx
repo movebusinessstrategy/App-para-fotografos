@@ -133,6 +133,23 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   );
 };
 
+const DASHBOARD_TIMEOUT_MS = 15_000;
+
+async function fetchDashboard(): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), DASHBOARD_TIMEOUT_MS);
+  try {
+    return await authFetch('/api/fin/dashboard', { signal: controller.signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('O resumo financeiro demorou para responder. Tente novamente.');
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
 export default function VisaoGeral() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -145,7 +162,7 @@ export default function VisaoGeral() {
     if (!silent) setLoading(true);
     setLoadError('');
     try {
-      const res = await authFetch('/api/fin/dashboard');
+      const res = await fetchDashboard();
       const body = await res.json().catch(() => null);
       if (!res.ok) {
         throw new Error(body?.message || body?.error || 'Não foi possível carregar o resumo financeiro.');

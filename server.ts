@@ -16412,6 +16412,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return missingConflictKey || finMigrationMissing(error, column);
   }
 
+  type FinAsyncHandler = (
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ) => Promise<unknown>;
+
+  function finAsyncRoute(handler: FinAsyncHandler): express.RequestHandler {
+    return (req, res, next) => {
+      void handler(req, res, next).catch(next);
+    };
+  }
+
   const finRoundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 
   function finAddDays(date: string | null, days: number) {
@@ -16800,7 +16812,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         userId,
       ).then((rows: any[]) => rows.filter((row: any) => !finIsRevertedOfx(row)));
     } catch (error: any) {
-      if (finMigrationMissing(error, 'transferencia_par_id')) {
+      if (finMigrationMissing(error)) {
         return loadAllUserRows(
           supabase,
           'fin_transacoes_ofx',
@@ -16809,6 +16821,20 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         );
       }
       throw error;
+    }
+  }
+
+  async function finOptionalReceiptTransactions(supabase: SupabaseClient, userId: string) {
+    try {
+      return await loadAllUserRows(
+        supabase,
+        'fin_transacoes_ofx',
+        'id,receita_id,revertido_em',
+        userId,
+      );
+    } catch (error: any) {
+      if (!finMigrationMissing(error, 'revertido_em')) throw error;
+      return loadAllUserRows(supabase, 'fin_transacoes_ofx', 'id,receita_id', userId);
     }
   }
 
@@ -17060,7 +17086,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // ─── Contas bancárias ───────────────────────────────────────────────────────
-  app.get('/api/fin/contas', requireAuth, async (req, res) => {
+  app.get('/api/fin/contas', requireAuth, finAsyncRoute(async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
     const [contasRows, receitas, despesas, transactions, importBatches] = await Promise.all([
       loadAllUserRows(supabase, 'fin_contas', '*', userId),
@@ -17085,7 +17111,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       ...finAccountBalance(account, receitas, despesas, transactions),
     }));
     res.json(result);
-  });
+  }));
 
   app.post('/api/fin/contas', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
@@ -17194,12 +17220,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // ─── Receitas ───────────────────────────────────────────────────────────────
-  app.get('/api/fin/receitas', requireAuth, async (req, res) => {
+  app.get('/api/fin/receitas', requireAuth, finAsyncRoute(async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
     const receiptRows = await loadAllUserRows(supabase, 'fin_receitas', '*', userId);
     const receiptIds = receiptRows.map((row: any) => String(row.id));
     const [directLinks, allocations] = await Promise.all([
-      loadAllUserRows(supabase, 'fin_transacoes_ofx', 'id,receita_id,revertido_em', userId),
+      finOptionalReceiptTransactions(supabase, userId),
       finLoadReceiptAllocations(supabase, userId, receiptIds),
     ]);
     const linkedIds = new Set([
@@ -17214,7 +17240,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const filtered = status ? rows.filter((row: any) => row.status === status) : rows;
     filtered.sort((a: any, b: any) => String(a.data_vencimento || '').localeCompare(String(b.data_vencimento || '')));
     res.json(filtered);
-  });
+  }));
 
   app.post('/api/fin/receitas', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
@@ -17377,12 +17403,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // ─── Despesas ───────────────────────────────────────────────────────────────
-  app.get('/api/fin/despesas', requireAuth, async (req, res) => {
+  app.get('/api/fin/despesas', requireAuth, finAsyncRoute(async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
     const rows = (await loadAllUserRows(supabase, 'fin_despesas', '*', userId)).map(finWithEffectiveStatus);
     rows.sort((a: any, b: any) => String(a.data_vencimento || '').localeCompare(String(b.data_vencimento || '')));
     res.json(rows);
-  });
+  }));
 
   app.post('/api/fin/despesas', requireAuth, async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
@@ -18359,7 +18385,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // ─── Dashboard financeiro ───────────────────────────────────────────────────
-  app.get('/api/fin/dashboard', requireAuth, async (req, res) => {
+  app.get('/api/fin/dashboard', requireAuth, finAsyncRoute(async (req, res) => {
     const supabase = finClient(req); const userId = finUser(req);
     const currentMonth = finSaoPauloMonthParts();
     const mesAtual = `${currentMonth.year}-${String(currentMonth.month).padStart(2, '0')}`;
@@ -18441,7 +18467,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       proximos_recebimentos,
       proximas_despesas,
     });
-  });
+  }));
 
   // ─── DRE ───────────────────────────────────────────────────────────────────
   app.get('/api/fin/dre', requireAuth, async (req, res) => {
