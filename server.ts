@@ -55,7 +55,15 @@ import {
   resolveObjectUrl,
   uploadObject,
 } from './object-storage.js';
-import { captureMetaWhatsAppTouchpoint } from './marketing-attribution.js';
+import { captureMarketingWhatsAppContact } from './lib/marketing-whatsapp-contact.js';
+import {
+  MarketingSiteRouteError,
+  registerMarketingSiteEvent,
+} from './lib/marketing-site-route.js';
+import {
+  createSupabaseMarketingOutboxRepository,
+  processMarketingConversionOutbox,
+} from './lib/marketing-conversion-dispatch.js';
 import {
   InviteEmailValidationError,
   JobScheduleValidationError,
@@ -88,6 +96,17 @@ import {
 } from './financial-reconciliation.js';
 
 dotenv.config();
+
+function marketingMeasurementTenantIds(): string[] {
+  return String(process.env.MARKETING_MEASUREMENT_TENANT_IDS || '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value));
+}
+
+function marketingMeasurementTenantAllowed(userId: string): boolean {
+  return marketingMeasurementTenantIds().includes(userId.trim().toLowerCase());
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WA_MEDIA_BUCKET = 'wa-media';
@@ -1421,6 +1440,46 @@ const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) 
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
+
+  // A ponte pública preserva os bytes exatos para HMAC e limita o corpo antes
+  // do parser JSON geral. Sem a allowlist/configuração, falha fechada.
+  app.post(
+    '/api/public/marketing/site-intake',
+    express.raw({ type: 'application/json', limit: '16kb' }),
+    async (req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      if (!supabaseAdmin) return res.status(503).json({ error: 'BRIDGE_DISABLED' });
+      const header = (name: string): string => {
+        const value = req.headers[name];
+        return Array.isArray(value) ? String(value[0] || '') : String(value || '');
+      };
+      if (!Buffer.isBuffer(req.body)) return res.status(400).json({ error: 'INVALID_RAW_BODY' });
+      try {
+        const result = await registerMarketingSiteEvent({
+          db: supabaseAdmin,
+          decryptSecret: (encrypted) => decryptIfNeeded(encrypted),
+          bridgeReferenceSecret: process.env.MARKETING_BRIDGE_REFERENCE_SECRET,
+        }, {
+          rawBody: req.body,
+          method: req.method,
+          path: req.path,
+          origin: header('x-marketing-origin') || header('origin'),
+          siteKeyId: header('x-marketing-site-key'),
+          timestamp: header('x-marketing-timestamp'),
+          nonce: header('x-marketing-nonce'),
+          signature: header('x-marketing-signature'),
+        });
+        return res.status(result.status === 'created' ? 201 : 200).json(result);
+      } catch (error: any) {
+        const expected = error instanceof MarketingSiteRouteError
+          || error?.name === 'MarketingSiteIntakeError';
+        if (!expected) console.error('[marketing] falha interna no site intake');
+        return res.status(expected ? Number(error.statusCode || 400) : 500).json({
+          error: expected ? String(error.code || 'INVALID_INTAKE') : 'INTERNAL_INTAKE_ERROR',
+        });
+      }
+    },
+  );
 
   // Guarda o raw body em req.rawBody pra rotas que precisam validar HMAC
   // (webhook do Meta WhatsApp via X-Hub-Signature-256). Sem isso, JSON.stringify
@@ -3084,15 +3143,6 @@ async function startServer() {
         }
         const channelWaNumber = webhookWaNumber;
 
-        await captureMetaWhatsAppTouchpoint(supabaseAdmin, {
-          userId: waAccount.user_id,
-          phone: cleanFrom,
-          waNumber: ourWaNumber,
-          messageId: msgId,
-          messageTimestamp: message.timestamp,
-          referral: message.referral,
-        });
-
         const { error: msgErr } = await supabaseAdmin.from('wa_messages').insert({
           user_id: waAccount.user_id,
           phone: cleanFrom,
@@ -3105,7 +3155,28 @@ async function startServer() {
           status: 'received',
           ...(storedMediaUrl ? { media_url: storedMediaUrl } : {}),
         });
-        if (msgErr) console.error('[Webhook Meta] Erro ao salvar mensagem:', msgErr.message);
+        const messageWasDuplicate = Boolean(
+          msgErr && (msgErr.message.includes('duplicate') || msgErr.code?.includes('23505')),
+        );
+        if (msgErr && !messageWasDuplicate) {
+          console.error('[Webhook Meta] Erro ao salvar mensagem:', msgErr.message);
+        }
+        if ((!msgErr || messageWasDuplicate) && marketingMeasurementTenantAllowed(waAccount.user_id)) {
+          try {
+            await captureMarketingWhatsAppContact(supabaseAdmin, {
+              userId: waAccount.user_id,
+              phone: cleanFrom,
+              waNumber: channelWaNumber,
+              messageId: msgId,
+              messageBody: msgBody || null,
+              occurredAt: now,
+              ctwaClid: message.referral?.ctwa_clid,
+              referral: message.referral,
+            });
+          } catch {
+            console.warn('[marketing] Contact Meta não capturado; mensagem preservada');
+          }
+        }
 
         const lastMsg = msgBody || `[${normalizedType}]`;
         // UPDATE primeiro, INSERT se não existir (sem dependência de onConflict)
@@ -25602,6 +25673,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   startFollowUpWorker();
+  startMarketingConversionWorker();
+  startMarketingRetentionWorker();
 
   // ── Baileys: upload de mídia para Supabase Storage ───────────────────────
   let waBucketEnsured = false;
@@ -26097,9 +26170,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       type: msgType, status: msg.key.fromMe ? 'sent' : 'received',
       ...(mediaDataUrl ? { media_url: mediaDataUrl } : {}),
     });
+    const messageWasDuplicate = Boolean(
+      msgSaveErr && (msgSaveErr.message.includes('duplicate') || msgSaveErr.code?.includes('23505')),
+    );
     if (msgSaveErr) {
-      const isDup = msgSaveErr.message.includes('duplicate') || msgSaveErr.code?.includes('23505');
-      if (!isDup) {
+      if (!messageWasDuplicate) {
         console.error('[Baileys] Erro ao salvar mensagem:', msgSaveErr.message, msgSaveErr.code);
       } else if (isHistory && slot !== 'main' && waNumber) {
         // Mensagem do histórico do 2º número que JÁ existia no banco: antes do
@@ -26107,6 +26182,23 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         // A re-sincronização (re-parear o QR do pós-venda) devolve a mensagem
         // pro número certo — sem isso a conversa abria vazia na aba Pós-venda.
         queueWaNumberRepair(userId, waNumber, msgId);
+      }
+    }
+
+    if (!isHistory && !msg.key.fromMe && (!msgSaveErr || messageWasDuplicate)) {
+      try {
+        if (marketingMeasurementTenantAllowed(userId)) {
+          await captureMarketingWhatsAppContact(supabaseAdmin, {
+            userId,
+            phone,
+            waNumber,
+            messageId: msgId,
+            messageBody: msgBody || null,
+            occurredAt: ts,
+          });
+        }
+      } catch {
+        console.warn('[marketing] Contact não capturado; mensagem preservada');
       }
     }
 
@@ -26440,6 +26532,90 @@ async function runAgentFollowUp(task: any): Promise<'sent' | 'cancelled' | 'fail
     console.warn('[Lia follow-up] erro (vai reagendar):', e?.message);
     return 'retry';
   }
+}
+
+function startMarketingConversionWorker(): void {
+  if (!supabaseAdmin || process.env.MARKETING_CONVERSION_WORKER_ENABLED !== 'true') {
+    console.log('[Marketing Worker] desativado — nenhuma conversão externa será enviada');
+    return;
+  }
+  if (process.env.MARKETING_CONVERSION_VALIDATE_ONLY !== 'false') {
+    console.log('[Marketing Worker] validação somente; fila real permanece intacta');
+    return;
+  }
+  const repository = createSupabaseMarketingOutboxRepository(
+    supabaseAdmin,
+    marketingMeasurementTenantIds(),
+  );
+  let processing = false;
+  const run = async (): Promise<void> => {
+    if (processing) return;
+    processing = true;
+    try {
+      const result = await processMarketingConversionOutbox({
+        repository,
+        decryptCredentials: (encrypted) => decryptIfNeeded(encrypted) || '{}',
+        fetch: (input, init) => fetch(input, init),
+        validateOnly: false,
+        limit: 25,
+        leaseSeconds: 300,
+        maxAttempts: 10,
+      });
+      if (result.claimed > 0) console.log('[Marketing Worker] lote concluído', result);
+    } catch (error: any) {
+      console.error('[Marketing Worker] falha:', error?.code || error?.message || 'erro');
+    } finally {
+      processing = false;
+    }
+  };
+  const timer = setInterval(() => { void run(); }, 30_000);
+  timer.unref();
+  setTimeout(() => { void run(); }, 5_000).unref();
+}
+
+function marketingRetentionDays(): number {
+  const configured = Number(process.env.MARKETING_MEASUREMENT_RETENTION_DAYS || 180);
+  if (!Number.isFinite(configured)) return 180;
+  return Math.min(Math.max(Math.trunc(configured), 120), 730);
+}
+
+async function purgeMarketingMeasurementHistory(): Promise<void> {
+  if (!supabaseAdmin) return;
+  const tenantIds = marketingMeasurementTenantIds();
+  if (!tenantIds.length) return;
+  const sites = await supabaseAdmin.from('marketing_sites').select('id,user_id').in('user_id', tenantIds);
+  if (sites.error) throw sites.error;
+  const cutoff = new Date(Date.now() - marketingRetentionDays() * 86_400_000).toISOString();
+  for (const site of sites.data || []) {
+    const purged = await supabaseAdmin.rpc('purge_marketing_measurement_history', {
+      p_user_id: site.user_id,
+      p_marketing_site_id: site.id,
+      p_before: cutoff,
+    });
+    if (purged.error) throw purged.error;
+  }
+}
+
+function startMarketingRetentionWorker(): void {
+  if (!supabaseAdmin || process.env.MARKETING_RETENTION_WORKER_ENABLED !== 'true') {
+    console.log('[Marketing Retention] desativado');
+    return;
+  }
+  let running = false;
+  const run = async (): Promise<void> => {
+    if (running) return;
+    running = true;
+    try {
+      await purgeMarketingMeasurementHistory();
+    } catch (error: any) {
+      console.error('[Marketing Retention] falha:', error?.code || error?.message || 'erro');
+    } finally {
+      running = false;
+    }
+  };
+  const timer = setInterval(() => { void run(); }, 86_400_000);
+  timer.unref();
+  setTimeout(() => { void run(); }, 60_000).unref();
 }
 
 // ─── Worker de follow-ups automáticos ────────────────────────────────────────

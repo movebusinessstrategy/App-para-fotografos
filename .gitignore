@@ -38,6 +38,7 @@ wa-try-*.mjs
 
 # Backups privados de migração (dados de clientes; nunca versionar)
 private-backups/
+workers/**/.wrangler/
 
 # Extratos bancários reais nunca devem entrar no repositório
 *.ofx
