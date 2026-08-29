@@ -57,6 +57,10 @@ import {
 } from './object-storage.js';
 import { captureMetaWhatsAppTouchpoint } from './marketing-attribution.js';
 import {
+  MarketingSiteRouteError,
+  registerMarketingSiteEvent,
+} from './lib/marketing-site-route.js';
+import {
   InviteEmailValidationError,
   JobScheduleValidationError,
   inviteEmailUpdateForExistingClient,
@@ -1421,6 +1425,47 @@ const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) 
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
+
+  // Esta rota pública tem limite próprio e preserva os bytes exatos para HMAC.
+  // Ela precisa vir antes do parser JSON geral de 50 MB.
+  app.post(
+    '/api/public/marketing/site-intake',
+    express.raw({ type: 'application/json', limit: '16kb' }),
+    async (req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      if (!supabaseAdmin) return res.status(503).json({ error: 'BRIDGE_DISABLED' });
+      const header = (name: string): string => {
+        const value = req.headers[name];
+        return Array.isArray(value) ? String(value[0] || '') : String(value || '');
+      };
+      const rawBody = req.body;
+      if (!Buffer.isBuffer(rawBody)) return res.status(400).json({ error: 'INVALID_RAW_BODY' });
+      try {
+        const result = await registerMarketingSiteEvent({
+          db: supabaseAdmin,
+          decryptSecret: encrypted => decryptIfNeeded(encrypted),
+          bridgeReferenceSecret: process.env.MARKETING_BRIDGE_REFERENCE_SECRET,
+        }, {
+          rawBody,
+          method: req.method,
+          path: req.path,
+          origin: header('x-marketing-origin') || header('origin'),
+          siteKeyId: header('x-marketing-site-key'),
+          timestamp: header('x-marketing-timestamp'),
+          nonce: header('x-marketing-nonce'),
+          signature: header('x-marketing-signature'),
+        });
+        return res.status(result.status === 'created' ? 201 : 200).json(result);
+      } catch (error: any) {
+        const expected = error instanceof MarketingSiteRouteError
+          || error?.name === 'MarketingSiteIntakeError';
+        if (!expected) console.error('[marketing] falha interna no site intake');
+        const statusCode = expected ? Number(error.statusCode || 400) : 500;
+        const code = expected ? String(error.code || 'INVALID_INTAKE') : 'INTERNAL_INTAKE_ERROR';
+        return res.status(statusCode).json({ error: code });
+      }
+    },
+  );
 
   // Guarda o raw body em req.rawBody pra rotas que precisam validar HMAC
   // (webhook do Meta WhatsApp via X-Hub-Signature-256). Sem isso, JSON.stringify
