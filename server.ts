@@ -65,6 +65,11 @@ import {
   processMarketingConversionOutbox,
 } from './lib/marketing-conversion-dispatch.js';
 import {
+  emptyMarketingAttributionResponse,
+  loadMarketingAttributionReport,
+  normalizeMarketingAttributionDays,
+} from './lib/marketing-attribution-query.js';
+import {
   InviteEmailValidationError,
   JobScheduleValidationError,
   inviteEmailUpdateForExistingClient,
@@ -25158,6 +25163,29 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // ============ DASHBOARD ANALYTICS ============
+  app.get(
+    '/api/marketing/attribution-report',
+    requireAuth,
+    requirePermission('dashboard'),
+    async (req, res) => {
+      const userId = String((req as any).userId || '');
+      const days = normalizeMarketingAttributionDays(req.query.days);
+      if (!marketingMeasurementTenantAllowed(userId)) {
+        return res.json(emptyMarketingAttributionResponse(days));
+      }
+
+      try {
+        const supabase = (req as any).supabase as SupabaseClient;
+        const report = await loadMarketingAttributionReport(supabase, userId, days);
+        return res.json(report);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'UNKNOWN';
+        console.error('[marketing-report] falha ao montar relatório:', message);
+        return res.status(500).json({ error: 'Não foi possível carregar o rastreamento agora.' });
+      }
+    },
+  );
+
   const parseHistory = (raw: any): any[] => {
     if (!raw) return [];
     if (Array.isArray(raw)) return raw;

@@ -41,6 +41,7 @@ export type LayoutOutletContext = {
 const TITLE_MAP: Record<string, string> = {
   "/": "Dashboard",
   "/clients": "Clientes",
+  "/rastreamento": "Rastreamento",
   "/jobs": "Jobs",
   "/pipeline": "Funil de Vendas",
   "/vendas": "Vendas",

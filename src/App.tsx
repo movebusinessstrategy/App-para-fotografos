@@ -17,6 +17,7 @@ const Cadastro = lazy(() => import("./pages/Cadastro"));
 const RecuperarSenha = lazy(() => import("./pages/RecuperarSenha"));
 const RedefinirSenha = lazy(() => import("./pages/RedefinirSenha"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
+const MarketingAttributionPage = lazy(() => import("./pages/MarketingAttributionPage"));
 const ClientsPage = lazy(() => import("./pages/ClientsPage"));
 const JobsPage = lazy(() => import("./pages/JobsPage"));
 const VendasPage = lazy(() => import("./pages/VendasPage"));
@@ -124,6 +125,7 @@ export default function App() {
                 }
               >
                 <Route path="dashboard" element={<PermissionRoute module="dashboard"><DashboardPage /></PermissionRoute>} />
+                <Route path="rastreamento" element={<PermissionRoute module="dashboard"><MarketingAttributionPage /></PermissionRoute>} />
                 <Route path="clients" element={<PermissionRoute module="clients"><ClientsPage /></PermissionRoute>} />
                 <Route path="jobs" element={<PermissionRoute module="jobs"><JobsPage /></PermissionRoute>} />
                 <Route path="tarefas" element={<PermissionRoute module="jobs"><TasksPage /></PermissionRoute>} />
