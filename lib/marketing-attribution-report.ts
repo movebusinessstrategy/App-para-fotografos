@@ -259,7 +259,12 @@ function touchpointPage(row?: MarketingTouchpointRow): string | null {
 }
 
 function touchpointEventName(row: MarketingTouchpointRow): string {
-  return metadataText(row, 'event_name') || '';
+  const explicitName = metadataText(row, 'event_name');
+  if (explicitName) return explicitName;
+  const marker = metadataText(row, 'cta_id');
+  if (marker === '__page_view__') return 'PageView';
+  if (marker === '__site_click__') return 'SiteClick';
+  return '';
 }
 
 function touchpointKind(row: MarketingTouchpointRow): AttributionJourneyEvent['kind'] {

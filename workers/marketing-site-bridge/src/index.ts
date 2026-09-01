@@ -24,6 +24,8 @@ const DEFAULT_DEPENDENCIES: BridgeDependencies = { fetch };
 const TURNSTILE_SITEVERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 const TURNSTILE_ACTIONS = {
   WhatsAppClick: 'whatsapp_click',
+  PageView: 'page_view',
+  SiteClick: 'site_click',
   ConsentUpdate: 'consent_update',
 } as const;
 const UPSTREAM_TIMEOUT_MS = 10_000;

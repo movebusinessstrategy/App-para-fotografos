@@ -259,7 +259,7 @@ export async function registerMarketingSiteClick(
   input: MarketingSiteRouteInput,
 ) {
   const routed = await prepareRoutedRequest(deps, input);
-  if (isConsentUpdate(routed.prepared)) {
+  if (!('touchpoint' in routed.prepared) || routed.prepared.event.event_name !== 'WhatsAppClick') {
     throw new MarketingSiteRouteError(422, 'INVALID_EVENT', 'Somente WhatsAppClick é aceito nesta operação');
   }
   return writeClick(deps, routed.site, routed.origin, routed.prepared);

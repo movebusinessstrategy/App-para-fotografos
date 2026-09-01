@@ -33,6 +33,7 @@ const WHATSAPP_CLICK_FIELDS = [
   'campaign_id',
   'ga_client_id',
   'ga_session_id',
+  'journey_id',
 ] as const;
 
 const CONSENT_UPDATE_FIELDS = [
@@ -81,7 +82,9 @@ function requireJsonRecord(value: unknown): JsonRecord {
 }
 
 function eventFieldSet(body: JsonRecord): ReadonlySet<string> {
-  if (body.event_name === 'WhatsAppClick') return WHATSAPP_CLICK_FIELD_SET;
+  if (['WhatsAppClick', 'PageView', 'SiteClick'].includes(String(body.event_name))) {
+    return WHATSAPP_CLICK_FIELD_SET;
+  }
   if (body.event_name === 'ConsentUpdate') return CONSENT_UPDATE_FIELD_SET;
   throw new MarketingBridgeError('INVALID_EVENT', 400);
 }
@@ -151,16 +154,19 @@ export function sanitizeBrowserPayload(raw: unknown, userAgent: string | null): 
   for (const field of forwardedFields) {
     if (Object.hasOwn(body, field)) sanitized[field] = body[field];
   }
-  if (body.event_name === 'WhatsAppClick' && userAgent) {
+  if (body.event_name !== 'ConsentUpdate' && userAgent) {
     sanitized.client_user_agent = userAgent.trim().slice(0, 500);
   }
   return sanitized;
 }
 
-export function browserEventName(raw: unknown): 'WhatsAppClick' | 'ConsentUpdate' {
+export type BrowserEventName = 'WhatsAppClick' | 'PageView' | 'SiteClick' | 'ConsentUpdate';
+
+export function browserEventName(raw: unknown): BrowserEventName {
   const body = requireJsonRecord(raw);
-  if (body.event_name === 'WhatsAppClick' || body.event_name === 'ConsentUpdate') {
-    return body.event_name;
+  const eventName = String(body.event_name || '');
+  if (['WhatsAppClick', 'PageView', 'SiteClick', 'ConsentUpdate'].includes(eventName)) {
+    return eventName as BrowserEventName;
   }
   throw new MarketingBridgeError('INVALID_EVENT', 400);
 }
@@ -236,14 +242,14 @@ export type PublicBridgeSuccess =
 
 export function publicSuccessPayload(
   value: unknown,
-  eventName: 'WhatsAppClick' | 'ConsentUpdate' = 'WhatsAppClick',
+  eventName: BrowserEventName = 'WhatsAppClick',
 ): PublicBridgeSuccess {
   const body = requireJsonRecord(value);
   const eventId = String(body.event_id || '');
   if (!UUID_PATTERN.test(eventId)) {
     throw new MarketingBridgeError('INVALID_UPSTREAM_RESPONSE', 502);
   }
-  if (eventName === 'ConsentUpdate') return { status: 'registered', event_id: eventId };
+  if (eventName !== 'WhatsAppClick') return { status: 'registered', event_id: eventId };
   const bridgeRef = String(body.bridge_ref || '');
   if (!BRIDGE_REFERENCE_PATTERN.test(bridgeRef)) {
     throw new MarketingBridgeError('INVALID_UPSTREAM_RESPONSE', 502);

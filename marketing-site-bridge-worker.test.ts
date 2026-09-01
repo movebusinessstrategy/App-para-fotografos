@@ -125,6 +125,33 @@ test('encaminha clique, não envia IP e expõe somente referência pública mín
   assert.equal('lead_id' in body, false);
 });
 
+test('encaminha PageView com journey_id e não expõe bridge_ref', async () => {
+  let forwardedBody: Record<string, unknown> | null = null;
+  const response = await handleMarketingBridgeRequest(
+    browserRequest({
+      event_name: 'PageView',
+      event_id: EVENT_ID,
+      journey_id: '35e875e8-619b-4a2b-9491-d0ca9181249b',
+      analytics_storage: 'granted',
+      cta_id: '__page_view__',
+      cta_location: 'page',
+    }),
+    fakeEnv(),
+    {
+      fetch: async (target, init) => {
+        if (String(target).includes('/turnstile/')) return turnstileSuccess('page_view');
+        forwardedBody = JSON.parse(String(init?.body));
+        return Response.json({ status: 'created', event_id: EVENT_ID });
+      },
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { status: 'registered', event_id: EVENT_ID });
+  assert.equal(forwardedBody?.event_name, 'PageView');
+  assert.equal(forwardedBody?.journey_id, '35e875e8-619b-4a2b-9491-d0ca9181249b');
+});
+
 test('encaminha retirada de consentimento sem click IDs, PII ou user agent', async () => {
   let forwardedBody: Record<string, unknown> | null = null;
   const response = await handleMarketingBridgeRequest(

@@ -146,3 +146,25 @@ test('mantém a origem antiga, mas conta somente cliques dentro do período', ()
   assert.equal(report.records[0].click_count, 0);
   assert.equal(report.summary.tracked_clicks, 0);
 });
+
+test('reconhece os marcadores reservados gravados pelo intake atual', () => {
+  const report = buildMarketingAttributionReport({
+    touchpoints: [
+      touchpoint({
+        id: 3,
+        metadata: { cta_id: '__page_view__', cta_location: 'page', page_path: '/portfolio' },
+      }),
+      touchpoint({
+        id: 4,
+        metadata: { cta_id: '__site_click__', cta_location: 'Veja mais → /portfolio', page_path: '/' },
+      }),
+    ],
+    facts: [],
+    deals: [],
+    integrations: [],
+  });
+
+  assert.equal(report.records[0].page_view_count, 1);
+  assert.equal(report.records[0].click_count, 1);
+  assert.deepEqual(report.records[0].journey.map(item => item.kind), ['page_view', 'site_click']);
+});

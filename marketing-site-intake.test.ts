@@ -9,6 +9,7 @@ import {
   hashMarketingBridgeReference,
   prepareMarketingSiteIntake,
   prepareMarketingSiteConsentUpdate,
+  prepareMarketingSiteRequest,
   signMarketingSiteRequest,
   verifyMarketingSiteRequest,
 } from './lib/marketing-site-intake.js';
@@ -170,6 +171,43 @@ test('preserva event_id UUID do navegador para deduplicação com o Pixel', () =
   assert.equal(prepared.response.event_id, EVENT_ID);
   assert.equal(prepared.touchpoint.external_event_id, EVENT_ID);
   assert.equal(prepared.response.lead_id, LEAD_ID);
+});
+
+test('agrupa PageView e SiteClick no journey_id sem criar referência pública', () => {
+  const prepared = prepareMarketingSiteRequest({
+    ...signedInput({
+      event_name: 'PageView',
+      event_id: EVENT_ID,
+      journey_id: LEAD_ID,
+      analytics_storage: 'granted',
+      ad_storage: 'denied',
+      ad_user_data: 'denied',
+      ad_personalization: 'denied',
+      page_path: '/portfolio',
+      cta_id: '__page_view__',
+      cta_location: 'page',
+    }),
+    uuidFactory: fixedIds(),
+  });
+
+  assert.equal('touchpoint' in prepared, true);
+  if (!('touchpoint' in prepared)) return;
+  assert.equal(prepared.event.lead_id, LEAD_ID);
+  assert.equal(prepared.touchpoint.bridge_reference_hash, null);
+  assert.equal(prepared.touchpoint.metadata.event_name, 'PageView');
+  assert.equal('bridge_ref' in prepared.response, false);
+});
+
+test('rejeita evento de navegação sem consentimento analítico', () => {
+  assert.throws(
+    () => prepareMarketingSiteRequest(signedInput({
+      event_name: 'SiteClick',
+      journey_id: LEAD_ID,
+      analytics_storage: 'denied',
+      cta_id: '__site_click__',
+    })),
+    error => errorCode(error, 'INVALID_FIELD'),
+  );
 });
 
 test('bridge_ref usa pepper estável independente do segredo HMAC rotacionável', () => {

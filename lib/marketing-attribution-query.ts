@@ -130,6 +130,7 @@ export async function loadMarketingAttributionReport(
   supabase: SupabaseClient,
   userId: string,
   days: number,
+  journeyCollectionEnabled = false,
   now = new Date(),
 ): Promise<MarketingAttributionApiResponse> {
   const to = now.toISOString();
@@ -170,9 +171,11 @@ export async function loadMarketingAttributionReport(
     site: activeSite(sites),
     collection: {
       whatsapp_clicks: true,
-      page_views: false,
-      site_clicks: false,
-      note: 'Cliques no WhatsApp já aparecem. A navegação completa passa a ser mostrada após ativar o coletor de páginas e cliques.',
+      page_views: journeyCollectionEnabled,
+      site_clicks: journeyCollectionEnabled,
+      note: journeyCollectionEnabled
+        ? 'Páginas e cliques consentidos estão sendo enviados pela ponte first-party.'
+        : 'Cliques no WhatsApp já aparecem. A navegação completa passa a ser mostrada após ativar o coletor de páginas e cliques.',
     },
     report: buildMarketingAttributionReport({
       touchpoints: reportTouchpoints,

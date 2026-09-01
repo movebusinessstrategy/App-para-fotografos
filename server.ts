@@ -25176,7 +25176,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
       try {
         const supabase = (req as any).supabase as SupabaseClient;
-        const report = await loadMarketingAttributionReport(supabase, userId, days);
+        const journeyCollectionEnabled = process.env.MARKETING_JOURNEY_COLLECTION_ENABLED === 'true';
+        const report = await loadMarketingAttributionReport(
+          supabase,
+          userId,
+          days,
+          journeyCollectionEnabled,
+        );
         return res.json(report);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'UNKNOWN';

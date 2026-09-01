@@ -24,6 +24,7 @@ const CONSENT_FIELDS = [
   'ad_user_data',
   'ad_personalization',
 ] as const;
+const SITE_EVENT_NAMES = ['WhatsAppClick', 'PageView', 'SiteClick'] as const;
 
 const WHATSAPP_CLICK_ALLOWED_FIELDS = new Set([
   'event_name',
@@ -40,6 +41,7 @@ const WHATSAPP_CLICK_ALLOWED_FIELDS = new Set([
   ...AD_ID_FIELDS,
   'ga_client_id',
   'ga_session_id',
+  'journey_id',
   'client_user_agent',
 ]);
 
@@ -105,11 +107,12 @@ type ClickIdField = typeof CLICK_ID_FIELDS[number];
 type UtmField = typeof UTM_FIELDS[number];
 type AdIdField = typeof AD_ID_FIELDS[number];
 type ConsentField = typeof CONSENT_FIELDS[number];
+export type MarketingSiteEventName = typeof SITE_EVENT_NAMES[number];
 
 export type MarketingConsentStatus = 'unknown' | 'granted' | 'denied';
 
 export type MarketingSiteEventInput = {
-  event_name: 'WhatsAppClick';
+  event_name: MarketingSiteEventName;
   event_id?: string;
   occurred_at?: string | number;
   consent_status?: MarketingConsentStatus;
@@ -137,6 +140,7 @@ export type MarketingSiteEventInput = {
   campaign_id?: string;
   ga_client_id?: string;
   ga_session_id?: string;
+  journey_id?: string;
   client_user_agent?: string;
 };
 
@@ -167,7 +171,7 @@ export type VerifiedMarketingSiteRequest = {
 };
 
 export type NormalizedMarketingSiteEvent = {
-  event_name: 'WhatsAppClick';
+  event_name: MarketingSiteEventName;
   event_id: string;
   lead_id: string;
   occurred_at: string;
@@ -218,14 +222,14 @@ export type MarketingSiteTouchpointRow = {
   campaign_external_id: string | null;
   lead_id: string;
   bridge_payload_hash: string;
-  bridge_reference_hash: string;
+  bridge_reference_hash: string | null;
   ga_client_id: string | null;
   ga_session_id: string | null;
   client_user_agent: string | null;
   consent_status: MarketingConsentStatus;
   consent_snapshot: Record<ConsentField | 'captured_at' | 'source', string>;
   metadata: {
-    event_name: 'WhatsAppClick';
+    event_name: MarketingSiteEventName;
     page_path: string | null;
     cta_id: string | null;
     cta_location: string | null;
@@ -240,10 +244,10 @@ export type PreparedMarketingSiteIntake = {
   touchpoint: MarketingSiteTouchpointRow;
   response: {
     accepted: true;
-    event_name: 'WhatsAppClick';
+    event_name: MarketingSiteEventName;
     event_id: string;
     lead_id: string;
-    bridge_ref: string;
+    bridge_ref?: string;
   };
 };
 
@@ -632,11 +636,11 @@ function normalizePagePath(value: unknown): string | null {
   return path;
 }
 
-function normalizeEventName(value: unknown): 'WhatsAppClick' {
-  if (value !== 'WhatsAppClick') {
-    intakeError('INVALID_EVENT', 422, 'Somente o evento WhatsAppClick é aceito');
+function normalizeEventName(value: unknown): MarketingSiteEventName {
+  if (SITE_EVENT_NAMES.includes(value as MarketingSiteEventName)) {
+    return value as MarketingSiteEventName;
   }
-  return value;
+  return intakeError('INVALID_EVENT', 422, 'Evento do site não permitido');
 }
 
 function normalizedFieldMap<T extends string>(
@@ -695,13 +699,19 @@ function normalizeMarketingSiteEvent(
   assertNoForbiddenFields(payload);
   assertOnlyAllowedFields(payload, WHATSAPP_CLICK_ALLOWED_FIELDS);
   const consent = normalizedConsentSnapshot(payload);
+  const eventName = normalizeEventName(payload.event_name);
+  if (eventName !== 'WhatsAppClick' && consent.analytics_storage !== 'granted') {
+    intakeError('INVALID_FIELD', 422, 'Evento de navegação exige consentimento analítico');
+  }
   const eventId = payload.event_id
     ? normalizeUuid(payload.event_id, 'event_id')
     : generatedUuid(uuidFactory, 'event_id');
   return {
-    event_name: normalizeEventName(payload.event_name),
+    event_name: eventName,
     event_id: eventId,
-    lead_id: generatedUuid(uuidFactory, 'lead_id'),
+    lead_id: payload.journey_id
+      ? normalizeUuid(payload.journey_id, 'journey_id')
+      : generatedUuid(uuidFactory, 'lead_id'),
     occurred_at: normalizeOccurredAt(payload.occurred_at, signedAt, nowMs),
     consent_status: consent.ad_user_data,
     consent_snapshot: consent,
@@ -787,7 +797,7 @@ function marketingSiteTouchpointRow(
   userId: string,
   event: NormalizedMarketingSiteEvent,
   bodyHash: string,
-  bridgeRefHash: string,
+  bridgeRefHash: string | null,
 ): MarketingSiteTouchpointRow {
   return {
     user_id: userId,
@@ -856,10 +866,13 @@ function prepareVerifiedMarketingSiteRequest(
     };
   }
   const event = normalizeMarketingSiteEvent(payload, verified.signed_at, nowMs, uuidFactory);
-  if (!input.bridgeReferenceSecret) {
+  const needsBridgeReference = event.event_name === 'WhatsAppClick';
+  if (needsBridgeReference && !input.bridgeReferenceSecret) {
     intakeError('INVALID_CONFIGURATION', 500, 'Segredo estável de bridge_ref ausente');
   }
-  const bridge = deriveMarketingBridgeReference(input.bridgeReferenceSecret, event.event_id);
+  const bridge = needsBridgeReference
+    ? deriveMarketingBridgeReference(input.bridgeReferenceSecret!, event.event_id)
+    : null;
   return {
     verified_request: verified,
     event,
@@ -867,14 +880,14 @@ function prepareVerifiedMarketingSiteRequest(
       userId,
       event,
       verified.body_sha256,
-      bridge.bridge_ref_hash,
+      bridge?.bridge_ref_hash || null,
     ),
     response: {
       accepted: true,
       event_name: event.event_name,
       event_id: event.event_id,
       lead_id: event.lead_id,
-      bridge_ref: bridge.bridge_ref,
+      ...(bridge ? { bridge_ref: bridge.bridge_ref } : {}),
     },
   };
 }
