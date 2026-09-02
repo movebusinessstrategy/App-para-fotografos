@@ -11,6 +11,7 @@ interface AuthContextType {
   permissions: Record<string, boolean> | null;
   isPlatformAdmin: boolean;
   isImpersonating: boolean;
+  canAccessMarketingTracking: boolean;
   isProductionOnly: boolean;
   features: PlanFeatures;
   canAccess: (module: string) => boolean;
@@ -28,6 +29,7 @@ const AuthContext = createContext<AuthContextType>({
   permissions: null,
   isPlatformAdmin: false,
   isImpersonating: false,
+  canAccessMarketingTracking: false,
   isProductionOnly: false,
   features: DEFAULT_FEATURES,
   canAccess: () => true,
@@ -52,6 +54,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   const [permissions, setPermissions] = useState<Record<string, boolean> | null>(null);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [isImpersonating, setIsImpersonating] = useState(false);
+  const [canAccessMarketingTracking, setCanAccessMarketingTracking] = useState(false);
   const [isProductionOnly, setIsProductionOnly] = useState(false);
   const [features, setFeatures] = useState<PlanFeatures>(DEFAULT_FEATURES);
   // Qual usuário já teve as permissões carregadas — evita re-fetch em refresh de
@@ -68,6 +71,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         setPermissions(data.permissions ?? null);
         setIsPlatformAdmin(data.isPlatformAdmin ?? false);
         setIsImpersonating(data.isImpersonating ?? false);
+        setCanAccessMarketingTracking(data.canAccessMarketingTracking === true);
         setIsProductionOnly(data.productionOnly ?? false);
         setFeatures(data.planFeatures ?? DEFAULT_FEATURES);
       }
@@ -84,6 +88,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     setPermissions(null);
     setIsPlatformAdmin(false);
     setIsImpersonating(false);
+    setCanAccessMarketingTracking(false);
     setIsProductionOnly(false);
     setFeatures(DEFAULT_FEATURES);
   };
@@ -141,7 +146,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, isMember, permissions, isPlatformAdmin, isImpersonating, isProductionOnly, features, canAccess, signOut }}>
+    <AuthContext.Provider value={{ user, session, loading, isMember, permissions, isPlatformAdmin, isImpersonating, canAccessMarketingTracking, isProductionOnly, features, canAccess, signOut }}>
       {children}
     </AuthContext.Provider>
   );

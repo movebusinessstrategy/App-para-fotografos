@@ -69,6 +69,7 @@ import {
   loadMarketingAttributionReport,
   normalizeMarketingAttributionDays,
 } from './lib/marketing-attribution-query.js';
+import { canAccessMarketingTracking } from './lib/marketing-tracking-access.js';
 import {
   InviteEmailValidationError,
   JobScheduleValidationError,
@@ -1864,6 +1865,7 @@ async function startServer() {
   type AuthCacheEntry = {
     userId: string;
     realUserId: string;
+    authEmail: string | null;
     isMember: boolean;
     isPlatformAdmin: boolean;
     isImpersonating: boolean;
@@ -1944,6 +1946,7 @@ async function startServer() {
       }
       (req as any).userId = cached.userId;
       (req as any).realUserId = cached.realUserId;
+      (req as any).authEmail = cached.authEmail;
       (req as any).isMember = cached.isMember;
       (req as any).isPlatformAdmin = cached.isPlatformAdmin;
       (req as any).isImpersonating = cached.isImpersonating;
@@ -1993,6 +1996,7 @@ async function startServer() {
           if (!member) return res.status(404).json({ error: 'Membro não encontrado' });
           (req as any).userId = member.owner_user_id;
           (req as any).realUserId = user.id;
+          (req as any).authEmail = user.email ?? null;
           (req as any).isImpersonating = true;
           // NÃO marca isPlatformAdmin=true: ao "ver como membro" o admin deve
           // enxergar EXATAMENTE o que o membro vê (respeita o RBAC dele, inclusive
@@ -2008,6 +2012,7 @@ async function startServer() {
 
         (req as any).userId = impersonateOwnerHeader;
         (req as any).realUserId = user.id;
+        (req as any).authEmail = user.email ?? null;
         (req as any).isImpersonating = true;
         (req as any).isPlatformAdmin = true;
         (req as any).memberPermissions = null;
@@ -2050,6 +2055,7 @@ async function startServer() {
           }
           (req as any).userId = memberById.owner_user_id;
           (req as any).realUserId = user.id;
+          (req as any).authEmail = user.email ?? null;
           (req as any).memberPermissions = memberById.permissions;
           (req as any).isMember = true;
           (req as any).isPlatformAdmin = platformAdmin;
@@ -2057,6 +2063,7 @@ async function startServer() {
           cacheAuth({
             userId: memberById.owner_user_id,
             realUserId: user.id,
+            authEmail: user.email ?? null,
             isMember: true,
             isPlatformAdmin: platformAdmin,
             isImpersonating: false,
@@ -2108,6 +2115,7 @@ async function startServer() {
             }
             (req as any).userId = memberByEmail.owner_user_id;
             (req as any).realUserId = user.id;
+            (req as any).authEmail = user.email ?? null;
             (req as any).memberPermissions = memberByEmail.permissions;
             (req as any).isMember = true;
             (req as any).isPlatformAdmin = platformAdmin;
@@ -2115,6 +2123,7 @@ async function startServer() {
             cacheAuth({
               userId: memberByEmail.owner_user_id,
               realUserId: user.id,
+              authEmail: user.email ?? null,
               isMember: true,
               isPlatformAdmin: platformAdmin,
               isImpersonating: false,
@@ -2158,6 +2167,7 @@ async function startServer() {
       }
       (req as any).userId = user.id;
       (req as any).realUserId = user.id;
+      (req as any).authEmail = user.email ?? null;
       (req as any).memberPermissions = null;
       (req as any).isMember = false;
       (req as any).isPlatformAdmin = platformAdmin;
@@ -2165,6 +2175,7 @@ async function startServer() {
       cacheAuth({
         userId: user.id,
         realUserId: user.id,
+        authEmail: user.email ?? null,
         isMember: false,
         isPlatformAdmin: platformAdmin,
         isImpersonating: false,
@@ -2260,6 +2271,17 @@ async function startServer() {
     if (!supabaseAdmin) return res.status(500).json({ error: 'Service role não configurado' });
     const allowed = await isSuperAdmin(realUserId);
     if (!allowed) return res.status(403).json({ error: 'Acesso restrito ao painel da plataforma' });
+    next();
+  };
+
+  const requireMarketingTrackingAccess = (
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ) => {
+    if (!canAccessMarketingTracking((req as any).authEmail)) {
+      return res.status(403).json({ error: 'Acesso não autorizado.' });
+    }
     next();
   };
 
@@ -10444,6 +10466,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       permissions: (req as any).memberPermissions ?? null,
       isPlatformAdmin: (req as any).isPlatformAdmin ?? false,
       isImpersonating: (req as any).isImpersonating ?? false,
+      canAccessMarketingTracking: canAccessMarketingTracking((req as any).authEmail),
       impersonatingOwnerId: (req as any).isImpersonating ? (req as any).userId : null,
       productionOnly: isProductionOnly(req),
       currentMember,
@@ -25286,6 +25309,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.get(
     '/api/marketing/attribution-report',
     requireAuth,
+    requireMarketingTrackingAccess,
     requirePermission('dashboard'),
     async (req, res) => {
       const userId = String((req as any).userId || '');

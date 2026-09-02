@@ -35,7 +35,7 @@ import { useAuth } from "../../contexts/AuthContext";
 
 const ALL_NAV_ITEMS = [
   { to: "/dashboard",     label: "Dashboard",       icon: LayoutDashboard, end: true,  module: "dashboard" },
-  { to: "/rastreamento", label: "Rastreamento",    icon: Waypoints,        module: "dashboard" },
+  { to: "/rastreamento", label: "Rastreamento",    icon: Waypoints,        module: "dashboard", marketingTrackingOnly: true },
   { to: "/vendas",        label: "Vendas",           icon: Trello,          module: "vendas" },
   { to: "/whatsapp",      label: "Atendimento",      icon: MessageCircle,   module: "whatsapp" },
   { to: "/oportunidades", label: "Oportunidades",    icon: TrendingUp,      module: "oportunidades" },
@@ -74,7 +74,7 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ isOpen, onClose, collapsed = false, onToggleCollapse }: SidebarProps) {
-  const { canAccess, isMember, isPlatformAdmin, isProductionOnly, features } = useAuth();
+  const { canAccess, isMember, isPlatformAdmin, isProductionOnly, features, canAccessMarketingTracking } = useAuth();
   const location = useLocation();
 
   const isCatalogo = location.pathname === "/catalogo";
@@ -84,10 +84,13 @@ export default function Sidebar({ isOpen, onClose, collapsed = false, onToggleCo
   const planAllowsItem = (item: { feature?: string }) =>
     !item.feature || features[item.feature as keyof typeof features] !== false;
 
+  const accountAllowsItem = (item: { marketingTrackingOnly?: boolean }) =>
+    !item.marketingTrackingOnly || canAccessMarketingTracking;
+
   // Papel de produção: vê SÓ "Produção", nada mais (sem catálogo/config/tarefas).
   const navItems = isProductionOnly
     ? ALL_NAV_ITEMS.filter(item => item.to === "/jobs")
-    : ALL_NAV_ITEMS.filter(item => canAccess(item.module) && planAllowsItem(item));
+    : ALL_NAV_ITEMS.filter(item => canAccess(item.module) && planAllowsItem(item) && accountAllowsItem(item));
   const bottomItems = isProductionOnly ? [] : (isMember ? MEMBER_BOTTOM_ITEMS : OWNER_ITEMS);
 
   const currentAba = new URLSearchParams(location.search).get("aba") ?? "produtos";

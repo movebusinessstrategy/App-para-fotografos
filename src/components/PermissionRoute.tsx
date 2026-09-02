@@ -10,6 +10,8 @@ interface PermissionRouteProps {
   module?: string;
   /** Se true, só dono da conta OU platform admin podem acessar. */
   ownerOnly?: boolean;
+  /** Se true, exige liberação explícita para o painel de rastreamento. */
+  marketingTrackingOnly?: boolean;
 }
 
 /**
@@ -28,8 +30,8 @@ interface PermissionRouteProps {
  * Voltar, mas isso quebrava o login (login → /dashboard sem permissão →
  * tela de erro → Voltar → /login → loop).
  */
-export default function PermissionRoute({ children, module, ownerOnly }: PermissionRouteProps) {
-  const { loading, user, isMember, isPlatformAdmin, canAccess } = useAuth();
+export default function PermissionRoute({ children, module, ownerOnly, marketingTrackingOnly }: PermissionRouteProps) {
+  const { loading, user, isMember, isPlatformAdmin, canAccess, canAccessMarketingTracking } = useAuth();
 
   if (loading) {
     return (
@@ -40,6 +42,10 @@ export default function PermissionRoute({ children, module, ownerOnly }: Permiss
   }
 
   if (!user) return null; // ProtectedRoute pai já redireciona pra login
+
+  if (marketingTrackingOnly && !canAccessMarketingTracking) {
+    return <Navigate to={getLandingRoute(canAccess)} replace />;
+  }
 
   // Platform admin: passa por tudo
   if (isPlatformAdmin) return <>{children}</>;
