@@ -13,6 +13,8 @@ export default function IntegracaoCalendar() {
   const [connected, setConnected] = useState(false);
   const [reconnectRequired, setReconnectRequired] = useState(false);
   const [conversionReady, setConversionReady] = useState<boolean | null>(null);
+  const [marketingReady, setMarketingReady] = useState(false);
+  const [preparingMarketing, setPreparingMarketing] = useState(false);
   const [accountEmail, setAccountEmail] = useState<string | null>(null);
   const [pendingInvites, setPendingInvites] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -29,6 +31,7 @@ export default function IntegracaoCalendar() {
       setConnected(Boolean(data.connected && healthy));
       setReconnectRequired(Boolean(data.connected && data.reconnect_required));
       setConversionReady(Boolean(data.offline_ready && data.datamanager_scope));
+      setMarketingReady(Boolean(data.marketing_google_ready));
       setAccountEmail(typeof data.account_email === "string" ? data.account_email : null);
       setPendingInvites(Number.isFinite(data.pending_invites) ? data.pending_invites : null);
     } catch { /* */ }
@@ -66,6 +69,20 @@ export default function IntegracaoCalendar() {
     await authFetch("/api/auth/google/disconnect", { method: "POST" });
     checkStatus();
     setConfirmDisconnect(false);
+  };
+
+  const prepareMarketing = async () => {
+    setPreparingMarketing(true);
+    try {
+      const res = await authFetch('/api/auth/google/prepare-marketing', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.ready) throw new Error(data.error || 'Falha ao preparar Google Ads.');
+      setMarketingReady(true);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Falha ao preparar Google Ads.');
+    } finally {
+      setPreparingMarketing(false);
+    }
   };
 
   const sync = async () => {
@@ -207,9 +224,26 @@ export default function IntegracaoCalendar() {
             : "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-900/10 dark:border-amber-900/40 dark:text-amber-200"}`}>
             {conversionReady ? <CheckCircle2 size={14} className="mt-0.5 flex-shrink-0" /> : <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />}
             <div>{conversionReady
-              ? "Acesso offline e Google Data Manager validados. O CRM está pronto para registrar conversões qualificadas."
+              ? "Acesso offline e Google Data Manager validados."
               : "A permissão de conversão ainda não pode ser renovada. Clique em Atualizar permissões Google."}</div>
           </div>
+        )}
+
+        {connected && conversionReady && (
+          marketingReady ? (
+            <div className="flex items-start gap-2 p-3 rounded-lg border bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-900/10 dark:border-emerald-900/40 dark:text-emerald-300 text-xs">
+              <CheckCircle2 size={14} className="mt-0.5 flex-shrink-0" />
+              <div>Google Ads preparado em modo de validação. Nenhuma conversão real será enviada enquanto a ativação permanecer desabilitada.</div>
+            </div>
+          ) : (
+            <button
+              onClick={prepareMarketing}
+              disabled={preparingMarketing}
+              className="flex items-center justify-center gap-2 px-4 py-2 bg-gold-600 hover:bg-gold-700 text-white rounded-lg font-semibold text-sm disabled:opacity-60"
+            >
+              {preparingMarketing ? 'Preparando Google Ads…' : 'Finalizar integração Google Ads'}
+            </button>
+          )
         )}
       </div>
 

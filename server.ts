@@ -1051,6 +1051,68 @@ const inspectGoogleOfflineAccess = async (auth: NonNullable<Awaited<ReturnType<t
   }
 };
 
+const googleMarketingIntegrationReady = async (userId: string): Promise<boolean> => {
+  if (!supabaseAdmin) return false;
+  const { data: rows, error } = await supabaseAdmin.from('marketing_integrations')
+    .select('enabled,conversion_action_id,credentials_encrypted,provider_config')
+    .eq('user_id', userId).eq('provider', 'google').limit(2);
+  if (error || rows?.length !== 1) return false;
+  const row = rows[0];
+  const config = row.provider_config as Record<string, unknown> | null;
+  return !row.enabled
+    && /^\d+$/.test(String(row.conversion_action_id || ''))
+    && String(row.credentials_encrypted || '').startsWith('enc:v1:')
+    && config?.state === 'credentials_validated'
+    && config?.validation_mode === true;
+};
+
+const prepareGoogleMarketingIntegration = async (
+  userId: string,
+  auth: NonNullable<Awaited<ReturnType<typeof getGoogleAuth>>>,
+) => {
+  if (!supabaseAdmin || !isEncryptionConfigured()) throw new Error('PROTECAO_INDISPONIVEL');
+  const refreshToken = auth.credentials.refresh_token;
+  const clientId = cleanCredential(process.env.GOOGLE_CLIENT_ID);
+  const clientSecret = cleanCredential(process.env.GOOGLE_CLIENT_SECRET);
+  if (!refreshToken || !clientId || !clientSecret) throw new Error('GOOGLE_CREDENCIAL_INCOMPLETA');
+  const { data: rows, error } = await supabaseAdmin.from('marketing_integrations')
+    .select('id,enabled,account_id,conversion_action_id,provider_config')
+    .eq('user_id', userId).eq('provider', 'google').limit(2);
+  if (error || rows?.length !== 1) throw error || new Error('INTEGRACAO_GOOGLE_NAO_ENCONTRADA');
+  const row = rows[0];
+  if (!/^\d+$/.test(String(row.conversion_action_id || ''))) throw new Error('CONVERSAO_GOOGLE_NAO_CONFIGURADA');
+  const providerConfig = row.provider_config && typeof row.provider_config === 'object'
+    ? row.provider_config as Record<string, unknown>
+    : {};
+  const credentials = encryptIfNeeded(JSON.stringify({
+    refresh_token: refreshToken,
+    client_id: clientId,
+    client_secret: clientSecret,
+  }));
+  const { data: updated, error: updateError } = await supabaseAdmin.from('marketing_integrations')
+    .update({
+      enabled: false,
+      credentials_encrypted: credentials,
+      provider_config: {
+        ...providerConfig,
+        state: 'credentials_validated',
+        customer_id: row.account_id,
+        oauth_scope: 'https://www.googleapis.com/auth/datamanager',
+        validation_mode: true,
+      },
+      last_tested_at: new Date().toISOString(),
+      last_error: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', row.id).eq('user_id', userId).eq('provider', 'google')
+    .select('id,enabled,account_id,conversion_action_id,credentials_encrypted,provider_config,last_error')
+    .single();
+  if (updateError || !updated || updated.enabled || !String(updated.credentials_encrypted || '').startsWith('enc:v1:')) {
+    throw updateError || new Error('INTEGRACAO_GOOGLE_NAO_PREPARADA');
+  }
+  return updated;
+};
+
 const inspectGoogleCalendarConnection = async (supabase: SupabaseClient, userId: string) => {
   const auth = await getGoogleAuth(supabase, userId);
   if (!auth) return { connected: false, healthy: false, reconnect_required: false };
@@ -4348,7 +4410,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.get('/api/auth/google/status', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const [connection, pendingInvites, pendingMissingTime] = await Promise.all([
+    const [connection, pendingInvites, pendingMissingTime, marketingGoogleReady] = await Promise.all([
       inspectGoogleCalendarConnection(supabase, userId),
       pendingGoogleCalendarInviteCount(supabase, userId).catch((error: any) => {
         console.warn('[google-calendar] Falha ao contar ensaios pendentes:', error?.message || error);
@@ -4358,12 +4420,41 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         console.warn('[google-calendar] Falha ao contar ensaios sem horário:', error?.message || error);
         return null;
       }),
+      googleMarketingIntegrationReady(userId),
     ]);
     res.json({
       ...connection,
       pending_invites: pendingInvites,
       pending_missing_time: pendingMissingTime,
+      marketing_google_ready: marketingGoogleReady,
     });
+  });
+
+  app.post('/api/auth/google/prepare-marketing', requireAuth, async (req, res) => {
+    if (!canManageGoogleCalendarConnection(req)) {
+      return res.status(403).json({ error: 'Somente o dono real da conta pode preparar a integração Google Ads.' });
+    }
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    try {
+      const auth = await getGoogleAuth(supabase, userId);
+      if (!auth) return res.status(401).json({ error: 'Conta Google não conectada.' });
+      const offline = await inspectGoogleOfflineAccess(auth);
+      if (!offline.offline_ready || !offline.datamanager_scope) {
+        return res.status(409).json({ error: 'Permissão Google Data Manager indisponível.' });
+      }
+      const integration = await prepareGoogleMarketingIntegration(userId, auth);
+      return res.json({
+        ready: true,
+        enabled: integration.enabled,
+        account_id: integration.account_id,
+        conversion_action_id: integration.conversion_action_id,
+        validation_mode: true,
+      });
+    } catch (error: any) {
+      console.error('[google-auth] Falha ao preparar integração Google Ads:', error?.message || error);
+      return res.status(500).json({ error: 'Não foi possível preparar a integração Google Ads.' });
+    }
   });
 
   app.post('/api/auth/google/disconnect', requireAuth, async (req, res) => {
