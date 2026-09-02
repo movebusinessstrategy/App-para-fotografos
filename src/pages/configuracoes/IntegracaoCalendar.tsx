@@ -152,6 +152,12 @@ export default function IntegracaoCalendar() {
           canManage ? (
             <div className="flex flex-col sm:flex-row gap-3">
               <button
+                onClick={connect}
+                className="flex items-center justify-center gap-2 px-4 py-2 border border-gold-200 dark:border-gold-800 text-gold-700 dark:text-gold-300 hover:bg-gold-50 dark:hover:bg-gold-900/20 rounded-lg font-semibold text-sm"
+              >
+                Atualizar permissões Google
+              </button>
+              <button
                 onClick={() => setConfirmSync(true)}
                 disabled={syncing}
                 className="flex items-center justify-center gap-2 px-4 py-2 bg-gold-50 dark:bg-gold-900/20 text-gold-700 dark:text-gold-300 hover:bg-gold-100 dark:hover:bg-gold-900/30 rounded-lg font-semibold text-sm disabled:opacity-60"
