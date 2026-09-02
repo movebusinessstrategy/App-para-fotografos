@@ -4245,7 +4245,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const url = client.generateAuthUrl({
       access_type: 'offline',
-      scope: ['openid', 'email', 'https://www.googleapis.com/auth/calendar.events'],
+      scope: [
+        'openid',
+        'email',
+        'https://www.googleapis.com/auth/calendar.events',
+        'https://www.googleapis.com/auth/datamanager',
+      ],
       prompt: 'consent',
       redirect_uri: redirectUri,
       // state assinado (userId.exp.hmac) em vez do userId cru — ver helpers
