@@ -12,6 +12,7 @@ export default function IntegracaoCalendar() {
   const canManage = !isMember && !isImpersonating;
   const [connected, setConnected] = useState(false);
   const [reconnectRequired, setReconnectRequired] = useState(false);
+  const [conversionReady, setConversionReady] = useState<boolean | null>(null);
   const [accountEmail, setAccountEmail] = useState<string | null>(null);
   const [pendingInvites, setPendingInvites] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -27,6 +28,7 @@ export default function IntegracaoCalendar() {
       const healthy = data.healthy !== false;
       setConnected(Boolean(data.connected && healthy));
       setReconnectRequired(Boolean(data.connected && data.reconnect_required));
+      setConversionReady(Boolean(data.offline_ready && data.datamanager_scope));
       setAccountEmail(typeof data.account_email === "string" ? data.account_email : null);
       setPendingInvites(Number.isFinite(data.pending_invites) ? data.pending_invites : null);
     } catch { /* */ }
@@ -196,6 +198,17 @@ export default function IntegracaoCalendar() {
             <div>
               Existem {pendingInvites} ensaios futuros antigos fora do Google Agenda. A sincronização manual pode enviar convites por e-mail a esses clientes.
             </div>
+          </div>
+        )}
+
+        {connected && conversionReady !== null && (
+          <div className={`flex items-start gap-2 p-3 rounded-lg border text-xs ${conversionReady
+            ? "bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-900/10 dark:border-emerald-900/40 dark:text-emerald-300"
+            : "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-900/10 dark:border-amber-900/40 dark:text-amber-200"}`}>
+            {conversionReady ? <CheckCircle2 size={14} className="mt-0.5 flex-shrink-0" /> : <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />}
+            <div>{conversionReady
+              ? "Acesso offline e Google Data Manager validados. O CRM está pronto para registrar conversões qualificadas."
+              : "A permissão de conversão ainda não pode ser renovada. Clique em Atualizar permissões Google."}</div>
           </div>
         )}
       </div>

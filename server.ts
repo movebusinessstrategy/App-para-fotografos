@@ -1030,9 +1030,31 @@ const missingGoogleCalendarTimeCount = async (supabase: SupabaseClient, userId: 
   return count ?? 0;
 };
 
+const inspectGoogleOfflineAccess = async (auth: NonNullable<Awaited<ReturnType<typeof getGoogleAuth>>>) => {
+  const refreshToken = auth.credentials.refresh_token;
+  if (!refreshToken) return { offline_ready: false, datamanager_scope: false };
+
+  try {
+    const verifier = getOAuth2Client();
+    verifier.setCredentials({ refresh_token: refreshToken });
+    const { token } = await verifier.getAccessToken();
+    if (!token) return { offline_ready: false, datamanager_scope: false };
+    const info = await verifier.getTokenInfo(token);
+    const scopes = info.scopes || [];
+    return {
+      offline_ready: true,
+      datamanager_scope: scopes.includes('https://www.googleapis.com/auth/datamanager'),
+    };
+  } catch (error: any) {
+    console.warn('[google-auth] A renovação offline falhou:', error?.message || 'falha desconhecida');
+    return { offline_ready: false, datamanager_scope: false };
+  }
+};
+
 const inspectGoogleCalendarConnection = async (supabase: SupabaseClient, userId: string) => {
   const auth = await getGoogleAuth(supabase, userId);
   if (!auth) return { connected: false, healthy: false, reconnect_required: false };
+  const offlineAccess = await inspectGoogleOfflineAccess(auth);
 
   try {
     const oauth = google.oauth2({ version: 'v2', auth });
@@ -1043,6 +1065,7 @@ const inspectGoogleCalendarConnection = async (supabase: SupabaseClient, userId:
       reconnect_required: false,
       account_email: data.email || null,
       calendar_name: data.name || null,
+      ...offlineAccess,
     };
   } catch {
     try {
@@ -1056,10 +1079,11 @@ const inspectGoogleCalendarConnection = async (supabase: SupabaseClient, userId:
         reconnect_required: false,
         account_email: data.id || null,
         calendar_name: data.summary || null,
+        ...offlineAccess,
       };
     } catch (error: any) {
       console.warn('[google-auth] A conexão salva precisa ser refeita:', error?.message || 'falha ao validar calendário');
-      return { connected: true, healthy: false, reconnect_required: true };
+      return { connected: true, healthy: false, reconnect_required: true, ...offlineAccess };
     }
   }
 };
