@@ -49,16 +49,13 @@ export default function IntegracaoCalendar() {
   }, []);
 
   const connect = async () => {
-    const popup = window.open("", "google_auth_popup", "width=600,height=700");
     try {
       const res = await authFetch("/api/auth/google/url");
       if (!res.ok) throw new Error("Não foi possível iniciar a autorização Google.");
       const { url } = await res.json();
       if (!url) throw new Error("A autorização Google não retornou um endereço válido.");
-      if (popup) popup.location.replace(url);
-      else window.location.assign(url);
+      window.location.assign(url);
     } catch (e) {
-      popup?.close();
       console.error(e);
     }
   };
