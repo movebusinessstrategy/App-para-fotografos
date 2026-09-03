@@ -236,7 +236,7 @@ async function forwardEvent(
       method: 'POST',
       headers: signed.headers,
       body: signed.rawBody,
-      redirect: 'error',
+      redirect: 'manual',
     }, dependencies.timeoutMs);
   } catch (error) {
     console.warn('[marketing-bridge] crm_intake_unavailable', {

@@ -120,6 +120,7 @@ test('encaminha clique, não envia IP e expõe somente referência pública mín
   assert.equal(response.status, 200);
   assert.deepEqual(body, { status: 'registered', event_id: EVENT_ID, bridge_ref: 'gp_a1b2c3d4e5f6' });
   assert.equal(forwarded?.url, CRM_URL);
+  assert.equal(forwarded?.init.redirect, 'manual');
   assert.equal(forwardedBody.client_user_agent, 'Studio Browser/1.0');
   assert.equal('ip' in forwardedBody, false);
   assert.equal('lead_id' in body, false);
