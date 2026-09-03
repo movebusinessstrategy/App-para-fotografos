@@ -802,7 +802,7 @@ async function processGoogleRow(
     const status = await retrieveGoogleRequestStatus(options.fetch, accessToken, pendingRequestId);
     return googleStatusTransition(pendingRequestId, status, now);
   }
-  const request = buildMarketingProviderRequest(row, integration, credentials, { validateOnly });
+  const request = buildMarketingProviderRequest(row, integration, credentials, { validateOnly, now });
   const response = await sendProviderRequest(options.fetch, request);
   if (validateOnly) return validationOnlyTransition('google', response, now);
   const accepted = googleAcceptedIngestTransition(response, now);
@@ -829,7 +829,7 @@ async function processDirectProviderRow(
   validateOnly: boolean,
   now: Date,
 ): Promise<MarketingOutboxTransition> {
-  const request = buildMarketingProviderRequest(row, integration, credentials, { validateOnly });
+  const request = buildMarketingProviderRequest(row, integration, credentials, { validateOnly, now });
   const response = await sendProviderRequest(options.fetch, request);
   if (validateOnly) return validationOnlyTransition(row.provider, response, now);
   if (row.provider === 'ga4') {

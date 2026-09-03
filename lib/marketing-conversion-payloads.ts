@@ -57,6 +57,7 @@ export type MarketingProviderCredentials = {
 
 export type MarketingPayloadBuildOptions = {
   validateOnly?: boolean;
+  now?: Date;
 };
 
 export type MarketingHttpRequest = {
@@ -437,7 +438,7 @@ export function buildGa4MeasurementRequest(
   options: MarketingPayloadBuildOptions = {},
 ): MarketingHttpRequest {
   const event = assertBaseSnapshot(row, integration);
-  const eventAge = Date.now() - eventTimestamp(row).getTime();
+  const eventAge = (options.now?.getTime() ?? Date.now()) - eventTimestamp(row).getTime();
   if (eventAge > GA4_MAX_EVENT_AGE_MS || eventAge < -GA4_MAX_FUTURE_SKEW_MS) {
     payloadError('INVALID_SNAPSHOT', 'Evento GA4 fora da janela temporal permitida');
   }

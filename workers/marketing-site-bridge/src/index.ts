@@ -238,10 +238,16 @@ async function forwardEvent(
       body: signed.rawBody,
       redirect: 'error',
     }, dependencies.timeoutMs);
-  } catch {
+  } catch (error) {
+    console.warn('[marketing-bridge] crm_intake_unavailable', {
+      reason: error instanceof Error ? error.name : 'unknown',
+    });
     throw new MarketingBridgeError('CRM_INTAKE_REJECTED', 502);
   }
   if (!upstream.response.ok) {
+    console.warn('[marketing-bridge] crm_intake_rejected', {
+      status: upstream.response.status,
+    });
     const status = upstream.response.status >= 500 ? 502 : 400;
     throw new MarketingBridgeError('CRM_INTAKE_REJECTED', status);
   }
