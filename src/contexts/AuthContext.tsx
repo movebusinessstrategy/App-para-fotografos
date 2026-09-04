@@ -2,11 +2,13 @@ import { createContext, useContext, useEffect, useRef, useState, ReactNode } fro
 import { User, Session } from "@supabase/supabase-js";
 import { supabase } from "../integrations/supabase/client";
 import { authFetch } from "../utils/authFetch";
+import { CONNECTION_ERROR, withTimeout } from '../utils/requestTimeout';
 
 interface AuthContextType {
   user: User | null;
   session: Session | null;
   loading: boolean;
+  authError: string | null;
   isMember: boolean;
   permissions: Record<string, boolean> | null;
   isPlatformAdmin: boolean;
@@ -25,6 +27,7 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   session: null,
   loading: true,
+  authError: null,
   isMember: false,
   permissions: null,
   isPlatformAdmin: false,
@@ -50,6 +53,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [isMember, setIsMember] = useState(false);
   const [permissions, setPermissions] = useState<Record<string, boolean> | null>(null);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
@@ -61,12 +65,16 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   // token e, principalmente, garante que NÃO renderizamos o app antes de saber
   // as permissões (senão o menu pisca "tudo liberado" por alguns segundos).
   const loadedForUser = useRef<string | null>(null);
+  const requestVersion = useRef(0);
 
-  const fetchMe = async () => {
+  const fetchMe = async (version: number) => {
     try {
-      const res = await authFetch("/api/me");
-      if (res.ok) {
-        const data = await res.json();
+      const data = await withTimeout((async () => {
+        const res = await authFetch("/api/me");
+        if (!res.ok) throw new Error(CONNECTION_ERROR);
+        return res.json();
+      })());
+      if (version === requestVersion.current) {
         setIsMember(data.isMember ?? false);
         setPermissions(data.permissions ?? null);
         setIsPlatformAdmin(data.isPlatformAdmin ?? false);
@@ -74,16 +82,21 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         setCanAccessMarketingTracking(data.canAccessMarketingTracking === true);
         setIsProductionOnly(data.productionOnly ?? false);
         setFeatures(data.planFeatures ?? DEFAULT_FEATURES);
+        setAuthError(null);
       }
     } catch {
-      // silencia - se falhar, trata como dono
+      if (version !== requestVersion.current) return;
+      loadedForUser.current = null;
+      setAuthError(CONNECTION_ERROR);
     } finally {
-      setLoading(false);
+      if (version === requestVersion.current) setLoading(false);
     }
   };
 
   const resetAuthState = () => {
+    requestVersion.current++;
     loadedForUser.current = null;
+    setAuthError(null);
     setIsMember(false);
     setPermissions(null);
     setIsPlatformAdmin(false);
@@ -94,45 +107,57 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   };
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      if (session) {
-        // Só busca se ainda não buscou pra esse usuário (evita corrida com
-        // onAuthStateChange). loading começa true, então o app já espera.
-        if (loadedForUser.current !== session.user.id) {
-          loadedForUser.current = session.user.id;
-          fetchMe();
-        }
-      } else {
+    let active = true;
+    const scheduled = new Set<ReturnType<typeof setTimeout>>();
+    const acceptSession = (nextSession: Session | null) => {
+      if (!active) return;
+      setSession(nextSession);
+      setUser(nextSession?.user ?? null);
+      if (!nextSession) {
+        resetAuthState();
         setLoading(false);
+        return;
       }
+      if (loadedForUser.current === nextSession.user.id) return;
+      loadedForUser.current = nextSession.user.id;
+      setAuthError(null);
+      setLoading(true);
+      void fetchMe(++requestVersion.current);
+    };
+
+    const initialVersion = requestVersion.current;
+    withTimeout(supabase.auth.getSession()).then(({ data, error }) => {
+      if (error) throw error;
+      if (requestVersion.current === initialVersion) acceptSession(data.session);
+    }).catch(() => {
+      if (!active || requestVersion.current !== initialVersion) return;
+      setAuthError(CONNECTION_ERROR);
+      setLoading(false);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
-        const newUserId = session?.user?.id ?? null;
-        setSession(session);
-        setUser(session?.user ?? null);
-        if (!session) {
-          resetAuthState();
-          setLoading(false);
-          return;
-        }
-        // Usuário NOVO (login ou troca de conta): segura o app no "Carregando"
-        // até as permissões chegarem. Mesmo usuário (refresh de token): ignora.
-        if (loadedForUser.current !== newUserId) {
-          loadedForUser.current = newUserId;
-          setLoading(true);
-          fetchMe();
-        }
+      (_event, nextSession) => {
+        // O callback roda sob o lock de auth. A API pode pedir getSession(),
+        // então só a consultamos depois que esse callback liberar o lock.
+        const timer = setTimeout(() => {
+          scheduled.delete(timer);
+          acceptSession(nextSession);
+        }, 0);
+        scheduled.add(timer);
       }
     );
 
-    return () => subscription.unsubscribe();
+    return () => {
+      active = false;
+      requestVersion.current++;
+      loadedForUser.current = null;
+      scheduled.forEach(clearTimeout);
+      subscription.unsubscribe();
+    };
   }, []);
 
   const canAccess = (module: string): boolean => {
+    if (loading || authError) return false;
     if (!isMember) return true; // dono tem acesso total
     if (!permissions) return false;
     return permissions[module] !== false;
@@ -146,7 +171,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, isMember, permissions, isPlatformAdmin, isImpersonating, canAccessMarketingTracking, isProductionOnly, features, canAccess, signOut }}>
+    <AuthContext.Provider value={{ user, session, loading, authError, isMember, permissions, isPlatformAdmin, isImpersonating, canAccessMarketingTracking, isProductionOnly, features, canAccess, signOut }}>
       {children}
     </AuthContext.Provider>
   );

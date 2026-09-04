@@ -88,10 +88,9 @@ export function InboxView({ deals, stages, initialPhone, onDealUpdated }: Props)
     checkWaStatus();
     checkMetaDiag();
     fetchConversations();
-    pollRef.current = startVisiblePoll(() => {
-      fetchConversations(true);
-      checkWaStatus();
-    }, 12000);
+    pollRef.current = startVisiblePoll(() => Promise.allSettled([
+      fetchConversations(true), checkWaStatus(),
+    ]), 12000);
     return () => { if (pollRef.current) pollRef.current(); };
   }, [fetchConversations, checkWaStatus, checkMetaDiag]);
 

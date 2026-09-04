@@ -18,8 +18,16 @@ function resolveApiBase(stored) {
   return v;
 }
 
-async function getAuth() {
-  return new Promise(async (resolve, reject) => {
+let authInFlight = null;
+function getAuth() {
+  if (!authInFlight) {
+    authInFlight = loadAuth().finally(() => { authInFlight = null; });
+  }
+  return authInFlight;
+}
+
+function loadAuth() {
+  return new Promise((resolve, reject) => {
     chrome.storage.local.get(['fp_token', 'fp_refresh_token', 'fp_token_expires', 'fp_api_base'], async (result) => {
       if (!result.fp_token) return reject(new Error('Não autenticado — faça login no ícone da extensão.'));
 
@@ -34,14 +42,16 @@ async function getAuth() {
       try {
         if (!result.fp_refresh_token) throw new Error('Sessão expirada. Faça login novamente.');
         const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+          signal: AbortSignal.timeout(12_000),
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY },
           body: JSON.stringify({ refresh_token: result.fp_refresh_token }),
         });
         const data = await res.json();
+        if (res.status >= 500) throw new Error('O serviço está indisponível. Tente novamente em alguns instantes.');
         if (!res.ok || !data.access_token) throw new Error('Sessão expirada. Faça login novamente.');
 
-        chrome.storage.local.set({
+        await chrome.storage.local.set({
           fp_token: data.access_token,
           fp_refresh_token: data.refresh_token,
           fp_token_expires: Date.now() + (data.expires_in * 1000),
@@ -62,6 +72,7 @@ async function apiFetch(path, options = {}) {
   try {
     response = await fetch(`${apiBase}${path}`, {
       ...options,
+      signal: options.signal || ((options.method || 'GET').toUpperCase() === 'GET' ? AbortSignal.timeout(15_000) : undefined),
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,

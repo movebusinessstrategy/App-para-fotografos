@@ -3,6 +3,13 @@ import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "../integrations/supabase/client";
 import { Eye, EyeOff, Loader2, ArrowLeft, ArrowRight } from "lucide-react";
+import { CONNECTION_ERROR, withTimeout } from '../utils/requestTimeout';
+
+function loginErrorMessage(error: { message: string; status?: number }) {
+  if (error.message === 'Invalid login credentials') return 'Email ou senha incorretos';
+  if (!error.status || error.status >= 500) return CONNECTION_ERROR;
+  return error.message;
+}
 
 const Login = () => {
   const [email, setEmail] = useState("");
@@ -26,17 +33,13 @@ const Login = () => {
     setError("");
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await withTimeout(supabase.auth.signInWithPassword({
         email,
         password,
-      });
+      }), 30_000);
 
       if (error) {
-        setError(
-          error.message === "Invalid login credentials"
-            ? "Email ou senha incorretos"
-            : error.message
-        );
+        setError(loginErrorMessage(error));
         return;
       }
 
@@ -44,7 +47,7 @@ const Login = () => {
         navigate("/dashboard");
       }
     } catch (err) {
-      setError("Ocorreu um erro inesperado. Tente novamente.");
+      setError(CONNECTION_ERROR);
     } finally {
       setLoading(false);
     }

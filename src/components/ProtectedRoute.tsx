@@ -2,13 +2,14 @@ import type React from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { Loader2 } from "lucide-react";
+import ConnectionError from './ConnectionError';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
 }
 
 const ProtectedRoute = ({ children }: ProtectedRouteProps) => {
-  const { user, loading } = useAuth();
+  const { user, loading, authError } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -21,6 +22,8 @@ const ProtectedRoute = ({ children }: ProtectedRouteProps) => {
       </div>
     );
   }
+
+  if (authError) return <ConnectionError message={authError} />;
 
   if (!user) {
     // Não-logados em rota protegida vão pro login (preservando a URL de destino).

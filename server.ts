@@ -1,4 +1,5 @@
 import express from 'express';
+import { nonOverlappingTask } from './lib/non-overlapping-task.js';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import crypto from 'crypto';
@@ -26993,18 +26994,23 @@ function startFollowUpWorker() {
 }
 
 // ─── Worker: sincroniza mensagens da Evolution API periodicamente ────────────
-async function syncEvolutionMessages() {
+const syncEvolutionMessages = nonOverlappingTask(runEvolutionMessagesSync);
+
+async function runEvolutionMessagesSync() {
   if (!supabaseAdmin || !EVOLUTION_API_URL || !EVOLUTION_API_KEY) {
     console.warn('[EvolutionSync] Abortando: supabaseAdmin ou variáveis de ambiente ausentes');
     return;
   }
 
   try {
-    const { data: convs } = await supabaseAdmin
+    const { data: convs, error: conversationsError } = await supabaseAdmin
       .from('wa_conversations')
       .select('user_id, phone, wa_number')
       .order('last_message_at', { ascending: false })
-      .limit(200);
+      .limit(200)
+      .abortSignal(AbortSignal.timeout(15_000));
+
+    if (conversationsError) throw conversationsError;
 
     if (!convs || convs.length === 0) {
       console.log('[EvolutionSync] Nenhuma conversa no DB para sincronizar');

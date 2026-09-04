@@ -2,9 +2,10 @@ import type { ReactNode } from "react";
 import { Navigate } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
+import ConnectionError from './ConnectionError';
 
 export default function PlatformAdminRoute({ children }: { children: ReactNode }) {
-  const { user, loading, isPlatformAdmin } = useAuth();
+  const { user, loading, authError, isPlatformAdmin } = useAuth();
 
   if (loading) {
     return (
@@ -13,6 +14,7 @@ export default function PlatformAdminRoute({ children }: { children: ReactNode }
       </div>
     );
   }
+  if (authError) return <ConnectionError message={authError} />;
   if (!user) return <Navigate to="/login" replace />;
   if (!isPlatformAdmin) return <Navigate to="/dashboard" replace />;
   return <>{children}</>;

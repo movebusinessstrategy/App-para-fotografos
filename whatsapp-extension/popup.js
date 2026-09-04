@@ -24,7 +24,7 @@ function resolveApiBase(stored) {
 
 async function checkApiHealth(apiBase) {
   try {
-    const r = await fetch(`${apiBase}/api/health`, { method: 'GET' });
+    const r = await fetch(`${apiBase}/api/health`, { method: 'GET', signal: AbortSignal.timeout(10_000) });
     if (!r.ok) return false;
     const j = await r.json().catch(() => ({}));
     return j.ok === true;
@@ -115,6 +115,7 @@ function renderLogin(errorMsg, currentApiBase, savedEmail = '') {
 
     try {
       const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+        signal: AbortSignal.timeout(15_000),
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -248,6 +249,7 @@ async function refreshToken() {
 
       try {
         const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+          signal: AbortSignal.timeout(12_000),
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY },
           body: JSON.stringify({ refresh_token: result.fp_refresh_token }),
