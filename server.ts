@@ -23,7 +23,7 @@ import bcrypt from 'bcryptjs';
 
 // Não bloqueia o boot — roda em paralelo
 const sentryReady = initSentry();
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { createSupabaseClient, supabaseAdmin } from './supabase.js';
 import { getAgentReply, extractCadastroWithAI, analyzeDossierWithAI, DEFAULT_PERSONA, DEFAULT_OBJECTIVE, DEFAULT_KNOWLEDGE, DEFAULT_RULES, DEFAULT_SALES_STRATEGY } from './ai-agent.js';
 import { buildDossierPdf, normalizePhotoToJpeg, DossierPhoto } from './dossier-pdf.js';
@@ -56,6 +56,8 @@ import {
   resolveObjectUrl,
   uploadObject,
 } from './object-storage.js';
+import { appStorageBucket, ensureAppStorageBucket, registerPublicStorageRoutes, resolvePublicStorageUrl } from './app-storage.js';
+import { sumPrefixBytes } from './object-storage.js';
 import { captureMarketingWhatsAppContact } from './lib/marketing-whatsapp-contact.js';
 import {
   MarketingSiteRouteError,
@@ -4910,6 +4912,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const jobsFormatted = (jobs || []).map((j: any) => ({
       ...j,
+      cover_image_url: resolvePublicStorageUrl(j.cover_image_url),
       client_name: (j.clients as any)?.name || null,
       // production_stage só é definido quando o usuário envia explicitamente
       // pra produção. Trabalhos com null não aparecem no kanban.
@@ -5350,19 +5353,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // Upload de imagem de capa do job. Body: { dataUrl: "data:image/...;base64,..." }
-  // Sobe pro Supabase Storage (bucket 'job-covers'), salva URL pública.
+  // Usa o provedor configurado para job-covers e salva uma URL permanente.
   let jobCoversBucketReady = false;
   async function ensureJobCoversBucket() {
     if (jobCoversBucketReady || !supabaseAdmin) return;
     try {
-      const { data: buckets } = await supabaseAdmin.storage.listBuckets();
-      const exists = (buckets || []).some((b: any) => b.name === 'job-covers');
-      if (!exists) {
-        await supabaseAdmin.storage.createBucket('job-covers', { public: true, fileSizeLimit: 5_242_880 });
-      }
+      await ensureAppStorageBucket('job-covers', { public: true, fileSizeLimit: 5_242_880 });
       jobCoversBucketReady = true;
     } catch (e: any) {
-      console.error('[jobs/cover] erro criando bucket:', e?.message);
+      console.error('[jobs/cover] erro preparando bucket:', e?.message);
     }
   }
 
@@ -5385,13 +5384,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     await ensureJobCoversBucket();
     const ext = mime.split('/')[1]?.split('+')[0] || 'jpg';
     const filename = `${userId}/${jobId}-${Date.now()}.${ext}`;
-    const { error: upErr } = await supabaseAdmin.storage.from('job-covers').upload(filename, buffer, {
+    const { error: upErr } = await appStorageBucket('job-covers').upload(filename, buffer, {
       contentType: mime,
       upsert: false,
     });
     if (upErr) return res.status(500).json({ error: `Upload falhou: ${upErr.message}` });
 
-    const { data: pub } = supabaseAdmin.storage.from('job-covers').getPublicUrl(filename);
+    const { data: pub } = appStorageBucket('job-covers').getPublicUrl(filename);
     const url = pub?.publicUrl;
     if (!url) return res.status(500).json({ error: 'Falha ao gerar URL pública' });
 
@@ -9385,8 +9384,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           fileName = mat?.nome_arquivo || null;
           if (mat?.path) {
             if (supabaseAdmin) {
-              const { data: blob, error: dlErr } = await supabaseAdmin
-                .storage.from('agente-materiais').download(mat.path);
+              const { data: blob, error: dlErr } = await appStorageBucket('agente-materiais').download(mat.path);
               pdfFound = !dlErr && !!blob;
             } else {
               pdfFound = true; // sem service role não dá pra checar o storage; a linha existe
@@ -9744,17 +9742,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   async function ensureAgenteMateriaisBucket() {
     if (agenteMateriaisBucketReady || !supabaseAdmin) return;
     try {
-      const { data: buckets } = await supabaseAdmin.storage.listBuckets();
-      const exists = (buckets || []).some((b: any) => b.name === 'agente-materiais');
-      if (!exists) {
-        await supabaseAdmin.storage.createBucket('agente-materiais', {
-          public: false,
-          fileSizeLimit: 20_971_520, // 20MB
-        });
-      }
+      await ensureAppStorageBucket('agente-materiais', { public: false, fileSizeLimit: 20_971_520 });
       agenteMateriaisBucketReady = true;
     } catch (e: any) {
-      console.error('[agente/materiais] erro criando bucket:', e?.message);
+      console.error('[agente/materiais] erro preparando bucket:', e?.message);
     }
   }
 
@@ -9775,8 +9766,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     for (const m of data || []) {
       let url: string | null = null;
       if (supabaseAdmin) {
-        const { data: signed } = await supabaseAdmin.storage
-          .from('agente-materiais')
+        const { data: signed } = await appStorageBucket('agente-materiais')
           .createSignedUrl(m.path, 3600);
         url = signed?.signedUrl || null;
       }
@@ -9807,8 +9797,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     await ensureAgenteMateriaisBucket();
     // Caminho determinístico: substituir reescreve o mesmo arquivo.
     const path = `${userId}/${nicho}-${tipo}.pdf`;
-    const { error: upErr } = await supabaseAdmin.storage
-      .from('agente-materiais')
+    const { error: upErr } = await appStorageBucket('agente-materiais')
       .upload(path, buffer, { contentType: 'application/pdf', upsert: true });
     if (upErr) return res.status(500).json({ error: `Upload falhou: ${upErr.message}` });
 
@@ -9849,7 +9838,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('user_id', userId)
       .maybeSingle();
     if (row?.path && supabaseAdmin) {
-      await supabaseAdmin.storage.from('agente-materiais').remove([row.path]);
+      await appStorageBucket('agente-materiais').remove([row.path]);
     }
     const { error } = await supabase
       .from('agente_materiais')
@@ -9865,17 +9854,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   async function ensureAgenteAudiosBucket() {
     if (agenteAudiosBucketReady || !supabaseAdmin) return;
     try {
-      const { data: buckets } = await supabaseAdmin.storage.listBuckets();
-      const exists = (buckets || []).some((b: any) => b.name === 'agente-audios');
-      if (!exists) {
-        await supabaseAdmin.storage.createBucket('agente-audios', {
-          public: false,
-          fileSizeLimit: 20_971_520,
-        });
-      }
+      await ensureAppStorageBucket('agente-audios', { public: false, fileSizeLimit: 20_971_520 });
       agenteAudiosBucketReady = true;
     } catch (e: any) {
-      console.error('[agente/audios] erro criando bucket:', e?.message);
+      console.error('[agente/audios] erro preparando bucket:', e?.message);
     }
   }
 
@@ -9905,8 +9887,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     for (const a of data || []) {
       let url: string | null = null;
       if (supabaseAdmin) {
-        const { data: signed } = await supabaseAdmin.storage
-          .from('agente-audios')
+        const { data: signed } = await appStorageBucket('agente-audios')
           .createSignedUrl(a.path, 3600);
         url = signed?.signedUrl || null;
       }
@@ -9933,8 +9914,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     await ensureAgenteAudiosBucket();
     const path = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${audioExt(mime)}`;
-    const { error: upErr } = await supabaseAdmin.storage
-      .from('agente-audios')
+    const { error: upErr } = await appStorageBucket('agente-audios')
       .upload(path, buffer, { contentType: mime, upsert: false });
     if (upErr) return res.status(500).json({ error: `Upload falhou: ${upErr.message}` });
 
@@ -9971,7 +9951,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('user_id', userId)
       .maybeSingle();
     if (row?.path && supabaseAdmin) {
-      await supabaseAdmin.storage.from('agente-audios').remove([row.path]);
+      await appStorageBucket('agente-audios').remove([row.path]);
     }
     const { error } = await supabase
       .from('agente_audios')
@@ -10672,29 +10652,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // de medição).
   const storageUsageCache = new Map<string, { bytes: number; at: number }>();
   const STORAGE_TTL = 5 * 60 * 1000;
-  async function sumBucketPrefix(bucket: string, prefix: string, depth = 0): Promise<number> {
-    if (!supabaseAdmin || depth > 6) return 0;
-    let total = 0;
-    try {
-      // Pagina (1000 por página) — pasta com muitas fotos não pode subcontar.
-      let offset = 0;
-      for (;;) {
-        const { data } = await supabaseAdmin.storage.from(bucket).list(prefix, { limit: 1000, offset });
-        const items = data || [];
-        for (const item of items) {
-          const isFolder = (item as any).id == null && (item as any).metadata == null;
-          if (isFolder) {
-            total += await sumBucketPrefix(bucket, prefix ? `${prefix}/${item.name}` : item.name, depth + 1);
-          } else {
-            total += Number((item as any).metadata?.size || 0);
-          }
-        }
-        if (items.length < 1000) break;
-        offset += 1000;
-        if (offset > 200000) break; // teto de segurança
-      }
-    } catch { /* fail-open */ }
-    return total;
+  async function sumBucketPrefix(bucket: string, prefix: string): Promise<number> {
+    try { return await sumPrefixBytes(bucket, prefix); }
+    catch { return 0; } // Preserva a medição fail-open durante indisponibilidade.
   }
   async function getStorageUsageBytes(userId: string, fresh = false): Promise<number> {
     const c = storageUsageCache.get(userId);
@@ -10722,20 +10682,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   async function ensureGalleryBuckets() {
     if (galleryBucketsReady || !supabaseAdmin) return;
     try {
-      const { data: buckets } = await supabaseAdmin.storage.listBuckets();
-      const names = new Set((buckets || []).map((b: any) => b.name));
-      if (!names.has(GALLERY_ORIGINALS_BUCKET)) {
-        await supabaseAdmin.storage.createBucket(GALLERY_ORIGINALS_BUCKET, {
-          public: false,
-          fileSizeLimit: 52_428_800, // 50MB por original
-        });
-      }
-      if (!names.has(GALLERY_PREVIEWS_BUCKET)) {
-        await supabaseAdmin.storage.createBucket(GALLERY_PREVIEWS_BUCKET, { public: true });
-      }
+      await ensureAppStorageBucket(GALLERY_ORIGINALS_BUCKET, { public: false, fileSizeLimit: 52_428_800 });
+      await ensureAppStorageBucket(GALLERY_PREVIEWS_BUCKET, { public: true });
       galleryBucketsReady = true;
     } catch (e: any) {
-      console.error('[galeria] erro criando buckets:', e?.message);
+      console.error('[galeria] erro preparando bucket:', e?.message);
     }
   }
 
@@ -10746,7 +10697,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   const previewPublicUrl = (p: string | null | undefined): string | null => {
     if (!p || !supabaseAdmin) return null;
-    return supabaseAdmin.storage.from(GALLERY_PREVIEWS_BUCKET).getPublicUrl(p).data.publicUrl || null;
+    return appStorageBucket(GALLERY_PREVIEWS_BUCKET).getPublicUrl(p).data.publicUrl || null;
   };
 
   const galleryTableMissing = (error: any) => error?.code === '42P01';
@@ -11130,8 +11081,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     await ensureGalleryBuckets();
     const path = `logos/${userId}.png`;
-    const { error } = await supabaseAdmin.storage
-      .from(GALLERY_PREVIEWS_BUCKET)
+    const { error } = await appStorageBucket(GALLERY_PREVIEWS_BUCKET)
       .upload(path, buffer, { contentType: match[1], upsert: true });
     if (error) return { error: `Upload da logo falhou: ${error.message}` };
     return { path };
@@ -11726,10 +11676,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const originals = photos.map((p) => p.original_path).filter(Boolean);
     const previews = photos.flatMap((p) => [p.preview_path, p.thumb_path]).filter(Boolean);
     for (let i = 0; i < originals.length; i += 100) {
-      await supabaseAdmin.storage.from(GALLERY_ORIGINALS_BUCKET).remove(originals.slice(i, i + 100));
+      await appStorageBucket(GALLERY_ORIGINALS_BUCKET).remove(originals.slice(i, i + 100));
     }
     for (let i = 0; i < previews.length; i += 100) {
-      await supabaseAdmin.storage.from(GALLERY_PREVIEWS_BUCKET).remove(previews.slice(i, i + 100));
+      await appStorageBucket(GALLERY_PREVIEWS_BUCKET).remove(previews.slice(i, i + 100));
     }
   }
 
@@ -11799,8 +11749,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const uploads: Array<{ photo_id: string; signed_url: string }> = [];
     for (const r of rows) {
-      const { data: signed, error: sErr } = await supabaseAdmin.storage
-        .from(GALLERY_ORIGINALS_BUCKET)
+      const { data: signed, error: sErr } = await appStorageBucket(GALLERY_ORIGINALS_BUCKET)
         .createSignedUploadUrl(r.original_path);
       if (sErr || !signed) {
         return res.status(500).json({ error: `Falha ao assinar upload: ${sErr?.message || 'desconhecida'}` });
@@ -11811,14 +11760,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   async function downloadGalleryObject(bucket: string, objectPath: string): Promise<Buffer> {
-    const { data, error } = await supabaseAdmin!.storage.from(bucket).download(objectPath);
+    const { data, error } = await appStorageBucket(bucket).download(objectPath);
     if (error || !data) throw new Error(`download falhou: ${error?.message || 'arquivo vazio'}`);
     return Buffer.from(await data.arrayBuffer());
   }
 
   async function uploadGalleryPreview(objectPath: string, buf: Buffer) {
-    const { error } = await supabaseAdmin!.storage
-      .from(GALLERY_PREVIEWS_BUCKET)
+    const { error } = await appStorageBucket(GALLERY_PREVIEWS_BUCKET)
       .upload(objectPath, buf, { contentType: 'image/jpeg', upsert: true });
     if (error) throw new Error(`upload do preview falhou: ${error.message}`);
   }
@@ -13308,23 +13256,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   async function ensureAlbumBucket() {
     if (albumBucketReady || !supabaseAdmin) return;
     try {
-      const { data: buckets } = await supabaseAdmin.storage.listBuckets();
-      const names = new Set((buckets || []).map((b: any) => b.name));
-      if (!names.has(ALBUM_ASSETS_BUCKET)) {
-        await supabaseAdmin.storage.createBucket(ALBUM_ASSETS_BUCKET, {
-          public: true,
-          fileSizeLimit: 52_428_800, // 50MB por foto
-        });
-      }
+      await ensureAppStorageBucket(ALBUM_ASSETS_BUCKET, { public: true, fileSizeLimit: 52_428_800 });
       albumBucketReady = true;
     } catch (e: any) {
-      console.error('[album] erro criando bucket:', e?.message);
+      console.error('[album] erro preparando bucket:', e?.message);
     }
   }
 
   const albumPublicUrl = (p: string | null | undefined): string | null => {
     if (!p || !supabaseAdmin) return null;
-    return supabaseAdmin.storage.from(ALBUM_ASSETS_BUCKET).getPublicUrl(p).data.publicUrl || null;
+    return appStorageBucket(ALBUM_ASSETS_BUCKET).getPublicUrl(p).data.publicUrl || null;
   };
 
   // Resolve a URL pública de um asset. Asset 'gallery' aponta pro bucket de
@@ -13488,7 +13429,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         const srcPath = p.original_path || p.preview_path;
         const buf = await downloadGalleryObject(srcBucket, srcPath);
         const destPath = `${userId}/${albumId}/gallery/${crypto.randomUUID()}.jpg`;
-        const up = await supabaseAdmin.storage.from(ALBUM_ASSETS_BUCKET)
+        const up = await appStorageBucket(ALBUM_ASSETS_BUCKET)
           .upload(destPath, buf, { contentType: 'image/jpeg', upsert: true });
         if (up.error) throw new Error(up.error.message);
         const ins = await supabaseAdmin.from('album_assets').insert({
@@ -13689,7 +13630,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         }
       }
       if (paths.length > 0) {
-        await supabaseAdmin.storage.from(ALBUM_ASSETS_BUCKET).remove(paths).catch(() => {});
+        await appStorageBucket(ALBUM_ASSETS_BUCKET).remove(paths).catch(() => {});
       }
     }
 
@@ -13744,8 +13685,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const uploads: Array<{ asset_id: string; signed_url: string }> = [];
     for (const r of rows) {
-      const { data: signed, error: sErr } = await supabaseAdmin.storage
-        .from(ALBUM_ASSETS_BUCKET)
+      const { data: signed, error: sErr } = await appStorageBucket(ALBUM_ASSETS_BUCKET)
         .createSignedUploadUrl(r.preview_path);
       if (sErr || !signed) {
         return res.status(500).json({ error: `Falha ao assinar upload: ${sErr?.message || 'desconhecida'}` });
@@ -13756,14 +13696,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   async function downloadAlbumObject(objectPath: string): Promise<Buffer> {
-    const { data, error } = await supabaseAdmin!.storage.from(ALBUM_ASSETS_BUCKET).download(objectPath);
+    const { data, error } = await appStorageBucket(ALBUM_ASSETS_BUCKET).download(objectPath);
     if (error || !data) throw new Error(`download falhou: ${error?.message || 'arquivo vazio'}`);
     return Buffer.from(await data.arrayBuffer());
   }
 
   async function uploadAlbumObject(objectPath: string, buf: Buffer) {
-    const { error } = await supabaseAdmin!.storage
-      .from(ALBUM_ASSETS_BUCKET)
+    const { error } = await appStorageBucket(ALBUM_ASSETS_BUCKET)
       .upload(objectPath, buf, { contentType: 'image/jpeg', upsert: true });
     if (error) throw new Error(`upload falhou: ${error.message}`);
   }
@@ -13802,7 +13741,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       await uploadAlbumObject(`${base}/preview.jpg`, out.preview);
       await uploadAlbumObject(`${base}/thumb.jpg`, out.thumb);
       // O original temporário não é mais necessário (saída é só prévia).
-      await supabaseAdmin.storage.from(ALBUM_ASSETS_BUCKET).remove([originalPath]).catch(() => {});
+      await appStorageBucket(ALBUM_ASSETS_BUCKET).remove([originalPath]).catch(() => {});
 
       const patch = { preview_path: `${base}/preview.jpg`, thumb_path: `${base}/thumb.jpg` };
       await supabase.from('album_assets').update(patch).eq('id', asset.id);
@@ -13840,7 +13779,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     if (supabaseAdmin && asset.source === 'upload') {
       const base = `${userId}/${album.id}/${asset.id}`;
-      await supabaseAdmin.storage.from(ALBUM_ASSETS_BUCKET)
+      await appStorageBucket(ALBUM_ASSETS_BUCKET)
         .remove([`${base}/original`, `${base}/preview.jpg`, `${base}/thumb.jpg`]).catch(() => {});
     }
     const { error } = await supabase.from('album_assets').delete().eq('id', asset.id).eq('album_id', album.id);
@@ -15063,7 +15002,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     while (page <= 10) {
       const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: 200 });
       if (error) return res.status(500).json({ error: error.message });
-      const match = data.users.find((u) => (u.email || '').toLowerCase() === email);
+      const match = data.users.find((u: User) => (u.email || '').toLowerCase() === email);
       if (match) { target = match; break; }
       if (data.users.length < 200) break;
       page++;
@@ -25803,6 +25742,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
   });
 
+  registerPublicStorageRoutes(app);
+
   // ============ VITE / STATIC FILES ============
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -26073,7 +26014,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const { data: mat } = await supabaseAdmin.from('agente_materiais')
       .select('path, nome_arquivo').eq('user_id', userId).eq('nicho', nicho).eq('tipo', 'pacote').maybeSingle();
     if (!mat?.path) return false;
-    const { data: blob, error } = await supabaseAdmin.storage.from('agente-materiais').download(mat.path);
+    const { data: blob, error } = await appStorageBucket('agente-materiais').download(mat.path);
     if (error || !blob) return false;
     const buf = Buffer.from(await blob.arrayBuffer());
     await BaileysManager.sendMedia(userId, phone, buf.toString('base64'), 'application/pdf', mat.nome_arquivo || 'pacote.pdf', '');
