@@ -126,6 +126,7 @@ export default function App() {
               >
                 <Route path="dashboard" element={<PermissionRoute module="dashboard"><DashboardPage /></PermissionRoute>} />
                 <Route path="rastreamento" element={<PermissionRoute module="dashboard" marketingTrackingOnly><MarketingAttributionPage /></PermissionRoute>} />
+                <Route path="rastreamento/visitantes" element={<PermissionRoute module="dashboard" marketingTrackingOnly><MarketingAttributionPage /></PermissionRoute>} />
                 <Route path="clients" element={<PermissionRoute module="clients"><ClientsPage /></PermissionRoute>} />
                 <Route path="jobs" element={<PermissionRoute module="jobs"><JobsPage /></PermissionRoute>} />
                 <Route path="tarefas" element={<PermissionRoute module="jobs"><TasksPage /></PermissionRoute>} />

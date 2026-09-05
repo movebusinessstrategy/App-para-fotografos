@@ -76,6 +76,8 @@ export type AttributionJourneyEvent = {
   occurred_at: string;
   page_path: string | null;
   detail: string | null;
+  campaign?: string | null;
+  source_label?: string;
 };
 
 export type AttributionLeadRecord = {
@@ -99,6 +101,9 @@ export type AttributionLeadRecord = {
   click_count: number;
   page_view_count: number;
   session_count: number;
+  sessions_estimated: boolean;
+  message_count: number;
+  campaigns: string[];
   pages: string[];
   consent_status: string;
   has_contact: boolean;
@@ -218,23 +223,9 @@ export function classifyAttributionSource(row?: MarketingTouchpointRow): Attribu
   return SOURCE_RULES.find(rule => rule.matches(row))?.key || 'direct';
 }
 
-function sourcePriority(row: MarketingTouchpointRow): number {
-  const priorities: Record<AttributionSourceKey, number> = {
-    google_ads: 60,
-    meta_ads: 55,
-    organic: 35,
-    referral: 25,
-    other: 10,
-    direct: 1,
-  };
-  return priorities[classifyAttributionSource(row)] + (row.channel === 'website' ? 2 : 0);
-}
-
 function pickAttributionTouchpoint(rows: MarketingTouchpointRow[]): MarketingTouchpointRow | undefined {
-  return [...rows].sort((a, b) => {
-    const scoreDelta = sourcePriority(b) - sourcePriority(a);
-    return scoreDelta || Date.parse(a.first_seen_at) - Date.parse(b.first_seen_at);
-  })[0];
+  const ordered = [...rows].sort((a, b) => Date.parse(a.first_seen_at) - Date.parse(b.first_seen_at));
+  return ordered.find(row => classifyAttributionSource(row) !== 'direct') || ordered[0];
 }
 
 function metadataText(row: MarketingTouchpointRow, key: string): string | null {
@@ -274,10 +265,10 @@ function touchpointKind(row: MarketingTouchpointRow): AttributionJourneyEvent['k
 }
 
 function touchpointLabel(row: MarketingTouchpointRow): string {
+  if (row.channel === 'whatsapp') return 'Mensagem recebida no WhatsApp';
   const eventName = touchpointEventName(row);
   if (eventName === 'PageView') return 'Visualizou uma página';
   if (eventName === 'SiteClick') return 'Clicou no site';
-  if (row.channel === 'whatsapp') return 'Mensagem recebida no WhatsApp';
   if (eventName === 'WhatsAppClick' || row.channel === 'website') return 'Clicou para conversar no WhatsApp';
   return 'Interação registrada';
 }
@@ -296,6 +287,8 @@ function touchpointJourney(row: MarketingTouchpointRow): AttributionJourneyEvent
     occurred_at: row.first_seen_at,
     page_path: touchpointPage(row),
     detail: touchpointDetail(row),
+    campaign: clean(row.utm_campaign) || null,
+    source_label: SOURCE_LABELS[classifyAttributionSource(row)],
   };
 }
 
@@ -346,14 +339,36 @@ function hasFact(facts: MarketingConversionFactRow[], eventName: string): boolea
 }
 
 function leadPhone(touchpoints: MarketingTouchpointRow[], deal?: MarketingDealRow): string | null {
-  return clean(deal?.contact_phone)
-    || clean(touchpoints.find(row => row.channel === 'whatsapp')?.phone)
+  const incomingPhones = uniqueStrings(touchpoints.filter(row => row.channel === 'whatsapp').map(row => clean(row.phone).replace(/\D/g, '')));
+  if (incomingPhones.length > 1) return null;
+  return incomingPhones[0]
+    || clean(deal?.contact_phone)
     || clean(touchpoints.find(row => row.phone)?.phone)
     || null;
 }
 
 function contactName(deal?: MarketingDealRow): string {
-  return clean(deal?.contact_name) || clean(deal?.title) || 'Contato ainda não vinculado';
+  const name = clean(deal?.contact_name) || clean(deal?.title);
+  return /^[\d\s()+-]+$/.test(name) ? '' : name;
+}
+
+function websiteSessions(rows: MarketingTouchpointRow[]): { count: number; estimated: boolean } {
+  if (rows.length === 0) return { count: 0, estimated: false };
+  const known = rows.filter(row => clean(row.ga_session_id));
+  if (known.length === rows.length) {
+    // Session IDs are timestamps, so two different journeys may share one.
+    return { count: uniqueStrings(known.map(row => `${row.lead_id}:${row.ga_session_id}`)).length, estimated: false };
+  }
+  const previousByJourney = new Map<string, number>();
+  let count = 0;
+  for (const row of [...rows].sort((a, b) => Date.parse(a.first_seen_at) - Date.parse(b.first_seen_at))) {
+    const key = row.lead_id || String(row.id);
+    const time = Date.parse(row.first_seen_at);
+    const previous = previousByJourney.get(key);
+    if (previous === undefined || time - previous >= 30 * 60 * 1000) count += 1;
+    previousByJourney.set(key, time);
+  }
+  return { count, estimated: true };
 }
 
 function consentStatus(touchpoints: MarketingTouchpointRow[]): string {
@@ -382,12 +397,19 @@ function buildRecord(
   const pageViews = websiteEvents.filter(row => touchpointEventName(row) === 'PageView');
   const clicks = websiteEvents.filter(row => touchpointEventName(row) !== 'PageView');
   const contactFact = facts.find(row => row.event_name === 'Contact');
+  const phone = leadPhone(touchpoints, deal);
+  const sessions = websiteSessions(websiteEvents);
+  const messages = periodTouchpoints.filter(row => row.channel === 'whatsapp');
+  const confirmedAt = earliest([
+    ...facts.filter(row => row.event_name === 'Contact').map(row => row.occurred_at),
+    ...touchpoints.flatMap(row => row.contact_confirmed_at ? [row.contact_confirmed_at] : []),
+  ]);
 
   return {
     lead_id: leadId,
     deal_id: deal?.id ?? facts.find(row => row.deal_id)?.deal_id ?? null,
-    contact_name: contactName(deal),
-    contact_phone: leadPhone(touchpoints, deal),
+    contact_name: phone ? contactName(deal) || 'Contato identificado' : 'Visitante anônimo',
+    contact_phone: phone,
     funnel_stage: clean(deal?.stage) || null,
     source,
     source_label: SOURCE_LABELS[source],
@@ -400,15 +422,16 @@ function buildRecord(
     landing_page: touchpointPage(attribution || touchpoints[0]),
     first_seen_at: earliest(eventTimes),
     last_seen_at: latest(eventTimes),
-    contact_confirmed_at: contactFact?.occurred_at
-      || touchpoints.find(row => row.contact_confirmed_at)?.contact_confirmed_at
-      || null,
+    contact_confirmed_at: confirmedAt === new Date(0).toISOString() ? null : confirmedAt,
     click_count: clicks.length,
     page_view_count: pageViews.length,
-    session_count: uniqueStrings(touchpoints.map(row => row.ga_session_id)).length,
+    session_count: sessions.count,
+    sessions_estimated: sessions.estimated,
+    message_count: messages.length,
+    campaigns: uniqueStrings(touchpoints.map(row => row.utm_campaign)),
     pages: uniqueStrings(periodTouchpoints.map(touchpointPage)),
     consent_status: consentStatus(touchpoints),
-    has_contact: Boolean(contactFact),
+    has_contact: Boolean(contactFact || touchpoints.some(row => row.contact_confirmed_at)),
     has_qualified_lead: hasFact(facts, 'Lead'),
     has_schedule: hasFact(facts, 'Schedule'),
     has_purchase: hasFact(facts, 'Purchase'),
@@ -427,11 +450,20 @@ function recordsFromInput(input: BuildReportInput): AttributionLeadRecord[] {
       .map(row => [clean(row.marketing_lead_id), row]),
   );
 
-  return leadIds.map(leadId => buildRecord(
-    leadId,
-    input.touchpoints.filter(row => row.lead_id === leadId),
-    input.facts.filter(row => row.lead_id === leadId),
-    dealMap.get(leadId),
+  const groups = new Map<string, string[]>();
+  for (const leadId of leadIds) {
+    const phones = uniqueStrings(input.touchpoints
+      .filter(row => row.lead_id === leadId && row.channel === 'whatsapp')
+      .map(row => clean(row.phone).replace(/\D/g, '')));
+    // Only explicit incoming-message identity can join separate journeys.
+    const key = phones.length === 1 ? `phone:${phones[0]}` : `lead:${leadId}`;
+    groups.set(key, [...(groups.get(key) || []), leadId]);
+  }
+  return [...groups.values()].map(ids => buildRecord(
+    ids[0],
+    input.touchpoints.filter(row => row.lead_id && ids.includes(row.lead_id)),
+    input.facts.filter(row => ids.includes(row.lead_id)),
+    ids.map(id => dealMap.get(id)).find(Boolean),
     input.periodStart,
   )).sort((a, b) => Date.parse(b.last_seen_at) - Date.parse(a.last_seen_at));
 }

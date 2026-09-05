@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { filterAttributionRecords } from './lib/marketing-attribution-view.js';
 
 import {
   buildMarketingAttributionReport,
@@ -167,4 +168,58 @@ test('reconhece os marcadores reservados gravados pelo intake atual', () => {
   assert.equal(report.records[0].page_view_count, 1);
   assert.equal(report.records[0].click_count, 1);
   assert.deepEqual(report.records[0].journey.map(item => item.kind), ['page_view', 'site_click']);
+});
+
+test('contato com telefone sai da lista anônima, mantendo as páginas anteriores', () => {
+  const report = buildMarketingAttributionReport({touchpoints: [
+    touchpoint({metadata:{event_name:'PageView'}, ga_session_id:null}),
+    touchpoint({id:2, channel:'whatsapp',phone:'5543999990000',contact_confirmed_at:NOW}),
+    touchpoint({id:3,lead_id:'anonymous',ga_session_id:null}),
+  ], facts:[],deals:[],integrations:[]});
+  const identified = filterAttributionRecords(report.records,false,'(43) 99999-0000');
+  assert.equal(identified.length,1);
+  assert.equal(identified[0].page_view_count,1);
+  assert.equal(identified[0].message_count,1);
+  assert.equal(identified[0].has_contact,true);
+  assert.equal(filterAttributionRecords(report.records,true,'').length,1);
+});
+
+test('visitas usam apenas o site, respeitam o período e sinalizam estimativa sem GA', () => {
+  const report = buildMarketingAttributionReport({periodStart:'2026-09-01T00:00:00Z',touchpoints:[
+    touchpoint({first_seen_at:OLD,last_seen_at:OLD,ga_session_id:'old'}),
+    touchpoint({id:2,ga_session_id:null}),
+    touchpoint({id:3,ga_session_id:null,first_seen_at:'2026-09-01T20:10:00Z'}),
+    touchpoint({id:4,ga_session_id:null,first_seen_at:'2026-09-01T20:45:00Z'}),
+    touchpoint({id:5,channel:'whatsapp',ga_session_id:'copy-from-source'}),
+  ],facts:[],deals:[],integrations:[]});
+  assert.equal(report.records[0].session_count,2);
+  assert.equal(report.records[0].sessions_estimated,true);
+});
+
+test('busca encontra todas as campanhas e mantém a primeira origem sem favorecer Google', () => {
+  const report = buildMarketingAttributionReport({touchpoints:[
+    touchpoint({utm_campaign:'Primeira Meta',ctwa_clid:'ctwa',first_seen_at:OLD}),
+    touchpoint({id:2,utm_campaign:'Retorno Google',gclid:'google'}),
+  ],facts:[],deals:[],integrations:[]});
+  assert.equal(report.records[0].source,'meta_ads');
+  assert.equal(filterAttributionRecords(report.records,true,'retorno google').length,1);
+  assert.equal(report.records[0].journey[1].campaign,'Retorno Google');
+});
+
+test('junta jornadas apenas pelo telefone informado em mensagens recebidas', () => {
+  const report = buildMarketingAttributionReport({touchpoints:[
+    touchpoint({channel:'whatsapp',phone:'5543999990000'}),
+    touchpoint({id:2,lead_id:'second',channel:'whatsapp',phone:'5543999990000'}),
+    touchpoint({id:3,lead_id:'third',channel:'website',phone:null}),
+  ],facts:[],deals:[],integrations:[]});
+  assert.equal(report.records.length,2);
+  assert.equal(filterAttributionRecords(report.records,false,'')[0].message_count,2);
+});
+
+test('não atribui uma jornada compartilhada a um telefone arbitrário', () => {
+  const report = buildMarketingAttributionReport({touchpoints:[
+    touchpoint({channel:'whatsapp',phone:'5543999990000'}),
+    touchpoint({id:2,channel:'whatsapp',phone:'5543999990001'}),
+  ],facts:[],deals:[],integrations:[]});
+  assert.equal(report.records[0].contact_phone,null);
 });

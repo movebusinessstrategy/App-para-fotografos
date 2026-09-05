@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
+import { filterAttributionRecords } from '../../lib/marketing-attribution-view';
 import {
-  ArrowUpRight,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -110,7 +111,7 @@ function integrationHealth(data: MarketingAttributionApiResponse, provider: stri
   const label = provider === 'google' ? 'Google Ads' : provider === 'meta' ? 'Meta Ads' : 'Google Analytics 4';
   if (!integration) return { label, status: 'pending', detail: 'Destino ainda não vinculado ao envio do CRM.' };
   if (integration.last_error) return { label, status: 'error', detail: 'A última validação encontrou um erro.' };
-  if (integration.enabled) return { label, status: 'ok', detail: 'Integração ativa e pronta para receber eventos.' };
+  if (integration.enabled) return { label, status: 'pending', detail: 'Envio habilitado. Isso não comprova recebimento de cada evento nem entrega de anúncios.' };
   if (integration.configured) return { label, status: 'pending', detail: 'Destino configurado, aguardando validação para ativar.' };
   return { label, status: 'pending', detail: 'Configuração ainda incompleta.' };
 }
@@ -161,7 +162,7 @@ function TrackingHealth({ data }: { data: MarketingAttributionApiResponse }) {
           status={siteOk ? 'ok' : 'pending'}
           detail={siteOk ? 'Ponte first-party ativa e isolada para o Estúdio Gi Pitori.' : 'A ponte ainda não está completamente habilitada.'}
         />
-        <HealthItem label="CRM Trilha" status="ok" detail="Contato real do WhatsApp vira fato de conversão, sem contar só o clique." />
+        <HealthItem label="CRM Trilha" status={data.report.summary.contacts > 0 ? 'ok' : 'pending'} detail="Mensagens recebidas são separadas de cliques. A origem só é vinculada quando há uma referência compatível." />
         <HealthItem
           label="Jornada no site"
           status={collectionOk ? 'ok' : 'pending'}
@@ -190,9 +191,10 @@ function Journey({ record }: { record: AttributionLeadRecord }) {
               </div>
               {(event.page_path || event.detail) && (
                 <p className="mt-1 break-all text-xs text-gray-500 dark:text-gray-400">
-                  {[compactPath(event.page_path), event.detail].filter(Boolean).join(' · ')}
+                  {[event.page_path ? compactPath(event.page_path) : null, event.detail].filter(Boolean).join(' · ')}
                 </p>
               )}
+              {event.campaign && <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{event.source_label} · {event.campaign}</p>}
             </div>
           </div>
         ))}
@@ -213,11 +215,12 @@ function LeadRow({ record }: { record: AttributionLeadRecord }) {
               {record.source_label}
             </span>
             <p className="mt-3 truncate font-semibold text-gray-950 dark:text-white">{record.contact_name}</p>
-            <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{formatPhone(record.contact_phone)}</p>
+            <p className="mt-0.5 text-sm font-medium text-gray-700 dark:text-gray-200">{record.contact_phone ? formatPhone(record.contact_phone) : 'Identidade ainda não informada'}</p>
+            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{record.has_contact ? 'Mensagem recebida no estúdio' : 'Sem mensagem confirmada'}</p>
           </div>
 
           <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-gray-400">Campanha</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-gray-400">Primeira origem reconhecida</p>
             <p className="mt-1 truncate text-sm font-medium text-gray-800 dark:text-gray-200">{record.campaign || 'Campanha não identificada'}</p>
             <p className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">
               {record.keyword ? `Busca: ${record.keyword}` : compactPath(record.landing_page)}
@@ -227,7 +230,7 @@ function LeadRow({ record }: { record: AttributionLeadRecord }) {
           <div className="grid grid-cols-3 gap-2 text-center lg:text-left">
             <div>
               <p className="text-lg font-semibold tabular-nums text-gray-900 dark:text-gray-100">{record.page_view_count}</p>
-              <p className="text-[11px] text-gray-400">páginas</p>
+              <p className="text-[11px] text-gray-400">visualizações</p>
             </div>
             <div>
               <p className="text-lg font-semibold tabular-nums text-gray-900 dark:text-gray-100">{record.click_count}</p>
@@ -235,7 +238,7 @@ function LeadRow({ record }: { record: AttributionLeadRecord }) {
             </div>
             <div>
               <p className="text-lg font-semibold tabular-nums text-gray-900 dark:text-gray-100">{record.session_count}</p>
-              <p className="text-[11px] text-gray-400">sessões</p>
+              <p className="text-[11px] text-gray-400">visitas{record.sessions_estimated ? ' estimadas' : ''}</p>
             </div>
           </div>
 
@@ -252,6 +255,7 @@ function LeadRow({ record }: { record: AttributionLeadRecord }) {
             <button
               type="button"
               onClick={() => setOpen(value => !value)}
+              aria-expanded={open}
               className="inline-flex h-10 items-center gap-2 rounded-xl bg-gray-950 px-3 text-xs font-medium text-white transition hover:bg-gray-800 dark:bg-white dark:text-gray-950 dark:hover:bg-gray-200"
             >
               Jornada
@@ -261,8 +265,10 @@ function LeadRow({ record }: { record: AttributionLeadRecord }) {
         </div>
 
         <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 border-t border-black/[0.05] pt-4 text-xs text-gray-500 dark:border-white/[0.06] dark:text-gray-400">
-          <span>Primeiro acesso: {formatDate(record.first_seen_at, true)}</span>
+          <span>Primeiro registro: {formatDate(record.first_seen_at, true)}</span>
           <span>Última atividade: {formatDate(record.last_seen_at, true)}</span>
+          {record.contact_confirmed_at && <span>Chegou no WhatsApp: {formatDate(record.contact_confirmed_at, true)}</span>}
+          <span>{record.message_count || 0} mensagens rastreadas no período</span>
           {record.funnel_stage && <span>Etapa: {record.funnel_stage}</span>}
           {record.has_purchase && <span className="font-medium text-emerald-600 dark:text-emerald-400">Venda confirmada</span>}
         </div>
@@ -284,6 +290,7 @@ function LoadingState() {
 }
 
 export default function MarketingAttributionPage() {
+  const anonymous = useLocation().pathname.endsWith('/visitantes');
   const [days, setDays] = useState<number>(30);
   const [data, setData] = useState<MarketingAttributionApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -307,17 +314,7 @@ export default function MarketingAttributionPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const records = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    if (!term) return data?.report.records || [];
-    return (data?.report.records || []).filter(record => [
-      record.contact_name,
-      record.contact_phone,
-      record.campaign,
-      record.keyword,
-      record.source_label,
-    ].some(value => String(value || '').toLowerCase().includes(term)));
-  }, [data, search]);
+  const records = useMemo(() => filterAttributionRecords(data?.report.records || [], anonymous, search), [data, anonymous, search]);
 
   const summary = data?.report.summary;
 
@@ -329,9 +326,9 @@ export default function MarketingAttributionPage() {
             <ShieldCheck className="h-3.5 w-3.5" />
             Atribuição first-party
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight text-gray-950 dark:text-white md:text-3xl">Rastreamento de aquisição</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-gray-950 dark:text-white md:text-3xl">{anonymous ? 'Visitas anônimas' : 'Contatos e origem'}</h1>
           <p className="mt-2 text-sm leading-relaxed text-gray-500 dark:text-gray-400">
-            Veja de onde cada contato veio, qual campanha trouxe a conversa e o caminho percorrido até virar lead ou venda.
+            {anonymous ? 'Navegação ainda sem telefone vinculado. Estes registros não são leads confirmados.' : 'Telefone, campanha, visitas e mensagens: acompanhe quem realmente chegou ao estúdio.'}
           </p>
         </div>
 
@@ -365,6 +362,12 @@ export default function MarketingAttributionPage() {
         </div>
       </header>
 
+      <nav aria-label="Visões do rastreamento" className="flex gap-6 border-b border-black/10 dark:border-white/10">
+        {[[false, '/rastreamento', 'Contatos com telefone'], [true, '/rastreamento/visitantes', 'Visitas anônimas']].map(([isAnonymous, path, label]) => (
+          <NavLink key={String(path)} to={String(path)} end className={cn('border-b-2 px-1 pb-3 text-sm font-medium', anonymous === isAnonymous ? 'border-[#b88938] text-gray-950 dark:text-white' : 'border-transparent text-gray-500 dark:text-gray-400')}>{String(label)}</NavLink>
+        ))}
+      </nav>
+
       {loading && !data ? <LoadingState /> : error ? (
         <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300">
           <div className="flex items-start gap-3">
@@ -383,11 +386,16 @@ export default function MarketingAttributionPage() {
         </div>
       ) : data && summary ? (
         <>
-          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+            {anonymous ? <>
+              <KpiCard label="Jornadas anônimas" value={records.length} detail="Ainda sem telefone vinculado." icon={Eye} />
+              <KpiCard label="Visualizações" value={records.reduce((sum, record) => sum + record.page_view_count, 0)} detail="Páginas vistas pelas jornadas desta lista." icon={MousePointerClick} />
+            </> : <>
             <KpiCard label="Contatos confirmados" value={summary.contacts} detail="Mensagens reais recebidas, sem contar apenas o clique." icon={MessageCircle} />
             <KpiCard label="Origem identificada" value={`${summary.attribution_rate}%`} detail={`${summary.attributed_contacts} de ${summary.contacts} contatos com origem reconhecida.`} icon={Route} />
-            <KpiCard label="Cliques rastreados" value={summary.tracked_clicks} detail="Interações registradas no site dentro do período." icon={MousePointerClick} />
-            <KpiCard label="Visitante → contato" value={`${summary.contact_rate}%`} detail={`${summary.contacts} contatos entre ${summary.visitors} jornadas identificadas.`} icon={ArrowUpRight} />
+            <KpiCard label="Com visita vinculada" value={data.report.records.filter(record => record.contact_phone && record.page_view_count > 0).length} detail="Contatos identificados com navegação registrada no período." icon={MousePointerClick} />
+            <KpiCard label="Visitas sem identificação" value={data.report.records.filter(record => !record.contact_phone).length} detail="Jornadas separadas na página de visitas anônimas. Não são pessoas identificadas." icon={Eye} />
+            </>}
           </section>
 
           {!data.collection.page_views && (
@@ -399,16 +407,11 @@ export default function MarketingAttributionPage() {
             </div>
           )}
 
-          <div className="grid gap-4 xl:grid-cols-2">
-            <SourceDistribution data={data} />
-            <TrackingHealth data={data} />
-          </div>
-
           <section>
             <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
               <div>
-                <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Jornada por contato</h2>
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{records.length} registros encontrados no período selecionado.</p>
+                <h2 className="text-lg font-semibold text-gray-950 dark:text-white">{anonymous ? 'Navegação sem telefone' : 'Jornada por contato'}</h2>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{records.length} {records.length === 1 ? 'registro encontrado' : 'registros encontrados'} no período selecionado.</p>
               </div>
               <label className="relative block w-full md:w-80">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
@@ -416,6 +419,7 @@ export default function MarketingAttributionPage() {
                   value={search}
                   onChange={event => setSearch(event.target.value)}
                   placeholder="Buscar contato, campanha ou origem"
+                  aria-label="Buscar telefone, contato, campanha ou origem"
                   className="h-11 w-full rounded-xl border border-black/[0.07] bg-white pl-10 pr-4 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-[#b88938]/60 focus:ring-2 focus:ring-[#b88938]/10 dark:border-white/10 dark:bg-[#111] dark:text-white"
                 />
               </label>
@@ -431,6 +435,12 @@ export default function MarketingAttributionPage() {
               <div className="space-y-3">{records.map(record => <LeadRow key={record.lead_id} record={record} />)}</div>
             )}
           </section>
+
+          <p className="text-xs leading-relaxed text-gray-500 dark:text-gray-400">O telefone é associado à visita quando a pessoa envia a mensagem com a referência do site. Sem essa ligação, a origem permanece não identificada. Visitas estimadas usam intervalos de 30 minutos; bloqueios de cookies e trocas de navegador podem impedir o reconhecimento de retornos.</p>
+          <details className="border-t border-black/10 pt-4 dark:border-white/10">
+            <summary className="cursor-pointer text-sm font-medium text-gray-700 dark:text-gray-200">Origem dos contatos e diagnóstico das integrações</summary>
+            <div className="mt-4 grid gap-4 xl:grid-cols-2"><SourceDistribution data={data} /><TrackingHealth data={data} /></div>
+          </details>
 
           <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-black/[0.06] pt-5 text-[11px] text-gray-400 dark:border-white/[0.07]">
             <span>Atualizado em {formatDate(data.generated_at, true)}</span>
