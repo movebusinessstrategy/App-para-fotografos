@@ -80,12 +80,12 @@ const NEW_EPISODE_GAP_MS = 30 * 24 * 60 * 60 * 1000;
 const NICHE_PATTERNS: Array<[string, RegExp]> = [
   ['gestante', /\bgestante|gesta[cç][aã]o|gr[aá]vid[ao]|esperando (?:um |uma )?beb[eê]\b/i],
   ['newborn', /\bnewborn|rec[eé]m[- ]?nascid|beb[eê].{0,20}(?:ja nasceu|acabou de nascer|nascido)\b/i],
-  // Acompanhamento do primeiro ano (3, 6, 9 e 12 meses). Sem isso, "ensaio do
-  // meu bebê de 6 meses" caía em newborn ou ficava sem nicho nenhum.
-  ['baby', /acompanhamento (?:do |da |de )?beb[eê]|ensaio baby|\bbaby\b|beb[eê].{0,16}\b(?:[3-9]|1[01])\s*mes(?:es)?\b/i],
   ['smash_the_cake', /\bsmash(?: the cake)?\b/i],
   ['aniversario', /\banivers[aá]rio|festa\b/i],
-  ['familia', /\b(?:ensaio|fotos?|sess[aã]o).{0,24}(?:de |em )?fam[ií]lia|ensaio familiar|fam[ií]lia.{0,18}(?:ensaio|fotos?|sess[aã]o)\b/i],
+  // Familia absorveu o que era o pacote Baby: ele saiu de linha e bebê de 2 a
+  // 11 meses passou a ser oferecido como ensaio de família. Aos 12 meses / 1
+  // aninho o ensaio é o Smash the Cake, que tem padrão próprio logo acima.
+  ['familia', /\b(?:ensaio|fotos?|sess[aã]o).{0,24}(?:de |em )?fam[ií]lia|ensaio familiar|fam[ií]lia.{0,18}(?:ensaio|fotos?|sess[aã]o)\b|acompanhamento (?:do |da |de )?beb[eê]|ensaio baby|\bbaby\b|beb[eê].{0,16}\b(?:[2-9]|1[01])\s*mes(?:es)?\b/i],
   ['infantil', /\bensaio.{0,18}infantil|fotos?.{0,18}(?:da|de uma?) crian[cç]a\b/i],
   ['casal', /\bcasal|namorad|noiv[ao]\b/i],
   ['feminino', /\bfeminino|retrato feminino\b/i],
@@ -624,7 +624,6 @@ const CREATIVE_INTENT_BY_NICHE: Record<string, string> = {
   revelacao: 'Como você imaginou esse ensaio?',
   batizado: 'Como você imaginou a cobertura do batizado?',
   anunciacao: 'Como vocês imaginaram esse ensaio pra contar a novidade?',
-  baby: 'Quantos mesinhos o bebê tem e como você imaginou esse ensaio?',
   marca_pessoal: 'Onde você vai usar essas fotos e como quer aparecer nelas?',
   feminino: 'Como você quer se ver nessas fotos?',
   familia: 'Quem vai participar do ensaio?',

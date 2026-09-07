@@ -1,9 +1,9 @@
 -- 075 — Libera no portfólio da Lia os nichos que já têm orçamento cadastrado.
 --
 -- A 071 fixou uma lista de nichos que ficou menor que a lista real de pacotes do
--- estúdio: acompanhamento do bebê (baby), chá de bebê/revelação e anunciação têm
--- PDF de orçamento e ensaios publicados, mas não podiam ter link aprovado. Quem
--- dizia "não conheço o trabalho de vocês" nesses nichos caía em hand-off.
+-- estúdio: chá de bebê/revelação e anunciação têm PDF de orçamento e ensaios
+-- publicados, mas não podiam ter link aprovado. Quem dizia "não conheço o
+-- trabalho de vocês" nesses nichos caía em hand-off.
 --
 -- Só muda a validação. Nenhum link é inserido aqui: quem cadastra é o dono.
 
@@ -56,7 +56,7 @@ begin
     if item_niche <> all (array[
       'geral', 'gestante', 'newborn', 'familia', 'smash_the_cake',
       'aniversario', 'infantil', 'casal', 'feminino', 'marca_pessoal',
-      'revelacao', 'batizado', 'baby', 'cha_revelacao', 'anunciacao'
+      'revelacao', 'batizado', 'cha_revelacao', 'anunciacao'
     ]) then
       return false;
     end if;

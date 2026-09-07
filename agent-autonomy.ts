@@ -35,7 +35,6 @@ export const AGENT_BUDGET_NICHES = [
   'marca_pessoal',
   'revelacao',
   'anunciacao',
-  'baby',
   'batizado',
   'aniversario',
   'cha_revelacao',

@@ -523,13 +523,22 @@ test('chá revelação é cobertura de evento e não cai no mini ensaio de revel
   }
 });
 
-test('acompanhamento e anunciação têm nicho próprio, com PDF próprio', () => {
-  for (const fala of ['queria o acompanhamento do bebê', 'ensaio do meu bebê de 6 meses', 'quero o ensaio baby']) {
-    assert.equal(flow([['user', fala]]).niche, 'baby', fala);
+test('bebê de 2 a 11 meses é ensaio de família; o pacote Baby saiu de linha', () => {
+  for (const fala of [
+    'queria o acompanhamento do bebê',
+    'ensaio do meu bebê de 6 meses',
+    'quero o ensaio baby',
+    'fotos do meu bebê de 2 meses',
+    'meu bebê tem 11 meses, queria umas fotos dele',
+  ]) {
+    assert.equal(flow([['user', fala]]).niche, 'familia', fala);
   }
   assert.equal(flow([['user', 'quero o ensaio de anunciação']]).niche, 'anunciacao');
-  // Gestante fala em meses de gestação e não pode virar acompanhamento.
+  // Gestante fala em meses de gestação e não pode virar ensaio de família.
   assert.equal(flow([['user', 'quero ensaio gestante, estou de 7 meses']]).niche, 'gestante');
+  // Recém-nascido continua sendo newborn, e 1 aninho continua sendo smash.
+  assert.equal(flow([['user', 'meu bebê nasceu, queria um newborn']]).niche, 'newborn');
+  assert.equal(flow([['user', 'queria um smash the cake, ele faz 1 aninho']]).niche, 'smash_the_cake');
 });
 
 test('a Lia reconhecendo a resposta não conta como perguntar de novo', () => {
@@ -570,8 +579,8 @@ test('catálogo de produtos pode sair fora da etapa de orçamento; o do ensaio n
 test('vocabulário de gestação não vaza para quem não é gestante', () => {
   // "meu bebê tem 6 meses" já virou "já passou um pouquinho da metade da
   // gestação" na cara da cliente. Só gestante e newborn têm etapa de tempo.
-  const bebe = flow([['user', 'queria o acompanhamento do meu bebê, ele tem 6 meses']]);
-  assert.equal(bebe.niche, 'baby');
+  const bebe = flow([['user', 'queria umas fotos do meu bebê, ele tem 6 meses']]);
+  assert.equal(bebe.niche, 'familia');
   assert.doesNotMatch(bebe.fallback_reply, /gesta[cç][aã]o|semanas/i);
   const familia = flow([['user', 'quero ensaio de família, minha filha tem 8 meses']]);
   assert.doesNotMatch(familia.fallback_reply, /gesta[cç][aã]o/i);
@@ -586,7 +595,7 @@ test('a etapa de intenção fecha mesmo quando a Lia reescreve a pergunta', () =
     'Vocês já tinham pensado em algum estilo?',
   ]) {
     const depois = flow([
-      ['user', 'queria o acompanhamento do meu bebê de 6 meses'],
+      ['user', 'queria umas fotos do meu bebê de 6 meses'],
       ['assistant', pergunta],
       ['user', 'queria bem clean, fundo claro'],
     ]);
