@@ -531,3 +531,65 @@ test('acompanhamento e anunciação têm nicho próprio, com PDF próprio', () =
   // Gestante fala em meses de gestação e não pode virar acompanhamento.
   assert.equal(flow([['user', 'quero ensaio gestante, estou de 7 meses']]).niche, 'gestante');
 });
+
+test('a Lia reconhecendo a resposta não conta como perguntar de novo', () => {
+  // "então você já conhece nosso trabalho pela sua prima" é reconhecimento, não
+  // pergunta. Lido como pergunta, a etapa reabria e a conversa travava em loop
+  // bem na hora de mandar o orçamento.
+  const depois = flow([
+    ['user', 'vocês fazem cobertura de chá revelação?'],
+    ['assistant', 'Fazemos sim 🥰\n\nComo você imaginou a cobertura?'],
+    ['user', 'queria registrar o estouro do confete com a família toda'],
+    ['assistant', 'Entendii 🤍\n\nE você já conhece um pouco do nosso trabalho?'],
+    ['user', 'Conheço, minha prima fez com vocês'],
+    ['assistant', 'Ahh, então você já conhece nosso trabalho pela sua prima 🥰\n\nE para vocês é tranquilo fazer as fotos de meio de semana?'],
+    ['user', 'Pode ser, me manda os valores'],
+  ]);
+  assert.equal(depois.move, 'send_quote');
+});
+
+test('catálogo de produtos pode sair fora da etapa de orçamento; o do ensaio não', () => {
+  const depoisDoOrcamento = flow([
+    ['user', 'quero ensaio de família'],
+    ['assistant', 'Quem vai participar do ensaio?'],
+    ['user', 'eu, meu marido e as meninas'],
+    ['assistant', 'E você já conhece um pouco do nosso trabalho?'],
+    ['user', 'já conheço sim, acompanho vocês'],
+    ['assistant', 'E para vocês é tranquilo fazer as fotos de meio de semana?'],
+    ['user', 'pode ser'],
+    ['assistant', 'Vou te mandar os nossos pacotes por aqui, pode ser?\n\n###PDF:familia###'],
+    ['user', 'vocês vendem álbum também?'],
+  ]);
+  assert.equal(depoisDoOrcamento.move, 'wait');
+  const comCatalogo = 'Temos sim 🤍\n\n###PDF:produtos###';
+  assert.match(enforceConversationFlowReply(comCatalogo, depoisDoOrcamento), /###PDF:produtos###/);
+  // O orçamento do ensaio continua preso à etapa de orçamento.
+  assert.doesNotMatch(enforceConversationFlowReply('Segue 🤍\n\n###PDF:familia###', depoisDoOrcamento), /###PDF:familia###/);
+});
+
+test('vocabulário de gestação não vaza para quem não é gestante', () => {
+  // "meu bebê tem 6 meses" já virou "já passou um pouquinho da metade da
+  // gestação" na cara da cliente. Só gestante e newborn têm etapa de tempo.
+  const bebe = flow([['user', 'queria o acompanhamento do meu bebê, ele tem 6 meses']]);
+  assert.equal(bebe.niche, 'baby');
+  assert.doesNotMatch(bebe.fallback_reply, /gesta[cç][aã]o|semanas/i);
+  const familia = flow([['user', 'quero ensaio de família, minha filha tem 8 meses']]);
+  assert.doesNotMatch(familia.fallback_reply, /gesta[cç][aã]o/i);
+});
+
+test('a etapa de intenção fecha mesmo quando a Lia reescreve a pergunta', () => {
+  // A pergunta muda de nicho pra nicho e a Lia ainda a reescreve. Quando a
+  // redação não era reconhecida, a etapa ficava aberta e ela perguntava de novo.
+  for (const pergunta of [
+    'Você pensou em fazer um acompanhamento ou uma sessão avulsa?',
+    'Você imaginou as fotos só dele ou com vocês também?',
+    'Vocês já tinham pensado em algum estilo?',
+  ]) {
+    const depois = flow([
+      ['user', 'queria o acompanhamento do meu bebê de 6 meses'],
+      ['assistant', pergunta],
+      ['user', 'queria bem clean, fundo claro'],
+    ]);
+    assert.notEqual(depois.move, 'ask_creative_intent', pergunta);
+  }
+});

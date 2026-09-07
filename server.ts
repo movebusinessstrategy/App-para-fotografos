@@ -37,7 +37,7 @@ import {
   type AgentConfig,
   type AgentMessage,
 } from './ai-agent.js';
-import { HANDOFF_INSTRUCTION, parseAgentHandoff, type AgentHandoffReason } from './agent-autonomy.js';
+import { AGENT_EXTRA_MATERIAL_NICHE, HANDOFF_INSTRUCTION, parseAgentHandoff, type AgentHandoffReason } from './agent-autonomy.js';
 import {
   AGENT_CHAT_MODEL,
   analyzeConversationFlow,
@@ -27824,7 +27824,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           return;
         }
         if (followText) await sendAgentMessages(userId, phone, waNumber, channel, followText);
-        if (deal) {
+        // Catálogo de produtos é material de apoio: não é o orçamento do ensaio,
+        // então não move o funil, não agenda o follow-up nem fecha a etapa.
+        const ehOrcamento = nicho !== AGENT_EXTRA_MATERIAL_NICHE;
+        if (deal && ehOrcamento) {
           await moveDealToStageNamed(userId, deal.id, /or[çc]amento.*enviad|enviad.*or[çc]amento/i);
           // Agenda o follow-up contextual da Lia pra ~24h (dispara só se a pessoa
           // não responder; o worker cancela sozinho se ela responder ou virar humano).
@@ -27847,9 +27850,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
             }
           }
         }
-        await updateAgentConversationState(userId, phone, waNumber, 'quote_sent', {
-          last_agent_reply_at: new Date().toISOString(),
-        });
+        if (ehOrcamento) {
+          await updateAgentConversationState(userId, phone, waNumber, 'quote_sent', {
+            last_agent_reply_at: new Date().toISOString(),
+          });
+        }
         console.log(`[Lia autônoma] PDF ${nicho} enviado | ${phone}`);
       } else {
         await sendAgentMessages(userId, phone, waNumber, channel, reply);

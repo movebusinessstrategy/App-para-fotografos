@@ -1,4 +1,5 @@
 import type { LearningMessage } from './agent-learning.js';
+import { AGENT_EXTRA_MATERIAL_NICHE } from './agent-autonomy.js';
 
 export type ConversationFlowStepId =
   | 'niche'
@@ -178,6 +179,10 @@ function gestationalWeeks(customerText: string): number | null {
 }
 
 function lifecycleAcknowledgement(niche: string | null, customerText: string): string {
+  // Só gestante e newborn têm etapa de tempo de vida (relevantSteps). Sem esta
+  // guarda, "meu bebê tem 6 meses" virava 26 semanas e a pessoa ouvia "já
+  // passou um pouquinho da metade da gestação" num ensaio de acompanhamento.
+  if (niche !== 'gestante' && niche !== 'newborn') return '';
   if (niche === 'newborn') {
     if (/ainda nao nasceu|nao nasceu ainda|vai nascer/.test(customerText)) {
       return 'O bebê ainda não nasceu';
@@ -203,7 +208,7 @@ function lifecycleAcknowledgement(niche: string | null, customerText: string): s
 // Precisa cobrir TODAS as redações da etapa, inclusive as por nicho
 // (CREATIVE_INTENT_BY_NICHE). Se a pergunta feita não casar aqui, a etapa
 // nunca fecha e a Lia repete a mesma pergunta depois de já ter sido respondida.
-const CREATIVE_INTENT_QUESTION = /(?:como|me conta).{0,70}(?:pens|imagin|registr)|referenc|pensou em fotos|ideia de tema|tema ou cores|usar essas fotos|quer aparecer|quer se ver|quem vai participar|imaginou (?:a cobertura|esse ensaio)|tinham pensado esse ensaio/;
+const CREATIVE_INTENT_QUESTION = /(?:como|me conta).{0,70}(?:pens|imagin|registr)|referenc|pensou em|pensad[oa]|imaginou|ideia de tema|tema ou cores|usar essas fotos|quer aparecer|quer se ver|quem vai participar/;
 
 function creativeIntentDescribed(customerText: string): boolean {
   return /\b(?:referenc|inspir|pensei (?:em|num|que)|imaginei|como (?:eu )?queria|queria (?:algo|fotos?|um ensaio) (?:mais )?(?:natural|classico|externo|(?:no|de) estudio)|registrar (?:esse|este|o) momento|estilo|natural|classico|externo|(?:no|de) estudio|fotos? (?:de|no) estudio|nao tenho (?:uma )?ideia|sem referenc)|\[(?:foto|imagem)/.test(customerText);
@@ -222,10 +227,21 @@ function normalizedMessage(message: LearningMessage): string {
   return message.content.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 }
 
+// Só conta como pergunta o trecho que TERMINA em "?". Sem isso, a própria Lia
+// reconhecendo a resposta ("então você já conhece nosso trabalho pela sua
+// prima") era lida como se ela tivesse perguntado de novo: a resposta anterior
+// deixava de valer, a etapa reabria e ela repetia a mesma pergunta pra sempre.
+function assistantAsked(message: LearningMessage, pattern: RegExp): boolean {
+  if (message.role !== 'assistant') return false;
+  return normalizedMessage(message)
+    .split(/\n+|(?<=[.!?])\s+/)
+    .some((trecho) => trecho.trim().endsWith('?') && pattern.test(trecho));
+}
+
 function customerReplyAfterAssistantQuestion(messages: LearningMessage[], pattern: RegExp): string {
   let questionIndex = -1;
   messages.forEach((message, index) => {
-    if (message.role === 'assistant' && pattern.test(normalizedMessage(message))) questionIndex = index;
+    if (assistantAsked(message, pattern)) questionIndex = index;
   });
   if (questionIndex < 0) return '';
   const answer: LearningMessage[] = [];
@@ -544,7 +560,11 @@ export function enforceConversationFlowReply(reply: unknown, flow: ConversationF
 
 function replyMatchesMove(reply: string, flow: ConversationFlowAnalysis): boolean {
   const normalized = reply.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  if (flow.move !== 'send_quote' && /###pdf:[a-z_]+###/i.test(reply)) return false;
+  // O catálogo de produtos não é o orçamento do ensaio: pode sair quando a
+  // pessoa perguntar por álbum ou revelação. Qualquer outro PDF fora da etapa
+  // de orçamento continua sendo envio prematuro.
+  const pdfPrematuro = new RegExp(`###pdf:(?!${AGENT_EXTRA_MATERIAL_NICHE}###)[a-z_]+###`, 'i');
+  if (flow.move !== 'send_quote' && pdfPrematuro.test(reply)) return false;
   const patterns: Partial<Record<ConversationFlowMove, RegExp>> = {
     ask_niche: /\b(?:qual|que|tipo).{0,30}(?:ensaio|fotos?|sessao).*[?]/,
     // Qualquer pergunta que explore o que a pessoa quer serve. O padrão antigo

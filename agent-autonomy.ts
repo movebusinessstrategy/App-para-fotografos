@@ -20,6 +20,10 @@ const MODEL_HANDOFF_REASONS = [
   'pessoa',
 ] as const;
 
+// Catálogo de álbuns, revelações e caixas. Não é um nicho de ensaio: sai a
+// pedido, a qualquer momento, e não conta como orçamento enviado.
+export const AGENT_EXTRA_MATERIAL_NICHE = 'produtos';
+
 export const AGENT_BUDGET_NICHES = [
   'gestante',
   'newborn',
@@ -35,9 +39,7 @@ export const AGENT_BUDGET_NICHES = [
   'batizado',
   'aniversario',
   'cha_revelacao',
-  // Catálogo de álbuns, revelações e caixas. Não é um nicho de ensaio: só sai
-  // quando a pessoa pergunta por esses itens.
-  'produtos',
+  AGENT_EXTRA_MATERIAL_NICHE,
 ] as const;
 
 const modelHandoffReasons = new Set<string>(MODEL_HANDOFF_REASONS);
