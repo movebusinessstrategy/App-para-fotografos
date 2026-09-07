@@ -488,3 +488,26 @@ test('"só consigo sábado" fecha a etapa de agenda e segue pro orçamento', () 
   ], 'send_quote');
   assert.equal(result.handoff_reason, null);
 });
+
+test('data concreta proposta pela cliente vira hand-off; preferência de dia não', () => {
+  const base: Turn[] = [
+    ['user', 'quero ensaio gestante, tô de 30 semanas'],
+    ['assistant', 'Vou te mandar os nossos pacotes por aqui, pode ser?'],
+  ];
+  for (const fala of ['Pode ser dia 18 de manhã?', 'dá pra ser 20/10?', 'consigo marcar amanhã?']) {
+    assert.equal(flow([...base, ['user', fala]]).handoff_reason, 'disponibilidade', fala);
+  }
+  for (const fala of ['Só consigo aos sábados', 'só posso sábado']) {
+    assert.equal(flow([...base, ['user', fala]]).handoff_reason, null, fala);
+  }
+});
+
+test('nenhum movimento devolve resposta vazia: sem texto, uma pessoa assume', () => {
+  const mudo = flow([
+    ['user', 'quero ensaio gestante, tô de 30 semanas'],
+    ['assistant', 'Vou te mandar os nossos pacotes por aqui, pode ser?'],
+    ['user', 'ok'],
+  ]);
+  const reply = enforceConversationFlowReply('', mudo);
+  assert.notEqual(reply.trim(), '');
+});

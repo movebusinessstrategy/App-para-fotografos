@@ -350,7 +350,13 @@ function asksToCheckAvailability(text: string): boolean {
   const hasAvailability = /\b(?:tem|ha).{0,24}(?:data|horario|vaga|agenda|sabado|segunda|terca|quarta|quinta|sexta).{0,16}(?:disponivel|livre|abert[ao])?\b/.test(text);
   const dateFirst = /\b(?:data|dia|horario|vaga|agenda).{0,36}(?:disponivel|livre|consultar|confirmar|reservar|consegue|tem)\b/.test(text);
   const namedDay = /\b(?:sabado|segunda|terca|quarta|quinta|sexta).{0,20}(?:disponivel|livre|tem vaga)\b/.test(text);
-  return actionFirst || canCheck || hasAvailability || dateFirst || namedDay;
+  // A cliente raramente pede "consultar disponibilidade": ela PROPÕE uma data
+  // concreta ("pode ser dia 18 de manhã?", "dá pra ser 20/10?"). Sem isso a
+  // conversa morria em silêncio bem na hora de fechar.
+  // Exige data NUMÉRICA ou "amanhã": dia da semana sozinho ("só posso sábado")
+  // continua sendo preferência de agenda, não pedido de consulta.
+  const proposesDay = /\b(?:pode ser|da pra ser|daria|consigo|conseguimos|seria possivel|tem como|marcar|agendar|fica bom|seria)\b.{0,30}\b(?:dia \d{1,2}|\d{1,2}\/\d{1,2}|amanha|depois de amanha)\b/.test(text);
+  return actionFirst || canCheck || hasAvailability || dateFirst || namedDay || proposesDay;
 }
 
 function asksForPerson(text: string): boolean {
@@ -523,8 +529,10 @@ export function enforceConversationFlowReply(reply: unknown, flow: ConversationF
   const handoff = handoffMatch?.[1]?.toLowerCase();
   if (handoffMatch && !handoff) return '###HUMANO:duvida###';
   if (handoff === 'duvida' || handoff === 'pessoa' || handoff === 'reclamacao') return text;
-  if (handoff || flow.move === 'send_quote' || !text) return flow.fallback_reply;
-  return replyMatchesMove(text, flow) ? text : flow.fallback_reply;
+  if (handoff || flow.move === 'send_quote' || !text) return flow.fallback_reply || '###HUMANO:duvida###';
+  // Nunca devolver vazio: silêncio é a pior resposta possível. Se o movimento
+  // não tem texto de reserva (o caso do "wait"), quem assume é uma pessoa.
+  return (replyMatchesMove(text, flow) ? text : flow.fallback_reply) || '###HUMANO:duvida###';
 }
 
 function replyMatchesMove(reply: string, flow: ConversationFlowAnalysis): boolean {
