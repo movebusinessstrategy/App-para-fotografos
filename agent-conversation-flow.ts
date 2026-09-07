@@ -185,8 +185,22 @@ function lifecycleAcknowledgement(niche: string | null, customerText: string): s
   return 'Já está indo para a reta final da gestação';
 }
 
-function creativeIntentKnown(customerText: string): boolean {
+// A pergunta "como você imaginou o ensaio?" foi respondida quando a pessoa
+// descreveu algo OU quando ela simplesmente respondeu depois de a gente
+// perguntar. Sem essa segunda porta, qualquer resposta fora da lista de
+// palavras ("não tinha nada em mente", "mais na parte do estúdio") deixava a
+// etapa aberta e a Lia repetia a mesma pergunta pra sempre.
+const CREATIVE_INTENT_QUESTION = /(?:como|me conta).{0,70}(?:pens|imagin|registr)|referenc/;
+
+function creativeIntentDescribed(customerText: string): boolean {
   return /\b(?:referenc|inspir|pensei (?:em|num|que)|imaginei|como (?:eu )?queria|queria (?:algo|fotos?|um ensaio) (?:mais )?(?:natural|classico|externo|(?:no|de) estudio)|registrar (?:esse|este|o) momento|estilo|natural|classico|externo|(?:no|de) estudio|fotos? (?:de|no) estudio|nao tenho (?:uma )?ideia|sem referenc)|\[(?:foto|imagem)/.test(customerText);
+}
+
+function creativeIntentKnown(messages: LearningMessage[], customerText: string): boolean {
+  if (creativeIntentDescribed(customerText)) return true;
+  // Respondeu qualquer coisa depois da pergunta (inclusive "não sei"): a etapa
+  // está cumprida. Só não vale resposta vazia.
+  return customerReplyAfterAssistantQuestion(messages, CREATIVE_INTENT_QUESTION).trim().length > 0;
 }
 
 type WorkFamiliarity = 'known' | 'unknown' | 'not_asked';
@@ -588,7 +602,7 @@ export function analyzeConversationFlow(
   const signals: FlowSignals = {
     niche,
     lifecycle: lifecycleKnown(niche, lifecycleText),
-    creativeIntent: creativeIntentKnown(customerText),
+    creativeIntent: creativeIntentKnown(episode, customerText),
     familiarity,
     referenceReceived,
     referencePromised: customerPromisedReference(customerText, referenceReceived),

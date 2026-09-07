@@ -409,3 +409,23 @@ test('não promete portfólio inexistente e não repete esclarecimento após rea
     ['user', 'Quero algo mais natural e claro.'],
   ], 'ask_schedule_preference');
 });
+
+test('resposta fora do vocabulário esperado encerra a etapa e não repete a pergunta', () => {
+  // Caso real: a cliente respondeu "não tinha nada em mente" e a Lia repetia
+  // "me conta como você tinha pensado" pra sempre.
+  const flow = assertMove([
+    ['user', 'Oi! Queria saber sobre o ensaio gestante'],
+    ['assistant', 'Com quantas semanas você está?'],
+    ['user', '26'],
+    ['assistant', 'Me conta mais de como você tinha pensado em registrar esse momento de vocês?'],
+    ['user', 'Eu não tinha nada em mente'],
+  ], 'ask_work_familiarity');
+  assert.equal(flow.niche, 'gestante');
+});
+
+test('silêncio depois da pergunta mantém a etapa aberta', () => {
+  assertMove([
+    ['user', 'Quero ensaio gestante, tô de 30 semanas'],
+    ['assistant', 'Me conta mais de como você tinha pensado em registrar esse momento de vocês?'],
+  ], 'ask_creative_intent');
+});

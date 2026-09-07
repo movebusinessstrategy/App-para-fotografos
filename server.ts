@@ -170,6 +170,14 @@ import {
 } from './lib/meta-whatsapp-channel.js';
 dotenv.config();
 
+// Quanto a Lia espera a pessoa PARAR de escrever antes de responder. Cada
+// mensagem nova reinicia a contagem, então quem manda "oi" / "queria saber do
+// gestante" / "tô de 30 semanas" em três mensagens recebe UMA resposta, não
+// três. Mídia espera mais: quem manda foto ou áudio costuma emendar um texto
+// explicando logo depois.
+const AGENT_REPLY_DEBOUNCE_MS = 60_000;
+const AGENT_REPLY_DEBOUNCE_MEDIA_MS = 75_000;
+
 function marketingMeasurementTenantIds(): string[] {
   return String(process.env.MARKETING_MEASUREMENT_TENANT_IDS || '')
     .split(',')
@@ -27462,6 +27470,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   function splitIntoMessages(text: string): string[] {
     return (text || '').split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
   }
+  // Tempo de "digitando…" proporcional ao balão, com piso pra não sair
+  // instantâneo e teto pra não deixar a pessoa esperando.
+  function agentTypingDelayMs(part: string): number {
+    return Math.min(2500 + (part || '').length * 45, 9000);
+  }
   async function sendAgentMessages(
     userId: string,
     phone: string,
@@ -27473,7 +27486,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     for (let i = 0; i < parts.length; i++) {
       if (i > 0) {
         if (channel === 'baileys') await BaileysManager.sendTyping(userId, phone, true);
-        await new Promise((r) => setTimeout(r, Math.min(1200 + parts[i].length * 35, 6000)));
+        await new Promise((r) => setTimeout(r, agentTypingDelayMs(parts[i])));
         if (channel === 'baileys') await BaileysManager.sendTyping(userId, phone, false);
       }
       await sendAgentText(userId, phone, waNumber, channel, parts[i]);
@@ -27642,9 +27655,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         return;
       }
 
-      // "digitando…" + atraso realista antes de mandar.
+      // "digitando…" antes do PRIMEIRO balão, no tempo de digitar aquele balão
+      // (não a resposta inteira: os outros balões têm a pausa deles em
+      // sendAgentMessages). Os balões seguintes repetem "digitando…" lá.
       if (channel === 'baileys') await BaileysManager.sendTyping(userId, phone, true);
-      await new Promise((r) => setTimeout(r, Math.min(2500 + reply.length * 45, 9000)));
+      await new Promise((r) => setTimeout(r, agentTypingDelayMs(splitIntoMessages(reply)[0] || reply)));
       if (channel === 'baileys') await BaileysManager.sendTyping(userId, phone, false);
       const { data: afterTypingRows } = await supabaseAdmin.from('wa_messages')
         .select('message_id, from_me')
@@ -27731,7 +27746,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const key = `${userId}|${waNumber}|${phone}|${channel}`;
     const old = autoReplyTimers.get(key);
     if (old) clearTimeout(old);
-    const delay = (msgType === 'audio' || msgType === 'image') ? 18000 : 14000;
+    // Espera a pessoa TERMINAR de escrever. Cliente quase sempre manda em
+    // várias mensagens seguidas ("oi" / "queria saber do gestante" / "tô de
+    // 30 semanas"); responder na primeira atropela as outras. Cada mensagem
+    // nova reinicia o relógio, então a Lia só entra quando a pessoa parou.
+    const delay = (msgType === 'audio' || msgType === 'image')
+      ? AGENT_REPLY_DEBOUNCE_MEDIA_MS
+      : AGENT_REPLY_DEBOUNCE_MS;
     autoReplyTimers.set(key, setTimeout(() => {
       autoReplyTimers.delete(key);
       runAutonomousReply(userId, phone, waNumber, channel).catch(() => {});
