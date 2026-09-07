@@ -29,13 +29,13 @@ export default function SettingsLayout() {
         <p className="text-sm text-gray-500 dark:text-gray-400 mb-5">
           Gerencie sua conta, equipe e integrações.
         </p>
-        <nav className="flex lg:flex-col gap-1 overflow-x-auto lg:overflow-visible -mx-2 lg:mx-0 px-2 lg:px-0">
+        <nav aria-label="Seções das configurações" className="scrollbar-hide -mx-2 flex snap-x snap-mandatory gap-1 overflow-x-auto px-2 lg:mx-0 lg:flex-col lg:overflow-visible lg:px-0">
           {visibleSections.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
               className={({ isActive }) =>
-                `flex-shrink-0 flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                `flex min-h-11 flex-shrink-0 snap-start items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                   isActive
                     ? "bg-gold-50 dark:bg-gold-900/20 text-gold-700 dark:text-gold-300"
                     : "text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"

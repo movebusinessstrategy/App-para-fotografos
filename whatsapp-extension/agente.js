@@ -76,6 +76,22 @@
       padding: 9px 10px; border-radius: 8px; margin-top: 10px; line-height: 1.4;
     }
     .fpa-ok { color: #2e7d32; font-size: 12.5px; margin-top: 10px; text-align: center; }
+    #fpa-attention-badge {
+      position: absolute; top: -5px; right: -5px; min-width: 21px; height: 21px;
+      padding: 0 5px; border-radius: 999px; background: #d97706; color: #fff;
+      border: 2px solid #fff; display: none; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 800; line-height: 1;
+    }
+    #fpa-attention {
+      display: none; gap: 9px; align-items: flex-start; margin-bottom: 12px;
+      padding: 10px; border-radius: 10px; background: #fff7ed; color: #9a3412;
+      border: 1px solid #fed7aa; font-size: 12.5px; line-height: 1.4;
+    }
+    #fpa-attention strong { display: block; color: #7c2d12; }
+    #fpa-attention button {
+      margin-top: 6px; border: 0; border-radius: 7px; background: #d97706;
+      color: #fff; padding: 6px 9px; font: inherit; font-weight: 700; cursor: pointer;
+    }
   `;
   document.documentElement.appendChild(style);
 
@@ -296,7 +312,7 @@
   const fab = document.createElement('button');
   fab.id = 'fpa-fab';
   fab.title = 'Lia — assistente de atendimento';
-  fab.innerHTML = sparkleSvg(26);
+  fab.innerHTML = `${sparkleSvg(26)}<span id="fpa-attention-badge"></span>`;
 
   const panel = document.createElement('div');
   panel.id = 'fpa-panel';
@@ -312,6 +328,14 @@
       <button class="fpa-x" id="fpa-close" title="Fechar">✕</button>
     </div>
     <div class="fpa-body">
+      <div id="fpa-attention" role="alert">
+        <span aria-hidden="true">🔔</span>
+        <div>
+          <strong id="fpa-attention-title">A Lia precisa de você</strong>
+          <span>Ela pausou a conversa sem avisar o cliente.</span>
+          <button id="fpa-open-attention" type="button">Ver no CRM</button>
+        </div>
+      </div>
       <p class="fpa-hint">Eu leio a conversa aberta e sugiro a resposta. Você revisa, ajusta se quiser e envia.</p>
       <button class="fpa-btn fpa-btn-primary" id="fpa-gen">Gerar sugestão</button>
       <div id="fpa-spin" class="fpa-spin" style="display:none;">Gerando sugestão…</div>
@@ -337,6 +361,80 @@
   const elInsert = $('#fpa-insert');
   const elErr = $('#fpa-err');
   const elOk = $('#fpa-ok');
+  const elAttention = $('#fpa-attention');
+  const elAttentionTitle = $('#fpa-attention-title');
+  const elAttentionBadge = fab.querySelector('#fpa-attention-badge');
+
+  let attentionSignature = '';
+  let attentionReady = false;
+
+  function playAttentionSound() {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const notes = [740, 988, 740];
+      notes.forEach((frequency, index) => {
+        const oscillator = ctx.createOscillator();
+        const gain = ctx.createGain();
+        const start = ctx.currentTime + index * 0.18;
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(frequency, start);
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.22, start + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.14);
+        oscillator.connect(gain).connect(ctx.destination);
+        oscillator.start(start);
+        oscillator.stop(start + 0.16);
+      });
+      window.setTimeout(() => ctx.close().catch(() => {}), 900);
+    } catch {}
+  }
+
+  function renderAttention(items) {
+    const waiting = (Array.isArray(items) ? items : []).filter((item) =>
+      item?.bucket === 'precisa_humano' || item?.agent_status === 'needs_human');
+    const count = waiting.length;
+    elAttention.style.display = count > 0 ? 'flex' : 'none';
+    elAttentionBadge.style.display = count > 0 ? 'flex' : 'none';
+    elAttentionBadge.textContent = count > 99 ? '99+' : String(count || '');
+    elAttentionTitle.textContent = count === 1
+      ? '1 atendimento precisa de você'
+      : `${count} atendimentos precisam de você`;
+    fab.title = count > 0
+      ? `Lia — ${count} atendimento${count === 1 ? '' : 's'} aguardando você`
+      : 'Lia — assistente de atendimento';
+
+    const signature = waiting
+      .map((item) => `${item.phone || ''}:${item.handoff_at || item.last_message_at || ''}`)
+      .sort()
+      .join('|');
+    if (signature && (!attentionReady || signature !== attentionSignature)) {
+      playAttentionSound();
+      bg({ type: 'NOTIFY_AGENT_ATTENTION', count }).catch(() => {});
+      panel.classList.add('fpa-open');
+    }
+    attentionSignature = signature;
+    attentionReady = true;
+  }
+
+  async function pollAttention() {
+    if (document.visibilityState !== 'visible') return;
+    try {
+      const data = await bg({ type: 'GET_AGENT_ATTENTION' });
+      renderAttention(data?.items || []);
+    } catch { /* sessão ausente ou rede: mantém o widget funcionando */ }
+  }
+
+  $('#fpa-open-attention').addEventListener('click', () => {
+    bg({ type: 'OPEN_AGENT_ATTENTION' }).catch(() => {});
+  });
+
+  pollAttention();
+  window.setInterval(pollAttention, 15000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') pollAttention();
+  });
 
   function showError(msg) {
     elErr.textContent = msg;
@@ -390,6 +488,9 @@
     elSpin.textContent = 'Gerando sugestão…';
     try {
       const resp = await bg({ type: 'AGENT_SUGGEST', messages: msgs });
+      if (resp && resp.action && resp.action.type === 'handoff') {
+        return fail('Essa conversa precisa de você. Assuma o atendimento antes de responder.');
+      }
       elText.value = (resp && resp.reply) || '';
       elResult.style.display = 'block';
       elGen.textContent = 'Gerar de novo';

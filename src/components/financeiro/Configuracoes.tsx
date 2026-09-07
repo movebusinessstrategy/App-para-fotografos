@@ -609,11 +609,11 @@ export default function Configuracoes() {
                             <div key={c.id} className="rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 overflow-hidden">
                               {editandoCategoria?.id === c.id ? (
                                 <div className="p-3 space-y-2">
-                                  <div className="flex gap-2">
+                                  <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:grid-cols-[minmax(0,1fr)_8rem_auto]">
                                     <input
                                       value={editandoCategoria.nome}
                                       onChange={e => setEditandoCategoria(prev => prev ? { ...prev, nome: e.target.value } : null)}
-                                      className="flex-1 text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                                      className="col-span-2 w-full text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500 sm:col-span-1"
                                     />
                                     <FinSelect
                                       value={editandoCategoria.tipo}
@@ -732,8 +732,8 @@ export default function Configuracoes() {
                   <div key={m.id} className="rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 overflow-hidden">
                     {editandoMeio?.id === m.id ? (
                       <div className="p-4 space-y-3">
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="col-span-2">
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          <div className="sm:col-span-2">
                             <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Nome</label>
                             <input value={editandoMeio.nome} onChange={e => setEditandoMeio(p => p ? { ...p, nome: e.target.value } : null)}
                               className="w-full text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500" />
@@ -804,8 +804,8 @@ export default function Configuracoes() {
               {/* Formulário novo meio */}
               <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-600 p-4 space-y-3">
                 <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Adicionar meio de pagamento</p>
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="col-span-2">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div className="sm:col-span-2">
                     <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Nome</label>
                     <input value={novaMeio.nome} onChange={e => setNovaMeio(f => ({ ...f, nome: e.target.value }))} placeholder="Ex: Pix, Link InfinitePay..."
                       className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500" />
@@ -888,8 +888,8 @@ export default function Configuracoes() {
                       {editandoConta?.id === c.id ? (
                         /* Modo edição */
                         <div className="p-4 space-y-3">
-                          <div className="grid grid-cols-2 gap-2">
-                            <div className="col-span-2">
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            <div className="sm:col-span-2">
                               <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                                 Nome <span className="text-gray-400 font-normal">- como você identifica essa conta (ex: "Nubank", "Caixa Empresa")</span>
                               </label>
@@ -954,12 +954,12 @@ export default function Configuracoes() {
                               />
                             </div>
                             {editandoConta.tem_extrato && (
-                              <div className="col-span-2 flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300">
+                              <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 sm:col-span-2 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300">
                                 <Lock className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
                                 <span>O código bancário e a identificação foram confirmados pelo extrato. Eles ficam somente leitura para não associar futuros OFX à conta errada.</span>
                               </div>
                             )}
-                            <div className="col-span-2">
+                            <div className="sm:col-span-2">
                               <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                                 Saldo Inicial <span className="text-gray-400 font-normal">- quanto havia nessa conta quando você a cadastrou aqui</span>
                               </label>
@@ -1134,8 +1134,8 @@ export default function Configuracoes() {
                     {editandoGrupo?.id === g.id ? (
                       /* Modo edição */
                       <div className="p-4 space-y-3">
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="col-span-2">
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          <div className="sm:col-span-2">
                             <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Nome</label>
                             <input
                               value={editandoGrupo.nome}
@@ -1223,8 +1223,8 @@ export default function Configuracoes() {
               {/* Formulário novo grupo */}
               <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-600 p-4 space-y-3">
                 <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Adicionar grupo</p>
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="col-span-2">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div className="sm:col-span-2">
                     <input
                       value={novoGrupo.nome}
                       onChange={e => setNovoGrupo(f => ({ ...f, nome: e.target.value }))}
@@ -1285,8 +1285,8 @@ export default function Configuracoes() {
       )}
 
       {infinitePayPreview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !infinitePayLoading && setInfinitePayPreview(null)}>
-          <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-gray-800" onClick={event => event.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4" onClick={() => !infinitePayLoading && setInfinitePayPreview(null)}>
+          <div className="max-h-[calc(100dvh-1rem)] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white shadow-xl sm:max-h-[92vh] sm:rounded-2xl dark:bg-gray-800" onClick={event => event.stopPropagation()}>
             <div className="flex items-start justify-between border-b border-gray-100 px-5 py-4 dark:border-gray-700">
               <div>
                 <h3 className="font-semibold text-gray-900 dark:text-white">Configurar InfinitePay</h3>

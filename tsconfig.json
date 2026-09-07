@@ -23,5 +23,9 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "exclude": ["api"]
+  "exclude": [
+    "api",
+    "workers",
+    "marketing-site-bridge-worker.test.ts"
+  ]
 }

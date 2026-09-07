@@ -189,26 +189,26 @@ export default function ContasPagar() {
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Contas a Pagar</h2>
           <p className="text-sm text-gray-500 dark:text-gray-400">
             {filtradas.length} lançamento{filtradas.length !== 1 ? 's' : ''} · {fmtBRL(totalFiltrado)}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex w-full gap-2 sm:w-auto">
           <button
             onClick={() => exportCSV(filtradas.map(d => ({
               Descrição: d.descricao, Valor: d.valor, Vencimento: d.data_vencimento ?? '',
               Status: STATUS_DESPESA_LABEL[d.status] ?? d.status, Fornecedor: d.fornecedor ?? '',
             })), 'contas_pagar.csv')}
-            className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+            className="flex-1 text-sm px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 sm:flex-none"
           >
             Exportar CSV
           </button>
           <button
             onClick={() => setShowForm(true)}
-            className="flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg bg-violet-600 text-white hover:bg-violet-700"
+            className="flex flex-1 items-center justify-center gap-2 text-sm px-3 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-700 sm:flex-none"
           >
             <Plus className="w-4 h-4" /> Nova
           </button>
@@ -254,7 +254,7 @@ export default function ContasPagar() {
         </div>
       ) : (
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-          <table className="w-full text-sm">
+          <table className="responsive-card-table w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400">
                 <th className="text-left px-4 py-3 font-medium">Descrição</th>
@@ -270,14 +270,14 @@ export default function ContasPagar() {
                 editando?.id === d.id ? (
                   // ── Linha de edição inline ──────────────────────────────
                   <tr key={d.id} className="border-b border-violet-100 dark:border-violet-900/30 bg-violet-50/30 dark:bg-violet-900/10">
-                    <td className="px-3 py-2">
+                    <td data-label="Descrição" className="px-3 py-2">
                       <input
                         value={editando.descricao}
                         onChange={e => setEditando(ed => ed ? { ...ed, descricao: e.target.value } : ed)}
                         className="w-full px-2 py-1 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-violet-500"
                       />
                     </td>
-                    <td className="px-3 py-2">
+                    <td data-label="Fornecedor" className="px-3 py-2">
                       <input
                         value={editando.fornecedor ?? ''}
                         onChange={e => setEditando(ed => ed ? { ...ed, fornecedor: e.target.value } : ed)}
@@ -285,19 +285,19 @@ export default function ContasPagar() {
                         placeholder="Fornecedor"
                       />
                     </td>
-                    <td className="px-3 py-2">
+                    <td data-label="Vencimento" className="px-3 py-2">
                       <DatePicker
                         value={editando.data_vencimento ?? ''}
                         onChange={v => setEditando(ed => ed ? { ...ed, data_vencimento: v } : ed)}
                       />
                     </td>
-                    <td className="px-3 py-2">
+                    <td data-label="Valor" className="px-3 py-2">
                       <MoneyInput
                         value={String(editando.valor)}
                         onChange={v => setEditando(ed => ed ? { ...ed, valor: parseFloat(v.replace(',', '.')) || 0 } : ed)}
                       />
                     </td>
-                    <td className="px-3 py-2">
+                    <td data-label="Status" className="px-3 py-2">
                       <FinSelect
                         value={editando.status}
                         onChange={v => setEditando(ed => ed ? { ...ed, status: v } : ed)}
@@ -310,7 +310,7 @@ export default function ContasPagar() {
                         ]}
                       />
                     </td>
-                    <td className="px-3 py-2">
+                    <td data-label="Ações" className="px-3 py-2">
                       <div className="flex items-center gap-1 justify-end">
                         <button onClick={saveEdit} className="p-1 rounded-md text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/30">
                           <Save className="w-4 h-4" />
@@ -324,7 +324,7 @@ export default function ContasPagar() {
                 ) : (
                   // ── Linha normal ────────────────────────────────────────
                   <tr key={d.id} className="border-b border-gray-50 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-700/30 last:border-0">
-                    <td className="px-4 py-3">
+                    <td data-label="Descrição" className="px-4 py-3">
                       <p className="font-medium text-gray-800 dark:text-gray-200">{d.descricao}</p>
                       {d.categoria_nome && <p className="text-xs text-gray-400">{d.categoria_nome}</p>}
                       {d.recorrente && (
@@ -333,15 +333,15 @@ export default function ContasPagar() {
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{d.fornecedor ?? '-'}</td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{fmtDate(d.data_vencimento)}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-gray-900 dark:text-white">{fmtBRL(d.valor)}</td>
-                    <td className="px-4 py-3 text-center">
+                    <td data-label="Fornecedor" className="px-4 py-3 text-gray-600 dark:text-gray-300">{d.fornecedor ?? '-'}</td>
+                    <td data-label="Vencimento" className="px-4 py-3 text-gray-600 dark:text-gray-300">{fmtDate(d.data_vencimento)}</td>
+                    <td data-label="Valor" className="px-4 py-3 text-right font-semibold text-gray-900 dark:text-white">{fmtBRL(d.valor)}</td>
+                    <td data-label="Status" className="px-4 py-3 text-center">
                       <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_DESPESA_COLOR[d.status] ?? ''}`}>
                         {STATUS_DESPESA_LABEL[d.status] ?? d.status}
                       </span>
                     </td>
-                    <td className="px-4 py-3">
+                    <td data-label="Ações" className="px-4 py-3">
                       <div className="flex items-center gap-1 justify-end">
                         {(d.status === 'pendente' || d.status === 'atrasado') && (
                           <button
@@ -378,8 +378,8 @@ export default function ContasPagar() {
 
       {/* Modal: marcar como pago (data + banco) */}
       {pagarFor && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setPagarFor(null)}>
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4" onClick={() => setPagarFor(null)}>
+          <div className="max-h-[calc(100dvh-1rem)] w-full max-w-sm overflow-y-auto rounded-t-2xl bg-white shadow-xl sm:max-h-[92vh] sm:rounded-2xl dark:bg-gray-800" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-700">
               <h3 className="font-semibold text-gray-900 dark:text-white">Marcar como pago</h3>
               <button onClick={() => setPagarFor(null)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400"><X className="w-4 h-4" /></button>
@@ -419,8 +419,8 @@ export default function ContasPagar() {
 
       {/* Modal confirmação de exclusão */}
       {confirmDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-sm p-6 flex flex-col items-center gap-4">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4">
+          <div className="flex max-h-[calc(100dvh-1rem)] w-full max-w-sm flex-col items-center gap-4 overflow-y-auto rounded-t-2xl bg-white p-6 shadow-xl sm:rounded-2xl dark:bg-gray-800">
             <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
               <AlertTriangle className="w-6 h-6 text-red-500" />
             </div>
@@ -448,8 +448,8 @@ export default function ContasPagar() {
 
       {/* Modal nova despesa */}
       {showForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-md">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4">
+          <div className="flex max-h-[calc(100dvh-1rem)] w-full max-w-md flex-col overflow-hidden rounded-t-2xl bg-white shadow-xl sm:max-h-[92vh] sm:rounded-2xl dark:bg-gray-800">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
               <h3 className="font-semibold text-gray-900 dark:text-white">Nova Despesa</h3>
               <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
@@ -471,7 +471,7 @@ export default function ContasPagar() {
               </div>
 
               {/* Valor + Vencimento */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Valor *</label>
                   <MoneyInput value={form.valor} onChange={v => setForm(f => ({ ...f, valor: v }))} />
@@ -496,7 +496,7 @@ export default function ContasPagar() {
               </div>
 
               {/* Categoria + Meio */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Categoria</label>
                   <FinSelect
@@ -561,7 +561,7 @@ export default function ContasPagar() {
                 />
               </div>
               {form.recorrente && (
-                <div className="grid grid-cols-2 gap-3 pl-1">
+                <div className="grid grid-cols-1 gap-3 pl-1 sm:grid-cols-2">
                   <div>
                     <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Frequência</label>
                     <FinSelect

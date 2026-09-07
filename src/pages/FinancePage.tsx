@@ -37,10 +37,10 @@ export default function FinancePage() {
   const visibleTabs = TABS;
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full min-h-0 min-w-0 flex-col">
       {/* Tab bar */}
-      <div className="border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-4 md:px-6 overflow-x-auto">
-        <nav className="flex gap-0 min-w-max">
+      <div className="shrink-0 overflow-x-auto border-b border-gray-200 bg-white px-2 dark:border-gray-700 dark:bg-gray-900 md:px-6">
+        <nav aria-label="Seções do financeiro" className="flex min-w-max snap-x snap-mandatory gap-0">
           {visibleTabs.map(t => {
             const Icon = t.icon;
             const active = tab === t.key;
@@ -48,14 +48,16 @@ export default function FinancePage() {
               <button
                 key={t.key}
                 onClick={() => setTab(t.key)}
-                className={`flex items-center gap-1.5 px-3 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                aria-label={t.label}
+                aria-current={active ? 'page' : undefined}
+                className={`flex min-h-11 snap-start items-center gap-1.5 whitespace-nowrap border-b-2 px-2.5 py-2.5 text-xs font-medium transition-colors sm:px-3 sm:text-sm ${
                   active
                     ? 'border-violet-500 text-violet-600 dark:text-violet-400'
                     : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600'
                 }`}
               >
                 <Icon className="w-4 h-4 flex-shrink-0" />
-                <span className="hidden sm:inline">{t.label}</span>
+                <span>{t.label}</span>
               </button>
             );
           })}
@@ -63,7 +65,7 @@ export default function FinancePage() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-4 md:p-6">
+      <div className="flex-1 min-h-0 min-w-0 overflow-y-auto px-3 py-4 sm:px-4 md:p-6">
         {tab === 'visao'       && <VisaoGeral />}
         {tab === 'receber'     && <ContasReceber />}
         {tab === 'pagar'       && <ContasPagar />}

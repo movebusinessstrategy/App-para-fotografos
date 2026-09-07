@@ -17,6 +17,7 @@ const Cadastro = lazy(() => import("./pages/Cadastro"));
 const RecuperarSenha = lazy(() => import("./pages/RecuperarSenha"));
 const RedefinirSenha = lazy(() => import("./pages/RedefinirSenha"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
+const MarketingAttributionPage = lazy(() => import("./pages/MarketingAttributionPage"));
 const ClientsPage = lazy(() => import("./pages/ClientsPage"));
 const JobsPage = lazy(() => import("./pages/JobsPage"));
 const VendasPage = lazy(() => import("./pages/VendasPage"));
@@ -35,6 +36,7 @@ const TasksPage = lazy(() => import("./pages/TasksPage"));
 const PlanosPage = lazy(() => import("./pages/PlanosPage"));
 const AssinaturaPage = lazy(() => import("./pages/AssinaturaPage"));
 const AgentePage = lazy(() => import("./pages/AgentePage"));
+const AgentLearningLab = lazy(() => import("./features/agent/AgentLearningLab"));
 const WhatsappPage = lazy(() => import("./pages/WhatsappPage"));
 const PosVendaPage = lazy(() => import("./pages/PosVendaPage"));
 const GaleriasPage = lazy(() => import("./features/galeria/GaleriasPage"));
@@ -111,6 +113,18 @@ export default function App() {
               <Route path="/privacidade" element={<PrivacyPolicyPage />} />
               <Route path="/termos" element={<TermsOfServicePage />} />
               <Route path="/excluir-dados" element={<DataDeletionPage />} />
+              {import.meta.env.DEV && (
+                <Route
+                  path="/dev/agent-learning"
+                  element={
+                    <main className="h-full overflow-y-auto bg-gray-50 px-4 py-8 dark:bg-gray-950 sm:px-6">
+                      <div className="mx-auto max-w-5xl">
+                        <AgentLearningLab demoMode />
+                      </div>
+                    </main>
+                  }
+                />
+              )}
               {/* Galeria pública de seleção de fotos — cliente final, sem login */}
               <Route path="/g/:token" element={<GaleriaPublicaPage />} />
               <Route path="/a/:token" element={<AlbumPublicoPage />} />
@@ -124,6 +138,7 @@ export default function App() {
                 }
               >
                 <Route path="dashboard" element={<PermissionRoute module="dashboard"><DashboardPage /></PermissionRoute>} />
+                <Route path="rastreamento" element={<PermissionRoute module="dashboard"><MarketingAttributionPage /></PermissionRoute>} />
                 <Route path="clients" element={<PermissionRoute module="clients"><ClientsPage /></PermissionRoute>} />
                 <Route path="jobs" element={<PermissionRoute module="jobs"><JobsPage /></PermissionRoute>} />
                 <Route path="tarefas" element={<PermissionRoute module="jobs"><TasksPage /></PermissionRoute>} />

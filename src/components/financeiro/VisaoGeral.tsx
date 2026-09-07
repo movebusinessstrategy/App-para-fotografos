@@ -487,8 +487,8 @@ export default function VisaoGeral() {
       </div>
 
       {syncPreview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !syncing && setSyncPreview(null)}>
-          <div className="w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-gray-800" onClick={event => event.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4" onClick={() => !syncing && setSyncPreview(null)}>
+          <div className="max-h-[calc(100dvh-1rem)] w-full max-w-lg overflow-hidden rounded-t-2xl bg-white shadow-xl sm:max-h-[92vh] sm:rounded-2xl dark:bg-gray-800" onClick={event => event.stopPropagation()}>
             <div className="flex items-start justify-between border-b border-gray-100 px-5 py-4 dark:border-gray-700">
               <div>
                 <h3 className="font-semibold text-gray-900 dark:text-white">Confirmar atualização dos recebimentos</h3>

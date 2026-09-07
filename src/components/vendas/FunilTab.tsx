@@ -278,9 +278,10 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
           </div>
           <div ref={boardRef} className="flex-1 snap-x snap-mandatory overflow-x-auto overflow-y-hidden bg-[#f5f4f1] pb-3 pt-1 dark:bg-[#111111] sm:snap-none">
             <div className="flex h-full gap-2 px-2.5" style={{ minWidth: "max-content" }}>
-              {activeStages.map((stage) => (
+              {activeStages.map((stage, index) => (
                 <React.Fragment key={stage.id}>
                   <StageColumn
+                    index={index}
                     stage={stage}
                     deals={dealsByStage[stage.id] || []}
                     clientMap={clientMap}
@@ -331,6 +332,7 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
 // ─── StageColumn ─────────────────────────────────────────────────────────────
 
 interface StageColumnProps {
+  index: number;
   stage: PipelineStage;
   deals: Deal[];
   clientMap: Map<number, Client>;
@@ -341,27 +343,33 @@ interface StageColumnProps {
   canSeeFinance: boolean;
 }
 
-function StageColumn({ stage, deals, clientMap, onDealClick, labelMap, campaignMap, sellerById, canSeeFinance }: StageColumnProps) {
+function StageColumn({ index, stage, deals, clientMap, onDealClick, labelMap, campaignMap, sellerById, canSeeFinance }: StageColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const totalValue = deals.reduce((sum, d) => sum + (d.value || 0), 0);
+  const chevronShape = index === 0
+    ? 'polygon(0 0, calc(100% - 16px) 0, 100% 50%, calc(100% - 16px) 100%, 0 100%)'
+    : 'polygon(0 0, calc(100% - 16px) 0, 100% 50%, calc(100% - 16px) 100%, 0 100%, 16px 50%)';
 
   return (
     <div
       ref={setNodeRef}
-      className={`flex h-full w-[82vw] max-w-[272px] flex-shrink-0 snap-center flex-col rounded-2xl border transition-colors sm:w-[260px] sm:min-w-[260px] ${
+      className={`flex h-full w-[82vw] max-w-[272px] flex-shrink-0 snap-center flex-col transition-colors sm:w-[260px] sm:min-w-[260px] ${
         isOver
-          ? "border-gold-500/45 bg-gold-500/[0.07] dark:bg-gold-500/[0.06]"
-          : "border-black/[0.055] bg-white/50 dark:border-white/[0.06] dark:bg-white/[0.025]"
+          ? "bg-gold-500/[0.07] dark:bg-gold-500/[0.06]"
+          : "bg-transparent"
       }`}
     >
       {/* Header */}
-      <div className="flex-shrink-0 px-2.5 pb-1.5 pt-2.5">
+      <div
+        className={`flex-shrink-0 bg-[#e9e5dc] px-4 py-2.5 dark:bg-[#202020] ${index > 0 ? 'pl-6' : ''}`}
+        style={{ clipPath: chevronShape }}
+      >
         <div className="flex items-center justify-between">
           <div className="flex min-w-0 items-center gap-2">
             <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ backgroundColor: stage.color || '#D4A94A' }} />
             <h3 className="truncate text-[12px] font-bold uppercase tracking-[0.1em] text-gray-700 dark:text-gray-200">{stage.name}</h3>
           </div>
-          <span className="rounded-full bg-black/[0.055] px-2 py-0.5 text-[10px] font-semibold text-gray-500 dark:bg-white/[0.07] dark:text-gray-400">
+          <span className="mr-4 rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-semibold text-gray-500 dark:bg-white/[0.07] dark:text-gray-400">
             {deals.length}
           </span>
         </div>
@@ -371,7 +379,11 @@ function StageColumn({ stage, deals, clientMap, onDealClick, labelMap, campaignM
       </div>
 
       {/* Cards */}
-      <div className="flex-1 space-y-2 overflow-y-auto px-2 pb-2.5">
+      <div className={`mt-1 flex-1 space-y-2 overflow-y-auto rounded-b-2xl border border-t-0 px-2 pb-2.5 pt-2 ${
+        isOver
+          ? 'border-gold-500/35 bg-gold-500/[0.035]'
+          : 'border-black/[0.055] bg-white/50 dark:border-white/[0.06] dark:bg-white/[0.025]'
+      }`}>
         <SortableContext items={deals.map((d) => d.id.toString())}>
           {deals.map((deal) => (
             <React.Fragment key={deal.id}>

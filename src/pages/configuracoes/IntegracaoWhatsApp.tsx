@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ChevronLeft, CheckCircle2, Phone, RefreshCw, RefreshCcw, Stethoscope, Smartphone, Cloud } from "lucide-react";
 import { authFetch } from "../../utils/authFetch";
@@ -6,6 +6,11 @@ import { ConfirmModal } from "../../components/ui/ConfirmModal";
 import { WhatsAppTemplatesManager } from "../../components/settings/WhatsAppTemplatesManager";
 import { PhoneNumberPicker } from "./PhoneNumberPicker";
 import { DiagnosticPanel } from "./DiagnosticPanel";
+import {
+  CoexistenceStatusCard,
+  type CoexistenceSnapshot,
+  type MetaPhoneDiagnostic,
+} from "./CoexistenceStatusCard";
 
 type Tab = "conexao" | "templates";
 type ConnectMode = "cloud_api" | "coexistence";
@@ -14,6 +19,60 @@ interface WaAccount {
   phone_number: string | null;
   display_name: string | null;
   connected_at?: string;
+  mode?: ConnectMode;
+}
+
+interface MetaDiagnosticResponse {
+  connected?: boolean;
+  cloud_api_ready?: boolean;
+  state?: string;
+  message?: string;
+  phone?: MetaPhoneDiagnostic;
+}
+
+async function jsonResponse(response: Response): Promise<Record<string, any>> {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("O servidor retornou uma resposta inválida.");
+  }
+}
+
+async function authenticatedJson(path: string): Promise<Record<string, any>> {
+  const response = await authFetch(path);
+  const data = await jsonResponse(response);
+  if (!response.ok) throw new Error(data.error || data.message || "Falha ao consultar a integração.");
+  return data;
+}
+
+async function loadLiveMetaDetails() {
+  const [diagnosticResult, syncResult] = await Promise.allSettled([
+    authenticatedJson("/api/meta/whatsapp/diag"),
+    authenticatedJson("/api/meta/whatsapp/coexistence/sync-status"),
+  ]);
+  const diagnostic = diagnosticResult.status === "fulfilled"
+    ? diagnosticResult.value as MetaDiagnosticResponse
+    : null;
+  const snapshot = syncResult.status === "fulfilled"
+    ? syncResult.value as CoexistenceSnapshot
+    : null;
+  const errors = [diagnosticResult, syncResult]
+    .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+    .map(result => result.reason instanceof Error ? result.reason.message : "Falha ao consultar a Meta");
+  return { diagnostic, snapshot, error: errors.length ? errors.join(" · ") : null };
+}
+
+function isOfficialOperational(
+  diagnostic: MetaDiagnosticResponse | null,
+  snapshot: CoexistenceSnapshot | null,
+): boolean {
+  const platform = String(diagnostic?.phone?.platform_type || "").toUpperCase();
+  const status = String(diagnostic?.phone?.status || "").toUpperCase();
+  const coexistence = snapshot?.mode === "coexistence" || diagnostic?.phone?.is_on_biz_app === true;
+  const coexistenceReady = !coexistence || diagnostic?.phone?.is_on_biz_app === true;
+  return platform === "CLOUD_API" && status === "CONNECTED" && coexistenceReady;
 }
 
 // ── Etiquetas do funil no WhatsApp: sincronizar tudo de uma vez ─────────────
@@ -79,22 +138,38 @@ export default function IntegracaoWhatsApp() {
   const [manualWabaId, setManualWabaId] = useState("");
   const [manualPhoneId, setManualPhoneId] = useState("");
   const [manualSubmitting, setManualSubmitting] = useState(false);
+  const [liveDiagnostic, setLiveDiagnostic] = useState<MetaDiagnosticResponse | null>(null);
+  const [coexistenceSnapshot, setCoexistenceSnapshot] = useState<CoexistenceSnapshot | null>(null);
+  const [liveStatusLoading, setLiveStatusLoading] = useState(false);
+  const [liveStatusError, setLiveStatusError] = useState<string | null>(null);
 
-  const checkStatus = async () => {
+  const checkStatus = useCallback(async () => {
+    setLiveStatusLoading(true);
+    setLiveStatusError(null);
     try {
-      const res = await authFetch("/api/meta/whatsapp/status");
-      const data = await res.json();
-      setConnected(data.connected);
+      const data = await authenticatedJson("/api/meta/whatsapp/status");
+      const nextConnected = data.connected === true;
+      setConnected(nextConnected);
       setAccount(data.account || null);
+      if (!nextConnected) {
+        setLiveDiagnostic(null);
+        setCoexistenceSnapshot(null);
+        return;
+      }
+      const live = await loadLiveMetaDetails();
+      setLiveDiagnostic(live.diagnostic);
+      setCoexistenceSnapshot(live.snapshot);
+      setLiveStatusError(live.error);
     } catch (err) {
-      console.error(err);
+      setLiveStatusError(err instanceof Error ? err.message : "Falha ao consultar a integração.");
     } finally {
       setLoading(false);
+      setLiveStatusLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    checkStatus();
+    void checkStatus();
     // SDK do Facebook (uma vez por página)
     if (!document.getElementById("facebook-jssdk")) {
       (window as any).fbAsyncInit = function () {
@@ -112,7 +187,7 @@ export default function IntegracaoWhatsApp() {
       script.defer = true;
       document.body.appendChild(script);
     }
-  }, []);
+  }, [checkStatus]);
 
   const connectMode = (mode: ConnectMode) => {
     const configId = import.meta.env.VITE_META_WA_CONFIG_ID;
@@ -217,6 +292,9 @@ export default function IntegracaoWhatsApp() {
     await authFetch("/api/meta/whatsapp/disconnect", { method: "DELETE" });
     setConnected(false);
     setAccount(null);
+    setLiveDiagnostic(null);
+    setCoexistenceSnapshot(null);
+    setLiveStatusError(null);
     setConfirmDisconnect(false);
   };
 
@@ -273,6 +351,8 @@ export default function IntegracaoWhatsApp() {
     }
   };
 
+  const officialOperational = isOfficialOperational(liveDiagnostic, coexistenceSnapshot);
+
   return (
     <div className="max-w-4xl">
       <Link to="/configuracoes/integracoes" className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 mb-4">
@@ -283,10 +363,11 @@ export default function IntegracaoWhatsApp() {
           engrenagem ⚙ no topo da lista de conversas. Aqui fica só a API
           oficial da Meta. Pedido explícito do usuário: NÃO trazer de volta. */}
       <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
-        💬 Procurando a conexão por QR Code (Atendimento e Pós-venda)? Ela fica no <strong>chat</strong> — clique na engrenagem ⚙ no topo da lista de conversas.
+        💬 Outros números e outras empresas podem continuar conectados por QR no <strong>chat</strong>. Quando um número for validado na API oficial, não mantenha esse mesmo número também no QR.
       </p>
 
-      {/* Header — API oficial da Meta (independente dos números via QR) */}
+      {/* Header — API oficial da Meta, isolada por empresa e sem duplicar
+          o mesmo número em um conector QR. */}
       <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 mb-4">
         <div className="flex items-start gap-4">
           <div className="w-14 h-14 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl flex items-center justify-center flex-shrink-0">
@@ -295,14 +376,24 @@ export default function IntegracaoWhatsApp() {
           <div className="flex-1">
             <div className="flex items-center gap-2 mb-1">
               <h2 className="text-xl font-bold text-gray-900 dark:text-white">WhatsApp Business — API oficial da Meta</h2>
-              {connected && (
+              {connected && liveStatusLoading && (
+                <span className="flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
+                  <RefreshCw size={11} className="animate-spin" /> Verificando Meta
+                </span>
+              )}
+              {connected && !liveStatusLoading && officialOperational && (
                 <span className="flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300">
-                  <CheckCircle2 size={11} /> Conectado
+                  <CheckCircle2 size={11} /> API oficial ativa
+                </span>
+              )}
+              {connected && !liveStatusLoading && !officialOperational && (
+                <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
+                  Cadastro encontrado · validação pendente
                 </span>
               )}
             </div>
             <p className="text-sm text-gray-600 dark:text-gray-400">
-              Opcional e independente dos números via QR acima: conta oficial autorizada na Meta pra templates aprovados e automações de follow-up.
+              Conta oficial autorizada na Meta para templates e automações. Cada empresa mantém sua própria conexão; um mesmo número deve usar apenas um canal no CRM.
             </p>
             {connected && account && (
               <div className="mt-2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
@@ -394,6 +485,13 @@ export default function IntegracaoWhatsApp() {
             </div>
           ) : (
             <div className="space-y-3">
+              <CoexistenceStatusCard
+                loading={liveStatusLoading}
+                error={liveStatusError}
+                phone={liveDiagnostic?.phone || null}
+                snapshot={coexistenceSnapshot}
+                onRefresh={checkStatus}
+              />
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={() => setPhonePickerOpen(true)}

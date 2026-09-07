@@ -4874,7 +4874,7 @@
   // Tira o lead do funil de vez (mensagem que não é venda: engano, spam,
   // fornecedor). Exclui o card no servidor — a conversa segue normal no
   // WhatsApp e o contato pode ser adicionado de novo depois, se quiser.
-  async function removeDealFromPipeline(deal) {
+  async function removeDealFromPipeline(deal, guardContext = null) {
     const nome = deal.contact_name || deal.title || 'este contato';
     const ok = await fpConfirm({
       title: 'Tirar do funil?',
@@ -4883,6 +4883,7 @@
       danger: true,
     });
     if (!ok) return false;
+    if (!await ensureChatMutationTarget(deal, guardContext, 'tirar do funil')) return false;
     try {
       await bg({ type: 'DELETE_DEAL', dealId: deal.id });
       deals = deals.filter((d) => Number(d.id) !== Number(deal.id));
@@ -4901,14 +4902,213 @@
     }
   }
 
-  function dealMatchesOpenChat(deal) {
+  function resolveChatPhone(rawPhone, openName, fallbackPhone = '') {
+    const anchor = openName ? freshAnchor(chatNameKey(openName)) : null;
+    const input = {
+      rawPhone,
+      fallbackPhone,
+      anchorPhone: anchor?.phone,
+      rejectedPhones: anchor?.rejected,
+    };
+    const resolver = globalThis.FocalPointChatIdentity?.resolvePhone;
+    if (resolver) return resolver(input);
+
+    const raw = digits(rawPhone);
+    const anchored = digits(anchor?.phone || '');
+    if (raw && anchored && anchor?.rejected?.has(raw)) {
+      return { phone: anchored, source: 'anchor', rawRejected: true };
+    }
+    if (raw) return { phone: raw, source: 'dom', rawRejected: false };
+    if (anchored) return { phone: anchored, source: 'anchor', rawRejected: false };
+    const fallback = digits(fallbackPhone);
+    return { phone: fallback, source: fallback ? 'state' : 'none', rawRejected: false };
+  }
+
+  const guardedChatItemTokens = new WeakMap();
+  let guardedChatItemSequence = 0;
+
+  function canonicalChatJid(value) {
+    const canonicalize = globalThis.FocalPointChatIdentity?.canonicalChatJid;
+    if (canonicalize) return canonicalize(value);
+    const input = String(value || '');
+    const unsupported = input.match(/(?:^|[_:])([\d-]{5,30}@g\.us|(?:status|\d{5,20})@broadcast)(?:[_:]|$)/i);
+    if (unsupported?.[1]) return unsupported[1].toLowerCase();
+    const individual = input.match(/(?:^|[_:])(\d{5,20}@(c\.us|s\.whatsapp\.net|lid))(?:[_:]|$)/i);
+    return individual?.[1]?.toLowerCase() || '';
+  }
+
+  function isUnsupportedChatJid(value) {
+    const check = globalThis.FocalPointChatIdentity?.isUnsupportedChatJid;
+    if (check) return check(value);
+    return /@(g\.us|broadcast)$/i.test(canonicalChatJid(value));
+  }
+
+  function preferredCanonicalChatJid(values) {
+    const prefer = globalThis.FocalPointChatIdentity?.preferredCanonicalChatJid;
+    if (prefer) return prefer(values);
+    const jids = Array.from(values || [], canonicalChatJid).filter(Boolean);
+    return jids.find(isUnsupportedChatJid) || jids[0] || '';
+  }
+
+  function opaqueIdFromChatNodes(nodes) {
+    const attrs = ['data-remote-jid', 'data-jid', 'data-id'];
+    const values = attrs.flatMap(attr => nodes.map(node => node.getAttribute?.(attr)));
+    return preferredCanonicalChatJid(values);
+  }
+
+  function chatListItemOpaqueId(item) {
+    if (!item) return '';
+    const nodes = [item, ...item.querySelectorAll('[data-id], [data-jid], [data-remote-jid]')];
+    return opaqueIdFromChatNodes(nodes);
+  }
+
+  function strictSelectedChatSnapshot() {
+    const item = getStrictSelectedChatListItem();
+    if (!item) return { token: '', opaqueId: '', phone: '' };
+    if (!guardedChatItemTokens.has(item)) {
+      guardedChatItemSequence += 1;
+      guardedChatItemTokens.set(item, `selected-${guardedChatItemSequence}`);
+    }
+    const opaqueId = chatListItemOpaqueId(item);
+    const phoneFromJid = globalThis.FocalPointChatIdentity?.phoneFromCanonicalJid;
+    return {
+      token: guardedChatItemTokens.get(item),
+      opaqueId,
+      phone: digits(phoneFromJid?.(opaqueId) || ''),
+    };
+  }
+
+  function chatContainerOpaqueId(root) {
+    if (!root) return '';
+    const nodes = [root, ...root.querySelectorAll('[data-id], [data-jid], [data-remote-jid]')];
+    return opaqueIdFromChatNodes(nodes);
+  }
+
+  function openChatIsUnsupported(selectedOpaqueId) {
+    if (isUnsupportedChatJid(selectedOpaqueId)) return true;
+    const headerOpaqueId = chatContainerOpaqueId(getChatHeaderEl());
+    const mainOpaqueId = chatContainerOpaqueId(document.querySelector('#main'));
+    return isUnsupportedChatJid(headerOpaqueId) || isUnsupportedChatJid(mainOpaqueId);
+  }
+
+  function currentOpenChatIdentity() {
+    const name = getWAChatName() || '';
+    const selected = strictSelectedChatSnapshot();
+    return {
+      name,
+      selectionToken: selected.token,
+      selectionOpaqueId: selected.opaqueId,
+      selectedPhone: selected.phone,
+      unsupportedChat: openChatIsUnsupported(selected.opaqueId),
+      ...resolveChatPhone(getWAChatPhone(), name, chatPhone),
+    };
+  }
+
+  function captureChatGuardContext(deal) {
+    const identity = currentOpenChatIdentity();
+    return {
+      origin: 'chat',
+      name: identity.name,
+      phone: identity.phone,
+      selectionToken: identity.selectionToken,
+      selectionOpaqueId: identity.selectionOpaqueId,
+      dealId: Number(deal?.id),
+    };
+  }
+
+  function dealMatchesOpenChat(deal, guardContext = null) {
     if (!deal) return false;
+    const current = currentOpenChatIdentity();
+    if (current.unsupportedChat) return false;
+    if (guardContext?.dealId !== undefined && guardContext.dealId !== Number(deal.id)) return false;
+    if (guardContext?.selectionOpaqueId && current.selectionOpaqueId !== guardContext.selectionOpaqueId) return false;
+    if (!guardContext?.selectionOpaqueId && guardContext?.selectionToken
+      && current.selectionToken !== guardContext.selectionToken) return false;
+    if (guardContext?.name && (!current.name || !nameStrongMatch(guardContext.name, current.name))) return false;
+
     const dealPhone = digits(deal.contact_phone || '');
-    const openPhone = digits(getWAChatPhone() || chatPhone || '');
-    if (dealPhone && openPhone) return phonesMatch(dealPhone, openPhone);
-    const openName = getWAChatName() || '';
-    if (openName) return namesMatch(deal.contact_name || deal.title || '', openName);
-    return !!(chatDeal && Number(chatDeal.id) === Number(deal.id));
+    if (dealPhone && current.selectedPhone) return phonesMatch(dealPhone, current.selectedPhone);
+    if (dealPhone && current.phone) return phonesMatch(dealPhone, current.phone);
+    if (current.name) return namesMatch(deal.contact_name || deal.title || '', current.name);
+    const sameDeal = chatDeal && Number(chatDeal.id) === Number(deal.id);
+    return Boolean(sameDeal && (!guardContext || guardContext.dealId === Number(deal.id)));
+  }
+
+  function dealMatchesStrictSelectedChat(deal, guardContext = null) {
+    if (!deal) return false;
+    const current = currentOpenChatIdentity();
+    if (current.unsupportedChat) return false;
+    const dealPhone = digits(deal.contact_phone || '');
+    if (!dealPhone || !current.selectedPhone) return false;
+    if (guardContext?.selectionOpaqueId && current.selectionOpaqueId
+      && guardContext.selectionOpaqueId !== current.selectionOpaqueId) return false;
+    if (guardContext?.name && current.name && !nameStrongMatch(guardContext.name, current.name)) return false;
+    return phonesMatch(dealPhone, current.selectedPhone);
+  }
+
+  function mutationGuardDecision(deal, guardContext, current) {
+    const dealPhone = digits(deal?.contact_phone || '');
+    const decide = globalThis.FocalPointChatIdentity?.mutationGuardDecision;
+    const input = {
+      expectedOpaqueId: guardContext?.selectionOpaqueId || '',
+      currentOpaqueId: current.selectionOpaqueId || '',
+      expectedSelectionToken: guardContext?.selectionToken || '',
+      currentSelectionToken: current.selectionToken || '',
+      currentNamePresent: Boolean(current.name),
+      namesCompatible: !guardContext?.name || nameStrongMatch(guardContext.name, current.name),
+      currentPhoneTrusted: Boolean(current.selectedPhone),
+      phoneMatches: Boolean(dealPhone && current.selectedPhone && phonesMatch(dealPhone, current.selectedPhone)),
+      currentChatUnsupported: Boolean(current.unsupportedChat),
+    };
+    if (decide) return decide(input);
+    if (input.currentChatUnsupported) return 'deny';
+    if (input.expectedOpaqueId && input.currentOpaqueId
+      && input.expectedOpaqueId !== input.currentOpaqueId) return 'deny';
+    if (input.currentNamePresent && !input.namesCompatible) return 'deny';
+    if (input.currentPhoneTrusted) return input.phoneMatches ? 'allow' : 'deny';
+    return 'confirm';
+  }
+
+  function drawerConfirmationMatches(deal, guardContext, before, after, confirmedPhone) {
+    const dealPhone = digits(deal?.contact_phone || '');
+    if (!dealPhone || !confirmedPhone || !phonesMatch(dealPhone, confirmedPhone)) return false;
+    if (!drawerSnapshotMatches(before, after)) return false;
+    if (!guardContext.name) return true;
+    return Boolean(after.name && nameStrongMatch(guardContext.name, after.name));
+  }
+
+  function rememberConfirmedGuardContext(guardContext, current, confirmedPhone) {
+    guardContext.phone = digits(confirmedPhone);
+    guardContext.selectionToken ||= current.selectionToken;
+    guardContext.selectionOpaqueId ||= current.selectionOpaqueId;
+  }
+
+  async function confirmDealMutationTarget(deal, guardContext) {
+    if (!guardContext) return true;
+    if (guardContext.dealId !== Number(deal?.id)) return false;
+
+    // Dá ao WhatsApp um frame curto para atualizar aria-selected após o clique
+    // em outra conversa. O guard lê o DOM de novo, sem depender de chatKey.
+    await sleep(80);
+    const current = currentOpenChatIdentity();
+    const decision = mutationGuardDecision(deal, guardContext, current);
+    if (decision === 'allow') return true;
+    if (decision === 'deny') return false;
+
+    const confirmed = await readPhoneFromContactDrawer(1500, current).catch(() => null);
+    const afterConfirmation = currentOpenChatIdentity();
+    if (!drawerConfirmationMatches(deal, guardContext, current, afterConfirmation, confirmed)) return false;
+    rememberConfirmedGuardContext(guardContext, afterConfirmation, confirmed);
+    return true;
+  }
+
+  async function ensureChatMutationTarget(deal, guardContext, action = 'continuar') {
+    if (await confirmDealMutationTarget(deal, guardContext)) return true;
+    toast(`A conversa mudou — volte ao lead correto antes de ${action}.`, true);
+    chatKey = null;
+    removeChatStrip();
+    fastDetect();
+    return false;
   }
 
   function injectChatStrip(deal, stgs) {
@@ -4925,6 +5125,7 @@
     }
     const stage = stgs.find(s => s.id === deal?.stage);
     const c = C(stage?.position ?? 0);
+    const guardContext = captureChatGuardContext(deal);
 
     // Pega as etapas de Ganho e Perda pela FLAG (is_won/is_final), com fallback
     // por nome — assim uma etapa marcada como ganho (ex.: "Convertido") mostra o
@@ -4984,23 +5185,17 @@
     // Ganho / Perda — mover fase
     const moveTo = async (sid, label) => {
       if (!sid || sid === deal.stage) return;
-      // TRAVA ANTI-CRUZAMENTO: só age se esta faixa ainda for do chat aberto AGORA.
-      // Sem isso, trocar de conversa e clicar na faixa antiga movia o lead ERRADO.
-      if (!dealMatchesOpenChat(deal)) {
-        toast('A conversa mudou — reabra o lead pra trocar a etapa.', true);
-        removeChatStrip();
-        fastDetect();
-        return;
-      }
       const targetStage = stgs.find(s => s.id === sid);
       if (isWonStage(targetStage)) {
-        openWonConversionModal(deal);
+        openWonConversionModal(deal, guardContext);
         return;
       }
       if (isLostStage(targetStage)) {
-        openLostDealModal(deal, sid);
+        openLostDealModal(deal, sid, guardContext);
         return;
       }
+      // TRAVA ANTI-CRUZAMENTO: só grava se esta faixa ainda for do chat aberto.
+      if (!await ensureChatMutationTarget(deal, guardContext, 'trocar a etapa')) return;
       try {
         await bg({ type: 'MOVE_STAGE', dealId: deal.id, stageId: sid });
         deal.stage = sid;
@@ -5016,29 +5211,17 @@
     });
     bindPress(strip.querySelector('#fp-strip-won'), () => moveTo(wonStage.id, wonStage.name));
     bindPress(strip.querySelector('#fp-strip-lost'), () => moveTo(lostStage.id, lostStage.name));
-    bindPress(strip.querySelector('#fp-strip-prereserve'), () => {
-      if (!dealMatchesOpenChat(deal)) {
-        toast('A conversa mudou — reabra o lead pra pré-reservar.', true);
-        removeChatStrip();
-        fastDetect();
-        return;
-      }
-      openPreReserveModal(deal);
-    });
+    bindPress(strip.querySelector('#fp-strip-prereserve'), () => openPreReserveModal(deal, guardContext));
     // Best-effort: se o lead já tem data segurada, o botão mostra 🔒 dd/mm
     refreshPreReserveButton(strip, deal);
 
     bindPress(strip.querySelector('#fp-strip-info'), () => {
-      if (!dealMatchesOpenChat(deal)) { toast('A conversa mudou — reabra o lead.', true); removeChatStrip(); fastDetect(); return; }
+      if (!dealMatchesOpenChat(deal, guardContext)) { toast('A conversa mudou — reabra o lead.', true); removeChatStrip(); fastDetect(); return; }
       openClientInfoModal(deal, stage);
     });
-    bindPress(strip.querySelector('#fp-strip-edit'), () => {
-      if (!dealMatchesOpenChat(deal)) { toast('A conversa mudou — reabra o lead.', true); removeChatStrip(); fastDetect(); return; }
-      openDealEditModal(deal);
-    });
+    bindPress(strip.querySelector('#fp-strip-edit'), () => openDealEditModal(deal, guardContext));
     bindPress(strip.querySelector('#fp-strip-remove'), () => {
-      if (!dealMatchesOpenChat(deal)) { toast('A conversa mudou — reabra o lead.', true); removeChatStrip(); fastDetect(); return; }
-      removeDealFromPipeline(deal);
+      removeDealFromPipeline(deal, guardContext);
     });
     bindPress(strip.querySelector('#fp-strip-funil'), showKanban);
 
@@ -5125,9 +5308,23 @@
     return a && Date.now() - a.at < DRAWER_ANCHOR_TTL ? a : null;
   }
 
+  function blockUnsupportedOpenChat() {
+    const selected = strictSelectedChatSnapshot();
+    if (!openChatIsUnsupported(selected.opaqueId)) return false;
+    chatKey = `unsupported:${selected.opaqueId || 'group'}`;
+    chatPhone = null;
+    chatDeal = null;
+    removeChatStrip();
+    return true;
+  }
+
   async function onChatOpened(phone) {
-    let cleanPhone = digits(phone || '');
     const chatName = getWAChatName();
+    let cleanPhone = resolveChatPhone(phone, chatName).phone;
+
+    // Grupos e listas podem expor JIDs de participantes no DOM. Eles não são
+    // conversas individuais e nunca devem receber ações do pipeline.
+    if (blockUnsupportedOpenChat()) return;
 
     // Conversa "Eu" (mensagens pra si mesmo) não é lead: sem faixa, sem
     // matching — evita casar o próprio número com card de cliente. Cobre
@@ -5147,10 +5344,6 @@
     // usa o número confirmado no lugar — assim a chave abaixo fica estável e o
     // pipeline não re-roda a cada leitura suja do DOM. Só com nome presente:
     // header vazio é transitório e viraria uma âncora "global" errada.
-    const anchor = chatName ? freshAnchor(chatNameKey(chatName)) : null;
-    if (anchor && cleanPhone && anchor.rejected.has(cleanPhone)) {
-      cleanPhone = digits(anchor.phone);
-    }
     // A chave inclui o NOME do header (atualiza rápido e é a identidade VISÍVEL da
     // conversa) + telefone. Assim, trocar de conversa SEMPRE re-detecta. Antes a
     // chave era só o telefone; se ele fosse lido "atrasado" (mensagens da conversa
@@ -5673,7 +5866,7 @@
     } catch { /* best-effort: botão fica no estado padrão */ }
   }
 
-  async function openPreReserveModal(deal) {
+  async function openPreReserveModal(deal, guardContext = null) {
     document.getElementById('fp-prereserve-modal')?.remove();
 
     let existing = null;
@@ -5728,6 +5921,7 @@
     modal.querySelector('#fp-pr-cancel')?.addEventListener('click', close);
 
     modal.querySelector('#fp-pr-release')?.addEventListener('click', async () => {
+      if (!await ensureChatMutationTarget(deal, guardContext, 'liberar a data')) return;
       const btn = modal.querySelector('#fp-pr-release');
       btn.disabled = true; btn.textContent = 'Liberando...';
       try {
@@ -5750,6 +5944,7 @@
     modal.querySelector('#fp-pr-save')?.addEventListener('click', async () => {
       const dateVal = modal.querySelector('#fp-pr-date')?.value || '';
       if (!dateVal) return toast('Escolha a data que será pré-reservada', true);
+      if (!await ensureChatMutationTarget(deal, guardContext, 'pré-reservar')) return;
       const btn = modal.querySelector('#fp-pr-save');
       btn.disabled = true; btn.textContent = 'Reservando...';
       try {
@@ -5775,7 +5970,7 @@
     });
   }
 
-  function openDealEditModal(deal) {
+  function openDealEditModal(deal, guardContext = null) {
     document.getElementById('fp-deal-edit-modal')?.remove();
 
     const ordered = orderedStages(stages);
@@ -5852,14 +6047,15 @@
     bindOverlayClose(modal, close);
     modal.querySelector('#fp-deal-edit-close')?.addEventListener('click', close);
     modal.querySelector('#fp-deal-edit-cancel')?.addEventListener('click', close);
-    modal.querySelector('#fp-deal-edit-save')?.addEventListener('click', () => saveDealEdit(deal, modal));
+    modal.querySelector('#fp-deal-edit-save')?.addEventListener('click', () => saveDealEdit(deal, modal, guardContext));
     modal.querySelector('#fp-deal-edit-remove')?.addEventListener('click', async () => {
-      const removed = await removeDealFromPipeline(deal);
+      const removed = await removeDealFromPipeline(deal, guardContext);
       if (removed) close();
     });
   }
 
-  async function saveDealEdit(deal, modal) {
+  async function saveDealEdit(deal, modal, guardContext = null) {
+    if (!await ensureChatMutationTarget(deal, guardContext, 'salvar')) return;
     const name = modal.querySelector('#fp-ed-name')?.value.trim() || deal.contact_phone || deal.title || 'Lead';
     const phone = digits(modal.querySelector('#fp-ed-phone')?.value || '');
     const shootType = (modal.querySelector('#fp-ed-type-slot')?._fpSel?.getValue() || '').trim();
@@ -5917,7 +6113,7 @@
 
   const LOST_REASONS = ['Não quis fechar', 'Preço', 'Concorrência', 'Sem resposta', 'Desistiu', 'Data indisponível', 'Outro'];
 
-  function openLostDealModal(deal, stageId) {
+  function openLostDealModal(deal, stageId, guardContext = null) {
     document.getElementById('fp-lost-modal')?.remove();
 
     const targetStage = stages.find(s => s.id === stageId) || stages.find(isLostStage);
@@ -5967,10 +6163,11 @@
     bindOverlayClose(modal, close);
     modal.querySelector('#fp-lost-close')?.addEventListener('click', close);
     modal.querySelector('#fp-lost-cancel')?.addEventListener('click', close);
-    modal.querySelector('#fp-lost-save')?.addEventListener('click', () => saveLostDeal(deal, modal, targetStage?.id || stageId));
+    modal.querySelector('#fp-lost-save')?.addEventListener('click', () => saveLostDeal(deal, modal, targetStage?.id || stageId, guardContext));
   }
 
-  async function saveLostDeal(deal, modal, stageId) {
+  async function saveLostDeal(deal, modal, stageId, guardContext = null) {
+    if (!await ensureChatMutationTarget(deal, guardContext, 'salvar a perda')) return;
     const reason = modal.querySelector('#fp-lost-reason-slot')?._fpSel?.getValue()?.trim();
     const notes = modal.querySelector('#fp-lost-notes')?.value.trim() || '';
     const targetStage = stages.find(s => s.id === stageId) || stages.find(isLostStage);
@@ -6329,7 +6526,7 @@
     // TRAVA ANTI-MISTURA: só extrai da conversa VISÍVEL se ela pertence ao lead.
     // Converter pelo kanban com OUTRA conversa aberta na tela puxava e-mail/CPF
     // de outra pessoa pro cadastro (ex.: Mariana salva com e-mail da Isabela).
-    if (!dealMatchesOpenChat(deal)) return 0;
+    if (!dealMatchesStrictSelectedChat(deal, modal.__fpChatGuardContext || null)) return 0;
     const data = extractCadastroFromVisibleConversation();
     modal.__fpParsedConversationData = data;
 
@@ -6391,29 +6588,58 @@
   // Fallback com IA: quando a cliente responde "solto" (fora do texto pré-pronto),
   // o parser regex não acha nada — a IA lê a conversa aberta e extrai o cadastro.
   // Mesma trava anti-mistura do prefill: só lê se a conversa É a do lead.
+  function cadastroReadContext(modal, deal) {
+    const boundContext = modal.__fpChatGuardContext;
+    if (boundContext) return modal.__fpReadGuardContext || boundContext;
+    return captureChatGuardContext(deal);
+  }
+
+  async function cadastroReadMatches(deal, readContext, silent) {
+    if (silent) return dealMatchesStrictSelectedChat(deal, readContext);
+    return confirmDealMutationTarget(deal, readContext);
+  }
+
+  function setCadastroAIButtonBusy(button, busy) {
+    if (!button) return;
+    button.disabled = busy;
+    button.textContent = busy ? 'Lendo conversa…' : '🪄 Ler dados da conversa (IA)';
+  }
+
+  function notifyCadastroAIResult(filled, silent) {
+    if (filled > 0) {
+      toast(`IA preencheu ${filled} campo(s) da conversa 🪄`);
+      return;
+    }
+    if (!silent) toast('IA não achou dados novos na conversa.', true);
+  }
+
+  async function applyCadastroAIFromBlocks(modal, blocks, silent) {
+    const button = modal.querySelector('#fp-win-ai-read');
+    setCadastroAIButtonBusy(button, true);
+    try {
+      const result = await bg({ type: 'EXTRACT_CADASTRO_AI', blocks });
+      if (!modal.isConnected) return;
+      notifyCadastroAIResult(applyAIDataToWonModal(modal, result?.data), silent);
+    } catch (err) {
+      if (!silent) toast(err.message, true);
+    } finally {
+      if (modal.isConnected) setCadastroAIButtonBusy(button, false);
+    }
+  }
+
   async function runAICadastroExtraction(modal, deal, { silent = false } = {}) {
-    if (!dealMatchesOpenChat(deal)) {
+    const readContext = cadastroReadContext(modal, deal);
+    if (!await cadastroReadMatches(deal, readContext, silent)) {
       if (!silent) toast('Abra a conversa deste lead no WhatsApp pra IA ler os dados.', true);
       return;
     }
+    modal.__fpReadGuardContext = readContext;
     const blocks = getVisibleChatTextBlocks();
     if (!blocks.length) {
       if (!silent) toast('Não achei texto na conversa aberta.', true);
       return;
     }
-    const btn = modal.querySelector('#fp-win-ai-read');
-    if (btn) { btn.disabled = true; btn.textContent = 'Lendo conversa…'; }
-    try {
-      const r = await bg({ type: 'EXTRACT_CADASTRO_AI', blocks });
-      if (!modal.isConnected) return; // modal fechou enquanto a IA lia
-      const filled = applyAIDataToWonModal(modal, r?.data);
-      if (filled > 0) toast(`IA preencheu ${filled} campo(s) da conversa 🪄`);
-      else if (!silent) toast('IA não achou dados novos na conversa.', true);
-    } catch (err) {
-      if (!silent) toast(err.message, true);
-    } finally {
-      if (btn && modal.isConnected) { btn.disabled = false; btn.textContent = '🪄 Ler dados da conversa (IA)'; }
-    }
+    await applyCadastroAIFromBlocks(modal, blocks, silent);
   }
 
   function catalogTypeLabel(type) {
@@ -6689,7 +6915,7 @@
     renderSelectedCatalogItems(modal);
   }
 
-  function openWonConversionModal(deal) {
+  function openWonConversionModal(deal, guardContext = null) {
     document.getElementById('fp-won-modal')?.remove();
 
     const shootType = getDealShootType(deal) || 'Gestante';
@@ -6698,6 +6924,7 @@
     const modal = document.createElement('div');
     modal.id = 'fp-won-modal';
     modal.className = 'fp-info-overlay';
+    modal.__fpChatGuardContext = guardContext;
     modal.innerHTML = `
       <div class="fp-won-box">
         <div class="fp-won-header">
@@ -6912,7 +7139,7 @@
     modal.querySelector('#fp-win-ai-read')?.addEventListener('click', () => runAICadastroExtraction(modal, deal));
     modal.querySelector('#fp-win-sinal')?.addEventListener('input', () => updateWonSummary(modal));
     modal.querySelector('#fp-win-job-amount')?.addEventListener('input', () => updateWonSummary(modal));
-    modal.querySelector('#fp-won-save')?.addEventListener('click', () => saveWonConversion(deal, modal));
+    modal.querySelector('#fp-won-save')?.addEventListener('click', () => saveWonConversion(deal, modal, guardContext));
     updateMode();
     updateJobVisibility();
     updateWonSummary(modal);
@@ -6947,7 +7174,8 @@
     return { error: false, message: 'Google Agenda sincronizado; nenhum novo convite foi confirmado.' };
   }
 
-  async function saveWonConversion(deal, modal) {
+  async function saveWonConversion(deal, modal, guardContext = null) {
+    if (!await ensureChatMutationTarget(deal, guardContext, 'converter')) return;
     const mode = modal.querySelector('input[name="fp-win-mode"]:checked')?.value || 'new';
     const createJob = !!modal.querySelector('#fp-win-create-job')?.checked;
     const createClient = mode === 'new';
@@ -7169,19 +7397,26 @@
   // WhatsApp Web migrou de role="listitem" para role="row" — mantém ambos.
   const CHAT_LIST_ITEM_SELECTOR = '[role="row"], [role="listitem"], [data-testid="cell-frame-container"]';
 
-  function getSelectedChatListItem() {
+  function getStrictSelectedChatListItem() {
     const side = document.querySelector('#pane-side') || document.querySelector('#side');
     if (!side) return null;
 
-    // 1) Direto via aria-selected/aria-current — o elemento pode ser o próprio row ou um descendente
     const directlySelected =
       side.querySelector(`${CHAT_LIST_ITEM_SELECTOR}[aria-selected="true"]`) ||
       side.querySelector(`${CHAT_LIST_ITEM_SELECTOR}[aria-current="true"]`);
     if (directlySelected) return directlySelected;
 
     const anyAriaSelected = side.querySelector('[aria-selected="true"], [aria-current="true"]');
-    const wrapped = anyAriaSelected?.closest(CHAT_LIST_ITEM_SELECTOR);
-    if (wrapped) return wrapped;
+    return anyAriaSelected?.closest(CHAT_LIST_ITEM_SELECTOR) || null;
+  }
+
+  function getSelectedChatListItem() {
+    const side = document.querySelector('#pane-side') || document.querySelector('#side');
+    if (!side) return null;
+
+    // 1) aria-selected/aria-current reflete a troca de conversa antes do #main.
+    const strictlySelected = getStrictSelectedChatListItem();
+    if (strictlySelected) return strictlySelected;
 
     // 2) Fallback: bate o nome do header com os itens visíveis da sidebar.
     const headerName = (getWAChatRawTitle() || '').trim().toLowerCase();
@@ -7260,24 +7495,67 @@
     return null;
   }
 
-  // Abre o drawer do contato (clicando no header), lê o telefone, fecha.
-  // Cacheia por nome para que abertura subsequentes sejam instantâneas.
-  // Trava de reentrada CHAVEADA pela conversa: detecções simultâneas da MESMA
-  // conversa compartilham uma leitura; conversa diferente NÃO herda a promise
-  // (leitura nascida no chat A entregava o telefone de A pro consumidor de B).
+  // Abre o drawer do contato, lê o telefone e fecha. A reentrada é chaveada
+  // pelo JID opaco da linha selecionada (token DOM só como fallback), nunca só
+  // pelo nome — duas conversas homônimas não podem compartilhar a leitura.
   let drawerReadInFlight = null; // { key, promise }
 
-  async function readPhoneFromContactDrawer(maxMs = 1500) {
-    const key = chatNameKey(getWAChatName() || '');
+  function drawerSnapshotKey(snapshot) {
+    if (snapshot?.selectionOpaqueId) return `jid:${snapshot.selectionOpaqueId}`;
+    if (snapshot?.selectionToken) return `row:${snapshot.selectionToken}`;
+    return `name:${chatNameKey(snapshot?.name || '')}`;
+  }
+
+  function drawerSnapshotMatches(expected, current) {
+    if (!expected || !current) return false;
+    if (expected.selectionOpaqueId && current.selectionOpaqueId) {
+      return expected.selectionOpaqueId === current.selectionOpaqueId;
+    }
+    if (expected.selectionToken && current.selectionToken) {
+      return expected.selectionToken === current.selectionToken;
+    }
+    return Boolean(expected.name && current.name && nameStrongMatch(expected.name, current.name));
+  }
+
+  async function closeExistingContactDrawer() {
+    const info = findOpenContactDrawer();
+    if (!info?.close) return;
+    simulateRealClick(info.close);
+    await sleep(100);
+  }
+
+  function openContactDrawerFromHeader(header) {
+    const clickable = header.querySelector('[role="button"]')
+      || header.querySelector('div[tabindex]')
+      || header;
+    simulateRealClick(clickable);
+  }
+
+  async function waitForContactDrawerPhone(maxMs) {
+    const start = Date.now();
+    while (Date.now() - start < maxMs) {
+      await sleep(120);
+      const info = findOpenContactDrawer();
+      const phone = info ? extractPhoneFromDrawer(info.drawer) : null;
+      if (phone) return { phone, info };
+    }
+    return { phone: null, info: findOpenContactDrawer() };
+  }
+
+  async function readPhoneFromContactDrawer(maxMs = 1500, expectedSnapshot = null) {
+    const snapshot = expectedSnapshot || currentOpenChatIdentity();
+    if (snapshot.unsupportedChat || isUnsupportedChatJid(snapshot.selectionOpaqueId)) return null;
+    const key = drawerSnapshotKey(snapshot);
     if (drawerReadInFlight && drawerReadInFlight.key === key) return drawerReadInFlight.promise;
-    const promise = readPhoneFromContactDrawerNow(maxMs).finally(() => {
+    const promise = readPhoneFromContactDrawerNow(maxMs, snapshot).finally(() => {
       if (drawerReadInFlight && drawerReadInFlight.promise === promise) drawerReadInFlight = null;
     });
     drawerReadInFlight = { key, promise };
     return promise;
   }
 
-  async function readPhoneFromContactDrawerNow(maxMs = 1500) {
+  async function readPhoneFromContactDrawerNow(maxMs, snapshot) {
+    if (!drawerSnapshotMatches(snapshot, currentOpenChatIdentity())) return null;
     const header = getChatHeaderEl();
     if (!header) return null;
 
@@ -7285,32 +7563,13 @@
     // fonte que corrige entrada envenenada — o remember lá embaixo sobrescreve
     // o par nome→telefone com o valor real lido do painel. Quem quer resposta
     // rápida de cache usa getCachedPhoneByName antes de chamar.
-    const headerName = getWAChatName();
-
-    let info = findOpenContactDrawer();
-    let openedByUs = false;
-    if (!info) {
-      const clickable =
-        header.querySelector('[role="button"]') ||
-        header.querySelector('div[tabindex]') ||
-        header;
-      simulateRealClick(clickable);
-      openedByUs = true;
-    }
-
-    const start = Date.now();
-    let phone = null;
-    while (!phone && Date.now() - start < maxMs) {
-      await sleep(120);
-      info = info || findOpenContactDrawer();
-      if (!info) continue;
-      phone = extractPhoneFromDrawer(info.drawer);
-    }
-
-    if (openedByUs && info?.close) {
-      simulateRealClick(info.close);
-    }
-
+    const headerName = snapshot.name || getWAChatName();
+    await closeExistingContactDrawer();
+    if (!drawerSnapshotMatches(snapshot, currentOpenChatIdentity())) return null;
+    openContactDrawerFromHeader(header);
+    const { phone, info } = await waitForContactDrawerPhone(maxMs);
+    if (info?.close) simulateRealClick(info.close);
+    if (!drawerSnapshotMatches(snapshot, currentOpenChatIdentity())) return null;
     if (phone) rememberChatPhoneByName(headerName, phone);
     return phone ? (phone.startsWith('55') || phone.length > 11 ? phone : `55${phone}`) : null;
   }

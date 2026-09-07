@@ -58,6 +58,7 @@
 @layer base {
   html, body, #root {
     height: 100%;
+    max-width: 100%;
     margin: 0;
   }
   /* Densidade geral do app: base 15px (≈94% do padrão 16px). Como o Tailwind v4
@@ -71,6 +72,87 @@
     overflow: hidden;
     @apply bg-luxury-paper text-luxury-black antialiased;
     @apply dark:bg-luxury-black dark:text-luxury-paper;
+  }
+}
+
+/* Controles móveis precisam ter pelo menos 16px. No iPhone, fontes menores
+   fazem o Safari ampliar a tela ao focar — o “zoom” que atrapalhava o uso. */
+@media (max-width: 767px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']),
+  select,
+  textarea {
+    min-height: 44px;
+    font-size: 16px !important;
+  }
+
+  button,
+  [role='button'] {
+    touch-action: manipulation;
+  }
+
+  .responsive-card-table,
+  .responsive-card-table tbody {
+    display: block;
+    width: 100%;
+  }
+
+  .responsive-card-table thead {
+    display: none;
+  }
+
+  .responsive-card-table tbody {
+    padding: 12px;
+  }
+
+  .responsive-card-table tr {
+    display: block;
+    overflow: hidden;
+    border: 1px solid #e5e7eb;
+    border-radius: 14px;
+  }
+
+  .responsive-card-table tr + tr {
+    margin-top: 12px;
+  }
+
+  .responsive-card-table td {
+    display: flex;
+    min-width: 0;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 11px 12px !important;
+    border-bottom: 1px solid #f3f4f6;
+    text-align: right !important;
+  }
+
+  .responsive-card-table td::before {
+    content: attr(data-label);
+    flex: 0 0 auto;
+    padding-top: 2px;
+    color: #9ca3af;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+
+  .responsive-card-table td:last-child {
+    align-items: center;
+    border-bottom: 0;
+  }
+
+  .responsive-card-table td > * {
+    min-width: 0;
+    max-width: 68%;
+  }
+
+  .dark .responsive-card-table tr {
+    border-color: #374151;
+  }
+
+  .dark .responsive-card-table td {
+    border-color: #374151;
   }
 }
 

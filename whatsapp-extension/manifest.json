@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CRM Trilha para WhatsApp",
-  "version": "1.4.8",
+  "version": "1.4.9",
   "description": "Pipeline de vendas integrado ao WhatsApp Web",
   "icons": {
     "16": "icons/icon.png",
@@ -21,7 +21,8 @@
   "permissions": [
     "storage",
     "activeTab",
-    "tabs"
+    "tabs",
+    "notifications"
   ],
   "host_permissions": [
     "https://web.whatsapp.com/*",
@@ -37,6 +38,7 @@
         "https://web.whatsapp.com/*"
       ],
       "js": [
+        "chat-identity.js",
         "content.js",
         "agente.js"
       ],

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Calendar,
@@ -27,13 +27,17 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   MessageCircle,
+  Waypoints,
 } from "lucide-react";
 
 import { cn } from "../../utils/cn";
 import { useAuth } from "../../contexts/AuthContext";
+import { authFetch } from "../../utils/authFetch";
+import { startVisiblePoll } from "../../utils/poll";
 
 const ALL_NAV_ITEMS = [
   { to: "/dashboard",     label: "Dashboard",       icon: LayoutDashboard, end: true,  module: "dashboard" },
+  { to: "/rastreamento", label: "Rastreamento",    icon: Waypoints,        module: "dashboard" },
   { to: "/vendas",        label: "Vendas",           icon: Trello,          module: "vendas" },
   { to: "/whatsapp",      label: "Atendimento",      icon: MessageCircle,   module: "whatsapp" },
   { to: "/oportunidades", label: "Oportunidades",    icon: TrendingUp,      module: "oportunidades" },
@@ -74,9 +78,26 @@ interface SidebarProps {
 export default function Sidebar({ isOpen, onClose, collapsed = false, onToggleCollapse }: SidebarProps) {
   const { canAccess, isMember, isPlatformAdmin, isProductionOnly, features } = useAuth();
   const location = useLocation();
+  const [agentAttentionCount, setAgentAttentionCount] = useState(0);
 
   const isCatalogo = location.pathname === "/catalogo";
   const [catalogoOpen, setCatalogoOpen] = useState(isCatalogo);
+
+  useEffect(() => {
+    if (isProductionOnly || !canAccess("agente")) return;
+    let mounted = true;
+    const loadAgentAttention = async () => {
+      try {
+        const response = await authFetch("/api/agent/atendimentos");
+        if (!response.ok) return;
+        const data = await response.json().catch(() => ({}));
+        if (mounted) setAgentAttentionCount(Number(data?.counts?.precisa_humano) || 0);
+      } catch { /* badge auxiliar: falha silenciosa */ }
+    };
+    loadAgentAttention();
+    const stop = startVisiblePoll(loadAgentAttention, 30000);
+    return () => { mounted = false; stop(); };
+  }, [canAccess, isProductionOnly]);
 
   // Esconde itens não liberados pelo plano (galeria/álbum só Studio/Premium).
   const planAllowsItem = (item: { feature?: string }) =>
@@ -177,6 +198,7 @@ export default function Sidebar({ isOpen, onClose, collapsed = false, onToggleCo
               className={({ isActive }) =>
                 cn(
                   "flex items-center gap-3 w-full px-4 py-3.5 rounded-xl transition-all duration-200",
+                  "relative",
                   railRow,
                   isActive
                     ? "bg-gold-50 dark:bg-gold-500/20 text-gold-700 dark:text-gold-300 font-semibold"
@@ -186,6 +208,18 @@ export default function Sidebar({ isOpen, onClose, collapsed = false, onToggleCo
             >
               <item.icon size={22} className="flex-shrink-0" />
               <span className={cn("text-[15px]", railText)}>{item.label}</span>
+              {item.to === "/agente" && agentAttentionCount > 0 && (
+                <span
+                  className={cn(
+                    "ml-auto inline-flex min-w-5 h-5 items-center justify-center rounded-full bg-amber-500 px-1.5 text-[10px] font-extrabold text-white",
+                    collapsed && "lg:absolute lg:ml-0 lg:translate-x-3 lg:-translate-y-3 lg:min-w-4 lg:h-4 lg:px-1 lg:text-[9px]",
+                  )}
+                  aria-label={`${agentAttentionCount} atendimento${agentAttentionCount === 1 ? "" : "s"} aguardando uma pessoa`}
+                  title={`${agentAttentionCount} atendimento${agentAttentionCount === 1 ? "" : "s"} aguardando você`}
+                >
+                  {agentAttentionCount > 99 ? "99+" : agentAttentionCount}
+                </span>
+              )}
             </NavLink>
           ))}
 

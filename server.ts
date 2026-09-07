@@ -24,7 +24,63 @@ import bcrypt from 'bcryptjs';
 const sentryReady = initSentry();
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createSupabaseClient, supabaseAdmin } from './supabase.js';
-import { getAgentReply, extractCadastroWithAI, analyzeDossierWithAI, DEFAULT_PERSONA, DEFAULT_OBJECTIVE, DEFAULT_KNOWLEDGE, DEFAULT_RULES, DEFAULT_SALES_STRATEGY } from './ai-agent.js';
+import {
+  buildSystemPrompt,
+  extractCadastroWithAI,
+  analyzeDossierWithAI,
+  DEFAULT_PERSONA,
+  DEFAULT_OBJECTIVE,
+  DEFAULT_KNOWLEDGE,
+  DEFAULT_RULES,
+  DEFAULT_SALES_STRATEGY,
+  type AgentConfig,
+  type AgentMessage,
+} from './ai-agent.js';
+import { HANDOFF_INSTRUCTION, parseAgentHandoff, type AgentHandoffReason } from './agent-autonomy.js';
+import {
+  AGENT_CHAT_MODEL,
+  analyzeConversationFlow,
+  enforceConversationFlowReply,
+  normalizeConversationFlowMessages,
+} from './agent-conversation-flow.js';
+import {
+  enforceApprovedPortfolioUrls,
+  normalizePortfolioLinks,
+  portfolioLinksForNiche,
+  PortfolioLinksValidationError,
+} from './agent-portfolio.js';
+import {
+  SUPERVISED_LAB_CASES,
+  LearningValidationError,
+  applyDevelopmentFeedback,
+  assertAnonymousLearningText,
+  buildSupervisedLearningMemory,
+  compactAnonymousPlaygroundContext,
+  developmentLearningMemory,
+  developmentLearningRules,
+  developmentLearningState,
+  developmentLearningSummary,
+  evaluateLearningSimulation,
+  interpretLearningReply,
+  isLearningMigrationMissing,
+  listDevelopmentCases,
+  recordDevelopmentSimulation,
+  toggleDevelopmentRule,
+  validateLearningMessages,
+  type LearningAction,
+  type LearningCase,
+  type LearningDecision,
+  type LearningExample,
+  type LearningRule,
+} from './agent-learning.js';
+import {
+  AgentSalesReplayError,
+  getAgentSalesReplayTranscript,
+  getAgentSalesReplayProviderStatus,
+  listAgentSalesReplayCases,
+  runAgentSalesReplayCase,
+} from './agent-replay-service.js';
+import { createOpenAIAgentProvider } from './openai-agent-provider.js';
 import { buildDossierPdf, normalizePhotoToJpeg, DossierPhoto } from './dossier-pdf.js';
 import * as plugnotas from './plugnotas.js';
 import * as nfseNacional from './nfse-nacional.js';
@@ -55,11 +111,20 @@ import {
   resolveObjectUrl,
   uploadObject,
 } from './object-storage.js';
-import { captureMetaWhatsAppTouchpoint } from './marketing-attribution.js';
+import { captureMarketingWhatsAppContact } from './lib/marketing-whatsapp-contact.js';
 import {
   MarketingSiteRouteError,
   registerMarketingSiteEvent,
 } from './lib/marketing-site-route.js';
+import {
+  createSupabaseMarketingOutboxRepository,
+  processMarketingConversionOutbox,
+} from './lib/marketing-conversion-dispatch.js';
+import {
+  emptyMarketingAttributionResponse,
+  loadMarketingAttributionReport,
+  normalizeMarketingAttributionDays,
+} from './lib/marketing-attribution-query.js';
 import {
   InviteEmailValidationError,
   JobScheduleValidationError,
@@ -90,8 +155,43 @@ import {
   projectJobPaymentsToReceitas,
   scoreReconciliationCandidate,
 } from './financial-reconciliation.js';
-
+import { createMetaWebhookRuntime } from './lib/meta-whatsapp-runtime.js';
+import {
+  parseChannelPreference,
+} from './lib/meta-whatsapp-coexistence.js';
+import {
+  CoexistenceSchemaRequiredError,
+  getWhatsAppChannelState,
+  MetaChannelNotOperationalError,
+  recordMetaPhoneStatus,
+  refreshMetaOperationalState,
+  requestMetaDataSync,
+  setWhatsAppChannelPreference,
+} from './lib/meta-whatsapp-channel.js';
 dotenv.config();
+
+function marketingMeasurementTenantIds(): string[] {
+  return String(process.env.MARKETING_MEASUREMENT_TENANT_IDS || '')
+    .split(',')
+    .map(value => value.trim().toLowerCase())
+    .filter(value => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value));
+}
+
+function marketingMeasurementTenantAllowed(userId: string): boolean {
+  return marketingMeasurementTenantIds().includes(userId.trim().toLowerCase());
+}
+
+const liaOpenAIProvider = createOpenAIAgentProvider<AgentConfig>({
+  buildInstructions: buildSystemPrompt,
+});
+
+function getLiaReply(
+  config: AgentConfig,
+  messages: AgentMessage[],
+  options?: { extraInstruction?: string },
+) {
+  return liaOpenAIProvider.getAgentReply(config, messages, options);
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WA_MEDIA_BUCKET = 'wa-media';
@@ -123,17 +223,6 @@ async function resolveMessageMediaUrls(messages: any[]): Promise<any[]> {
     media_url: await resolveObjectUrl(message?.media_url),
   })));
 }
-
-// Instrução do MODO AUTÔNOMO (e do teste de fluxo na aba "Testar"). Fonte única
-// usada tanto pelo atendimento autônomo quanto pelo /api/agent/test, pra o teste
-// reproduzir EXATAMENTE o comportamento real (hand-off silencioso + envio do PDF).
-const HANDOFF_INSTRUCTION = [
-  'MODO AUTÔNOMO: você responde o cliente SOZINHA, sem revisão humana, COMO UMA PESSOA do time do estúdio — o cliente NUNCA pode perceber que é uma IA.',
-  'HAND-OFF: se for FECHAR a venda, falar PREÇO/valor final, PAGAMENTO/Pix, CONFIRMAR a DATA do ensaio, OBJEÇÃO forte/reclamação, ou o cliente PEDIR uma pessoa — responda APENAS com ###HUMANO### (e nada mais), pra equipe assumir. Nunca avise que vai transferir. (Combinar um RETORNO de conversa — "te chamo amanhã/segunda" — NÃO é hand-off: faça você mesma.)',
-  'ENVIAR PACOTE (PDF): quando for apresentar o pacote/orçamento do nicho que a pessoa quer, NÃO descreva em texto — comece a resposta com o token ###PDF:<nicho>### (nicho em minúsculo e sem acento: gestante, newborn, smash_the_cake, familia, casal, feminino, marca_pessoal, revelacao) e DEPOIS uma frase curta e natural de acompanhamento (ex.: "te mandei aqui as opções, dá uma olhada 🥰 qualquer dúvida me chama"). O sistema envia o PDF certo sozinho. Só use isso quando já souber o nicho.',
-  'VÁRIOS BALÕES: escreva como no WhatsApp. Pra mandar em mensagens SEPARADAS, ponha uma LINHA EM BRANCO entre elas (ex.: a apresentação "…vou tomar conta do seu atendimento por aqui." vai numa mensagem e "Qual tipo de ensaio você gostaria?" vem na mensagem SEGUINTE). Quebra de linha simples fica no MESMO balão. Não exagere: 1 a 3 balões por vez.',
-  'No resto, responda normal seguindo as regras, a estratégia de venda e o tom.',
-].join('\n');
 
 // Transcodifica áudio webm → ogg/opus com flags de voice note para WhatsApp
 function transcodeWebmToOgg(inputBase64: string): Promise<Buffer> {
@@ -1422,12 +1511,15 @@ const pullFromGoogleCalendar = async (supabase: SupabaseClient, userId: string) 
 };
 
 // ============ START SERVER ============
+let loadSupervisedLearningMemory: (userId: string, waNumber: string) => Promise<string> = async () => '';
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
   // Esta rota pública tem limite próprio e preserva os bytes exatos para HMAC.
-  // Ela precisa vir antes do parser JSON geral de 50 MB.
+  // Ela precisa vir antes do parser JSON geral de 50 MB para não aceitar um
+  // corpo grande apenas para rejeitá-lo depois da alocação.
   app.post(
     '/api/public/marketing/site-intake',
     express.raw({ type: 'application/json', limit: '16kb' }),
@@ -2326,13 +2418,52 @@ async function startServer() {
     return String(data?.phone_number || '').replace(/\D/g, '');
   }
 
+  async function activeAgentChannel(
+    db: SupabaseClient,
+    userId: string,
+    waNumber: string,
+  ): Promise<'baileys' | 'meta' | null> {
+    const baileysNumber = registeredSlotNumber(userId, 'main');
+    const state = await outboundWhatsAppChannel(db, userId, BaileysManager.getStatus(userId) === 'open');
+    const selectedNumber = state.selected_channel === 'meta' ? state.wa_number : baileysNumber;
+    const sameNumber = brazilianPhoneVariants(selectedNumber).includes(normalizePhone(waNumber));
+    return sameNumber ? state.selected_channel : null;
+  }
+
   async function inboxWaNumber(
     db: SupabaseClient,
     userId: string,
     slot: unknown,
   ): Promise<string> {
     if (slot === 'posvenda') return registeredSlotNumber(userId, 'posvenda');
-    return registeredSlotNumber(userId, 'main') || await activeMetaNumber(db, userId);
+    const baileysNumber = registeredSlotNumber(userId, 'main');
+    const state = await outboundWhatsAppChannel(db, userId, BaileysManager.getStatus(userId) === 'open');
+    if (state.selected_channel === 'meta') return state.wa_number || '';
+    if (state.selected_channel === 'baileys') return baileysNumber;
+    if (state.preferred_channel === 'meta') return state.wa_number || '';
+    return baileysNumber || state.wa_number || '';
+  }
+
+  function metaStatusCacheStale(checkedAt: string | null): boolean {
+    if (!checkedAt) return true;
+    const timestamp = new Date(checkedAt).getTime();
+    return !Number.isFinite(timestamp) || Date.now() - timestamp > 5 * 60 * 1000;
+  }
+
+  async function outboundWhatsAppChannel(
+    db: SupabaseClient,
+    userId: string,
+    baileysAvailable: boolean,
+  ) {
+    let state = await getWhatsAppChannelState(db, userId, baileysAvailable);
+    const shouldRefresh = state.configured
+      && state.preferred_channel !== 'baileys'
+      && metaStatusCacheStale(state.meta_status_checked_at);
+    if (shouldRefresh) {
+      await refreshMetaOperationalState(db, userId, decryptIfNeeded);
+      state = await getWhatsAppChannelState(db, userId, baileysAvailable);
+    }
+    return state;
   }
 
   app.get('/api/whatsapp/slots', requireAuth, async (req, res) => {
@@ -2980,6 +3111,55 @@ async function startServer() {
     console.log(`[WA Webhook] Evento sub-rota não processado: ${eventParam}`, JSON.stringify(body).slice(0, 200));
   });
 
+  const metaWebhookRuntime = supabaseAdmin ? createMetaWebhookRuntime({
+    db: supabaseAdmin,
+    decryptToken: decryptIfNeeded,
+    normalizePhone: value => normalizeBrazilianPhone(value.replace(/\D/g, '')),
+    phoneVariants: brazilianPhoneVariants,
+    storeMedia: storeWaMediaObject,
+    understandMedia,
+    captureContact: async input => {
+      if (!marketingMeasurementTenantAllowed(input.userId)) return;
+      const result = await captureMarketingWhatsAppContact(supabaseAdmin, {
+        userId: input.userId,
+        phone: input.phone,
+        waNumber: input.waNumber,
+        messageId: input.messageId,
+        messageBody: input.messageBody,
+        occurredAt: input.messageTimestamp,
+        ctwaClid: input.ctwaClid,
+        wabaId: input.wabaId,
+        referral: input.referral,
+      });
+      if (result.status === 'migration_missing' || result.status === 'unattributed') {
+        throw new Error(`MARKETING_CONTACT_${result.status.toUpperCase()}`);
+      }
+    },
+    scheduleReply: (userId, phone, type, waNumber) => {
+      scheduleAutonomousReply(userId, phone, type, waNumber, 'meta');
+    },
+    markHumanActive: async (userId, phone, waNumber) => {
+      await markConversationHumanActiveIfNeeded(userId, phone, waNumber);
+    },
+  }) : null;
+
+  async function drainMetaWebhookInbox(): Promise<void> {
+    if (!metaWebhookRuntime) return;
+    for (let batch = 0; batch < 20; batch += 1) {
+      const processed = await metaWebhookRuntime.drain(50);
+      if (processed < 50) return;
+    }
+  }
+
+  if (metaWebhookRuntime) {
+    const metaInboxTimer = setInterval(() => {
+      void drainMetaWebhookInbox().catch(error => {
+        console.error('[Webhook Meta] Falha no worker periódico:', error?.message || error);
+      });
+    }, 15_000);
+    metaInboxTimer.unref();
+  }
+
   app.post('/api/whatsapp/webhook', async (req, res) => {
     // ── HMAC verification ────────────────────────────────────────────────────
     // Meta assina cada POST com sha256(rawBody, META_APP_SECRET) em X-Hub-Signature-256.
@@ -3007,6 +3187,26 @@ async function startServer() {
       if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
         console.warn('[Webhook] HMAC inválido — payload rejeitado');
         return res.status(403).send('Forbidden');
+      }
+    }
+
+    // Meta: confirma somente depois que todo o lote foi persistido na inbox
+    // durável. Enquanto a migration 072 não existir, o runtime faz fallback
+    // síncrono e só confirma se todos os efeitos terminarem sem erro.
+    if (isMetaPayload) {
+      if (!metaWebhookRuntime) return res.status(503).send('Webhook storage unavailable');
+      try {
+        const result = await metaWebhookRuntime.ingest(req.body);
+        res.sendStatus(200);
+        if (result.durable && result.accepted > 0) {
+          setImmediate(() => void drainMetaWebhookInbox().catch(error => {
+            console.error('[Webhook Meta] Falha ao drenar inbox:', error?.message || error);
+          }));
+        }
+        return;
+      } catch (error: any) {
+        console.error('[Webhook Meta] Lote não confirmado:', error?.message || error);
+        return res.status(503).send('Webhook not persisted');
       }
     }
 
@@ -3073,6 +3273,8 @@ async function startServer() {
 
         let msgBody = '';
         let storedMediaUrl: string | null = null;
+        let receivedMediaBuffer: Buffer | null = null;
+        let receivedMediaMime = '';
         const normalizedType = msgType === 'voice' ? 'audio' : msgType;
 
         if (msgType === 'text') {
@@ -3099,6 +3301,8 @@ async function startServer() {
                   if (fileRes.ok) {
                     const contentType = fileRes.headers.get('content-type') || `${normalizedType}/octet-stream`;
                     const buffer = Buffer.from(await fileRes.arrayBuffer());
+                    receivedMediaBuffer = buffer;
+                    receivedMediaMime = contentType;
                     try {
                       storedMediaUrl = await storeWaMediaObject(waAccount.user_id, buffer, contentType);
                     } catch (storageError: any) {
@@ -3128,15 +3332,6 @@ async function startServer() {
           console.error('[Webhook Meta] Número remetente ausente; mensagem preservada sem misturar canais');
         }
         const channelWaNumber = webhookWaNumber;
-
-        await captureMetaWhatsAppTouchpoint(supabaseAdmin, {
-          userId: waAccount.user_id,
-          phone: cleanFrom,
-          waNumber: ourWaNumber,
-          messageId: msgId,
-          messageTimestamp: message.timestamp,
-          referral: message.referral,
-        });
 
         const { error: msgErr } = await supabaseAdmin.from('wa_messages').insert({
           user_id: waAccount.user_id,
@@ -3173,6 +3368,35 @@ async function startServer() {
           if (metaInsertErr) console.error('[Webhook Meta] Erro ao INSERT conversa:', metaInsertErr.message);
         }
         console.log(`[Webhook Meta] ✅ ${normalizedType} salvo — user ${waAccount.user_id}, phone ${cleanFrom}`);
+
+        // Mesma compreensão usada no QR: a resposta só acontece depois que a
+        // transcrição/descrição estiver pronta; se não ficar, o fluxo chama humano.
+        if ((normalizedType === 'audio' || normalizedType === 'image') && receivedMediaBuffer) {
+          const mediaBuffer = receivedMediaBuffer;
+          const mediaMime = receivedMediaMime;
+          void (async () => {
+            try {
+              const understood = await understandMedia(normalizedType as 'audio' | 'image', mediaBuffer, mediaMime);
+              if (!understood) return;
+              await supabaseAdmin!.from('wa_messages').update({ transcription: understood })
+                .eq('user_id', waAccount.user_id).eq('wa_number', channelWaNumber).eq('message_id', msgId);
+              const preview = understood.replace(/^\[[^\]]+\]\s*/, '').slice(0, 60);
+              await supabaseAdmin!.from('wa_conversations')
+                .update({ last_message: `${normalizedType === 'audio' ? '🎤' : '📷'} ${preview}` })
+                .eq('user_id', waAccount.user_id).eq('wa_number', channelWaNumber).eq('phone', cleanFrom);
+            } catch (error: any) {
+              console.warn('[Webhook Meta] compreensão de mídia falhou:', error?.message);
+            }
+          })();
+        }
+
+        scheduleAutonomousReply(
+          waAccount.user_id,
+          cleanFrom,
+          normalizedType,
+          channelWaNumber,
+          'meta',
+        );
 
         // Enriquece o nome de um deal já existente (criado manualmente) com o nome
         // que veio no payload do WhatsApp. Não cria novos deals — adição é manual.
@@ -3399,9 +3623,10 @@ async function startServer() {
     // Sem um número identificável, falha fechado. Mostrar todo o histórico do
     // usuário aqui misturaria canais diferentes na mesma lista.
     if (!waNumber) return res.json([]);
+    const waNumberVariants = brazilianPhoneVariants(waNumber);
     if (!db) {
       let q = userDb.from('wa_conversations').select('*').eq('user_id', userId);
-      q = q.eq('wa_number', waNumber);
+      q = q.in('wa_number', waNumberVariants);
       if (searchFilter) q = q.or(searchFilter);
       const { data } = await q.order('last_message_at', { ascending: false }).limit(200);
       return res.json(data || []);
@@ -3412,7 +3637,7 @@ async function startServer() {
         .select('*')
         .eq('user_id', userId)
         .neq('archived', true); // arquivadas no WhatsApp ficam fora do CRM
-      q = q.eq('wa_number', waNumber);
+      q = q.in('wa_number', waNumberVariants);
       if (searchFilter) q = q.or(searchFilter);
       let { data, error } = await q
         .order('last_message_at', { ascending: false })
@@ -3420,7 +3645,7 @@ async function startServer() {
       if (error && /archived/.test(error.message || '')) {
         // Migration 059 pendente — lista sem o filtro
         let q2 = db.from('wa_conversations').select('*').eq('user_id', userId);
-        q2 = q2.eq('wa_number', waNumber);
+        q2 = q2.in('wa_number', waNumberVariants);
         if (searchFilter) q2 = q2.or(searchFilter);
         ({ data, error } = await q2.order('last_message_at', { ascending: false }).limit(200));
       }
@@ -3457,16 +3682,11 @@ async function startServer() {
     // Mesmo fallback do /conversations: tenta Baileys, depois Meta Cloud.
     let waNumber = isPosvenda
       ? registeredSlotNumber(userId, 'posvenda')
-      : registeredSlotNumber(userId, 'main');
+      : await inboxWaNumber((supabaseAdmin || supabase) as SupabaseClient, userId, 'main').catch(() => '');
     // Pós-venda sem número registrado: FAIL-CLOSED (paridade com o branch
     // posvenda do /conversations). Cair no modo "disconnected" aqui mostraria
     // a thread do número PRINCIPAL dentro da aba Pós-venda — mistura proibida.
     if (isPosvenda && !waNumber) return res.json([]);
-    if (!waNumber && !isPosvenda) {
-      try {
-        waNumber = await activeMetaNumber(supabase, userId);
-      } catch {}
-    }
     // Sem canal identificável, nunca faz uma busca ampla por telefone: a mesma
     // pessoa pode existir em dois números e os históricos se misturariam.
     if (!waNumber) return res.json([]);
@@ -3478,7 +3698,7 @@ async function startServer() {
         .from('wa_messages')
         .select('*')
         .eq('user_id', userId);
-      msgQuery = msgQuery.eq('wa_number', waNumber);
+      msgQuery = msgQuery.in('wa_number', brazilianPhoneVariants(waNumber));
       msgQuery = msgQuery
         .in('phone', phoneVariants)
         // Busca as MAIS RECENTES. A ordenação cronológica é restaurada abaixo
@@ -3727,6 +3947,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Só adiciona código do país se estiver faltando (número local digitado manualmente)
     const cleanPhone = rawDigits.startsWith('55') ? rawDigits : '55' + rawDigits;
     const db = supabaseAdmin || (req as any).supabase as SupabaseClient;
+    const baileysOpen = BaileysManager.getStatus(waKey) === 'open';
+    const channelState = slot === 'posvenda'
+      ? null
+      : await outboundWhatsAppChannel(db, userId, baileysOpen);
+    const outboundChannel = slot === 'posvenda'
+      ? (baileysOpen ? 'baileys' : null)
+      : channelState?.selected_channel || null;
+    if (!outboundChannel) {
+      const explicitMeta = channelState?.preferred_channel === 'meta';
+      return res.status(409).json({
+        error: explicitMeta
+          ? 'Canal Meta selecionado, mas a Cloud API oficial não está operacional. Consulte o diagnóstico antes de enviar.'
+          : 'Nenhum canal WhatsApp operacional para esta conta.',
+      });
+    }
 
     const waNumber = BaileysManager.getRegisteredPhone(waKey)
       || BaileysManager.getConnectedPhone(waKey)
@@ -3772,8 +4007,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           user_id: userId, phone: storedPhone, last_message: text, last_message_at: now, updated_at: now, wa_number: sourceWaNumber,
         });
       }
+      await markConversationHumanActiveIfNeeded(userId, storedPhone, sourceWaNumber);
     };
-    if (BaileysManager.getStatus(waKey) === 'open') {
+    if (outboundChannel === 'baileys') {
       try {
         const msgId = await BaileysManager.sendText(waKey, baileysPhone, text);
         console.log(`[Send] Baileys enviou | msgId=${msgId}${slot ? ` | slot=${slot}` : ''}`);
@@ -3781,6 +4017,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         return res.json({ success: true, message_id: msgId });
       } catch (err: any) {
         console.warn('[Send] Baileys erro:', err.message);
+        return res.status(502).json({ error: 'Falha ao enviar pelo canal QR selecionado.' });
       }
     }
 
@@ -3788,7 +4025,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       return res.status(400).json({ error: 'WhatsApp do Pós-venda desconectado. Reconecte o QR Code desse número antes de enviar.' });
     }
 
-    // ── Meta WhatsApp Business API (fallback) ────────────────────────────────
+    // ── Meta WhatsApp Business API (canal selecionado por conta) ─────────────
     const { data: waAccount } = await db
       .from('whatsapp_business_accounts')
       .select('phone_number_id, phone_number, access_token')
@@ -3828,7 +4065,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         // Comum quando Embedded Signup completou mas o app Meta ainda está em Dev Mode.
         if (code === 133010 || msg.toLowerCase().includes('account not registered')) {
           return res.status(400).json({
-            error: 'Conta WhatsApp ainda em provisionamento na Meta. Sua integração foi conectada, mas o número precisa ser promovido pra Cloud API antes de enviar/receber mensagens. Aguarde aprovação do App Review da Meta (3-4 semanas após submissão) ou consulte o status em Configurações → WhatsApp → Diagnóstico.',
+            error: 'Conta WhatsApp ainda não está habilitada para envio pela Cloud API. Consulte o status em Configurações → WhatsApp → Diagnóstico.',
           });
         }
         return res.status(400).json({ error: msg });
@@ -3852,6 +4089,23 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     if (!phone || !mediaBase64 || !mimetype) {
       return res.status(400).json({ error: 'phone, mediaBase64 e mimetype são obrigatórios' });
+    }
+
+    const db = (supabaseAdmin || supabase) as SupabaseClient;
+    const baileysOpen = BaileysManager.getStatus(mediaKey) === 'open';
+    const channelState = slot === 'posvenda'
+      ? null
+      : await outboundWhatsAppChannel(db, userId, baileysOpen);
+    const outboundChannel = slot === 'posvenda'
+      ? (baileysOpen ? 'baileys' : null)
+      : channelState?.selected_channel || null;
+    if (!outboundChannel) {
+      const explicitMeta = channelState?.preferred_channel === 'meta';
+      return res.status(409).json({
+        error: explicitMeta
+          ? 'Canal Meta selecionado, mas a Cloud API oficial não está operacional. Consulte o diagnóstico antes de enviar.'
+          : 'Nenhum canal WhatsApp operacional para esta conta.',
+      });
     }
 
     console.log(`[SendMedia] Recebido: phone=${phone} mimetype=${mimetype} size=${mediaBase64?.length ?? 0}`);
@@ -3951,12 +4205,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         .or(phoneOr)
         .select('id');
       if (!upd || upd.length === 0) { await db.from('wa_conversations').insert(convPayload); }
+      await markConversationHumanActiveIfNeeded(userId, storedPhone, sourceWaNumber);
     };
 
     // ── Baileys (primário) ───────────────────────────────────────────────────
     const baileysStatus = BaileysManager.getStatus(mediaKey);
     console.log(`[SendMedia] Baileys status=${baileysStatus} cleanPhone=${cleanPhone} finalMimetype=${finalMimetype}${slot ? ` slot=${slot}` : ''}`);
-    if (baileysStatus === 'open') {
+    if (outboundChannel === 'baileys') {
       try {
         if (audioWaveform) {
           console.log('[SendMedia] Enviado como PTT', {
@@ -3972,6 +4227,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         return res.json({ success: true, message_id: msgId });
       } catch (err: any) {
         console.error('[SendMedia] ❌ Baileys erro ao enviar áudio:', err.message, err.stack?.split('\n')[1]);
+        return res.status(502).json({ error: 'Falha ao enviar mídia pelo canal QR selecionado.' });
       }
     }
 
@@ -3980,7 +4236,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
 
     // ── Meta WhatsApp Business API ───────────────────────────────────────────
-    const { data: waAccount } = await supabase
+    const { data: waAccount } = await db
       .from('whatsapp_business_accounts')
       .select('phone_number_id, phone_number, access_token')
       .eq('user_id', userId)
@@ -5563,6 +5819,114 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
+  });
+
+  // Mensagem de lembrete da Produção. O envio real acontece somente após uma
+  // segunda confirmação no card; aqui ficam também a configuração e o teste.
+  const DEFAULT_PRODUCTION_REMINDER_MESSAGE =
+    'Oi, {cliente}! Passando para lembrar do seu {tipo} no dia {data}, às {hora}. Qualquer dúvida, estou por aqui. 📸';
+
+  async function loadProductionReminderMessage(db: SupabaseClient, userId: string) {
+    const { data, error } = await db.from('production_reminder_settings')
+      .select('message').eq('user_id', userId).maybeSingle();
+    return { message: String(data?.message || DEFAULT_PRODUCTION_REMINDER_MESSAGE), error };
+  }
+
+  async function loadJobReminderContext(db: SupabaseClient, userId: string, jobId: unknown) {
+    const { data: job } = await db.from('jobs')
+      .select('id, job_date, job_time, job_type, clients(name, phone)')
+      .eq('id', jobId).eq('user_id', userId).maybeSingle();
+    if (!job) return null;
+    const client = (job as any).clients || {};
+    const phone = normalizeBrazilianPhone(String(client.phone || '').replace(/\D/g, ''));
+    return { job, client, phone };
+  }
+
+  function maskedReminderPhone(phone: string) {
+    const local = String(phone || '').replace(/\D/g, '').slice(-11);
+    if (local.length < 10) return 'número não cadastrado';
+    return `(${local.slice(0, 2)}) *****-${local.slice(-4)}`;
+  }
+
+  app.get('/api/production/reminder-settings', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const db = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const result = await loadProductionReminderMessage(db, userId);
+    if (result.error?.code === '42P01') return res.status(422).json({ error: 'MIGRATION_NEEDED' });
+    if (result.error) return res.status(500).json({ error: result.error.message });
+    res.json({ message: result.message });
+  });
+
+  app.put('/api/production/reminder-settings', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const db = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const message = String(req.body?.message || '').trim();
+    if (!message) return res.status(400).json({ error: 'Escreva a mensagem padrão.' });
+    if (message.length > 4000) return res.status(400).json({ error: 'A mensagem pode ter no máximo 4.000 caracteres.' });
+    const { error } = await db.from('production_reminder_settings').upsert({
+      user_id: userId, message, updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id' });
+    if (error?.code === '42P01') return res.status(422).json({ error: 'MIGRATION_NEEDED' });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ message });
+  });
+
+  app.post('/api/production/reminder-test', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const phone = normalizeBrazilianPhone(String(req.body?.phone || '').replace(/\D/g, ''));
+    const message = String(req.body?.message || DEFAULT_PRODUCTION_REMINDER_MESSAGE).trim();
+    if (!phone || phone.length < 12) return res.status(400).json({ error: 'Informe um WhatsApp válido para o teste.' });
+    if (!message) return res.status(400).json({ error: 'Escreva a mensagem antes de testar.' });
+    try {
+      const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const result = await sendProductionReminder({
+        user_id: userId, phone, contact_name: 'Cliente teste',
+      }, { job_date: tomorrow, job_time: '10:00', job_type: 'ensaio teste' }, message);
+      res.json({ success: true, channel: result.channel, message: result.text });
+    } catch (error: any) {
+      res.status(400).json({ error: error?.message || 'Não foi possível enviar o teste.' });
+    }
+  });
+
+  app.get('/api/jobs/:id/reminder/preview', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const db = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const [context, settings] = await Promise.all([
+      loadJobReminderContext(db, userId, req.params.id),
+      loadProductionReminderMessage(db, userId),
+    ]);
+    if (settings.error && settings.error.code !== '42P01') {
+      return res.status(500).json({ error: settings.error.message });
+    }
+    if (!context) return res.status(404).json({ error: 'Ensaio não encontrado.' });
+    if (!context.phone) return res.status(400).json({ error: 'Cadastre o WhatsApp da cliente antes de enviar o lembrete.' });
+    res.json({
+      client_name: context.client.name || 'Cliente',
+      phone_masked: maskedReminderPhone(context.phone),
+      message: renderJobReminderMessage(settings.message, context.job, context.client.name || ''),
+    });
+  });
+
+  app.post('/api/jobs/:id/reminder/send', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const db = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const [context, settings] = await Promise.all([
+      loadJobReminderContext(db, userId, req.params.id),
+      loadProductionReminderMessage(db, userId),
+    ]);
+    if (settings.error && settings.error.code !== '42P01') {
+      return res.status(500).json({ error: settings.error.message });
+    }
+    if (!context) return res.status(404).json({ error: 'Ensaio não encontrado.' });
+    if (!context.phone) return res.status(400).json({ error: 'Cadastre o WhatsApp da cliente antes de enviar o lembrete.' });
+    try {
+      const result = await sendProductionReminder({
+        user_id: userId, phone: context.phone, contact_name: context.client.name || 'Cliente',
+      }, context.job, settings.message);
+      res.json({ success: true, channel: result.channel, message: result.text });
+    } catch (error: any) {
+      res.status(400).json({ error: error?.message || 'Não foi possível enviar o lembrete.' });
+    }
   });
 
   app.get('/api/jobs/:id/stage-history', requireAuth, async (req, res) => {
@@ -9080,6 +9444,580 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   // ============ AGENTE IA ============
 
+  type AgentLearningContext = {
+    db: SupabaseClient;
+    userId: string;
+    waNumber: string;
+    development: boolean;
+    storeKey: string;
+  };
+
+  const learningMigrationMessage =
+    'Laboratório de aprendizado ainda não instalado. Rode a migration 070_ai_agent_supervised_learning.sql.';
+  let learningMigrationWarningShown = false;
+
+  function learningStatusFromDecision(decision: LearningDecision) {
+    if (decision === 'approve') return 'approved';
+    if (decision === 'correct') return 'corrected';
+    return 'rejected';
+  }
+
+  function learningError(res: express.Response, error: any) {
+    if (error instanceof LearningValidationError) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    if (isLearningMigrationMissing(error)) {
+      return res.status(503).json({ error: learningMigrationMessage, code: 'MIGRATION_NEEDED' });
+    }
+    console.error('[Agent learning] erro:', error?.message || error);
+    return res.status(500).json({ error: error?.message || 'Erro no laboratório de aprendizado.' });
+  }
+
+  async function learningContext(req: express.Request, developmentAlias = false): Promise<AgentLearningContext> {
+    const db = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    let userId = String((req as any).userId || '');
+    if (developmentAlias) {
+      const { data, error } = await db.from('ai_agent_config')
+        .select('user_id').eq('enabled', true).limit(1).maybeSingle();
+      if (error) throw error;
+      userId = String(data?.user_id || '');
+    }
+    if (!userId) throw new LearningValidationError('Nenhuma configuração ativa da Lia foi encontrada.');
+    const waNumber = await inboxWaNumber(db, userId, 'main') || 'laboratorio';
+    return { db, userId, waNumber, development: process.env.NODE_ENV !== 'production', storeKey: `${userId}|${waNumber}` };
+  }
+
+  async function ensureSupervisedLabCases(context: AgentLearningContext) {
+    const rows = SUPERVISED_LAB_CASES.map((item) => ({
+      user_id: context.userId,
+      wa_number: context.waNumber,
+      id: item.id,
+      category: item.category,
+      messages: item.messages,
+      expected_action: item.expected_action,
+      source: item.source,
+    }));
+    const { error } = await context.db.from('ai_agent_learning_cases')
+      .upsert(rows, { onConflict: 'user_id,wa_number,id', ignoreDuplicates: true });
+    if (error) throw error;
+  }
+
+  async function loadProductionLearningRows(context: AgentLearningContext) {
+    const [{ data: rules, error: rulesError }, { data: feedback, error: feedbackError }] = await Promise.all([
+      context.db.from('ai_agent_learning_rules')
+        .select('id, rule_text, category, active, approval_count, created_at, updated_at')
+        .eq('user_id', context.userId).eq('wa_number', context.waNumber)
+        .order('updated_at', { ascending: false }).limit(50),
+      context.db.from('ai_agent_learning_feedback')
+        .select('case_id, category, context_excerpt, example_reply, decision, created_at')
+        .eq('user_id', context.userId).eq('wa_number', context.waNumber)
+        .in('decision', ['approve', 'correct']).not('example_reply', 'is', null)
+        .order('created_at', { ascending: false }).limit(12),
+    ]);
+    if (rulesError) throw rulesError;
+    if (feedbackError) throw feedbackError;
+    return {
+      rules: (rules || []) as LearningRule[],
+      examples: (feedback || []).map((item: any) => ({
+        case_id: String(item.case_id || 'playground'),
+        category: String(item.category || 'geral'),
+        customer_message: String(item.context_excerpt || ''),
+        ideal_reply: String(item.example_reply || ''),
+        decision: item.decision,
+      })) as LearningExample[],
+    };
+  }
+
+  loadSupervisedLearningMemory = async (userId: string, waNumber: string): Promise<string> => {
+    if (!supabaseAdmin) return '';
+    const context: AgentLearningContext = {
+      db: supabaseAdmin,
+      userId,
+      waNumber: waNumber || 'laboratorio',
+      development: process.env.NODE_ENV !== 'production',
+      storeKey: `${userId}|${waNumber || 'laboratorio'}`,
+    };
+    try {
+      const rows = await loadProductionLearningRows(context);
+      return buildSupervisedLearningMemory(rows.rules, rows.examples);
+    } catch (error: any) {
+      if (context.development && isLearningMigrationMissing(error)) {
+        return developmentLearningMemory(context.storeKey);
+      }
+      if (isLearningMigrationMissing(error)) {
+        if (!learningMigrationWarningShown) {
+          learningMigrationWarningShown = true;
+          console.warn(`[Agent learning] ${learningMigrationMessage}`);
+        }
+        return '';
+      }
+      console.warn('[Agent learning] memória indisponível:', error?.message || error);
+      return '';
+    }
+  };
+
+  async function productionLearningCases(context: AgentLearningContext, status?: string) {
+    await ensureSupervisedLabCases(context);
+    let query = context.db.from('ai_agent_learning_cases')
+      .select('id, category, messages, expected_action, source, status, created_at, updated_at', { count: 'exact' })
+      .eq('user_id', context.userId).eq('wa_number', context.waNumber)
+      .order('id', { ascending: true });
+    if (status) query = query.eq('status', status);
+    const { data, error, count } = await query;
+    if (error) throw error;
+    const ids = (data || []).map((item: any) => item.id);
+    let simulations: any[] = [];
+    if (ids.length) {
+      const result = await context.db.from('ai_agent_learning_simulations')
+        .select('id, case_id, reply, actual_action, evaluation, created_at')
+        .eq('user_id', context.userId).eq('wa_number', context.waNumber)
+        .in('case_id', ids).order('created_at', { ascending: false });
+      if (result.error) throw result.error;
+      simulations = result.data || [];
+    }
+    const latest = new Map<string, any>();
+    for (const row of simulations) if (!latest.has(row.case_id)) latest.set(row.case_id, row);
+    return {
+      items: (data || []).map((item: any) => ({
+        ...item,
+        flow_steps: analyzeConversationFlow(item.messages || []).steps,
+        latest_simulation: latest.get(item.id) || null,
+      })),
+      total: count || 0,
+    };
+  }
+
+  async function listLearningCases(context: AgentLearningContext, status?: string) {
+    try {
+      return await productionLearningCases(context, status);
+    } catch (error: any) {
+      if (context.development && isLearningMigrationMissing(error)) {
+        const items = listDevelopmentCases(context.storeKey, status);
+        return { items, total: items.length, development_memory: true };
+      }
+      throw error;
+    }
+  }
+
+  async function learningSummary(context: AgentLearningContext) {
+    try {
+      const cases = await productionLearningCases(context);
+      const rows = await loadProductionLearningRows(context);
+      const { data: latestFeedback, error } = await context.db.from('ai_agent_learning_feedback')
+        .select('created_at').eq('user_id', context.userId).eq('wa_number', context.waNumber)
+        .order('created_at', { ascending: false }).limit(1).maybeSingle();
+      if (error) throw error;
+      const counts = {
+        total: cases.total,
+        pending: cases.items.filter((item: any) => item.status === 'pending').length,
+        approved: cases.items.filter((item: any) => item.status === 'approved').length,
+        corrected: cases.items.filter((item: any) => item.status === 'corrected').length,
+        rejected: cases.items.filter((item: any) => item.status === 'rejected').length,
+      };
+      return {
+        counts,
+        rules: rows.rules,
+        active_rules: rows.rules.filter((rule) => rule.active).length,
+        memory_examples: rows.examples.length,
+        last_feedback_at: latestFeedback?.created_at || null,
+      };
+    } catch (error: any) {
+      if (context.development && isLearningMigrationMissing(error)) {
+        return { ...developmentLearningSummary(context.storeKey), development_memory: true };
+      }
+      throw error;
+    }
+  }
+
+  async function learningConfig(context: AgentLearningContext) {
+    const { data, error } = await context.db.from('ai_agent_config')
+      .select('*').eq('user_id', context.userId).maybeSingle();
+    if (error) throw error;
+    if (!data) throw new LearningValidationError('Configure a Lia antes de usar o laboratório.');
+    return data;
+  }
+
+  async function simulateLearningCase(context: AgentLearningContext, input: any) {
+    const caseId = String(input?.case_id || '').trim();
+    let learningCase: LearningCase;
+    if (caseId) {
+      const result = await listLearningCases(context);
+      learningCase = result.items.find((item: any) => item.id === caseId) as LearningCase;
+      if (!learningCase) throw new LearningValidationError('Caso de laboratório não encontrado.');
+    } else {
+      const messages = validateLearningMessages(input?.messages);
+      learningCase = {
+        id: 'playground',
+        category: String(input?.category || 'playground').slice(0, 80),
+        messages,
+        expected_action: input?.expected_action || { type: 'reply' },
+        source: SUPERVISED_LAB_CASES[0].source,
+      };
+    }
+    const config = await learningConfig(context);
+    const memory = await loadSupervisedLearningMemory(context.userId, context.waNumber);
+    const flow = analyzeConversationFlow(learningCase.messages);
+    const portfolioLinks = portfolioLinksForNiche(config.portfolio_links || [], flow.niche);
+    const generatedReply = flow.handoff_reason
+      ? `###HUMANO:${flow.handoff_reason}###`
+      : await getLiaReply({
+        enabled: true,
+        persona: config.persona || '',
+        objective: config.objective || '',
+        knowledge: config.knowledge || '',
+        rules: config.rules || '',
+        salesStrategy: config.sales_strategy || '',
+        attendantName: config.attendant_name || '',
+        learnedPlaybook: config.learned_playbook || '',
+        supervisedMemory: memory,
+        portfolioLinks,
+      }, learningCase.messages, { extraInstruction: `${HANDOFF_INSTRUCTION}\n\n${flow.instruction}` });
+    const flowReply = enforceConversationFlowReply(generatedReply, flow);
+    const rawReply = enforceApprovedPortfolioUrls(flowReply, portfolioLinks, flow.niche);
+    const interpreted = interpretLearningReply(rawReply);
+    const evaluation = evaluateLearningSimulation(learningCase, interpreted.reply, interpreted.action, flow);
+    const row = {
+      case_id: caseId || null,
+      reply: interpreted.reply,
+      action: interpreted.action,
+      evaluation,
+      flow_state: flow.state,
+      flow_move: flow.move,
+      model: AGENT_CHAT_MODEL,
+      model_id: AGENT_CHAT_MODEL.id,
+    };
+    try {
+      const { data, error } = await context.db.from('ai_agent_learning_simulations').insert({
+        user_id: context.userId,
+        wa_number: context.waNumber,
+        case_id: row.case_id,
+        source_type: caseId ? 'lab_case' : 'playground',
+        source_ref: caseId || 'playground',
+        reply: row.reply,
+        actual_action: row.action,
+        evaluation,
+      }).select('id').single();
+      if (error) throw error;
+      return { ...row, simulation_id: data.id };
+    } catch (error: any) {
+      if (context.development && isLearningMigrationMissing(error)) {
+        const saved = recordDevelopmentSimulation(context.storeKey, row);
+        return { ...row, simulation_id: saved.id, development_memory: true };
+      }
+      throw error;
+    }
+  }
+
+  function parseLearningFeedbackInput(input: any) {
+    const decision = String(input?.decision || '') as LearningDecision;
+    if (!['approve', 'correct', 'reject'].includes(decision)) throw new LearningValidationError('Decisão de feedback inválida.');
+    const sourceType: 'lab_case' | 'playground' = input?.source_type === 'playground' ? 'playground' : 'lab_case';
+    const caseId = String(input?.case_id || '').trim() || null;
+    if (sourceType === 'lab_case' && !caseId) throw new LearningValidationError('Informe o caso de laboratório.');
+    const messages = sourceType === 'playground' ? validateLearningMessages(input?.messages) : [];
+    const correctedReply = decision === 'correct'
+      ? assertAnonymousLearningText(input?.corrected_reply, 'Resposta corrigida')
+      : '';
+    if (decision === 'correct' && !correctedReply) throw new LearningValidationError('Escreva a resposta corrigida.');
+    const lesson = assertAnonymousLearningText(input?.lesson || input?.proposed_rule, 'Regra proposta').slice(0, 600);
+    const approveRule = input?.approve_rule === true;
+    if (approveRule && !lesson) throw new LearningValidationError('Escreva a regra antes de aprová-la.');
+    const resultValue = typeof input?.assistant_result === 'object' && input.assistant_result !== null
+      ? input.assistant_result.reply || input.assistant_result.content || input?.reply
+      : input?.assistant_result || input?.reply;
+    const assistantResult = assertAnonymousLearningText(resultValue, 'Resposta da Lia').slice(0, 1200);
+    return {
+      decision,
+      sourceType,
+      caseId,
+      messages,
+      correctedReply,
+      lesson,
+      approveRule,
+      assistantResult,
+      category: String(input?.category || 'geral').replace(/[^\p{L}\p{N}_ -]/gu, '').trim().slice(0, 80) || 'geral',
+      simulationId: String(input?.simulation_id || '').trim() || null,
+      sourceRef: String(input?.source_ref || caseId || 'playground').replace(/[^\w:-]/g, '').slice(0, 100),
+    };
+  }
+
+  async function ownedLearningSimulation(context: AgentLearningContext, input: {
+    simulationId: string | null;
+    caseId: string | null;
+  }) {
+    if (!input.simulationId && !input.caseId) return null;
+    let query = context.db.from('ai_agent_learning_simulations')
+      .select('id, case_id, reply, actual_action')
+      .eq('user_id', context.userId).eq('wa_number', context.waNumber);
+    if (input.simulationId) query = query.eq('id', input.simulationId);
+    else query = query.eq('case_id', input.caseId).order('created_at', { ascending: false }).limit(1);
+    const { data, error } = await query.maybeSingle();
+    if (error) throw error;
+    if (input.simulationId && !data) throw new LearningValidationError('Simulação não encontrada nesta conta e canal.');
+    return data;
+  }
+
+  async function saveLearningFeedback(context: AgentLearningContext, body: any) {
+    const input = parseLearningFeedbackInput(body);
+    if (input.sourceType === 'lab_case') {
+      const cases = await listLearningCases(context);
+      if (!cases.items.some((item: any) => item.id === input.caseId)) throw new LearningValidationError('Caso de laboratório não encontrado.');
+    }
+    const contextExcerpt = input.sourceType === 'playground'
+      ? compactAnonymousPlaygroundContext(input.messages)
+      : '';
+    try {
+      let labCase: any = null;
+      if (input.caseId) {
+        const { data, error } = await context.db.from('ai_agent_learning_cases')
+          .select('id, category, messages, expected_action, source, status, created_at, updated_at')
+          .eq('user_id', context.userId).eq('wa_number', context.waNumber).eq('id', input.caseId).maybeSingle();
+        if (error) throw error;
+        labCase = data;
+      }
+      const simulation = await ownedLearningSimulation(context, input);
+      let approvedReply = input.decision === 'correct' ? input.correctedReply : input.assistantResult;
+      if (input.decision === 'approve' && !approvedReply) approvedReply = String(simulation?.reply || '');
+      if (input.decision === 'reject') approvedReply = '';
+      const excerpt = contextExcerpt || compactAnonymousPlaygroundContext(labCase?.messages || []);
+      const { data: feedback, error } = await context.db.from('ai_agent_learning_feedback').insert({
+        user_id: context.userId,
+        wa_number: context.waNumber,
+        case_id: input.caseId,
+        simulation_id: simulation?.id || null,
+        source_type: input.sourceType,
+        source_ref: input.sourceRef,
+        decision: input.decision,
+        category: input.category === 'geral' ? labCase?.category || 'geral' : input.category,
+        context_excerpt: excerpt,
+        assistant_result: input.assistantResult || null,
+        corrected_reply: input.correctedReply || null,
+        lesson: input.lesson || null,
+        approve_rule: input.approveRule,
+        example_reply: approvedReply || null,
+      }).select('*').single();
+      if (error) throw error;
+      if (input.caseId) {
+        const { error: caseError } = await context.db.from('ai_agent_learning_cases')
+          .update({ status: learningStatusFromDecision(input.decision), updated_at: new Date().toISOString() })
+          .eq('user_id', context.userId).eq('wa_number', context.waNumber).eq('id', input.caseId);
+        if (caseError) throw caseError;
+      }
+      let activeRule: any = null;
+      if (input.approveRule) {
+        const { data, error: ruleError } = await context.db.from('ai_agent_learning_rules').insert({
+          user_id: context.userId,
+          wa_number: context.waNumber,
+          source_feedback_id: feedback.id,
+          rule_text: input.lesson,
+          category: feedback.category,
+          active: true,
+        }).select('id, rule_text, category, active, approval_count, created_at, updated_at').single();
+        if (ruleError) throw ruleError;
+        activeRule = data;
+      }
+      return { case: input.caseId ? { ...labCase, status: learningStatusFromDecision(input.decision) } : null, feedback, active_rule: activeRule };
+    } catch (error: any) {
+      if (context.development && isLearningMigrationMissing(error)) {
+        return { ...applyDevelopmentFeedback(context.storeKey, {
+          case_id: input.caseId || undefined,
+          decision: input.decision,
+          corrected_reply: input.correctedReply,
+          proposed_rule: input.lesson,
+          approve_rule: input.approveRule,
+          category: input.category,
+          simulation_id: input.simulationId || undefined,
+          source_type: input.sourceType,
+          source_ref: input.sourceRef,
+          messages: input.messages,
+          assistant_result: input.assistantResult,
+        }), development_memory: true };
+      }
+      throw error;
+    }
+  }
+
+  async function toggleLearningRule(context: AgentLearningContext, ruleId: string, active: unknown) {
+    if (typeof active !== 'boolean') throw new LearningValidationError('Informe active como verdadeiro ou falso.');
+    try {
+      const { data, error } = await context.db.from('ai_agent_learning_rules')
+        .update({ active, updated_at: new Date().toISOString() })
+        .eq('id', ruleId).eq('user_id', context.userId).eq('wa_number', context.waNumber)
+        .select('id, rule_text, category, active, approval_count, created_at, updated_at').maybeSingle();
+      if (error) throw error;
+      if (!data) return null;
+      return data;
+    } catch (error: any) {
+      if (context.development && isLearningMigrationMissing(error)) {
+        return toggleDevelopmentRule(context.storeKey, ruleId, active);
+      }
+      throw error;
+    }
+  }
+
+  function registerLearningRoutes(prefix: string, middlewares: express.RequestHandler[], developmentAlias = false) {
+    app.get(`${prefix}/summary`, ...middlewares, async (req, res) => {
+      try { res.json(await learningSummary(await learningContext(req, developmentAlias))); }
+      catch (error: any) { learningError(res, error); }
+    });
+    app.get(`${prefix}/cases`, ...middlewares, async (req, res) => {
+      try {
+        const status = String(req.query.status || '').trim();
+        const allowedStatus = ['pending', 'approved', 'corrected', 'rejected'].includes(status) ? status : undefined;
+        const offset = Math.max(0, Number.parseInt(String(req.query.offset || '0'), 10) || 0);
+        const limit = Math.min(50, Math.max(1, Number.parseInt(String(req.query.limit || '20'), 10) || 20));
+        const result = await listLearningCases(await learningContext(req, developmentAlias), allowedStatus);
+        res.json({ ...result, items: result.items.slice(offset, offset + limit), limit, offset });
+      } catch (error: any) { learningError(res, error); }
+    });
+    app.post(`${prefix}/simulate`, ...middlewares, async (req, res) => {
+      try { res.json(await simulateLearningCase(await learningContext(req, developmentAlias), req.body)); }
+      catch (error: any) { learningError(res, error); }
+    });
+    app.post(`${prefix}/feedback`, ...middlewares, async (req, res) => {
+      try { res.json(await saveLearningFeedback(await learningContext(req, developmentAlias), req.body)); }
+      catch (error: any) { learningError(res, error); }
+    });
+    app.patch(`${prefix}/rules/:id`, ...middlewares, async (req, res) => {
+      try {
+        const rule = await toggleLearningRule(await learningContext(req, developmentAlias), req.params.id, req.body?.active);
+        if (!rule) return res.status(404).json({ error: 'Regra não encontrada.' });
+        res.json({ rule });
+      } catch (error: any) { learningError(res, error); }
+    });
+  }
+
+  registerLearningRoutes('/api/agent/learning', [requireAuth]);
+  if (process.env.NODE_ENV !== 'production') {
+    registerLearningRoutes('/api/dev/agent-learning', [], true);
+  } else {
+    app.all('/api/dev/agent-learning/*', (_req, res) => res.status(404).json({ error: 'Não encontrado.' }));
+  }
+
+  const activeReplayRuns = new Set<string>();
+
+  function agentReplaySecret(): string {
+    return String(
+      process.env.AGENT_REPLAY_SECRET
+      || process.env.SUPABASE_SERVICE_ROLE_KEY
+      || process.env.SESSION_SECRET
+      || '',
+    );
+  }
+
+  function agentReplayError(res: express.Response, error: any) {
+    if (error instanceof AgentSalesReplayError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
+    console.error('[Agent replay] falha sem conteúdo de conversa:', error?.message || error);
+    return res.status(500).json({ error: 'Não foi possível executar o replay da conversa.' });
+  }
+
+  async function agentReplayConfig(context: AgentLearningContext): Promise<import('./ai-agent.js').AgentConfig> {
+    const row = await learningConfig(context);
+    const supervisedMemory = await loadSupervisedLearningMemory(context.userId, context.waNumber);
+    return {
+      enabled: true,
+      persona: row.persona || '',
+      objective: row.objective || '',
+      knowledge: row.knowledge || '',
+      rules: row.rules || '',
+      salesStrategy: row.sales_strategy || '',
+      attendantName: row.attendant_name || '',
+      learnedPlaybook: row.learned_playbook || '',
+      supervisedMemory,
+      portfolioLinks: Array.isArray(row.portfolio_links) ? row.portfolio_links : [],
+    };
+  }
+
+  function registerAgentReplayRoutes(
+    prefix: string,
+    middlewares: express.RequestHandler[],
+    developmentAlias = false,
+  ) {
+    app.get(`${prefix}/provider-status`, ...middlewares, async (_req, res) => {
+      try {
+        const status = await getAgentSalesReplayProviderStatus();
+        res.json({
+          ...status,
+          message: status.available
+            ? 'OpenAI pronta para executar os replays.'
+            : status.configured
+              ? 'A credencial OpenAI configurada foi recusada e precisa ser atualizada.'
+              : 'Configure uma credencial OpenAI para executar os replays.',
+        });
+      } catch (error: any) {
+        agentReplayError(res, error);
+      }
+    });
+
+    app.get(`${prefix}/cases`, ...middlewares, async (req, res) => {
+      try {
+        const context = await learningContext(req, developmentAlias);
+        res.json(await listAgentSalesReplayCases(
+          context.db,
+          context.userId,
+          agentReplaySecret(),
+        ));
+      } catch (error: any) {
+        agentReplayError(res, error);
+      }
+    });
+
+    app.get(`${prefix}/:id`, ...middlewares, async (req, res) => {
+      try {
+        const context = await learningContext(req, developmentAlias);
+        res.json(await getAgentSalesReplayTranscript(
+          context.db,
+          context.userId,
+          String(req.params.id || '').trim(),
+          agentReplaySecret(),
+        ));
+      } catch (error: any) {
+        agentReplayError(res, error);
+      }
+    });
+
+    app.post(`${prefix}/:id`, ...middlewares, async (req, res) => {
+      let runKey = '';
+      try {
+        const context = await learningContext(req, developmentAlias);
+        const caseId = String(req.params.id || '').trim();
+        runKey = `${context.userId}|${caseId}`;
+        if (activeReplayRuns.has(runKey)) {
+          return res.status(409).json({ error: 'Este replay já está em andamento.' });
+        }
+        if (req.body?.consent_to_external_ai !== true) {
+          return res.status(400).json({
+            error: 'Confirme na tela a autorização para enviar a conversa anonimizada à OpenAI.',
+            code: 'EXTERNAL_AI_CONSENT_REQUIRED',
+          });
+        }
+        activeReplayRuns.add(runKey);
+        const config = await agentReplayConfig(context);
+        res.json(await runAgentSalesReplayCase({
+          db: context.db,
+          userId: context.userId,
+          caseId,
+          secret: agentReplaySecret(),
+          config,
+          consentToExternalAi: true,
+        }));
+      } catch (error: any) {
+        agentReplayError(res, error);
+      } finally {
+        if (runKey) activeReplayRuns.delete(runKey);
+      }
+    });
+  }
+
+  registerAgentReplayRoutes('/api/agent/replay', [requireAuth]);
+  if (process.env.NODE_ENV !== 'production') {
+    registerAgentReplayRoutes('/api/dev/agent-replay', [], true);
+  } else {
+    app.all('/api/dev/agent-replay/*', (_req, res) => res.status(404).json({ error: 'Não encontrado.' }));
+  }
+
   // Lê a config do agente. Se a tabela ainda não existe (migration 009 não
   // rodada), devolve os padrões + table_missing pra UI avisar.
   app.get('/api/agent/config', requireAuth, async (req, res) => {
@@ -9101,6 +10039,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           knowledge: DEFAULT_KNOWLEDGE,
           rules: DEFAULT_RULES,
           sales_strategy: DEFAULT_SALES_STRATEGY,
+          learned_playbook: '',
+          portfolio_links: [],
+          playbook_source_count: 0,
+          playbook_updated_at: null,
           table_missing: true,
         });
       }
@@ -9116,13 +10058,29 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       rules: data?.rules || DEFAULT_RULES,
       sales_strategy: data?.sales_strategy || DEFAULT_SALES_STRATEGY,
       attendant_name: data?.attendant_name || '',
+      learned_playbook: data?.learned_playbook || '',
+      portfolio_links: data?.portfolio_links || [],
+      playbook_source_count: Number(data?.playbook_source_count) || 0,
+      playbook_updated_at: data?.playbook_updated_at || null,
     });
   });
 
   app.put('/api/agent/config', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { enabled, auto_send, use_client_history, persona, objective, knowledge, rules, sales_strategy, attendant_name } = req.body;
+    const { enabled, auto_send, use_client_history, persona, objective, knowledge, rules, sales_strategy, attendant_name, portfolio_links } = req.body;
+    const portfolioLinksProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'portfolio_links');
+    let validatedPortfolioLinks: ReturnType<typeof normalizePortfolioLinks> | undefined;
+    try {
+      validatedPortfolioLinks = portfolioLinksProvided
+        ? normalizePortfolioLinks(portfolio_links)
+        : undefined;
+    } catch (error) {
+      if (error instanceof PortfolioLinksValidationError) {
+        return res.status(error.status).json({ error: error.message });
+      }
+      throw error;
+    }
     const baseRow: any = {
       user_id: userId,
       enabled: !!enabled,
@@ -9138,8 +10096,19 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       ...(auto_send !== undefined ? { auto_send: !!auto_send } : {}),
       ...(use_client_history !== undefined ? { use_client_history: !!use_client_history } : {}),
       ...(attendant_name !== undefined ? { attendant_name: typeof attendant_name === 'string' ? attendant_name.trim() : null } : {}),
+      ...(portfolioLinksProvided ? { portfolio_links: validatedPortfolioLinks } : {}),
     };
     let { error } = await supabase.from('ai_agent_config').upsert(row, { onConflict: 'user_id' });
+    if (error && /portfolio_links/.test(error.message || '')) {
+      if (validatedPortfolioLinks?.length) {
+        return res.status(400).json({
+          error: 'Portfólio seguro ainda não instalado. Rode a migration 071_ai_agent_portfolio_links.sql.',
+          code: 'MIGRATION_NEEDED',
+        });
+      }
+      const { portfolio_links: _ignoredPortfolioLinks, ...legacyRow } = row;
+      ({ error } = await supabase.from('ai_agent_config').upsert(legacyRow, { onConflict: 'user_id' }));
+    }
     // Resiliente: se colunas novas (sales_strategy/auto_send/use_client_history/attendant_name)
     // ainda não existem (migrations 045/046/048/049), salva o resto pra não travar a tela.
     if (error && (error.code === '42703' || /sales_strategy|auto_send|use_client_history|attendant_name/.test(error.message || ''))) {
@@ -9166,31 +10135,44 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.post('/api/agent/test', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
-    const { messages, persona, objective, knowledge, rules, sales_strategy, attendant_name } = req.body;
+    const { messages, persona, objective, knowledge, rules, sales_strategy, attendant_name, learned_playbook, portfolio_links } = req.body;
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'Envie ao menos uma mensagem.' });
     }
     try {
+      const flowMessages = normalizeConversationFlowMessages(messages);
+      const testFlow = analyzeConversationFlow(flowMessages);
+      const testPortfolioLinks = portfolioLinksForNiche(portfolio_links, testFlow.niche);
+      const learningWaNumber = await inboxWaNumber((supabaseAdmin || supabase) as SupabaseClient, userId, 'main') || 'laboratorio';
+      const supervisedMemory = await loadSupervisedLearningMemory(userId, learningWaNumber);
       // Mesmo cérebro do atendimento autônomo (HANDOFF_INSTRUCTION) pra o teste
       // descer o fluxo REAL — até o envio do orçamento (token ###PDF###) e o
       // hand-off (###HUMANO###). Aqui NADA é enviado: a gente só relata.
-      const reply = await getAgentReply(
-        {
-          enabled: true,
-          persona: typeof persona === 'string' ? persona : '',
-          objective: typeof objective === 'string' ? objective : '',
-          knowledge: typeof knowledge === 'string' ? knowledge : '',
-          rules: typeof rules === 'string' ? rules : '',
-          salesStrategy: typeof sales_strategy === 'string' ? sales_strategy : '',
-          attendantName: typeof attendant_name === 'string' ? attendant_name : '',
-        },
-        messages,
-        { extraInstruction: HANDOFF_INSTRUCTION },
-      );
+      const generatedReply = testFlow.handoff_reason
+        ? `###HUMANO:${testFlow.handoff_reason}###`
+        : await getLiaReply(
+          {
+            enabled: true,
+            persona: typeof persona === 'string' ? persona : '',
+            objective: typeof objective === 'string' ? objective : '',
+            knowledge: typeof knowledge === 'string' ? knowledge : '',
+            rules: typeof rules === 'string' ? rules : '',
+            salesStrategy: typeof sales_strategy === 'string' ? sales_strategy : '',
+            attendantName: typeof attendant_name === 'string' ? attendant_name : '',
+            learnedPlaybook: typeof learned_playbook === 'string' ? learned_playbook : '',
+            portfolioLinks: testPortfolioLinks,
+            supervisedMemory,
+          },
+          flowMessages,
+          { extraInstruction: `${HANDOFF_INSTRUCTION}\n\n${testFlow.instruction}` },
+        );
+      const flowReply = enforceConversationFlowReply(generatedReply, testFlow);
+      const reply = enforceApprovedPortfolioUrls(flowReply, testPortfolioLinks, testFlow.niche);
 
       // Hand-off → a Lia passaria pro humano (no real ela não responde nada).
-      if (!reply || reply.includes('###HUMANO###')) {
-        return res.json({ reply: '', action: { type: 'handoff' } });
+      const handoffReason = parseAgentHandoff(reply) || (!reply ? 'duvida' : null);
+      if (handoffReason) {
+        return res.json({ reply: '', action: { type: 'handoff', reason: handoffReason } });
       }
       // Envio do orçamento → checa se o PDF de 'pacote' do nicho está cadastrado.
       const pdfMatch = reply.match(/###PDF:([a-z_]+)###/i);
@@ -9223,6 +10205,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
       res.json({ reply, action: null });
     } catch (e: any) {
+      if (e instanceof PortfolioLinksValidationError) {
+        return res.status(e.status).json({ error: e.message });
+      }
       console.error('[Agent test] erro:', e?.message || e);
       res.status(500).json({ error: e?.message || 'Erro ao gerar resposta do agente.' });
     }
@@ -9242,20 +10227,39 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .select('*')
       .eq('user_id', userId)
       .maybeSingle();
+    if (!data?.enabled) {
+      return res.status(409).json({ error: 'As sugestões da Lia estão pausadas na configuração do agente.' });
+    }
     try {
-      const reply = await getAgentReply(
-        {
-          enabled: true,
-          persona: data?.persona || '',
-          objective: data?.objective || '',
-          knowledge: data?.knowledge || '',
-          rules: data?.rules || '',
-          salesStrategy: data?.sales_strategy || '',
-          attendantName: data?.attendant_name || '',
-        },
-        messages,
-      );
-      res.json({ reply });
+      const flowMessages = normalizeConversationFlowMessages(messages);
+      const suggestionFlow = analyzeConversationFlow(flowMessages);
+      const suggestionPortfolioLinks = portfolioLinksForNiche(data?.portfolio_links || [], suggestionFlow.niche);
+      const learningWaNumber = await inboxWaNumber((supabaseAdmin || supabase) as SupabaseClient, userId, 'main') || 'laboratorio';
+      const supervisedMemory = await loadSupervisedLearningMemory(userId, learningWaNumber);
+      const generatedReply = suggestionFlow.handoff_reason
+        ? `###HUMANO:${suggestionFlow.handoff_reason}###`
+        : await getLiaReply(
+          {
+            enabled: true,
+            persona: data?.persona || '',
+            objective: data?.objective || '',
+            knowledge: data?.knowledge || '',
+            rules: data?.rules || '',
+            salesStrategy: data?.sales_strategy || '',
+            attendantName: data?.attendant_name || '',
+            learnedPlaybook: data?.learned_playbook || '',
+            supervisedMemory,
+            portfolioLinks: suggestionPortfolioLinks,
+          },
+          flowMessages,
+          { extraInstruction: `${HANDOFF_INSTRUCTION}\n\n${suggestionFlow.instruction}` },
+        );
+      const flowReply = enforceConversationFlowReply(generatedReply, suggestionFlow);
+      const reply = enforceApprovedPortfolioUrls(flowReply, suggestionPortfolioLinks, suggestionFlow.niche);
+      const handoffReason = parseAgentHandoff(reply);
+      res.json(handoffReason
+        ? { reply: '', action: { type: 'handoff', reason: handoffReason } }
+        : { reply });
     } catch (e: any) {
       console.error('[Agent suggest] erro:', e?.message || e);
       res.status(500).json({ error: e?.message || 'Erro ao gerar a sugestão.' });
@@ -9282,6 +10286,26 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Ao marcar GANHO, a IA analisa a conversa do WhatsApp e monta o dossiê pro
   // time de produção: o que a cliente quer, falas/fotos de referência,
   // preferências e combinados. Persistido em alignment_dossiers (migration 058).
+  function pickDossierPhotoIds(msgs: any[], indices: unknown): string[] {
+    const list = Array.isArray(indices) ? indices : [];
+    return list
+      .map((index) => msgs[Number(index)])
+      .filter((message: any) => message && !message.from_me && message.type === 'image' && message.media_url)
+      .map((message: any) => String(message.message_id))
+      .filter(Boolean)
+      .slice(0, 12);
+  }
+
+  function extractConversationLinks(msgs: any[]): string[] {
+    const links = new Set<string>();
+    for (const message of msgs) {
+      const matches = String(message?.body || '').match(/https?:\/\/[^\s<>"']+/gi) || [];
+      matches.forEach((url) => links.add(url.replace(/[),.;!?]+$/, '')));
+      if (links.size >= 20) break;
+    }
+    return [...links].slice(0, 20);
+  }
+
   async function generateAlignmentDossier(userId: string, dealId: number): Promise<any> {
     const db = supabaseAdmin;
     if (!db) throw new Error('Servidor sem service role — dossiê indisponível.');
@@ -9334,17 +10358,26 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     try {
       const content = await analyzeDossierWithAI(lines.join('\n'));
       // Índices → message_ids de fotos DA CLIENTE com mídia salva
-      const refIds = content.fotos_referencia_indices
-        .map((i) => msgs[i])
-        .filter((m: any) => m && !m.from_me && m.type === 'image' && m.media_url)
-        .map((m: any) => m.message_id)
-        .slice(0, 12);
-      const stored: any = { ...content, reference_photo_ids: refIds };
+      const paymentIds = pickDossierPhotoIds(msgs, content.fotos_pagamento_indices);
+      const paymentSet = new Set(paymentIds);
+      const refIds = pickDossierPhotoIds(msgs, content.fotos_referencia_indices)
+        .filter((id) => !paymentSet.has(id));
+      const links = new Set([
+        ...(Array.isArray(content.links_importantes) ? content.links_importantes : []),
+        ...extractConversationLinks(msgs),
+      ]);
+      const stored: any = {
+        ...content,
+        links_importantes: [...links].filter(Boolean).slice(0, 20),
+        reference_photo_ids: refIds,
+        payment_photo_ids: paymentIds,
+      };
       delete stored.fotos_referencia_indices;
+      delete stored.fotos_pagamento_indices;
       const { data: saved } = await db.from('alignment_dossiers')
         .upsert({ ...upsertBase, content: stored, status: 'ready', error: null }, { onConflict: 'user_id,deal_id' })
         .select().single();
-      console.log(`[dossie] gerado | deal=${dealId} | fotos=${refIds.length} (user ${userId})`);
+      console.log(`[dossie] gerado | deal=${dealId} | referencias=${refIds.length} | comprovantes=${paymentIds.length} (user ${userId})`);
       return saved;
     } catch (e: any) {
       return fail(e?.message || 'Falha na análise da IA.');
@@ -9372,23 +10405,41 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     } catch { return null; }
   }
 
-  async function loadDossierPhotos(userId: string, dossier: any): Promise<DossierPhoto[]> {
+  type DossierPhotoKind = 'reference' | 'payment';
+  interface DossierPhotoAsset {
+    id: string;
+    kind: DossierPhotoKind;
+    photo: DossierPhoto;
+  }
+
+  function dossierPhotoRefs(dossier: any): Array<{ id: string; kind: DossierPhotoKind }> {
+    const content = dossier?.content || {};
+    const references = Array.isArray(content.reference_photo_ids) ? content.reference_photo_ids : [];
+    const payments = Array.isArray(content.payment_photo_ids) ? content.payment_photo_ids : [];
+    return [
+      ...references.slice(0, 12).map((id: unknown) => ({ id: String(id), kind: 'reference' as const })),
+      ...payments.slice(0, 12).map((id: unknown) => ({ id: String(id), kind: 'payment' as const })),
+    ].filter((item) => item.id);
+  }
+
+  async function loadDossierPhotoAssets(userId: string, dossier: any): Promise<DossierPhotoAsset[]> {
     const db = supabaseAdmin;
-    const ids: string[] = Array.isArray(dossier?.content?.reference_photo_ids)
-      ? dossier.content.reference_photo_ids : [];
-    if (!db || !ids.length) return [];
+    const refs = dossierPhotoRefs(dossier);
+    if (!db || !refs.length) return [];
+    const ids = [...new Set(refs.map((item) => item.id))];
     const { data: rows } = await db.from('wa_messages')
       .select('message_id, media_url')
       .eq('user_id', userId)
-      .in('message_id', ids.slice(0, 12));
-    const photos: DossierPhoto[] = [];
-    for (const r of rows || []) {
-      const raw = await fetchMediaBuffer(String((r as any).media_url || ''));
+      .in('message_id', ids);
+    const mediaById = new Map((rows || []).map((row: any) => [String(row.message_id), String(row.media_url || '')]));
+    const assets: DossierPhotoAsset[] = [];
+    for (const ref of refs) {
+      const raw = await fetchMediaBuffer(mediaById.get(ref.id) || '');
       if (!raw) continue;
       const photo = await normalizePhotoToJpeg(raw);
-      if (photo) photos.push(photo);
+      if (photo) assets.push({ ...ref, photo });
     }
-    return photos;
+    return assets;
   }
 
   app.get('/api/jobs/:id/dossie', requireAuth, async (req, res) => {
@@ -9418,6 +10469,23 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
   });
 
+  app.get('/api/jobs/:id/dossie/media', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const dossier = await findDossierByJob(userId, Number(req.params.id));
+    if (!dossier || dossier.status !== 'ready') return res.json([]);
+    try {
+      const assets = await loadDossierPhotoAssets(userId, dossier);
+      res.json(assets.map((asset) => ({
+        id: asset.id,
+        kind: asset.kind,
+        data_url: `data:image/jpeg;base64,${asset.photo.jpeg.toString('base64')}`,
+      })));
+    } catch (error: any) {
+      console.error('[dossie media] erro:', error?.message || error);
+      res.status(500).json({ error: 'Não foi possível carregar as imagens do dossiê.' });
+    }
+  });
+
   app.get('/api/jobs/:id/dossie/pdf', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const db = supabaseAdmin;
@@ -9436,14 +10504,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
     }
     try {
-      const photos = await loadDossierPhotos(userId, dossier);
+      const includeImages = req.query.include_images !== '0';
+      const assets = includeImages ? await loadDossierPhotoAssets(userId, dossier) : [];
       const pdf = buildDossierPdf({
         clientName: dossier.client_name || 'Cliente',
         phone: dossier.phone,
         jobLabel,
         generatedAt: dossier.updated_at || dossier.created_at,
         content: dossier.content || {},
-        photos,
+        referencePhotos: assets.filter((asset) => asset.kind === 'reference').map((asset) => asset.photo),
+        paymentPhotos: assets.filter((asset) => asset.kind === 'payment').map((asset) => asset.photo),
       });
       const slug = String(dossier.client_name || 'cliente')
         .normalize('NFD').replace(/\p{Diacritic}/gu, '').replace(/[^\w]+/g, '-').toLowerCase();
@@ -9459,41 +10529,85 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // ── Painel "Atendimentos da Lia" (Fase 3 agêntica) ─────────────────
   // Lista as conversas que a Lia tocou, em 3 baldes: precisa de humano (hand-off),
   // orçamento enviado (aguardando), e Lia conversando. Só leitura, escopo do user.
+  async function loadAgentPanelRows(
+    db: SupabaseClient,
+    userId: string,
+    waNumber: string,
+    columns: string,
+  ): Promise<any[]> {
+    const rows: any[] = [];
+    const pageSize = 1000;
+    let from = 0;
+    while (true) {
+      const { data, error } = await db.from('wa_conversations')
+        .select(columns)
+        .eq('user_id', userId)
+        .eq('wa_number', waNumber)
+        .order('id', { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+      const page = data || [];
+      rows.push(...page);
+      if (page.length < pageSize) break;
+      from += pageSize;
+    }
+    return rows.sort((a, b) => Date.parse(b.last_message_at || '') - Date.parse(a.last_message_at || ''));
+  }
+
+  function missingAgentPanelColumns(error: any): boolean {
+    return error?.code === '42703'
+      || /agent_status|handoff_reason|last_agent_action_at/.test(error?.message || '');
+  }
+
   app.get('/api/agent/atendimentos', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const db = supabaseAdmin || ((req as any).supabase as SupabaseClient);
-    const emptyResp = { items: [] as any[], counts: { precisa_humano: 0, orcamento: 0, conversando: 0, total: 0 } };
+    const emptyResp = { items: [] as any[], counts: { precisa_humano: 0, orcamento: 0, conversando: 0, humano: 0, total: 0 } };
     try {
       const waNumber = await inboxWaNumber(db, userId, 'main');
       if (!waNumber) return res.json(emptyResp);
-      let { data: convData, error: convErr } = await db.from('wa_conversations')
-        .select('phone, contact_name, last_message, last_message_at, needs_human, unread_count, last_agent_reply_at')
-        .eq('user_id', userId)
-        .eq('wa_number', waNumber)
-        .order('last_message_at', { ascending: false })
-        .limit(300);
-      // Resiliente: se a coluna last_agent_reply_at ainda não existe (migration 051),
-      // cai pra só as conversas marcadas como needs_human.
-      if (convErr && (convErr.code === '42703' || /last_agent_reply_at/.test(convErr.message || ''))) {
-        const r = await db.from('wa_conversations')
-          .select('phone, contact_name, last_message, last_message_at, needs_human, unread_count')
-          .eq('user_id', userId).eq('wa_number', waNumber).eq('needs_human', true)
-          .order('last_message_at', { ascending: false }).limit(300);
-        convData = r.data as any; convErr = r.error as any;
-      } else if (convErr) {
-        throw convErr;
+      let convData: any[] = [];
+      // Resiliente enquanto a migration 069 ainda não foi aplicada.
+      try {
+        convData = await loadAgentPanelRows(
+          db,
+          userId,
+          waNumber,
+          'id, phone, contact_name, last_message, last_message_at, needs_human, unread_count, last_agent_reply_at, agent_status, handoff_reason, handoff_requested_at, human_assumed_at, last_agent_action_at',
+        );
+      } catch (error: any) {
+        if (!missingAgentPanelColumns(error)) throw error;
+        convData = await loadAgentPanelRows(
+          db,
+          userId,
+          waNumber,
+          'id, phone, contact_name, last_message, last_message_at, needs_human, unread_count, last_agent_reply_at',
+        );
       }
-      const convs = (convData || []).filter((c: any) => c.needs_human || c.last_agent_reply_at);
+      const activeCutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+      const convs = (convData || []).filter((c: any) => {
+        if (c.needs_human || c.agent_status === 'needs_human') return true;
+        const activity = Date.parse(c.last_agent_action_at || c.human_assumed_at || c.last_agent_reply_at || '');
+        const currentState = ['lia_active', 'quote_sent', 'human_active'].includes(c.agent_status);
+        const legacyActive = !c.agent_status && !!c.last_agent_reply_at;
+        return (currentState || legacyActive) && Number.isFinite(activity) && activity >= activeCutoff;
+      });
       if (convs.length === 0) return res.json(emptyResp);
 
-      const [{ data: deals }, { data: stages }, { data: fups }] = await Promise.all([
-        db.from('deals').select('id, stage, contact_phone').eq('user_id', userId),
-        db.from('deal_stages').select('id, name').eq('user_id', userId),
+      const [deals, stages, { data: fups }] = await Promise.all([
+        loadAllUserRows(
+          db,
+          'deals',
+          'id, stage, contact_phone, converted, updated_at, created_at, current_stage_entered_at',
+          userId,
+        ),
+        loadAllUserRows(db, 'deal_stages', 'id, name, is_final', userId),
         db.from('scheduled_followups').select('deal_id, status, scheduled_at')
           .eq('user_id', userId).eq('wa_number', waNumber)
           .eq('message', AGENT_FOLLOWUP_SENTINEL).in('status', ['pending', 'sent']),
       ]);
-      const stageName = new Map((stages || []).map((s: any) => [s.id, s.name]));
+      const stageName = new Map(stages.map((s: any) => [s.id, s.name]));
+      const finalStageIds = new Set(stages.filter((s: any) => s.is_final).map((s: any) => s.id));
       const fupByDeal = new Map<any, any>();
       for (const f of (fups || [])) {
         const prev = fupByDeal.get(f.deal_id);
@@ -9502,7 +10616,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       // Indexa os deals por dígitos UMA vez (em vez de varrer todos os deals por
       // conversa) — o painel faz poll de 30s, então evita O(conversas × deals).
       const dealByDigits = new Map<string, any>();
-      for (const dl of (deals || [])) {
+      const activeDeals = deals.filter((deal: any) => !deal.converted && !finalStageIds.has(deal.stage));
+      activeDeals.sort((a: any, b: any) => {
+        const bTime = Date.parse(b.current_stage_entered_at || b.updated_at || b.created_at || '') || 0;
+        const aTime = Date.parse(a.current_stage_entered_at || a.updated_at || a.created_at || '') || 0;
+        return bTime - aTime || Number(b.id) - Number(a.id);
+      });
+      for (const dl of activeDeals) {
         const dd = lerDigitos(dl.contact_phone || '');
         if (!dd) continue;
         const sh = dd.startsWith('55') ? dd.slice(2) : dd;
@@ -9519,9 +10639,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         const deal = dealForPhone(c.phone);
         const sName = deal ? (stageName.get(deal.stage) || '') : '';
         const fup = deal ? fupByDeal.get(deal.id) : null;
-        let bucket: 'precisa_humano' | 'orcamento' | 'conversando';
-        if (c.needs_human) bucket = 'precisa_humano';
-        else if (orcRe.test(sName)) bucket = 'orcamento';
+        let bucket: 'precisa_humano' | 'orcamento' | 'conversando' | 'humano';
+        if (c.needs_human || c.agent_status === 'needs_human') bucket = 'precisa_humano';
+        else if (c.agent_status === 'human_active') bucket = 'humano';
+        else if (c.agent_status === 'quote_sent' || orcRe.test(sName)) bucket = 'orcamento';
         else bucket = 'conversando';
         return {
           phone: c.phone,
@@ -9532,6 +10653,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           stage_name: sName || null,
           followup_status: fup?.status || null,
           followup_at: fup?.scheduled_at || null,
+          agent_status: c.agent_status || (c.needs_human ? 'needs_human' : 'lia_active'),
+          handoff_reason: c.handoff_reason || null,
+          handoff_at: c.handoff_requested_at || null,
+          human_assumed_at: c.human_assumed_at || null,
           bucket,
         };
       });
@@ -9539,12 +10664,30 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         precisa_humano: items.filter((i) => i.bucket === 'precisa_humano').length,
         orcamento: items.filter((i) => i.bucket === 'orcamento').length,
         conversando: items.filter((i) => i.bucket === 'conversando').length,
+        humano: items.filter((i) => i.bucket === 'humano').length,
         total: items.length,
       };
       res.json({ items, counts });
     } catch (e: any) {
       console.error('[Agent atendimentos] erro:', e?.message || e);
       res.status(500).json({ error: e?.message || 'Erro ao listar atendimentos.' });
+    }
+  });
+
+  // Confirma que uma pessoa assumiu a conversa. A Lia permanece bloqueada até
+  // alguém usar explicitamente "Devolver pra Lia".
+  app.post('/api/agent/atendimentos/:phone/assumir', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const db = supabaseAdmin || ((req as any).supabase as SupabaseClient);
+    const phone = String(req.params.phone || '').replace(/\D/g, '');
+    if (!phone) return res.status(400).json({ error: 'phone inválido' });
+    try {
+      const waNumber = await inboxWaNumber(db, userId, 'main');
+      if (!waNumber) return res.status(409).json({ error: 'Canal principal não identificado' });
+      await markConversationHumanActive(userId, phone, waNumber);
+      res.json({ ok: true, agent_status: 'human_active' });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || 'Erro ao assumir atendimento.' });
     }
   });
 
@@ -9557,9 +10700,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     try {
       const waNumber = await inboxWaNumber(db, userId, 'main');
       if (!waNumber) return res.status(409).json({ error: 'Canal principal não identificado' });
-      await db.from('wa_conversations').update({ needs_human: false })
-        .eq('user_id', userId).eq('wa_number', waNumber).eq('phone', phone);
-      res.json({ ok: true });
+      const channel = await activeAgentChannel(db, userId, waNumber);
+      if (!channel) return res.status(409).json({ error: 'Canal principal não está ativo' });
+      await updateAgentConversationState(userId, phone, waNumber, 'lia_active', {
+        handoff_reason: null,
+        handoff_requested_at: null,
+        human_assumed_at: null,
+      });
+      scheduleAutonomousReply(userId, phone, 'text', waNumber, channel);
+      res.json({ ok: true, agent_status: 'lia_active' });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || 'Erro ao devolver pra Lia.' });
     }
@@ -9815,6 +10964,29 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   const fiscalDb = (req: any) => (supabaseAdmin || (req as any).supabase) as SupabaseClient;
   const fiscalEnv = (cfg: any): plugnotas.PlugEnv =>
     cfg?.environment === 'production' ? 'production' : 'sandbox';
+  const FISCAL_JOB_LABEL = 'Nota fiscal emitida';
+
+  async function applyFiscalJobLabel(db: SupabaseClient, userId: string, jobId: unknown) {
+    const id = Number(jobId);
+    if (!Number.isFinite(id)) return;
+    try {
+      const { data: job } = await db.from('jobs')
+        .select('id, labels').eq('id', id).eq('user_id', userId).maybeSingle();
+      if (!job) return;
+      const current = Array.isArray((job as any).labels) ? (job as any).labels : [];
+      if (!current.includes(FISCAL_JOB_LABEL)) {
+        await db.from('jobs').update({ labels: [...current, FISCAL_JOB_LABEL] })
+          .eq('id', id).eq('user_id', userId);
+      }
+      const { data: palette } = await db.from('job_labels')
+        .select('id').eq('user_id', userId).eq('name', FISCAL_JOB_LABEL).limit(1);
+      if (!palette?.length) {
+        await db.from('job_labels').insert({ user_id: userId, name: FISCAL_JOB_LABEL, color: '#059669' });
+      }
+    } catch (error: any) {
+      console.warn('[fiscal] etiqueta automática não aplicada:', error?.message || error);
+    }
+  }
 
   async function getFiscalConfig(req: any) {
     const userId = (req as any).userId;
@@ -10085,6 +11257,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         if (salvar_cpf && client_id && docTomador.length === 11) {
           await dbNac.from('clients').update({ cpf: docTomador }).eq('id', client_id).eq('user_id', userId);
         }
+        await applyFiscalJobLabel(dbNac, userId, job_id);
         return res.json({ success: true, id: inv.id, chave_acesso: r.chaveAcesso, numero: numeroNota, ambiente: amb });
       } catch (e: any) {
         await dbNac.from('fiscal_invoices').update({
@@ -10143,7 +11316,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const db = fiscalDb(req);
     const { data: inv } = await db.from('fiscal_invoices').select('*').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
     if (!inv) return res.status(404).json({ error: 'Nota não encontrada.' });
-    if (inv.chave_acesso) return res.json(inv); // nacional: emissão é síncrona, nada a atualizar
+    if (inv.chave_acesso) {
+      if (inv.status === 'autorizada') await applyFiscalJobLabel(db, userId, inv.job_id);
+      return res.json(inv); // nacional: emissão é síncrona, nada a atualizar
+    }
     if (!inv.provider_id) return res.json(inv);
     const cfg = await getFiscalConfig(req);
     const r = await plugnotas.consultarNfse(fiscalEnv(cfg), inv.provider_id);
@@ -10157,6 +11333,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (d?.xml || d?.linkXml) upd.xml_url = d.xml || d.linkXml;
     if (status === 'rejeitada') upd.error_message = d?.mensagem || d?.motivo || 'Rejeitada pela prefeitura.';
     await db.from('fiscal_invoices').update(upd).eq('id', inv.id);
+    if (status === 'autorizada') await applyFiscalJobLabel(db, userId, inv.job_id);
     res.json({ ...inv, ...upd });
   });
 
@@ -15391,10 +16568,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         const normalized = normalizeBrazilianPhone(onlyDigits) || onlyDigits;
         let targets = [...new Set([onlyDigits, normalized])];
         if (supabaseAdmin && targets.length > 1) {
+          const waNumber = registeredSlotNumber(userId, 'main');
+          if (!waNumber) return;
           const { data: convs } = await supabaseAdmin
             .from('wa_conversations')
             .select('phone')
             .eq('user_id', userId)
+            .eq('wa_number', waNumber)
             .in('phone', targets);
           const real = (convs || []).map((c: any) => c.phone).filter(Boolean);
           if (real.length) targets = [...new Set(real)];
@@ -15451,6 +16631,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     let stages = await ensurePipelineStages(supabase, userId);
     stages = await ensureWonLostStages(supabase, userId, stages);
     const stageById = new Map(stages.map((s: any) => [s.id, s]));
+    const waNumber = registeredSlotNumber(userId, 'main');
+    if (!waNumber) return res.status(409).json({ error: 'Canal principal não identificado.' });
 
     const { data: deals } = await supabase.from('deals')
       .select('id, stage, contact_phone, stage_history')
@@ -15477,7 +16659,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           if (!stage || !digitsPhone) { stats.skipped++; return; }
           const normalized = normalizeBrazilianPhone(digitsPhone) || digitsPhone;
           const { data: convs } = await supabaseAdmin!.from('wa_conversations')
-            .select('phone').eq('user_id', userId)
+            .select('phone').eq('user_id', userId).eq('wa_number', waNumber)
             .in('phone', [...new Set([digitsPhone, normalized])]);
           const targets = [...new Set((convs || []).map((c: any) => c.phone).filter(Boolean))];
           if (!targets.length) { stats.skipped++; return; } // sem conversa = sem chat pra etiquetar
@@ -23273,12 +24455,87 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ connected: true, account: accountSafe });
   });
 
+  app.get('/api/meta/whatsapp/channel', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const db = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    try {
+      const state = await getWhatsAppChannelState(
+        db,
+        userId,
+        BaileysManager.getStatus(userId) === 'open',
+      );
+      res.json(state);
+    } catch (error: any) {
+      res.status(500).json({ error: error?.message || 'Falha ao consultar canal do WhatsApp' });
+    }
+  });
+
+  app.patch('/api/meta/whatsapp/channel', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const db = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    const preference = parseChannelPreference(req.body?.channel ?? req.body?.preferred_channel);
+    if (!preference) return res.status(400).json({ error: 'channel deve ser auto, meta ou baileys' });
+    try {
+      await setWhatsAppChannelPreference(db, userId, preference);
+      const state = await getWhatsAppChannelState(db, userId, BaileysManager.getStatus(userId) === 'open');
+      res.json({ success: true, ...state });
+    } catch (error: any) {
+      const status = error instanceof CoexistenceSchemaRequiredError ? 503 : 500;
+      res.status(status).json({ error: error?.message || 'Falha ao selecionar canal do WhatsApp' });
+    }
+  });
+
+  app.post('/api/meta/whatsapp/coexistence/sync', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const db = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    try {
+      const result = await requestMetaDataSync(db, userId, req.body?.sync_types, decryptIfNeeded);
+      res.status(202).json({ success: true, ...result });
+    } catch (error: any) {
+      const status = error instanceof CoexistenceSchemaRequiredError
+        ? 503
+        : error instanceof MetaChannelNotOperationalError ? 409 : 502;
+      res.status(status).json({ error: error?.message || 'Falha ao solicitar sincronização na Meta' });
+    }
+  });
+
+  app.get('/api/meta/whatsapp/coexistence/sync-status', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const db = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
+    try {
+      const state = await getWhatsAppChannelState(db, userId, BaileysManager.getStatus(userId) === 'open');
+      res.json({
+        connected: state.configured,
+        mode: state.mode,
+        preferred_channel: state.preferred_channel,
+        sync: {
+          status: state.sync.status,
+          attempts: state.sync.attempts,
+          requested_at: state.sync.requested_at,
+          updated_at: state.sync.updated_at,
+          completed_at: state.sync.completed_at,
+          last_error: state.sync.error,
+          details: state.sync.details,
+        },
+        status: state.sync.status,
+        attempts: state.sync.attempts,
+        requested_at: state.sync.requested_at,
+        updated_at: state.sync.updated_at,
+        completed_at: state.sync.completed_at,
+        error: state.sync.error,
+        details: state.sync.details,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error?.message || 'Falha ao consultar sincronização' });
+    }
+  });
+
   // Diagnóstico de provisionamento Meta — bate na Graph API e retorna o estado
   // ao vivo do phone number. Usado pelo banner de "conta em provisionamento"
   // na inbox e pela tela de diagnóstico de Configurações → WhatsApp.
   app.get('/api/meta/whatsapp/diag', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
 
     const { data: acc, error } = await supabase
       .from('whatsapp_business_accounts')
@@ -23295,15 +24552,31 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     try {
       const r = await fetch(
-        `https://graph.facebook.com/v21.0/${acc.phone_number_id}?fields=platform_type,code_verification_status,status,quality_rating,display_phone_number,verified_name`,
+        `https://graph.facebook.com/v21.0/${acc.phone_number_id}?fields=platform_type,code_verification_status,status,quality_rating,display_phone_number,verified_name,is_on_biz_app`,
         { headers: { Authorization: `Bearer ${token}` } },
       );
       const phone = await r.json();
       if (phone.error) return res.status(400).json({ error: phone.error.message, code: phone.error.code });
 
       const platform = String(phone.platform_type || '').toUpperCase();
-      const verified = String(phone.code_verification_status || '').toUpperCase();
-      const cloudApiReady = platform === 'CLOUD_API';
+      const connectionStatus = String(phone.status || '').toUpperCase();
+      const isOnBizApp = typeof phone.is_on_biz_app === 'boolean' ? phone.is_on_biz_app : null;
+      const { data: modeRow } = await supabase.from('whatsapp_business_accounts')
+        .select('mode').eq('user_id', userId).eq('is_active', true).limit(1).maybeSingle();
+      const isCoexistence = modeRow?.mode === 'coexistence';
+      const cloudApiReady = platform === 'CLOUD_API'
+        && connectionStatus === 'CONNECTED'
+        && (!isCoexistence || isOnBizApp === true);
+
+      await recordMetaPhoneStatus(supabase, userId, {
+        platform_type: phone.platform_type || null,
+        status: phone.status || null,
+        is_on_biz_app: isOnBizApp,
+        code_verification_status: phone.code_verification_status || null,
+        quality_rating: phone.quality_rating || null,
+        display_phone_number: phone.display_phone_number || null,
+        verified_name: phone.verified_name || null,
+      });
 
       // Interpretação humana do estado pra o frontend renderizar banner.
       // Ordem importa: CLOUD_API → OK; ON_PREMISE → aguardando migração; outros → erro genérico.
@@ -23314,7 +24587,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         humanMessage = 'Cloud API ativa — envio e recebimento de mensagens habilitados.';
       } else if (platform === 'ON_PREMISE') {
         humanState = 'provisioning';
-        humanMessage = 'Número conectado, mas ainda não promovido pra Cloud API. A Meta processa essa migração após aprovação do App Review (3-4 semanas). Mensagens enviadas/recebidas pela API oficial estarão indisponíveis até lá.';
+        humanMessage = 'Número conectado, mas ainda não habilitado para envio e recebimento pela Cloud API. Consulte o provisionamento da conta na Meta.';
       } else {
         humanState = 'error';
         humanMessage = `Estado inesperado do número: platform_type=${platform || 'desconhecido'}. Reconecte em Configurações → WhatsApp.`;
@@ -23329,6 +24602,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           platform_type: phone.platform_type || null,
           code_verification_status: phone.code_verification_status || null,
           status: phone.status || null,
+          is_on_biz_app: isOnBizApp,
           quality_rating: phone.quality_rating || null,
           display_phone_number: phone.display_phone_number || null,
           verified_name: phone.verified_name || null,
@@ -25132,6 +26406,29 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // ============ DASHBOARD ANALYTICS ============
+  app.get(
+    '/api/marketing/attribution-report',
+    requireAuth,
+    requirePermission('dashboard'),
+    async (req, res) => {
+      const userId = String((req as any).userId || '');
+      const days = normalizeMarketingAttributionDays(req.query.days);
+      if (!marketingMeasurementTenantAllowed(userId)) {
+        return res.json(emptyMarketingAttributionResponse(days));
+      }
+
+      try {
+        const supabase = (req as any).supabase as SupabaseClient;
+        const report = await loadMarketingAttributionReport(supabase, userId, days);
+        return res.json(report);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'UNKNOWN';
+        console.error('[marketing-report] falha ao montar relatório:', message);
+        return res.status(500).json({ error: 'Não foi possível carregar o rastreamento agora.' });
+      }
+    },
+  );
+
   const parseHistory = (raw: any): any[] => {
     if (!raw) return [];
     if (Array.isArray(raw)) return raw;
@@ -25647,6 +26944,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   startFollowUpWorker();
+  startMarketingConversionWorker();
+  startMarketingRetentionWorker();
 
   // ── Baileys: upload de mídia para Supabase Storage ───────────────────────
   let waBucketEnsured = false;
@@ -25823,16 +27122,164 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   const autoReplyTimers = new Map<string, NodeJS.Timeout>();
   const lastAutoReplyAt = new Map<string, number>();
 
+  type AgentConversationStatus = 'idle' | 'lia_active' | 'quote_sent' | 'needs_human' | 'human_active';
+
+  function agentPhoneVariants(phone: string): string[] {
+    const variants = brazilianPhoneVariants(phone);
+    const digits = String(phone || '').replace(/\D/g, '');
+    return [...new Set([digits, ...variants].filter(Boolean))];
+  }
+
+  async function updateAgentConversationState(
+    userId: string,
+    phone: string,
+    waNumber: string,
+    status: AgentConversationStatus,
+    extra: Record<string, unknown> = {},
+  ) {
+    if (!supabaseAdmin) return;
+    const now = new Date().toISOString();
+    const payload: Record<string, unknown> = {
+      agent_status: status,
+      last_agent_action_at: now,
+      needs_human: status === 'needs_human',
+      ...extra,
+    };
+    const { error } = await supabaseAdmin.from('wa_conversations')
+      .update(payload)
+      .eq('user_id', userId)
+      .eq('wa_number', waNumber)
+      .in('phone', agentPhoneVariants(phone));
+    if (!error) return;
+    const missingStateColumns = error.code === '42703'
+      || /agent_status|handoff_reason|handoff_requested_at|human_assumed_at|last_agent_action_at/.test(error.message || '');
+    if (!missingStateColumns) throw error;
+    await supabaseAdmin.from('wa_conversations')
+      .update({ needs_human: status === 'needs_human' })
+      .eq('user_id', userId)
+      .eq('wa_number', waNumber)
+      .in('phone', agentPhoneVariants(phone));
+  }
+
+  async function markConversationForHuman(
+    userId: string,
+    phone: string,
+    waNumber: string,
+    reason: AgentHandoffReason,
+  ) {
+    const now = new Date().toISOString();
+    await updateAgentConversationState(userId, phone, waNumber, 'needs_human', {
+      handoff_reason: reason,
+      handoff_requested_at: now,
+      human_assumed_at: null,
+    });
+  }
+
+  async function markConversationHumanActive(userId: string, phone: string, waNumber: string) {
+    await updateAgentConversationState(userId, phone, waNumber, 'human_active', {
+      human_assumed_at: new Date().toISOString(),
+    });
+  }
+
+  async function markConversationHumanActiveIfNeeded(userId: string, phone: string, waNumber: string) {
+    if (!supabaseAdmin || !waNumber) return;
+    let { data, error } = await supabaseAdmin.from('wa_conversations')
+      .select('needs_human, agent_status')
+      .eq('user_id', userId)
+      .eq('wa_number', waNumber)
+      .in('phone', agentPhoneVariants(phone))
+      .limit(1)
+      .maybeSingle();
+    if (error?.code === '42703') {
+      const fallback = await supabaseAdmin.from('wa_conversations')
+        .select('needs_human')
+        .eq('user_id', userId)
+        .eq('wa_number', waNumber)
+        .in('phone', agentPhoneVariants(phone))
+        .limit(1)
+        .maybeSingle();
+      data = fallback.data as any;
+      error = fallback.error;
+    }
+    if (error) return;
+    if (data?.needs_human || data?.agent_status === 'needs_human') {
+      await markConversationHumanActive(userId, phone, waNumber);
+    }
+  }
+
+  async function claimAgentMessage(
+    userId: string,
+    phone: string,
+    waNumber: string,
+    messageId: string,
+  ): Promise<boolean> {
+    if (!supabaseAdmin || !messageId) return false;
+    const { error } = await supabaseAdmin.from('ai_agent_message_claims').insert({
+      user_id: userId,
+      phone,
+      wa_number: waNumber,
+      message_id: messageId,
+      status: 'processing',
+    });
+    if (!error) return true;
+    if (error.code === '23505') {
+      const { data: existing } = await supabaseAdmin.from('ai_agent_message_claims')
+        .select('status, claimed_at')
+        .eq('user_id', userId)
+        .eq('wa_number', waNumber)
+        .eq('message_id', messageId)
+        .maybeSingle();
+      if (!existing) return false;
+      const claimAgeMs = Date.now() - Date.parse(existing?.claimed_at || '');
+      const staleProcessing = existing?.status === 'processing'
+        && Number.isFinite(claimAgeMs)
+        && claimAgeMs > 5 * 60 * 1000;
+      const reclaimable = staleProcessing || existing?.status === 'handoff' || existing?.status === 'failed';
+      if (!reclaimable) return false;
+      const { data: reclaimed } = await supabaseAdmin.from('ai_agent_message_claims')
+        .update({ status: 'processing', claimed_at: new Date().toISOString(), completed_at: null, error_code: null })
+        .eq('user_id', userId)
+        .eq('wa_number', waNumber)
+        .eq('message_id', messageId)
+        .eq('status', existing.status)
+        .eq('claimed_at', existing.claimed_at)
+        .select('message_id');
+      return !!reclaimed?.length;
+    }
+    const tableMissing = error.code === '42P01' || /ai_agent_message_claims/.test(error.message || '');
+    if (tableMissing) return true;
+    throw error;
+  }
+
+  async function finishAgentMessage(
+    userId: string,
+    waNumber: string,
+    messageId: string,
+    status: 'completed' | 'handoff' | 'failed',
+    errorCode?: string,
+  ) {
+    if (!supabaseAdmin || !messageId) return;
+    const { error } = await supabaseAdmin.from('ai_agent_message_claims').update({
+      status,
+      completed_at: new Date().toISOString(),
+      error_code: errorCode || null,
+    }).eq('user_id', userId).eq('wa_number', waNumber).eq('message_id', messageId);
+    if (error && error.code !== '42P01') {
+      console.warn('[Lia autônoma] não conseguiu concluir claim:', error.message);
+    }
+  }
+
   async function loadAgentConversation(userId: string, phone: string, waNumber: string) {
     if (!supabaseAdmin) return [] as { role: 'user' | 'assistant'; content: string }[];
     // Pega as ÚLTIMAS 60 (desc + reverte) — em conversa longa o que importa é o
     // contexto RECENTE, não as primeiras mensagens.
     const { data } = await supabaseAdmin.from('wa_messages')
       .select('body, from_me, type, transcription, timestamp')
-      .eq('user_id', userId).eq('wa_number', waNumber).eq('phone', phone)
+      .eq('user_id', userId).eq('wa_number', waNumber).in('phone', agentPhoneVariants(phone))
       .order('timestamp', { ascending: false }).limit(60);
     return (data || []).reverse().map((m: any) => ({
       role: (m.from_me ? 'assistant' : 'user') as 'user' | 'assistant',
+      timestamp: m.timestamp,
       content: (m.body && m.body.trim())
         || m.transcription
         || (m.type === 'audio' ? '[áudio]' : m.type === 'image' ? '[imagem]' : ''),
@@ -25843,12 +27290,26 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   const lerDigitos = (s: string) => (s || '').replace(/\D/g, '');
   async function findDealForPhone(userId: string, phone: string) {
     if (!supabaseAdmin) return null;
-    const d = lerDigitos(phone);
-    const short = d.startsWith('55') ? d.slice(2) : d;
-    const variants = new Set([d, short, '55' + short]);
-    const { data } = await supabaseAdmin.from('deals')
-      .select('id, stage, contact_phone').eq('user_id', userId);
-    return (data || []).find((x: any) => variants.has(lerDigitos(x.contact_phone))) || null;
+    const variants = new Set(agentPhoneVariants(phone));
+    const [deals, stages] = await Promise.all([
+      loadAllUserRows(
+        supabaseAdmin,
+        'deals',
+        'id, stage, contact_phone, converted, updated_at, created_at, current_stage_entered_at',
+        userId,
+      ),
+      loadAllUserRows(supabaseAdmin, 'deal_stages', 'id, is_final', userId),
+    ]);
+    const finalStages = new Set(stages.filter((stage: any) => stage.is_final).map((stage: any) => stage.id));
+    const matches = deals.filter((deal: any) => {
+      if (deal.converted || finalStages.has(deal.stage)) return false;
+      return agentPhoneVariants(deal.contact_phone || '').some((variant) => variants.has(variant));
+    });
+    return matches.sort((a: any, b: any) => {
+      const bTime = Date.parse(b.current_stage_entered_at || b.updated_at || b.created_at || '') || 0;
+      const aTime = Date.parse(a.current_stage_entered_at || a.updated_at || a.created_at || '') || 0;
+      return bTime - aTime || Number(b.id) - Number(a.id);
+    })[0] || null;
   }
   async function moveDealToStageNamed(userId: string, dealId: any, nameRegex: RegExp) {
     if (!supabaseAdmin || !dealId) return;
@@ -25861,7 +27322,114 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .update({ stage: target.id, current_stage_entered_at: new Date().toISOString() })
       .eq('id', dealId).eq('user_id', userId);
   }
-  async function sendMaterialPdf(userId: string, phone: string, nicho: string): Promise<boolean> {
+  type AgentChannel = 'baileys' | 'meta';
+
+  async function loadAgentMetaAccount(userId: string, waNumber: string) {
+    if (!supabaseAdmin) return null;
+    const { data } = await supabaseAdmin.from('whatsapp_business_accounts')
+      .select('phone_number_id, phone_number, access_token')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .limit(10);
+    const account = (data || []).find((row: any) =>
+      String(row?.phone_number || '').replace(/\D/g, '') === waNumber);
+    const token = account?.access_token ? decryptIfNeeded(account.access_token) : '';
+    if (!account?.phone_number_id || !token) return null;
+    return { phoneNumberId: account.phone_number_id, waNumber, token };
+  }
+
+  async function persistMetaAgentMessage(
+    userId: string,
+    phone: string,
+    waNumber: string,
+    messageId: string,
+    body: string,
+    type: 'text' | 'document',
+  ) {
+    if (!supabaseAdmin) return;
+    const now = new Date().toISOString();
+    await supabaseAdmin.from('wa_messages').insert({
+      user_id: userId,
+      phone,
+      wa_number: waNumber,
+      message_id: messageId,
+      body,
+      from_me: true,
+      timestamp: now,
+      type,
+      status: 'sent',
+    });
+    const preview = type === 'document' ? `📄 ${body || 'Orçamento'}` : body;
+    await supabaseAdmin.from('wa_conversations').update({
+      last_message: preview,
+      last_message_at: now,
+      last_from_me: true,
+      unread_count: 0,
+      updated_at: now,
+    }).eq('user_id', userId).eq('wa_number', waNumber).in('phone', agentPhoneVariants(phone));
+  }
+
+  async function sendMetaAgentPayload(
+    account: { phoneNumberId: string; token: string },
+    payload: Record<string, unknown>,
+  ): Promise<string> {
+    const response = await fetch(`https://graph.facebook.com/v21.0/${account.phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${account.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok || data?.error) throw new Error(data?.error?.message || 'Falha ao enviar pela API oficial do WhatsApp.');
+    return String(data?.messages?.[0]?.id || `meta-agent-${Date.now()}`);
+  }
+
+  async function sendAgentText(
+    userId: string,
+    phone: string,
+    waNumber: string,
+    channel: AgentChannel,
+    text: string,
+  ) {
+    if (channel === 'baileys') {
+      await BaileysManager.sendText(userId, phone, text);
+      return;
+    }
+    const account = await loadAgentMetaAccount(userId, waNumber);
+    if (!account) throw new Error('Canal oficial do WhatsApp indisponível.');
+    const messageId = await sendMetaAgentPayload(account, {
+      messaging_product: 'whatsapp',
+      to: phone,
+      type: 'text',
+      text: { body: text },
+    });
+    await persistMetaAgentMessage(userId, phone, waNumber, messageId, text, 'text');
+  }
+
+  async function uploadAgentPdfToMeta(
+    account: { phoneNumberId: string; token: string },
+    buffer: Buffer,
+    fileName: string,
+  ): Promise<string> {
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('file', new Blob([buffer], { type: 'application/pdf' }), fileName);
+    const response = await fetch(`https://graph.facebook.com/v21.0/${account.phoneNumberId}/media`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${account.token}` },
+      body: form,
+    });
+    const data = await response.json();
+    if (!response.ok || !data?.id) throw new Error(data?.error?.message || 'Falha ao preparar o orçamento no WhatsApp.');
+    return String(data.id);
+  }
+
+  async function sendMaterialPdf(
+    userId: string,
+    phone: string,
+    waNumber: string,
+    channel: AgentChannel,
+    nicho: string,
+  ): Promise<boolean> {
     if (!supabaseAdmin) return false;
     const { data: mat } = await supabaseAdmin.from('agente_materiais')
       .select('path, nome_arquivo').eq('user_id', userId).eq('nicho', nicho).eq('tipo', 'pacote').maybeSingle();
@@ -25869,7 +27437,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const { data: blob, error } = await supabaseAdmin.storage.from('agente-materiais').download(mat.path);
     if (error || !blob) return false;
     const buf = Buffer.from(await blob.arrayBuffer());
-    await BaileysManager.sendMedia(userId, phone, buf.toString('base64'), 'application/pdf', mat.nome_arquivo || 'pacote.pdf', '');
+    const fileName = mat.nome_arquivo || 'pacote.pdf';
+    if (channel === 'baileys') {
+      await BaileysManager.sendMedia(userId, phone, buf.toString('base64'), 'application/pdf', fileName, '');
+      return true;
+    }
+    const account = await loadAgentMetaAccount(userId, waNumber);
+    if (!account) throw new Error('Canal oficial do WhatsApp indisponível.');
+    const mediaId = await uploadAgentPdfToMeta(account, buf, fileName);
+    const messageId = await sendMetaAgentPayload(account, {
+      messaging_product: 'whatsapp',
+      to: phone,
+      type: 'document',
+      document: { id: mediaId, filename: fileName },
+    });
+    await persistMetaAgentMessage(userId, phone, waNumber, messageId, fileName, 'document');
     return true;
   }
 
@@ -25880,15 +27462,21 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   function splitIntoMessages(text: string): string[] {
     return (text || '').split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
   }
-  async function sendAgentMessages(userId: string, phone: string, text: string) {
+  async function sendAgentMessages(
+    userId: string,
+    phone: string,
+    waNumber: string,
+    channel: AgentChannel,
+    text: string,
+  ) {
     const parts = splitIntoMessages(text);
     for (let i = 0; i < parts.length; i++) {
       if (i > 0) {
-        await BaileysManager.sendTyping(userId, phone, true);
+        if (channel === 'baileys') await BaileysManager.sendTyping(userId, phone, true);
         await new Promise((r) => setTimeout(r, Math.min(1200 + parts[i].length * 35, 6000)));
-        await BaileysManager.sendTyping(userId, phone, false);
+        if (channel === 'baileys') await BaileysManager.sendTyping(userId, phone, false);
       }
-      await BaileysManager.sendText(userId, phone, parts[i]);
+      await sendAgentText(userId, phone, waNumber, channel, parts[i]);
     }
   }
 
@@ -25901,16 +27489,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // casar por "últimos 8 dígitos" — daria falso positivo entre clientes do
     // mesmo estúdio (DDDs diferentes / com e sem o 9) e vazaria PII pra conversa
     // errada. Melhor não reconhecer do que reconhecer o cliente errado.
-    const d = lerDigitos(phone);
-    const short = d.startsWith('55') ? d.slice(2) : d;
-    const variants = new Set([d, short, '55' + short]);
+    const variants = new Set(agentPhoneVariants(phone));
     const matchPhone = (p: any) => {
-      const cd = lerDigitos(p || '');
-      return !!cd && variants.has(cd);
+      return agentPhoneVariants(String(p || '')).some((variant) => variants.has(variant));
     };
-    const { data: clients } = await supabaseAdmin.from('clients')
-      .select('id, name, child_name, phone').eq('user_id', userId);
-    const cli = (clients || []).find((c: any) => matchPhone(c.phone));
+    const clients = await loadAllUserRows(supabaseAdmin, 'clients', 'id, name, child_name, phone', userId);
+    const cli = clients.find((c: any) => matchPhone(c.phone));
     if (!cli) return '';
     let past = '';
     try {
@@ -25935,115 +27519,222 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return lines.join('\n');
   }
 
-  async function runAutonomousReply(userId: string, phone: string, waNumber: string) {
+  async function runAutonomousReply(
+    userId: string,
+    phone: string,
+    waNumber: string,
+    channel: AgentChannel,
+  ) {
     if (!supabaseAdmin) return;
-    if (registeredSlotNumber(userId, 'main') !== waNumber) return;
-    const key = `${userId}|${waNumber}|${phone}`;
+    const activeNumber = channel === 'baileys'
+      ? registeredSlotNumber(userId, 'main')
+      : await activeMetaNumber(supabaseAdmin, userId);
+    if (activeNumber !== waNumber) return;
+    const key = `${userId}|${waNumber}|${phone}|${channel}`;
+    let claimedMessageId = '';
     try {
       if (Date.now() - (lastAutoReplyAt.get(key) || 0) < 8000) return; // cooldown anti-duplicidade
       const { data: cfg } = await supabaseAdmin.from('ai_agent_config').select('*').eq('user_id', userId).maybeSingle();
       if (!cfg?.enabled || !cfg?.auto_send) return; // só se ligado E autônomo on
       // Se a última mensagem já é nossa (respondemos / humano entrou), não age.
       const { data: lastMsgs } = await supabaseAdmin.from('wa_messages')
-        .select('from_me').eq('user_id', userId).eq('wa_number', waNumber).eq('phone', phone)
+        .select('message_id, from_me, type, transcription, timestamp')
+        .eq('user_id', userId).eq('wa_number', waNumber).in('phone', agentPhoneVariants(phone))
         .order('timestamp', { ascending: false }).limit(1);
-      if (lastMsgs?.[0]?.from_me) return;
+      const latest = lastMsgs?.[0] as any;
+      if (!latest || latest.from_me) return;
+      claimedMessageId = String(latest.message_id || '');
+
+      // Áudio/imagem ainda sem entendimento: espera até 2 min. Depois disso,
+      // falha fechado e chama uma pessoa em vez de responder no escuro.
+      const needsMediaUnderstanding = latest.type === 'audio' || latest.type === 'image';
+      if (needsMediaUnderstanding && !String(latest.transcription || '').trim()) {
+        const ageMs = Date.now() - Date.parse(latest.timestamp || '');
+        if (Number.isFinite(ageMs) && ageMs < 120000) {
+          scheduleAutonomousReply(userId, phone, latest.type, waNumber, channel);
+          return;
+        }
+        if (await claimAgentMessage(userId, phone, waNumber, claimedMessageId)) {
+          await markConversationForHuman(userId, phone, waNumber, 'duvida');
+          await finishAgentMessage(userId, waNumber, claimedMessageId, 'handoff', 'media_not_understood');
+        }
+        return;
+      }
+
+      // Documento/vídeo não têm entendimento automático seguro neste fluxo.
+      if (latest.type === 'document' || latest.type === 'video') {
+        if (await claimAgentMessage(userId, phone, waNumber, claimedMessageId)) {
+          await markConversationForHuman(userId, phone, waNumber, 'duvida');
+          await finishAgentMessage(userId, waNumber, claimedMessageId, 'handoff', 'unsupported_media');
+        }
+        return;
+      }
       // Se já foi passada pra humano, a Lia não responde mais (humano assume).
-      const { data: conv } = await supabaseAdmin.from('wa_conversations')
-        .select('needs_human').eq('user_id', userId).eq('wa_number', waNumber).eq('phone', phone).maybeSingle();
-      if (conv?.needs_human) return;
+      let { data: conv, error: convError } = await supabaseAdmin.from('wa_conversations')
+        .select('needs_human, agent_status').eq('user_id', userId).eq('wa_number', waNumber)
+        .in('phone', agentPhoneVariants(phone)).limit(1).maybeSingle();
+      if (convError?.code === '42703') {
+        const fallback = await supabaseAdmin.from('wa_conversations')
+          .select('needs_human').eq('user_id', userId).eq('wa_number', waNumber)
+          .in('phone', agentPhoneVariants(phone)).limit(1).maybeSingle();
+        conv = fallback.data as any;
+        convError = fallback.error;
+      }
+      if (convError) throw convError;
+      if (conv?.needs_human || conv?.agent_status === 'needs_human' || conv?.agent_status === 'human_active') return;
+      if (!await claimAgentMessage(userId, phone, waNumber, claimedMessageId)) return;
 
       const messages = await loadAgentConversation(userId, phone, waNumber);
-      if (!messages.length || messages[messages.length - 1].role !== 'user') return;
+      if (!messages.length || messages[messages.length - 1].role !== 'user') {
+        await markConversationForHuman(userId, phone, waNumber, 'duvida');
+        await finishAgentMessage(userId, waNumber, claimedMessageId, 'handoff', 'conversation_context_missing');
+        return;
+      }
 
       // Reconhecer cliente antigo (opt-in): injeta um contexto de proximidade.
-      let extraInstruction = HANDOFF_INSTRUCTION;
+      const conversationFlow = analyzeConversationFlow(messages);
+      const portfolioLinks = portfolioLinksForNiche(cfg.portfolio_links || [], conversationFlow.niche);
+      let extraInstruction = `${HANDOFF_INSTRUCTION}\n\n${conversationFlow.instruction}`;
       if (cfg.use_client_history) {
         try {
           const ctx = await buildClientContext(userId, phone);
-          if (ctx) extraInstruction = HANDOFF_INSTRUCTION + '\n\n' + ctx;
+          if (ctx) extraInstruction += '\n\n' + ctx;
         } catch (e: any) { console.warn('[Lia autônoma] contexto de cliente falhou:', e?.message); }
       }
 
-      const reply = await getAgentReply({
-        enabled: true,
-        persona: cfg.persona || '', objective: cfg.objective || '',
-        knowledge: cfg.knowledge || '', rules: cfg.rules || '',
-        salesStrategy: cfg.sales_strategy || '',
-        attendantName: cfg.attendant_name || '',
-      }, messages, { extraInstruction });
+      const supervisedMemory = await loadSupervisedLearningMemory(userId, waNumber);
+      const generatedReply = conversationFlow.handoff_reason
+        ? `###HUMANO:${conversationFlow.handoff_reason}###`
+        : await getLiaReply({
+          enabled: true,
+          persona: cfg.persona || '', objective: cfg.objective || '',
+          knowledge: cfg.knowledge || '', rules: cfg.rules || '',
+          salesStrategy: cfg.sales_strategy || '',
+          attendantName: cfg.attendant_name || '',
+          learnedPlaybook: cfg.learned_playbook || '',
+          supervisedMemory,
+          portfolioLinks,
+        }, messages, { extraInstruction });
+      const flowReply = enforceConversationFlowReply(generatedReply, conversationFlow);
+      const reply = enforceApprovedPortfolioUrls(flowReply, portfolioLinks, conversationFlow.niche);
 
-      if (!reply || reply.includes('###HUMANO###')) {
-        await supabaseAdmin.from('wa_conversations')
-          .update({ needs_human: true })
-          .eq('user_id', userId).eq('wa_number', waNumber).eq('phone', phone);
-        console.log(`[Lia autônoma] hand-off → equipe | ${phone}`);
+      const handoffReason = parseAgentHandoff(reply) || (!reply ? 'duvida' : null);
+      if (handoffReason) {
+        await markConversationForHuman(userId, phone, waNumber, handoffReason);
+        await finishAgentMessage(userId, waNumber, claimedMessageId, 'handoff');
+        console.log(`[Lia autônoma] hand-off (${handoffReason}) → equipe | ${phone}`);
         return;
       }
       const deal = await findDealForPhone(userId, phone);
       const isFirstReply = !messages.some((m) => m.role === 'assistant');
       const pdfMatch = reply.match(/###PDF:([a-z_]+)###/i);
 
+      // O cliente ou uma pessoa do estúdio pode ter escrito enquanto a IA
+      // pensava. Revalida o evento antes de qualquer envio para não atropelar.
+      const { data: currentRows } = await supabaseAdmin.from('wa_messages')
+        .select('message_id, from_me, type')
+        .eq('user_id', userId).eq('wa_number', waNumber).in('phone', agentPhoneVariants(phone))
+        .order('timestamp', { ascending: false }).limit(1);
+      const current = currentRows?.[0] as any;
+      if (!current || current.from_me || String(current.message_id || '') !== claimedMessageId) {
+        await finishAgentMessage(userId, waNumber, claimedMessageId, 'completed', 'conversation_changed');
+        if (current && !current.from_me) scheduleAutonomousReply(userId, phone, current.type || 'text', waNumber, channel);
+        return;
+      }
+
       // "digitando…" + atraso realista antes de mandar.
-      await BaileysManager.sendTyping(userId, phone, true);
+      if (channel === 'baileys') await BaileysManager.sendTyping(userId, phone, true);
       await new Promise((r) => setTimeout(r, Math.min(2500 + reply.length * 45, 9000)));
-      await BaileysManager.sendTyping(userId, phone, false);
+      if (channel === 'baileys') await BaileysManager.sendTyping(userId, phone, false);
+      const { data: afterTypingRows } = await supabaseAdmin.from('wa_messages')
+        .select('message_id, from_me')
+        .eq('user_id', userId).eq('wa_number', waNumber).in('phone', agentPhoneVariants(phone))
+        .order('timestamp', { ascending: false }).limit(1);
+      const afterTyping = afterTypingRows?.[0] as any;
+      if (!afterTyping || afterTyping.from_me || String(afterTyping.message_id || '') !== claimedMessageId) {
+        await finishAgentMessage(userId, waNumber, claimedMessageId, 'completed', 'conversation_changed_while_typing');
+        return;
+      }
 
       if (pdfMatch) {
         // Manda o PDF do pacote do nicho + a frase de acompanhamento e move o
         // funil pra "Orçamento Enviado".
         const nicho = pdfMatch[1].toLowerCase();
         const followText = reply.replace(/###PDF:[a-z_]+###/i, '').trim();
-        const sent = await sendMaterialPdf(userId, phone, nicho);
-        if (followText) await sendAgentMessages(userId, phone, followText);
-        if (sent && deal) {
+        const sent = await sendMaterialPdf(userId, phone, waNumber, channel, nicho);
+        if (!sent) {
+          await markConversationForHuman(userId, phone, waNumber, 'material_ausente');
+          await finishAgentMessage(userId, waNumber, claimedMessageId, 'handoff', 'missing_budget_pdf');
+          console.warn(`[Lia autônoma] PDF ${nicho} ausente → hand-off | ${phone}`);
+          return;
+        }
+        if (followText) await sendAgentMessages(userId, phone, waNumber, channel, followText);
+        if (deal) {
           await moveDealToStageNamed(userId, deal.id, /or[çc]amento.*enviad|enviad.*or[çc]amento/i);
           // Agenda o follow-up contextual da Lia pra ~24h (dispara só se a pessoa
           // não responder; o worker cancela sozinho se ela responder ou virar humano).
-          try {
-            // Cancela QUALQUER follow-up pendente do deal (inclusive os estáticos de
-            // etapa) — quando a Lia assume o orçamento, ela é a única fonte de retorno.
-            await supabaseAdmin.from('scheduled_followups').update({ status: 'cancelled' })
-              .eq('user_id', userId).eq('deal_id', deal.id).eq('status', 'pending');
-            await supabaseAdmin.from('scheduled_followups').insert({
-              user_id: userId, deal_id: deal.id, phone,
-              wa_number: waNumber,
-              message: AGENT_FOLLOWUP_SENTINEL, stage_id: deal.stage || null, contact_name: null,
-              scheduled_at: new Date(Date.now() + AGENT_FOLLOWUP_DELAY_HOURS * 3600 * 1000).toISOString(),
-            });
-            console.log(`[Lia autônoma] follow-up ${AGENT_FOLLOWUP_DELAY_HOURS}h agendado | ${phone}`);
-          } catch (e: any) { console.warn('[Lia autônoma] agendar follow-up falhou:', e?.message); }
+          // A API oficial não recebe este follow-up livre fora da janela de 24h.
+          if (channel === 'baileys') {
+            try {
+              // Cancela QUALQUER follow-up pendente do deal (inclusive os estáticos de
+              // etapa) — quando a Lia assume o orçamento, ela é a única fonte de retorno.
+              await supabaseAdmin.from('scheduled_followups').update({ status: 'cancelled' })
+                .eq('user_id', userId).eq('deal_id', deal.id).eq('status', 'pending');
+              await supabaseAdmin.from('scheduled_followups').insert({
+                user_id: userId, deal_id: deal.id, phone,
+                wa_number: waNumber,
+                message: AGENT_FOLLOWUP_SENTINEL, stage_id: deal.stage || null, contact_name: null,
+                scheduled_at: new Date(Date.now() + AGENT_FOLLOWUP_DELAY_HOURS * 3600 * 1000).toISOString(),
+              });
+              console.log(`[Lia autônoma] follow-up ${AGENT_FOLLOWUP_DELAY_HOURS}h agendado | ${phone}`);
+            } catch (e: any) {
+              console.warn('[Lia autônoma] agendar follow-up falhou:', e?.message);
+            }
+          }
         }
-        console.log(`[Lia autônoma] PDF ${nicho} ${sent ? 'enviado' : 'NÃO cadastrado'} | ${phone}`);
+        await updateAgentConversationState(userId, phone, waNumber, 'quote_sent', {
+          last_agent_reply_at: new Date().toISOString(),
+        });
+        console.log(`[Lia autônoma] PDF ${nicho} enviado | ${phone}`);
       } else {
-        await sendAgentMessages(userId, phone, reply);
+        await sendAgentMessages(userId, phone, waNumber, channel, reply);
         // Primeira resposta nossa → coloca o lead em "Conversa Iniciada".
         if (isFirstReply && deal) await moveDealToStageNamed(userId, deal.id, /conversa\s*iniciada/i);
+        await updateAgentConversationState(userId, phone, waNumber, 'lia_active', {
+          last_agent_reply_at: new Date().toISOString(),
+        });
         console.log(`[Lia autônoma] respondeu | ${phone}: ${reply.slice(0, 60)}`);
       }
       lastAutoReplyAt.set(key, Date.now());
-      // Marca que a Lia atendeu (pro painel "Atendimentos da Lia"). Best-effort.
-      try {
-        await supabaseAdmin.from('wa_conversations')
-          .update({ last_agent_reply_at: new Date().toISOString() })
-          .eq('user_id', userId).eq('wa_number', waNumber).eq('phone', phone);
-      } catch {}
+      await finishAgentMessage(userId, waNumber, claimedMessageId, 'completed');
     } catch (e: any) {
       console.warn('[Lia autônoma] erro:', e?.message);
+      try {
+        await markConversationForHuman(userId, phone, waNumber, 'erro_tecnico');
+        await finishAgentMessage(userId, waNumber, claimedMessageId, 'failed', 'agent_runtime_error');
+      } catch (stateError: any) {
+        console.warn('[Lia autônoma] não conseguiu marcar hand-off técnico:', stateError?.message);
+      }
     }
   }
 
   // Debounce: espera a pessoa terminar a RAJADA de mensagens antes de responder
   // (muita gente manda uma e já manda outra). Mídia espera mais (dá tempo da
   // transcrição/descrição ficar pronta).
-  function scheduleAutonomousReply(userId: string, phone: string, msgType: string, waNumber: string) {
-    const key = `${userId}|${waNumber}|${phone}`;
+  function scheduleAutonomousReply(
+    userId: string,
+    phone: string,
+    msgType: string,
+    waNumber: string,
+    channel: AgentChannel = 'baileys',
+  ) {
+    const key = `${userId}|${waNumber}|${phone}|${channel}`;
     const old = autoReplyTimers.get(key);
     if (old) clearTimeout(old);
     const delay = (msgType === 'audio' || msgType === 'image') ? 18000 : 14000;
     autoReplyTimers.set(key, setTimeout(() => {
       autoReplyTimers.delete(key);
-      runAutonomousReply(userId, phone, waNumber).catch(() => {});
+      runAutonomousReply(userId, phone, waNumber, channel).catch(() => {});
     }, delay));
   }
 
@@ -26142,9 +27833,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       type: msgType, status: msg.key.fromMe ? 'sent' : 'received',
       ...(mediaDataUrl ? { media_url: mediaDataUrl } : {}),
     });
+    const messageWasDuplicate = Boolean(
+      msgSaveErr
+      && (msgSaveErr.message.includes('duplicate') || msgSaveErr.code?.includes('23505')),
+    );
     if (msgSaveErr) {
-      const isDup = msgSaveErr.message.includes('duplicate') || msgSaveErr.code?.includes('23505');
-      if (!isDup) {
+      if (!messageWasDuplicate) {
         console.error('[Baileys] Erro ao salvar mensagem:', msgSaveErr.message, msgSaveErr.code);
       } else if (isHistory && slot !== 'main' && waNumber) {
         // Mensagem do histórico do 2º número que JÁ existia no banco: antes do
@@ -26152,6 +27846,26 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         // A re-sincronização (re-parear o QR do pós-venda) devolve a mensagem
         // pro número certo — sem isso a conversa abria vazia na aba Pós-venda.
         queueWaNumberRepair(userId, waNumber, msgId);
+      }
+    }
+
+    // Contact só existe quando chegou uma mensagem real. Histórico e mensagens
+    // enviadas pelo estúdio nunca geram conversão; retries usam message_id.
+    const messageIsPersisted = !msgSaveErr || messageWasDuplicate;
+    if (!isHistory && !msg.key.fromMe && messageIsPersisted) {
+      try {
+        if (marketingMeasurementTenantAllowed(userId)) {
+          await captureMarketingWhatsAppContact(supabaseAdmin, {
+            userId,
+            phone,
+            waNumber,
+            messageId: msgId,
+            messageBody: msgBody || null,
+            occurredAt: ts,
+          });
+        }
+      } catch {
+        console.warn('[marketing] Contact não foi capturado; recebimento do WhatsApp preservado');
       }
     }
 
@@ -26234,6 +27948,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       console.error('[Baileys] Exceção ao salvar conversa:', convEx?.message);
     }
 
+    // Resposta enviada pelo celular/WhatsApp Web depois de um hand-off = uma
+    // pessoa assumiu. Mensagens da própria Lia chegam aqui também, mas nesse
+    // caso a conversa não está marcada como needs_human e nada é alterado.
+    if (!isHistory && msg.key.fromMe && slot === 'main') {
+      await markConversationHumanActiveIfNeeded(userId, phone, waNumber);
+    }
+
     // Fase B: a Lia "entende" áudio/imagem do CLIENTE em segundo plano (não
     // bloqueia o fluxo, não pode quebrar o recebimento). Guarda a transcrição/
     // descrição na mensagem e atualiza o preview do inbox.
@@ -26259,7 +27980,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     // Fase C: agenda a resposta autônoma da Lia (só age se o estúdio ligou o
     // auto_send; debounce espera a pessoa terminar de mandar as mensagens).
-    if (!isHistory && !msg.key.fromMe && (msgType === 'text' || msgType === 'audio' || msgType === 'image')) {
+    if (!isHistory && !msg.key.fromMe && ['text', 'audio', 'image', 'video', 'document'].includes(msgType)) {
       // Lia autônoma só atende pelo número PRINCIPAL — o pós-venda é humano.
       if (slot === 'main') scheduleAutonomousReply(userId, phone, msgType, waNumber);
     }
@@ -26404,13 +28125,12 @@ function buildTemplateMessagePayload(tpl: any, params: string[]): any {
 
 // ─── Follow-up CONTEXTUAL da Lia (Fase 2 agêntica) ───────────────────────────
 // ~24h após mandar o orçamento, SE o cliente não respondeu, a Lia LÊ a conversa
-// e escreve um retorno caloroso (combinado com dia concreto), enviado via Baileys
-// (mesmo canal do autônomo). Agendado em scheduled_followups com este sentinel na
-// coluna `message`; o worker abaixo reconhece e gera/envia em vez do texto fixo.
+// e escreve um retorno caloroso (combinado com dia concreto), enviado via Baileys.
+// No canal oficial, o fluxo termina no orçamento para não estourar a janela de 24h.
 const AGENT_FOLLOWUP_SENTINEL = '###AGENT_FOLLOWUP###';
 const AGENT_FOLLOWUP_DELAY_HOURS = 24;
 const AGENT_FOLLOWUP_DIRECTIVE =
-  '[NOTA DO SISTEMA — NÃO é mensagem do cliente: já se passaram cerca de 24h desde que você enviou o orçamento e o cliente ainda não respondeu. Escreva AGORA uma única mensagem de follow-up pra retomar a conversa: calorosa, leve e na 1ª pessoa, sem cobrança e sem pressão. Relembre de leve o valor/a experiência, pergunte se ficou alguma dúvida, e proponha um combinado com DIA concreto (use a data de hoje: "posso te chamar amanhã?", "te chamo segunda?"). NÃO diga que é mensagem automática, NÃO mencione "24h" nem "sistema", NÃO mande pacote/PDF de novo. Se NÃO fizer sentido um follow-up (já fechou, já recusou, ou pediu pra não insistir), responda só ###SKIP###.]';
+  '[NOTA DO SISTEMA — NÃO é mensagem do cliente: passou quase um dia desde que você enviou o orçamento e o cliente ainda não respondeu. Escreva AGORA uma única mensagem de follow-up pra retomar a conversa: calorosa, leve e na 1ª pessoa, sem cobrança e sem pressão. Relembre de leve o valor/a experiência, pergunte se ficou alguma dúvida, e proponha um combinado com DIA concreto (use a data de hoje: "posso te chamar amanhã?", "te chamo segunda?"). NÃO diga que é mensagem automática, NÃO mencione tempo decorrido nem "sistema", NÃO mande pacote/PDF de novo. Se NÃO fizer sentido um follow-up (já fechou, já recusou, ou pediu pra não insistir), responda só ###SKIP###.]';
 
 // Gera e envia o follow-up. Retorna o status final pra gravar em
 // scheduled_followups. 'retry' = erro transitório (IA/WhatsApp fora) → reagenda.
@@ -26418,9 +28138,12 @@ async function runAgentFollowUp(task: any): Promise<'sent' | 'cancelled' | 'fail
   if (!supabaseAdmin) return 'retry';
   try {
     const taskWaNumber = String(task.wa_number || '').replace(/\D/g, '');
-    if (!taskWaNumber || await currentMainWaNumber(supabaseAdmin, task.user_id) !== taskWaNumber) {
-      return 'cancelled';
-    }
+    const qrNumber = BaileysManager.getRegisteredPhone(task.user_id)
+      || BaileysManager.getConnectedPhone(task.user_id)
+      || '';
+    if (!taskWaNumber || qrNumber !== taskWaNumber) return 'cancelled';
+    const rawPhone = String(task.phone || '').replace(/\D/g, '');
+    const phoneVariants = [...new Set([rawPhone, ...brazilianPhoneVariants(rawPhone)].filter(Boolean))];
     const { data: cfg } = await supabaseAdmin.from('ai_agent_config')
       .select('*').eq('user_id', task.user_id).maybeSingle();
     if (!cfg?.enabled || !cfg?.auto_send) return 'cancelled'; // autônomo desligou
@@ -26432,19 +28155,30 @@ async function runAgentFollowUp(task: any): Promise<'sent' | 'cancelled' | 'fail
     if (!Number.isNaN(cutMs)) {
       const since = new Date(cutMs).toISOString();
       const { data: clientMsgs } = await supabaseAdmin.from('wa_messages')
-        .select('id').eq('user_id', task.user_id).eq('wa_number', taskWaNumber).eq('phone', task.phone)
+        .select('id').eq('user_id', task.user_id).eq('wa_number', taskWaNumber)
+        .in('phone', phoneVariants)
         .eq('from_me', false).gt('timestamp', since).limit(1);
       if (clientMsgs && clientMsgs.length) return 'cancelled';
     }
     // Já passou pra humano? Não insiste.
-    const { data: conv } = await supabaseAdmin.from('wa_conversations')
-      .select('needs_human').eq('user_id', task.user_id).eq('wa_number', taskWaNumber).eq('phone', task.phone).maybeSingle();
-    if (conv?.needs_human) return 'cancelled';
+    let { data: conv, error: convError } = await supabaseAdmin.from('wa_conversations')
+      .select('needs_human, agent_status').eq('user_id', task.user_id).eq('wa_number', taskWaNumber)
+      .in('phone', phoneVariants).limit(1).maybeSingle();
+    if (convError?.code === '42703') {
+      const fallback = await supabaseAdmin.from('wa_conversations')
+        .select('needs_human').eq('user_id', task.user_id).eq('wa_number', taskWaNumber)
+        .in('phone', phoneVariants).limit(1).maybeSingle();
+      conv = fallback.data as any;
+      convError = fallback.error;
+    }
+    if (convError) throw convError;
+    if (conv?.needs_human || conv?.agent_status === 'needs_human' || conv?.agent_status === 'human_active') return 'cancelled';
     // Carrega a conversa (últimas 60, desc + reverte — precisa do contexto recente,
     // inclusive o orçamento que acabou de ir). Mesmo mapeamento do autônomo.
     const { data: rows } = await supabaseAdmin.from('wa_messages')
       .select('body, from_me, type, transcription, timestamp')
-      .eq('user_id', task.user_id).eq('wa_number', taskWaNumber).eq('phone', task.phone)
+      .eq('user_id', task.user_id).eq('wa_number', taskWaNumber)
+      .in('phone', phoneVariants)
       .order('timestamp', { ascending: false }).limit(60);
     const messages = (rows || []).reverse().map((m: any) => ({
       role: (m.from_me ? 'assistant' : 'user') as 'user' | 'assistant',
@@ -26454,29 +28188,43 @@ async function runAgentFollowUp(task: any): Promise<'sent' | 'cancelled' | 'fail
     if (!messages.length) return 'cancelled';
     // A API exige terminar com o cliente: anexa a diretiva como turno "user".
     messages.push({ role: 'user', content: AGENT_FOLLOWUP_DIRECTIVE });
-    const reply = await getAgentReply({
+    const supervisedMemory = await loadSupervisedLearningMemory(task.user_id, taskWaNumber);
+    const portfolioLinks = portfolioLinksForNiche(cfg.portfolio_links || [], null);
+      const generatedReply = await getLiaReply({
       enabled: true,
       persona: cfg.persona || '', objective: cfg.objective || '',
       knowledge: cfg.knowledge || '', rules: cfg.rules || '',
       salesStrategy: cfg.sales_strategy || '', attendantName: cfg.attendant_name || '',
-    }, messages);
-    if (!reply || /###SKIP###/i.test(reply) || /###HUMANO###/.test(reply)) return 'cancelled';
+      learnedPlaybook: cfg.learned_playbook || '',
+      supervisedMemory,
+      portfolioLinks,
+    }, messages, { extraInstruction: HANDOFF_INSTRUCTION });
+    const reply = enforceApprovedPortfolioUrls(generatedReply, portfolioLinks, null);
+    if (!reply || /###SKIP###/i.test(reply) || /###HUMANO(?::[a-z_]+)?###/i.test(reply)) return 'cancelled';
     const clean = reply.replace(/###[A-Za-z:_]+###/g, '').trim();
     if (!clean) return 'cancelled';
-    // Envia em balões (linha em branco = mensagem separada), via Baileys.
-    const parts = clean.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
+    const parts = clean.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean);
     for (let i = 0; i < parts.length; i++) {
       if (i > 0) {
         try { await BaileysManager.sendTyping(task.user_id, task.phone, true); } catch {}
-        await new Promise((r) => setTimeout(r, Math.min(1200 + parts[i].length * 35, 6000)));
+        await new Promise((resolve) => setTimeout(resolve, Math.min(1200 + parts[i].length * 35, 6000)));
         try { await BaileysManager.sendTyping(task.user_id, task.phone, false); } catch {}
       }
       await BaileysManager.sendText(task.user_id, task.phone, parts[i]);
     }
     try {
-      await supabaseAdmin.from('wa_conversations')
-        .update({ last_agent_reply_at: new Date().toISOString() })
-        .eq('user_id', task.user_id).eq('wa_number', taskWaNumber).eq('phone', task.phone);
+      const now = new Date().toISOString();
+      const { error } = await supabaseAdmin.from('wa_conversations').update({
+        needs_human: false,
+        agent_status: 'lia_active',
+        last_agent_reply_at: now,
+        last_agent_action_at: now,
+      }).eq('user_id', task.user_id).eq('wa_number', taskWaNumber).in('phone', phoneVariants);
+      if (error?.code === '42703') {
+        await supabaseAdmin.from('wa_conversations')
+          .update({ needs_human: false, last_agent_reply_at: now })
+          .eq('user_id', task.user_id).eq('wa_number', taskWaNumber).in('phone', phoneVariants);
+      }
     } catch {}
     console.log(`[Lia follow-up] enviado | ${task.phone}: ${clean.slice(0, 60)}`);
     return 'sent';
@@ -26488,6 +28236,102 @@ async function runAgentFollowUp(task: any): Promise<'sent' | 'cancelled' | 'fail
 }
 
 // ─── Worker de follow-ups automáticos ────────────────────────────────────────
+function startMarketingConversionWorker() {
+  if (!supabaseAdmin || process.env.MARKETING_CONVERSION_WORKER_ENABLED !== 'true') {
+    console.log('[Marketing Worker] desativado — nenhuma conversão externa será enviada');
+    return;
+  }
+  const validateOnly = process.env.MARKETING_CONVERSION_VALIDATE_ONLY !== 'false';
+  if (validateOnly) {
+    console.log('[Marketing Worker] validação requer evento sintético; fila real permanece intacta');
+    return;
+  }
+  const repository = createSupabaseMarketingOutboxRepository(
+    supabaseAdmin,
+    marketingMeasurementTenantIds(),
+  );
+  let processing = false;
+
+  const run = async () => {
+    if (processing) return;
+    processing = true;
+    try {
+      const result = await processMarketingConversionOutbox({
+        repository,
+        decryptCredentials: encrypted => decryptIfNeeded(encrypted) || '{}',
+        fetch: (input, init) => fetch(input, init),
+        validateOnly,
+        limit: 25,
+        leaseSeconds: 300,
+        maxAttempts: 10,
+      });
+      if (result.claimed > 0) {
+        console.log('[Marketing Worker] lote concluído', result);
+      }
+    } catch (error: any) {
+      console.error('[Marketing Worker] falha no lote:', error?.code || error?.message || 'erro');
+    } finally {
+      processing = false;
+    }
+  };
+
+  console.log('[Marketing Worker] iniciado em modo envio confirmado');
+  const timer = setInterval(() => { void run(); }, 30_000);
+  timer.unref();
+  setTimeout(() => { void run(); }, 5_000).unref();
+}
+
+function marketingRetentionDays(): number {
+  const configured = Number(process.env.MARKETING_MEASUREMENT_RETENTION_DAYS || 180);
+  if (!Number.isFinite(configured)) return 180;
+  return Math.min(Math.max(Math.trunc(configured), 120), 730);
+}
+
+async function purgeMarketingMeasurementHistory(): Promise<void> {
+  if (!supabaseAdmin) return;
+  const tenantIds = marketingMeasurementTenantIds();
+  if (!tenantIds.length) return;
+  const sites = await supabaseAdmin
+    .from('marketing_sites')
+    .select('id,user_id')
+    .in('user_id', tenantIds);
+  if (sites.error) throw sites.error;
+
+  const cutoff = new Date(
+    Date.now() - marketingRetentionDays() * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  for (const site of sites.data || []) {
+    const purged = await supabaseAdmin.rpc('purge_marketing_measurement_history', {
+      p_user_id: site.user_id,
+      p_marketing_site_id: site.id,
+      p_before: cutoff,
+    });
+    if (purged.error) throw purged.error;
+  }
+}
+
+function startMarketingRetentionWorker(): void {
+  if (!supabaseAdmin || process.env.MARKETING_RETENTION_WORKER_ENABLED !== 'true') {
+    console.log('[Marketing Retention] desativado');
+    return;
+  }
+  let running = false;
+  const run = async () => {
+    if (running) return;
+    running = true;
+    try {
+      await purgeMarketingMeasurementHistory();
+    } catch (error: any) {
+      console.error('[Marketing Retention] falha:', error?.code || error?.message || 'erro');
+    } finally {
+      running = false;
+    }
+  };
+  const daily = setInterval(() => { void run(); }, 24 * 60 * 60 * 1000);
+  daily.unref();
+  setTimeout(() => { void run(); }, 60_000).unref();
+}
+
 function startFollowUpWorker() {
   if (!supabaseAdmin) {
     console.warn('[FollowUp Worker] supabaseAdmin não disponível — worker desativado');
@@ -26521,17 +28365,9 @@ function startFollowUpWorker() {
         if (!claimed || claimed.length === 0) continue; // outro worker pegou
 
         const taskWaNumber = String(task.wa_number || '').replace(/\D/g, '');
-        const currentMainNumber = await currentMainWaNumber(supabaseAdmin!, task.user_id);
-        if (!taskWaNumber || currentMainNumber !== taskWaNumber) {
-          await supabaseAdmin!.from('scheduled_followups')
-            .update({ status: 'cancelled' })
-            .eq('id', task.id);
-          console.warn(`[FollowUp Worker] cancelado: canal original não está mais ativo | task=${task.id}`);
-          continue;
-        }
-
         // Follow-up CONTEXTUAL da Lia: gera com IA (lê a conversa) e envia via
-        // Baileys, em vez do texto fixo. Cancela sozinho se o cliente já respondeu.
+        // mesmo canal autônomo, em vez do texto fixo. Cancela sozinho se o
+        // cliente já respondeu ou se o canal original não está mais ativo.
         if (task.message === AGENT_FOLLOWUP_SENTINEL) {
           const fStatus = await runAgentFollowUp(task);
           if (fStatus === 'retry') {
@@ -26554,6 +28390,15 @@ function startFollowUpWorker() {
             .update({ status: fStatus, sent_at: fStatus === 'sent' ? new Date().toISOString() : null })
             .eq('id', task.id);
           console.log(`[FollowUp Worker] Lia follow-up ${task.phone} → ${fStatus}`);
+          continue;
+        }
+
+        const currentMainNumber = await currentMainWaNumber(supabaseAdmin!, task.user_id);
+        if (!taskWaNumber || currentMainNumber !== taskWaNumber) {
+          await supabaseAdmin!.from('scheduled_followups')
+            .update({ status: 'cancelled' })
+            .eq('id', task.id);
+          console.warn(`[FollowUp Worker] cancelado: canal original não está mais ativo | task=${task.id}`);
           continue;
         }
 
@@ -26681,6 +28526,169 @@ function startFollowUpWorker() {
       console.error('[FollowUp Worker] Erro geral:', err.message);
     }
   }, 60 * 1000);
+}
+
+// ─── Envio manual de lembretes da Produção ─────────────────────────────────
+const PRODUCTION_REMINDER_META_TEMPLATE = 'lembrete_ensaio';
+type ProductionReminderChannel = 'baileys' | 'meta_text' | 'meta_template';
+
+function formatReminderDate(dateValue: unknown): string {
+  const raw = String(dateValue || '').slice(0, 10);
+  const [year, month, day] = raw.split('-');
+  return year && month && day ? `${day}/${month}/${year}` : raw;
+}
+
+function renderJobReminderMessage(template: string, job: any, contactName: string): string {
+  const replacements: Record<string, string> = {
+    cliente: contactName || 'cliente',
+    data: formatReminderDate(job?.job_date),
+    hora: String(job?.job_time || '').slice(0, 5) || 'horário combinado',
+    tipo: String(job?.job_type || 'ensaio'),
+  };
+  return String(template || '').replace(/\{(cliente|data|hora|tipo)\}/gi, (_match, key: string) =>
+    replacements[key.toLowerCase()] || '');
+}
+
+function reminderBaileysPhone(phone: string): string {
+  const digits = String(phone || '').replace(/\D/g, '');
+  return digits.length === 13 && digits.startsWith('55')
+    ? digits.slice(0, 4) + digits.slice(5)
+    : digits;
+}
+
+async function sendReminderViaBaileys(
+  task: any,
+  text: string,
+): Promise<{ messageId: string; waNumber: string } | null> {
+  const phone = reminderBaileysPhone(task.phone);
+  const keys = [BaileysManager.slotKey(task.user_id, 'posvenda'), task.user_id];
+  for (const key of keys) {
+    if (BaileysManager.getStatus(key) !== 'open') continue;
+    const waNumber = BaileysManager.getRegisteredPhone(key) || '';
+    if (!waNumber) continue;
+    try {
+      return { messageId: await BaileysManager.sendText(key, phone, text), waNumber };
+    } catch (error: any) {
+      console.warn(`[JobReminder] Baileys falhou no slot ${key === task.user_id ? 'principal' : 'pós-venda'}:`, error?.message);
+    }
+  }
+  return null;
+}
+
+async function buildReminderMetaPayload(
+  task: any,
+  job: any,
+  text: string,
+  waNumber: string,
+): Promise<{ payload: any; channel: ProductionReminderChannel; deliveredText: string }> {
+  const within24h = await isWithin24hWindow(
+    supabaseAdmin!, task.user_id, task.phone, waNumber,
+  );
+  if (within24h) {
+    return {
+      payload: { messaging_product: 'whatsapp', to: task.phone, type: 'text', text: { body: text } },
+      channel: 'meta_text',
+      deliveredText: text,
+    };
+  }
+  const { data: template } = await supabaseAdmin!.from('whatsapp_message_templates')
+    .select('*').eq('user_id', task.user_id).eq('name', PRODUCTION_REMINDER_META_TEMPLATE)
+    .eq('status', 'APPROVED').limit(1).maybeSingle();
+  if (!template) {
+    throw new Error('O WhatsApp está fora da janela de 24h e o template “Lembrete de ensaio” ainda não foi aprovado no Meta.');
+  }
+  const params = [
+    task.contact_name || 'Cliente',
+    formatReminderDate(job.job_date),
+    String(job.job_time || '').slice(0, 5) || 'horário combinado',
+  ];
+  const deliveredText = String(template.body_text || text).replace(/\{\{(\d+)\}\}/g,
+    (_match: string, index: string) => params[Number(index) - 1] || '');
+  return {
+    payload: {
+      messaging_product: 'whatsapp',
+      to: task.phone,
+      type: 'template',
+      template: buildTemplateMessagePayload(template, params),
+    },
+    channel: 'meta_template',
+    deliveredText,
+  };
+}
+
+async function sendReminderViaMeta(
+  task: any,
+  job: any,
+  text: string,
+): Promise<{ messageId: string; channel: ProductionReminderChannel; deliveredText: string; waNumber: string }> {
+  const { data: account } = await supabaseAdmin!.from('whatsapp_business_accounts')
+    .select('phone_number_id, phone_number, access_token').eq('user_id', task.user_id)
+    .eq('is_active', true).limit(1).maybeSingle();
+  const accessToken = account?.access_token ? decryptIfNeeded(account.access_token) : null;
+  const waNumber = String(account?.phone_number || '').replace(/\D/g, '');
+  if (!account?.phone_number_id || !accessToken || !waNumber) {
+    throw new Error('WhatsApp não conectado. Conecte o número principal ou o pós-venda nas Configurações.');
+  }
+  const prepared = await buildReminderMetaPayload(task, job, text, waNumber);
+  const response = await fetch(`https://graph.facebook.com/v21.0/${account.phone_number_id}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(prepared.payload),
+  });
+  const body = await response.json();
+  if (!response.ok || body?.error) throw new Error(body?.error?.message || 'O WhatsApp recusou o lembrete.');
+  return {
+    messageId: body?.messages?.[0]?.id || `reminder-${Date.now()}`,
+    channel: prepared.channel,
+    deliveredText: prepared.deliveredText,
+    waNumber,
+  };
+}
+
+async function saveReminderInConversation(
+  task: any,
+  messageId: string,
+  text: string,
+  waNumber: string,
+) {
+  const now = new Date().toISOString();
+  try {
+    await supabaseAdmin!.from('wa_messages').insert({
+      user_id: task.user_id, phone: task.phone, message_id: messageId,
+      wa_number: waNumber,
+      body: text, from_me: true, timestamp: now, type: 'text', status: 'sent',
+    });
+    const conversation = {
+      user_id: task.user_id, phone: task.phone, wa_number: waNumber,
+      contact_name: task.contact_name || null,
+      last_message: text, last_message_at: now, updated_at: now,
+    };
+    const { data: updated } = await supabaseAdmin!.from('wa_conversations')
+      .update(conversation)
+      .eq('user_id', task.user_id)
+      .eq('wa_number', waNumber)
+      .eq('phone', task.phone)
+      .select('id');
+    if (!updated?.length) await supabaseAdmin!.from('wa_conversations').insert(conversation);
+  } catch (error: any) {
+    console.warn('[JobReminder] enviado, mas não salvo no histórico:', error?.message || error);
+  }
+}
+
+async function sendProductionReminder(
+  task: any,
+  job: any,
+  template: string,
+): Promise<{ messageId: string; channel: ProductionReminderChannel; text: string }> {
+  const text = renderJobReminderMessage(template, job, task.contact_name || '');
+  const baileysResult = await sendReminderViaBaileys(task, text);
+  if (baileysResult) {
+    await saveReminderInConversation(task, baileysResult.messageId, text, baileysResult.waNumber);
+    return { messageId: baileysResult.messageId, channel: 'baileys', text };
+  }
+  const meta = await sendReminderViaMeta(task, job, text);
+  await saveReminderInConversation(task, meta.messageId, meta.deliveredText, meta.waNumber);
+  return { messageId: meta.messageId, channel: meta.channel, text: meta.deliveredText };
 }
 
 // ─── Worker: sincroniza mensagens da Evolution API periodicamente ────────────

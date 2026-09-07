@@ -4,7 +4,7 @@ import { ChevronDown, Check, ChevronLeft, ChevronRight, Calendar } from 'lucide-
 import { fmtBRL, parseBRLMoney } from './finUtils';
 
 const BASE =
-  'w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 ' +
+  'w-full min-h-11 px-3 py-2 text-base md:text-sm rounded-lg border border-gray-200 dark:border-gray-700 ' +
   'bg-white dark:bg-gray-900 text-gray-900 dark:text-white ' +
   'focus:outline-none focus:ring-2 focus:ring-violet-500 appearance-none';
 
@@ -162,7 +162,7 @@ export function FinSelect({
         disabled={disabled}
         onClick={handleOpen}
         className={[
-          'w-full flex items-center justify-between gap-2 px-3 py-2 text-sm rounded-lg',
+          'w-full min-h-11 flex items-center justify-between gap-2 px-3 py-2 text-base md:text-sm rounded-lg',
           'border border-gray-200 dark:border-gray-700',
           'bg-white dark:bg-gray-900',
           'focus:outline-none focus:ring-2 focus:ring-violet-500',
@@ -268,8 +268,10 @@ export function DatePicker({ value, onChange, placeholder = 'Selecionar data', c
       // Abre acima se não couber embaixo
       const calH = 320;
       const spaceBelow = window.innerHeight - r.bottom;
-      const top = spaceBelow > calH ? r.bottom + 4 : r.top - calH - 4;
-      setPos({ top, left: r.left });
+      const desiredTop = spaceBelow > calH ? r.bottom + 4 : r.top - calH - 4;
+      const top = Math.min(Math.max(8, desiredTop), Math.max(8, window.innerHeight - calH - 8));
+      const left = Math.min(Math.max(8, r.left), Math.max(8, window.innerWidth - 288));
+      setPos({ top, left });
     }
     setOpen(v => !v);
   };
@@ -320,7 +322,7 @@ export function DatePicker({ value, onChange, placeholder = 'Selecionar data', c
         type="button"
         onClick={handleOpen}
         className={[
-          'w-full flex items-center justify-between gap-2 px-3 py-2 text-sm rounded-lg',
+          'w-full min-h-11 flex items-center justify-between gap-2 px-3 py-2 text-base md:text-sm rounded-lg',
           'border border-gray-200 dark:border-gray-700',
           'bg-white dark:bg-gray-900',
           'focus:outline-none focus:ring-2 focus:ring-violet-500',

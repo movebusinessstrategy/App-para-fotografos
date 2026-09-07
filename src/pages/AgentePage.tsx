@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Bot,
   BookOpen,
+  BrainCircuit,
   Check,
   FileText,
   Inbox,
@@ -22,10 +23,20 @@ import {
 } from "lucide-react";
 import { authFetch } from "../utils/authFetch";
 import { cn } from "../utils/cn";
+import { handoffReasonLabel } from "../features/chat/utils/agentHandoff";
 import AgenteMateriais from "../components/agente/AgenteMateriais";
 import AgenteAudios from "../components/agente/AgenteAudios";
+import AgentLearningLab from "../features/agent/AgentLearningLab";
+import AgentLearningFeedback, {
+  type LearningFeedbackMessage,
+} from "../features/agent/AgentLearningFeedback";
+import { AgentPortfolioLinksEditor } from "../features/agent/AgentPortfolioLinksEditor";
+import {
+  portfolioLinksValidationMessage,
+  type PortfolioLink,
+} from "../../agent-portfolio";
 
-type Tab = "config" | "test" | "atendimentos";
+type Tab = "config" | "test" | "learning" | "atendimentos";
 // Item do painel "Atendimentos da Lia".
 interface Atendimento {
   phone: string;
@@ -36,11 +47,16 @@ interface Atendimento {
   stage_name: string | null;
   followup_status: "pending" | "sent" | null;
   followup_at: string | null;
-  bucket: "precisa_humano" | "orcamento" | "conversando";
+  bucket: "precisa_humano" | "humano" | "orcamento" | "conversando";
+  agent_status?: "idle" | "lia_active" | "quote_sent" | "needs_human" | "human_active" | null;
+  handoff_reason?: string | null;
+  handoff_at?: string | null;
+  human_assumed_at?: string | null;
 }
 // O que a Lia FARIA naquele turno (reproduz o fluxo autônomo no teste).
 interface ChatAction {
   type: "handoff" | "orcamento";
+  reason?: string | null;
   nicho?: string;
   pdfFound?: boolean;
   fileName?: string | null;
@@ -49,7 +65,43 @@ interface ChatMsg {
   role: "user" | "assistant";
   content: string;
   action?: ChatAction | null;
+  /** Balões já "digitados". O teste espelha o envio real: um balão por vez. */
+  revealed?: number;
 }
+
+// Mesma regra do servidor (envio autônomo): linha em branco separa balões e a
+// pausa entre eles imita o tempo de digitação.
+function splitBubbles(text: string): string[] {
+  return text.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
+}
+function typingDelayMs(text: string): number {
+  return Math.min(1200 + text.length * 35, 6000);
+}
+function bubblesDone(m: ChatMsg): boolean {
+  return m.revealed === undefined || m.revealed >= splitBubbles(m.content).length;
+}
+
+interface PlaygroundFeedbackContext {
+  key: string;
+  messages: LearningFeedbackMessage[];
+  assistantResult: string;
+}
+
+interface AtendimentoCounts {
+  precisa_humano: number;
+  humano: number;
+  orcamento: number;
+  conversando: number;
+  total: number;
+}
+
+const EMPTY_ATENDIMENTO_COUNTS: AtendimentoCounts = {
+  precisa_humano: 0,
+  humano: 0,
+  orcamento: 0,
+  conversando: 0,
+  total: 0,
+};
 
 // Atalhos pra começar o teste já num nicho (a Lia ainda identifica pela conversa).
 const NICHOS_TESTE: { label: string; abre: string }[] = [
@@ -57,16 +109,56 @@ const NICHOS_TESTE: { label: string; abre: string }[] = [
   { label: "Newborn", abre: "Olá! Tenho interesse no ensaio newborn" },
   { label: "Smash the Cake", abre: "Oi, queria saber do Smash the Cake, meu bebê vai fazer 1 aninho" },
   { label: "Família", abre: "Oi! Vocês fazem ensaio de família?" },
+  { label: "Infantil", abre: "Oi! Queria saber sobre um ensaio infantil" },
   { label: "Casal", abre: "Olá! Queria um ensaio de casal" },
   { label: "Feminino", abre: "Oi, tenho interesse num ensaio feminino" },
   { label: "Marca Pessoal", abre: "Olá! Preciso de fotos pra minha marca pessoal" },
   { label: "Revelação", abre: "Oi! Queria saber do ensaio de revelação" },
+  { label: "Anunciação", abre: "Oi! Queria saber sobre o ensaio de anunciação da gravidez" },
+  { label: "Baby", abre: "Oi! Queria informações sobre o ensaio baby" },
+  { label: "Batizado", abre: "Olá! Vocês fotografam batizado?" },
+  { label: "Aniversário", abre: "Oi! Queria um orçamento para fotos de aniversário" },
+  { label: "Chá Revelação", abre: "Oi! Queria saber sobre fotos para chá revelação" },
 ];
 const NICHO_LABEL: Record<string, string> = {
   gestante: "Gestante", newborn: "Newborn", smash_the_cake: "Smash the Cake",
-  familia: "Família", casal: "Casal", feminino: "Feminino",
-  marca_pessoal: "Marca Pessoal", revelacao: "Revelação",
+  familia: "Família", infantil: "Infantil", casal: "Casal", feminino: "Feminino",
+  marca_pessoal: "Marca Pessoal", revelacao: "Revelação", anunciacao: "Anunciação",
+  baby: "Baby", batizado: "Batizado", aniversario: "Aniversário",
+  cha_revelacao: "Chá Revelação",
 };
+
+function anonymizePlaygroundText(text: string): string {
+  return text
+    .replace(/\b(?:https?:\/\/|www\.)\S+/gi, "[link oculto]")
+    .replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, "[e-mail oculto]")
+    .replace(/\b(?:\+?55\s*)?(?:\(?\d{2}\)?[\s.-]*)?\d{4,5}[\s.-]*\d{4}\b/g, "[telefone oculto]");
+}
+
+function playgroundFeedbackContext(chat: ChatMsg[]): PlaygroundFeedbackContext | null {
+  let assistantIndex = -1;
+  for (let index = chat.length - 1; index >= 0; index -= 1) {
+    if (chat[index].role === "assistant") {
+      assistantIndex = index;
+      break;
+    }
+  }
+  if (assistantIndex < 0) return null;
+  const messages = chat
+    .slice(0, assistantIndex)
+    .filter((message) => message.content.trim())
+    .slice(-20)
+    .map((message): LearningFeedbackMessage => ({
+      role: message.role,
+      content: anonymizePlaygroundText(message.content.trim()),
+    }));
+  if (messages.length === 0) return null;
+  return {
+    key: `${assistantIndex}-${chat.length}`,
+    messages,
+    assistantResult: anonymizePlaygroundText(chat[assistantIndex].content.trim()),
+  };
+}
 
 // Bloco de configuração reutilizável (ícone + título + ajuda + textarea).
 function ConfigSection({
@@ -107,7 +199,12 @@ function ConfigSection({
 }
 
 export default function AgentePage() {
-  const [tab, setTab] = useState<Tab>("config");
+  const initialTab: Tab = import.meta.env.DEV
+    && typeof window !== "undefined"
+    && new URLSearchParams(window.location.search).get("learning-demo") === "1"
+    ? "learning"
+    : "config";
+  const [tab, setTab] = useState<Tab>(initialTab);
 
   // ── Configuração ──────────────────────────────────────────────
   const [enabled, setEnabled] = useState(false);
@@ -119,6 +216,9 @@ export default function AgentePage() {
   const [rules, setRules] = useState("");
   const [salesStrategy, setSalesStrategy] = useState("");
   const [attendantName, setAttendantName] = useState("");
+  const [learnedPlaybook, setLearnedPlaybook] = useState("");
+  const [portfolioLinks, setPortfolioLinks] = useState<PortfolioLink[]>([]);
+  const [playbookSourceCount, setPlaybookSourceCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -135,7 +235,7 @@ export default function AgentePage() {
   // ── Atendimentos da Lia ───────────────────────────────────────
   const navigate = useNavigate();
   const [atend, setAtend] = useState<Atendimento[]>([]);
-  const [atendCounts, setAtendCounts] = useState({ precisa_humano: 0, orcamento: 0, conversando: 0, total: 0 });
+  const [atendCounts, setAtendCounts] = useState<AtendimentoCounts>(EMPTY_ATENDIMENTO_COUNTS);
   const [loadingAtend, setLoadingAtend] = useState(false);
   const [devolvendo, setDevolvendo] = useState<string | null>(null);
 
@@ -159,7 +259,7 @@ export default function AgentePage() {
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setAtend(Array.isArray(data.items) ? data.items : []);
-        setAtendCounts(data.counts || { precisa_humano: 0, orcamento: 0, conversando: 0, total: 0 });
+        setAtendCounts({ ...EMPTY_ATENDIMENTO_COUNTS, ...(data.counts || {}) });
       }
     } catch { /* silencioso */ } finally {
       setLoadingAtend(false);
@@ -200,6 +300,9 @@ export default function AgentePage() {
         setRules(data.rules || "");
         setSalesStrategy(data.sales_strategy || "");
         setAttendantName(data.attendant_name || "");
+        setLearnedPlaybook(data.learned_playbook || "");
+        setPortfolioLinks(Array.isArray(data.portfolio_links) ? data.portfolio_links : []);
+        setPlaybookSourceCount(Number(data.playbook_source_count) || 0);
         setTableMissing(!!data.table_missing);
       } else {
         setError(data.error || "Erro ao carregar a configuração.");
@@ -212,13 +315,19 @@ export default function AgentePage() {
   }
 
   async function save() {
+    const portfolioError = portfolioLinksValidationMessage(portfolioLinks);
+    if (portfolioError) {
+      setSaved(false);
+      setError(portfolioError);
+      return;
+    }
     setSaving(true);
     setSaved(false);
     setError(null);
     try {
       const res = await authFetch("/api/agent/config", {
         method: "PUT",
-        body: JSON.stringify({ enabled, auto_send: autoSend, use_client_history: useClientHistory, persona, objective, knowledge, rules, sales_strategy: salesStrategy, attendant_name: attendantName }),
+        body: JSON.stringify({ enabled, auto_send: autoSend, use_client_history: useClientHistory, persona, objective, knowledge, rules, sales_strategy: salesStrategy, attendant_name: attendantName, portfolio_links: portfolioLinks }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
@@ -235,9 +344,27 @@ export default function AgentePage() {
     }
   }
 
+  function toggleAutonomousService() {
+    const isActive = enabled && autoSend;
+    setSaved(false);
+    if (isActive) {
+      // Pausa apenas o envio autônomo. O modo de sugestão continua disponível.
+      setAutoSend(false);
+      return;
+    }
+    // O autônomo depende do motor do agente: um único controle liga os dois.
+    setEnabled(true);
+    setAutoSend(true);
+  }
+
   async function sendMessage(raw: string) {
     const text = raw.trim();
     if (!text || sending) return;
+    const portfolioError = portfolioLinksValidationMessage(portfolioLinks);
+    if (portfolioError) {
+      setTestError(portfolioError);
+      return;
+    }
     // A API só manda pro modelo o body limpo (role/content), sem a action.
     const next: ChatMsg[] = [...chat, { role: "user", content: text }];
     setChat(next);
@@ -255,14 +382,18 @@ export default function AgentePage() {
           rules,
           sales_strategy: salesStrategy,
           attendant_name: attendantName,
+          learned_playbook: learnedPlaybook,
+          portfolio_links: portfolioLinks,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && (data.reply || data.action)) {
+        const reply: string = data.reply || "";
         setChat((c) => [
           ...c,
-          { role: "assistant", content: data.reply || "", action: data.action || null },
+          { role: "assistant", content: reply, action: data.action || null, revealed: 0 },
         ]);
+        revealBubbles(next.length, splitBubbles(reply));
       } else {
         setTestError(data.error || "Erro ao gerar a resposta.");
       }
@@ -272,9 +403,25 @@ export default function AgentePage() {
       setSending(false);
     }
   }
+  // Revela os balões da resposta um a um, com "digitando…" e a mesma pausa
+  // que o servidor usa entre envios. Assim o teste mostra o ritmo real.
+  function revealBubbles(index: number, parts: string[]) {
+    let shown = 0;
+    const step = () => {
+      if (shown >= parts.length) return;
+      window.setTimeout(() => {
+        shown += 1;
+        setChat((c) => c.map((m, i) => (i === index ? { ...m, revealed: shown } : m)));
+        step();
+      }, typingDelayMs(parts[shown]));
+    };
+    step();
+  }
   function sendTest() {
     sendMessage(input);
   }
+
+  const latestPlaygroundFeedback = playgroundFeedbackContext(chat);
 
   return (
     <div className="max-w-4xl mx-auto p-4 sm:p-6">
@@ -294,11 +441,11 @@ export default function AgentePage() {
       </div>
 
       {/* Abas */}
-      <div className="inline-flex p-1 mb-6 bg-gray-100 dark:bg-gray-800 rounded-xl">
+      <div className="mb-6 flex w-full gap-1 overflow-x-auto rounded-xl bg-gray-100 p-1 dark:bg-gray-800 sm:w-fit">
         <button
           onClick={() => setTab("config")}
           className={cn(
-            "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all",
+            "flex flex-shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-semibold transition-all sm:px-4",
             tab === "config"
               ? "bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-sm"
               : "text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200",
@@ -310,7 +457,7 @@ export default function AgentePage() {
         <button
           onClick={() => setTab("test")}
           className={cn(
-            "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all",
+            "flex flex-shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-semibold transition-all sm:px-4",
             tab === "test"
               ? "bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-sm"
               : "text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200",
@@ -320,9 +467,21 @@ export default function AgentePage() {
           Testar
         </button>
         <button
+          onClick={() => setTab("learning")}
+          className={cn(
+            "flex flex-shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-semibold transition-all sm:px-4",
+            tab === "learning"
+              ? "bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-sm"
+              : "text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200",
+          )}
+        >
+          <BrainCircuit size={16} />
+          Aprendizado
+        </button>
+        <button
           onClick={() => setTab("atendimentos")}
           className={cn(
-            "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all",
+            "flex flex-shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-semibold transition-all sm:px-4",
             tab === "atendimentos"
               ? "bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-sm"
               : "text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200",
@@ -356,61 +515,143 @@ export default function AgentePage() {
             </div>
           )}
 
-          {/* Liga/desliga */}
-          <div className="flex items-center justify-between gap-4 p-4 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800">
-            <div>
-              <div className="font-semibold text-gray-900 dark:text-white">
-                Ativar sugestões do agente
+          {/* Controle operacional principal */}
+          <section
+            className={cn(
+              "overflow-hidden rounded-2xl border bg-white dark:bg-gray-900",
+              enabled && autoSend
+                ? "border-emerald-300 dark:border-emerald-800"
+                : "border-gray-200 dark:border-gray-800",
+            )}
+          >
+            <div className="flex flex-col gap-5 p-5 sm:flex-row sm:items-start sm:justify-between sm:p-6">
+              <div className="min-w-0">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <span
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold",
+                      enabled && autoSend
+                        ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                        : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300",
+                    )}
+                  >
+                    <span className={cn("h-2 w-2 rounded-full", enabled && autoSend ? "bg-emerald-500" : "bg-gray-400")} />
+                    {enabled && autoSend ? "IA ativa" : "IA pausada"}
+                  </span>
+                  <span className="text-xs font-medium text-gray-400 dark:text-gray-500">WhatsApp de Atendimento</span>
+                </div>
+                <h2 className="text-lg font-bold tracking-tight text-gray-950 dark:text-white">
+                  Atendimento automático até o orçamento
+                </h2>
+                <p className="mt-1 max-w-2xl text-sm leading-relaxed text-gray-600 dark:text-gray-300">
+                  A Lia recebe o contato, entende o ensaio, tira as dúvidas que conhece, qualifica o interesse e envia o PDF certo. Você só entra quando a conversa precisa de decisão humana.
+                </p>
               </div>
+
+              <div className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-2 sm:flex sm:flex-col sm:items-end">
+                <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">
+                  {enabled && autoSend ? "Atendendo sozinha" : "Atendimento pausado"}
+                </span>
+                <button
+                  type="button"
+                  onClick={toggleAutonomousService}
+                  role="switch"
+                  aria-checked={enabled && autoSend}
+                  aria-label={enabled && autoSend ? "Pausar atendimento automático" : "Ligar atendimento automático"}
+                  className={cn(
+                    "relative h-8 w-14 flex-shrink-0 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-900",
+                    enabled && autoSend ? "bg-emerald-500" : "bg-gray-300 dark:bg-gray-700",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "absolute left-1 top-1 h-6 w-6 rounded-full bg-white shadow-sm transition-transform",
+                      enabled && autoSend && "translate-x-6",
+                    )}
+                  />
+                </button>
+                <button
+                  type="button"
+                  onClick={save}
+                  disabled={saving}
+                  className="col-span-2 inline-flex items-center justify-center gap-1.5 rounded-lg bg-gray-950 px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-gray-800 disabled:opacity-60 dark:bg-white dark:text-gray-950 dark:hover:bg-gray-200"
+                >
+                  {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+                  Aplicar agora
+                </button>
+              </div>
+            </div>
+
+            <div className="grid border-t border-gray-100 bg-gray-50/70 dark:border-gray-800 dark:bg-gray-950/30 sm:grid-cols-[1fr_auto_1fr_auto_1fr]">
+              <div className="flex gap-3 p-4">
+                <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-gold-500 text-xs font-extrabold text-white">1</span>
+                <div>
+                  <div className="text-sm font-semibold text-gray-900 dark:text-white">Conversa e qualifica</div>
+                  <div className="mt-0.5 text-xs leading-relaxed text-gray-500 dark:text-gray-400">Responde dúvidas conhecidas e entende o que a pessoa procura.</div>
+                </div>
+              </div>
+              <div className="hidden items-center text-gray-300 dark:text-gray-700 sm:flex">→</div>
+              <div className="flex gap-3 border-t border-gray-100 p-4 dark:border-gray-800 sm:border-t-0">
+                <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-gold-500 text-xs font-extrabold text-white">2</span>
+                <div>
+                  <div className="text-sm font-semibold text-gray-900 dark:text-white">Envia o orçamento</div>
+                  <div className="mt-0.5 text-xs leading-relaxed text-gray-500 dark:text-gray-400">Escolhe o material do nicho e registra a etapa no funil.</div>
+                </div>
+              </div>
+              <div className="hidden items-center text-gray-300 dark:text-gray-700 sm:flex">→</div>
+              <div className="flex gap-3 border-t border-amber-100 bg-amber-50/60 p-4 dark:border-amber-900/30 dark:bg-amber-950/10 sm:border-t-0">
+                <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-amber-500 text-white"><UserRound size={14} /></span>
+                <div>
+                  <div className="text-sm font-semibold text-gray-900 dark:text-white">Chama você</div>
+                  <div className="mt-0.5 text-xs leading-relaxed text-gray-600 dark:text-gray-300">Data, fechamento, sinal/Pix, pagamento, objeção, pedido de pessoa ou pergunta sem resposta.</div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {playbookSourceCount > 0 && (
+            <section className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-4 dark:border-emerald-900/60 dark:bg-emerald-950/20">
+              <div className="flex gap-3">
+                <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white">
+                  <Check size={17} />
+                </span>
+                <div className="min-w-0">
+                  <div className="font-semibold text-emerald-950 dark:text-emerald-100">
+                    Padrão calibrado com {playbookSourceCount} vendas com sinal confirmado
+                  </div>
+                  <p className="mt-1 text-sm leading-relaxed text-emerald-800 dark:text-emerald-200/80">
+                    A Lia usa somente padrões anônimos das conversas vencedoras: conversa natural, ritmo e tamanho de mensagem variáveis, uma pergunta por vez, qualificação por nicho, orçamento em PDF e passagem silenciosa para você nos momentos de decisão.
+                  </p>
+                  <p className="mt-1.5 text-xs text-emerald-700/80 dark:text-emerald-300/70">
+                    Nenhuma mensagem, nome, telefone ou comprovante foi copiado para a configuração.
+                  </p>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* Recurso auxiliar — não interfere no limite do atendimento automático */}
+          <div className="flex items-center justify-between gap-4 rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+            <div>
+              <div className="font-semibold text-gray-900 dark:text-white">Sugestões manuais da Lia</div>
               <div className="text-sm text-gray-500 dark:text-gray-400">
-                Quando ligado, o agente sugere respostas dentro da extensão do WhatsApp (Fase 2). O teste abaixo funciona mesmo desligado.
+                Mostra o botão de sugestão no chat e na extensão. Com a IA autônoma ativa, este recurso fica ligado automaticamente.
               </div>
             </div>
             <button
-              onClick={() => setEnabled((v) => !v)}
+              type="button"
+              onClick={() => { setSaved(false); setEnabled((v) => !v); }}
               role="switch"
               aria-checked={enabled}
+              aria-label={enabled ? "Desligar sugestões manuais" : "Ligar sugestões manuais"}
+              disabled={enabled && autoSend}
               className={cn(
-                "relative w-12 h-7 rounded-full transition-colors flex-shrink-0",
+                "relative h-7 w-12 flex-shrink-0 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-500",
                 enabled ? "bg-gold-500" : "bg-gray-300 dark:bg-gray-700",
+                enabled && autoSend && "cursor-not-allowed opacity-60",
               )}
             >
-              <span
-                className={cn(
-                  "absolute top-1 left-1 w-5 h-5 rounded-full bg-white shadow transition-transform",
-                  enabled && "translate-x-5",
-                )}
-              />
-            </button>
-          </div>
-
-          {/* Atendimento autônomo (semi-automático) */}
-          <div className="flex items-center justify-between gap-4 p-4 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800">
-            <div>
-              <div className="font-semibold text-gray-900 dark:text-white">
-                Atendimento autônomo (a Lia responde sozinha)
-              </div>
-              <div className="text-sm text-gray-500 dark:text-gray-400">
-                Quando ligado, a Lia responde os clientes no WhatsApp sem você clicar. Em casos de preço, fechamento, objeção forte ou se o cliente pedir uma pessoa, ela <strong>não responde</strong> e marca a conversa pra equipe assumir — sem avisar o cliente. Precisa do agente ligado acima. Teste antes na aba "Testar".
-              </div>
-            </div>
-            <button
-              onClick={() => setAutoSend((v) => !v)}
-              role="switch"
-              aria-checked={autoSend}
-              disabled={!enabled}
-              className={cn(
-                "relative w-12 h-7 rounded-full transition-colors flex-shrink-0",
-                autoSend && enabled ? "bg-gold-500" : "bg-gray-300 dark:bg-gray-700",
-                !enabled && "opacity-50 cursor-not-allowed",
-              )}
-            >
-              <span
-                className={cn(
-                  "absolute top-1 left-1 w-5 h-5 rounded-full bg-white shadow transition-transform",
-                  autoSend && "translate-x-5",
-                )}
-              />
+              <span className={cn("absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform", enabled && "translate-x-5")} />
             </button>
           </div>
 
@@ -487,6 +728,12 @@ export default function AgentePage() {
             onChange={setKnowledge}
             rows={16}
             mono
+          />
+
+          <AgentPortfolioLinksEditor
+            value={portfolioLinks}
+            onChange={setPortfolioLinks}
+            disabled={saving}
           />
 
           <ConfigSection
@@ -578,28 +825,37 @@ export default function AgentePage() {
               {chat.map((m, i) => (
                 <div key={i} className="space-y-2">
                   {/* Balão de texto (cliente ou Lia). No hand-off não há texto. */}
-                  {m.content && (
-                    <div
-                      className={cn(
-                        "flex",
-                        m.role === "user" ? "justify-end" : "justify-start",
-                      )}
-                    >
-                      <div
-                        className={cn(
-                          "max-w-[80%] px-3.5 py-2.5 rounded-2xl text-sm whitespace-pre-wrap",
-                          m.role === "user"
-                            ? "bg-gold-500 text-white rounded-br-sm"
-                            : "bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-bl-sm",
-                        )}
-                      >
+                  {m.content && m.role === "user" && (
+                    <div className="flex justify-end">
+                      <div className="max-w-[80%] px-3.5 py-2.5 rounded-2xl text-sm whitespace-pre-wrap bg-gold-500 text-white rounded-br-sm">
                         {m.content}
                       </div>
                     </div>
                   )}
+                  {/* Lia: um balão por parágrafo, revelados no ritmo do envio real. */}
+                  {m.content && m.role === "assistant" && (
+                    <>
+                      {splitBubbles(m.content)
+                        .slice(0, m.revealed ?? Infinity)
+                        .map((part, j) => (
+                          <div key={j} className="flex justify-start">
+                            <div className="max-w-[80%] px-3.5 py-2.5 rounded-2xl text-sm whitespace-pre-wrap bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-bl-sm">
+                              {part}
+                            </div>
+                          </div>
+                        ))}
+                      {!bubblesDone(m) && (
+                        <div className="flex justify-start">
+                          <div className="px-3.5 py-2.5 rounded-2xl rounded-bl-sm bg-gray-100 dark:bg-gray-800 text-gray-400 text-xs tracking-widest">
+                            digitando…
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
 
-                  {/* Cartão: enviaria o orçamento (PDF do nicho) */}
-                  {m.action?.type === "orcamento" && (
+                  {/* Cartão: enviaria o orçamento (PDF do nicho). Só depois do último balão. */}
+                  {m.action?.type === "orcamento" && bubblesDone(m) && (
                     <div className="flex justify-start">
                       <div
                         className={cn(
@@ -633,16 +889,15 @@ export default function AgentePage() {
                   )}
 
                   {/* Cartão: passaria pra um humano */}
-                  {m.action?.type === "handoff" && (
+                  {m.action?.type === "handoff" && bubblesDone(m) && (
                     <div className="flex justify-start">
                       <div className="max-w-[85%] flex gap-2.5 px-3.5 py-2.5 rounded-2xl rounded-bl-sm text-sm border bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800 text-purple-800 dark:text-purple-300">
                         <UserRound size={18} className="flex-shrink-0 mt-0.5" />
                         <div>
                           <div className="font-semibold">Passaria pra um atendente</div>
                           <div className="text-xs mt-0.5">
-                            Preço final, fechamento, pagamento, data do ensaio ou objeção
-                            forte. No atendimento real a Lia <strong>não responde</strong>{" "}
-                            e te sinaliza, sem o cliente perceber.
+                            {m.action.reason ? `${handoffReasonLabel(m.action.reason)}. ` : ""}
+                            No atendimento real a Lia <strong>não responde</strong> e te sinaliza, sem o cliente perceber.
                           </div>
                         </div>
                       </div>
@@ -690,6 +945,31 @@ export default function AgentePage() {
             </div>
           </div>
 
+          {latestPlaygroundFeedback && !sending && (
+            <section className="space-y-3 rounded-2xl border border-gold-200 bg-gold-50/40 p-4 dark:border-gold-900/60 dark:bg-gold-950/10">
+              <div className="flex items-start gap-3">
+                <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-gold-500/10">
+                  <BrainCircuit size={18} className="text-gold-600 dark:text-gold-400" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-gray-900 dark:text-white">Ensinar com este teste</h4>
+                  <p className="mt-0.5 text-xs leading-relaxed text-gray-500 dark:text-gray-400">
+                    Avalie a última resposta. O histórico usado como exemplo é compactado e tem telefone, e-mail e links ocultados antes de salvar.
+                  </p>
+                </div>
+              </div>
+              <AgentLearningFeedback
+                key={latestPlaygroundFeedback.key}
+                context={{
+                  sourceType: "playground",
+                  sourceRef: "agent-test",
+                  messages: latestPlaygroundFeedback.messages,
+                  assistantResult: latestPlaygroundFeedback.assistantResult,
+                }}
+              />
+            </section>
+          )}
+
           {chat.length > 0 && (
             <button
               onClick={() => {
@@ -703,7 +983,7 @@ export default function AgentePage() {
             </button>
           )}
         </div>
-      ) : (
+      ) : tab === "atendimentos" ? (
         /* ── Atendimentos da Lia ── */
         <div className="space-y-5">
           <div className="flex items-start justify-between gap-3">
@@ -723,9 +1003,10 @@ export default function AgentePage() {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             {[
               { key: "precisa_humano", label: "Precisa de você", n: atendCounts.precisa_humano, cls: "text-amber-600 dark:text-amber-400" },
+              { key: "humano", label: "Você assumiu", n: atendCounts.humano, cls: "text-blue-600 dark:text-blue-400" },
               { key: "orcamento", label: "Orçamento enviado", n: atendCounts.orcamento, cls: "text-gold-600 dark:text-gold-400" },
               { key: "conversando", label: "Lia conversando", n: atendCounts.conversando, cls: "text-emerald-600 dark:text-emerald-400" },
             ].map((s) => (
@@ -745,6 +1026,7 @@ export default function AgentePage() {
           ) : (
             [
               { key: "precisa_humano", title: "🙋 Precisa de você", desc: "A Lia passou pra você assumir (preço, fechamento, objeção ou pedido de pessoa).", border: "border-amber-300 dark:border-amber-800" },
+              { key: "humano", title: "👤 Você assumiu", desc: "Conversas em atendimento humano. A Lia fica pausada até você devolver.", border: "border-blue-200 dark:border-blue-900" },
               { key: "orcamento", title: "📄 Orçamento enviado", desc: "A Lia mandou o orçamento e está aguardando a resposta.", border: "border-gray-200 dark:border-gray-800" },
               { key: "conversando", title: "💬 Lia conversando", desc: "Atendimento em andamento com a Lia.", border: "border-gray-200 dark:border-gray-800" },
             ].map((grp) => {
@@ -778,10 +1060,16 @@ export default function AgentePage() {
                           {a.followup_status === "sent" && (
                             <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300">follow-up enviado</span>
                           )}
+                          {a.agent_status === "human_active" && (
+                            <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">atendimento humano</span>
+                          )}
                         </div>
                         <div className="text-sm text-gray-500 dark:text-gray-400 truncate">{a.last_message || "—"}</div>
+                        {grp.key === "precisa_humano" && a.handoff_reason && (
+                          <div className="mt-0.5 truncate text-xs font-medium text-amber-700 dark:text-amber-300">Motivo: {handoffReasonLabel(a.handoff_reason)}</div>
+                        )}
                       </button>
-                      {grp.key === "precisa_humano" && (
+                      {(grp.key === "precisa_humano" || grp.key === "humano") && (
                         <button
                           onClick={() => devolverParaLia(a.phone)}
                           disabled={devolvendo === a.phone}
@@ -799,6 +1087,8 @@ export default function AgentePage() {
             })
           )}
         </div>
+      ) : (
+        <AgentLearningLab />
       )}
     </div>
   );

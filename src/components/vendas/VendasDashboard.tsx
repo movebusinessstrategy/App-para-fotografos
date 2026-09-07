@@ -116,7 +116,7 @@ export function VendasDashboard() {
   });
 
   const TABS = [
-    { id: "kanban" as Tab, label: "Kanban", icon: LayoutGrid },
+    { id: "kanban" as Tab, label: "Funil", icon: LayoutGrid },
     { id: "inbox" as Tab, label: "Conversas", icon: MessageCircle },
     { id: "historico" as Tab, label: "Histórico", icon: History },
     // Análises pode ser desmarcada por funcionário (permissão "vendas_analises").
