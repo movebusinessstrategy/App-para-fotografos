@@ -12,17 +12,28 @@ Identificar de qual anúncio cada lead veio e devolver as vendas confirmadas ao 
 4. Um worker envia a fila, com retentativa, diagnóstico e proteção contra duplicidade. Nenhuma chamada externa participa da transação da venda.
 5. Telefone e e-mail são normalizados e transformados em SHA-256 somente no momento do envio. Dados pessoais brutos e tokens não entram nos logs.
 
-## Fases
+## Estado validado em 28/08/2026
 
 - [x] Auditar e proteger a migração das mídias para Cloudflare R2.
 - [x] Criar tabelas de origem, configuração e fila de conversões.
 - [x] Capturar a origem de anúncios Click-to-WhatsApp recebida pelo webhook oficial da Meta.
 - [x] Enfileirar vendas feitas pelo modal ou por arrasto para uma etapa ganha.
-- [ ] Aplicar a migration 066 no Supabase e validar com uma venda de teste controlada.
+- [x] Aplicar a migration 074 no Supabase do projeto correto.
+- [x] Criar backup criptografado e conferir isolamento antes/depois por tenant.
+- [x] Cadastrar site, dois aliases de WhatsApp, etapa `proposal` e integrações Meta, Google e GA4, todos desativados.
+- [x] Validar intake, consentimento, contato, idempotência e proteção contra replay em transação com rollback forçado.
+- [x] Confirmar que a fila legada de 58 eventos permaneceu idêntica após os testes.
+- [x] Criar Turnstile para o domínio público do Estúdio.
+- [x] Adicionar trava explícita `BRIDGE_ENABLED=false` ao Worker.
+- [ ] Enviar a branch isolada ao GitHub após autorização explícita para esse destino.
+- [ ] Publicar o CRM em staging/produção após regularizar a cobrança e a memória do Render.
+- [ ] Carregar uma versão desativada do Worker na Cloudflare após autorização explícita para os quatro segredos.
 - [ ] Conectar Dataset/Conversions API da Meta e habilitar o worker para a conta.
 - [ ] Conectar Google Data Manager API e a ação de conversão `UPLOAD_CLICKS`.
 - [ ] Adicionar diagnóstico visual de integração e reprocessamento seguro de falhas.
 - [ ] Validar deduplicação, consentimento e correspondência em ambiente de teste antes de ativar produção.
+
+O GoHighLevel não faz parte da arquitetura porque o Estúdio informou que não possui conta na plataforma.
 
 ## Dependências externas para ativação
 
