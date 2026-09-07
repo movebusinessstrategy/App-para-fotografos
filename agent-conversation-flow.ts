@@ -79,6 +79,9 @@ const NEW_EPISODE_GAP_MS = 30 * 24 * 60 * 60 * 1000;
 const NICHE_PATTERNS: Array<[string, RegExp]> = [
   ['gestante', /\bgestante|gesta[cç][aã]o|gr[aá]vid[ao]|esperando (?:um |uma )?beb[eê]\b/i],
   ['newborn', /\bnewborn|rec[eé]m[- ]?nascid|beb[eê].{0,20}(?:ja nasceu|acabou de nascer|nascido)\b/i],
+  // Acompanhamento do primeiro ano (3, 6, 9 e 12 meses). Sem isso, "ensaio do
+  // meu bebê de 6 meses" caía em newborn ou ficava sem nicho nenhum.
+  ['baby', /acompanhamento (?:do |da |de )?beb[eê]|ensaio baby|\bbaby\b|beb[eê].{0,16}\b(?:[3-9]|1[01])\s*mes(?:es)?\b/i],
   ['smash_the_cake', /\bsmash(?: the cake)?\b/i],
   ['aniversario', /\banivers[aá]rio|festa\b/i],
   ['familia', /\b(?:ensaio|fotos?|sess[aã]o).{0,24}(?:de |em )?fam[ií]lia|ensaio familiar|fam[ií]lia.{0,18}(?:ensaio|fotos?|sess[aã]o)\b/i],
@@ -89,7 +92,11 @@ const NICHE_PATTERNS: Array<[string, RegExp]> = [
   // pessoa usa; "marca pessoal" é o nome interno do pacote. Sem isso o nicho
   // ficava indefinido e a Lia repetia "qual tipo de ensaio" pra sempre.
   ['marca_pessoal', /\bmarca pessoal|ensaio (?:profissional|corporativ[ao])|fotos? corporativ[ao]s?|book (?:profissional|corporativo)|linked ?in|headshot|foto de perfil profissional|fotos? (?:profissionais|para o? (?:meu )?trabalho)\b/i],
+  // Precisa vir antes de 'revelacao': "chá revelação" é cobertura de evento e
+  // tem orçamento próprio, não é o mini ensaio de revelação no estúdio.
+  ['cha_revelacao', /\bch[aá]\s+(?:de\s+)?(?:beb[eê]|fralda|revela[cç][aã]o)\b|\bch[aá]\b.{0,16}revela[cç][aã]o/i],
   ['revelacao', /\brevela[cç][aã]o\b/i],
+  ['anunciacao', /\banuncia[cç][aã]o\b/i],
   ['batizado', /\bbatizad[ao]|batismo\b/i],
 ];
 
@@ -563,13 +570,21 @@ function lifecycleReplyMatches(reply: string, flow: ConversationFlowAnalysis): b
   return /(?:ja nasceu|bebe.{0,18}nasceu).*[?]/.test(reply);
 }
 
+// Junto do orçamento de gestante o estúdio manda o PDF "Dicas para o Ensaio de
+// Gestante" (o envio dos dois é feito pelo servidor, em agente_materiais).
+// A frase avisa que vêm dois arquivos pra pessoa não achar que veio repetido.
+const QUOTE_EXTRA_BY_NICHE: Record<string, string> = {
+  gestante: ' Mando junto um material com as dicas pro dia do ensaio também 🤍',
+};
+
 function quoteFallback(niche: string | null, lastCustomer: string): string {
   if (!niche) return 'Qual tipo de ensaio você gostaria?';
   const token = `###PDF:${niche}###`;
+  const extra = QUOTE_EXTRA_BY_NICHE[niche] || '';
   if (/\b(?:sabado|fim de semana|final de semana)\b/.test(lastCustomer)) {
-    return `A gente trabalha aos sábados sim 😊 Como eles são bem concorridos, vou te mandar os nossos pacotes por aqui. Você me diz qual gostou mais e depois a gente vê uma data para vocês, pode ser?\n\n${token}`;
+    return `A gente trabalha aos sábados sim 😊 Como eles são bem concorridos, vou te mandar os nossos pacotes por aqui.${extra} Você me diz qual gostou mais e depois a gente vê uma data para vocês, pode ser?\n\n${token}`;
   }
-  return `Perfeito 😊 Vou te mandar os nossos pacotes por aqui. Você me diz qual gostou mais e depois a gente vê uma data para vocês, pode ser?\n\n${token}`;
+  return `Perfeito 😊 Vou te mandar os nossos pacotes por aqui.${extra} Você me diz qual gostou mais e depois a gente vê uma data para vocês, pode ser?\n\n${token}`;
 }
 
 // "esse momento de vocês" é linguagem de gestante e não cabe em quem vai
@@ -582,6 +597,8 @@ const CREATIVE_INTENT_BY_NICHE: Record<string, string> = {
   cha_revelacao: 'Como você imaginou a cobertura do chá?',
   revelacao: 'Como você imaginou esse ensaio?',
   batizado: 'Como você imaginou a cobertura do batizado?',
+  anunciacao: 'Como vocês imaginaram esse ensaio pra contar a novidade?',
+  baby: 'Quantos mesinhos o bebê tem e como você imaginou esse ensaio?',
   marca_pessoal: 'Onde você vai usar essas fotos e como quer aparecer nelas?',
   feminino: 'Como você quer se ver nessas fotos?',
   familia: 'Quem vai participar do ensaio?',

@@ -511,3 +511,23 @@ test('nenhum movimento devolve resposta vazia: sem texto, uma pessoa assume', ()
   const reply = enforceConversationFlowReply('', mudo);
   assert.notEqual(reply.trim(), '');
 });
+
+test('chá revelação é cobertura de evento e não cai no mini ensaio de revelação', () => {
+  // Os dois orçamentos existem e têm valores bem diferentes (R$ 2.400 x R$ 550):
+  // mandar o errado é erro comercial, não só de texto.
+  for (const fala of ['queria fotos do meu chá revelação', 'vocês fazem chá de bebê?', 'chá de revelação em novembro']) {
+    assert.equal(flow([['user', fala]]).niche, 'cha_revelacao', fala);
+  }
+  for (const fala of ['queria o ensaio de revelação do sexo', 'ensaio revelação no estúdio']) {
+    assert.equal(flow([['user', fala]]).niche, 'revelacao', fala);
+  }
+});
+
+test('acompanhamento e anunciação têm nicho próprio, com PDF próprio', () => {
+  for (const fala of ['queria o acompanhamento do bebê', 'ensaio do meu bebê de 6 meses', 'quero o ensaio baby']) {
+    assert.equal(flow([['user', fala]]).niche, 'baby', fala);
+  }
+  assert.equal(flow([['user', 'quero o ensaio de anunciação']]).niche, 'anunciacao');
+  // Gestante fala em meses de gestação e não pode virar acompanhamento.
+  assert.equal(flow([['user', 'quero ensaio gestante, estou de 7 meses']]).niche, 'gestante');
+});

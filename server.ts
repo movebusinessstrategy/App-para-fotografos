@@ -27542,17 +27542,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return String(data.id);
   }
 
-  async function sendMaterialPdf(
+  // Envia UM arquivo já cadastrado. Separado do sendMaterialPdf porque o mesmo
+  // nicho pode mandar mais de um PDF na sequência.
+  async function sendMaterialFile(
     userId: string,
     phone: string,
     waNumber: string,
     channel: AgentChannel,
-    nicho: string,
+    mat: { path: string; nome_arquivo?: string | null },
   ): Promise<boolean> {
-    if (!supabaseAdmin) return false;
-    const { data: mat } = await supabaseAdmin.from('agente_materiais')
-      .select('path, nome_arquivo').eq('user_id', userId).eq('nicho', nicho).eq('tipo', 'pacote').maybeSingle();
-    if (!mat?.path) return false;
     const { data: blob, error } = await appStorageBucket('agente-materiais').download(mat.path);
     if (error || !blob) return false;
     const buf = Buffer.from(await blob.arrayBuffer());
@@ -27571,6 +27569,37 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       document: { id: mediaId, filename: fileName },
     });
     await persistMetaAgentMessage(userId, phone, waNumber, messageId, fileName, 'document');
+    return true;
+  }
+
+  // Manda o orçamento do nicho e, logo em seguida, o material de dicas quando o
+  // estúdio cadastrou um (é o caso do "Dicas para o Ensaio de Gestante", que o
+  // estúdio sempre manda junto com o orçamento de gestante).
+  async function sendMaterialPdf(
+    userId: string,
+    phone: string,
+    waNumber: string,
+    channel: AgentChannel,
+    nicho: string,
+  ): Promise<boolean> {
+    if (!supabaseAdmin) return false;
+    const { data: mats } = await supabaseAdmin.from('agente_materiais')
+      .select('path, nome_arquivo, tipo')
+      .eq('user_id', userId).eq('nicho', nicho).in('tipo', ['pacote', 'dicas']);
+    const pacote = (mats || []).find((m: any) => m.tipo === 'pacote') as any;
+    if (!pacote?.path) return false;
+    if (!await sendMaterialFile(userId, phone, waNumber, channel, pacote)) return false;
+
+    const dicas = (mats || []).find((m: any) => m.tipo === 'dicas') as any;
+    if (dicas?.path) {
+      // O orçamento já foi: se as dicas falharem, a conversa segue mesmo assim.
+      await new Promise((r) => setTimeout(r, 1500));
+      try {
+        await sendMaterialFile(userId, phone, waNumber, channel, dicas);
+      } catch (e: any) {
+        console.warn(`[Lia] dicas de ${nicho} não enviadas: ${e?.message}`);
+      }
+    }
     return true;
   }
 
