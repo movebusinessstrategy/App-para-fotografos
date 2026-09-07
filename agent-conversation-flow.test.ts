@@ -593,3 +593,18 @@ test('a etapa de intenção fecha mesmo quando a Lia reescreve a pergunta', () =
     assert.notEqual(depois.move, 'ask_creative_intent', pergunta);
   }
 });
+
+test('não pergunta a mesma coisa três vezes, mas ainda ouve quem responde', () => {
+  const base: Turn[] = [
+    ['user', 'queria um smash the cake pra minha filha'],
+    ['assistant', 'Você já tem uma ideia de tema ou cores pro smash?'],
+    ['user', 'ela faz 1 aninho dia 12 de novembro'],
+    ['assistant', 'Entendii 🥰\n\nE você já conhece um pouco do nosso trabalho?'],
+    ['user', 'queria fazer ao ar livre, num lugar com grama'],
+    ['assistant', 'Entendii 😊\n\nE você já conhece um pouco do nosso trabalho?'],
+  ];
+  // Não respondeu duas vezes: segue a conversa em vez de perguntar de novo.
+  assert.notEqual(flow([...base, ['user', 'mas eu queria muito ao ar livre mesmo assim']]).move, 'ask_work_familiarity');
+  // Respondeu que não conhece: manda o portfólio, mesmo na segunda pergunta.
+  assert.equal(flow([...base, ['user', 'não conheço vocês ainda']]).move, 'share_portfolio');
+});

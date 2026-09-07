@@ -280,6 +280,8 @@ function lifecycleContextText(
   return customerText;
 }
 
+const FAMILIARITY_QUESTION = /conhece.{0,30}(?:trabalho|fotos)|dar uma olhada.{0,30}fotos|nosso trabalho/;
+
 function workFamiliarity(messages: LearningMessage[], customerText: string): WorkFamiliarity {
   // "vi" precisa de limite de palavra: sem isso, "ainda não, previsão 20 de
   // outubro" casava como "não ... vi" e a cliente era tratada como quem não
@@ -288,9 +290,13 @@ function workFamiliarity(messages: LearningMessage[], customerText: string): Wor
   if (explicitNo) return 'unknown';
   const explicitYes = /\b(?:ja conheco|conheco (?:o )?trabalho|vi.{0,40}instagram|vim.{0,20}instagram|acompanho|ja vi.{0,30}(?:fotos|trabalho))\b/.test(customerText);
   if (explicitYes) return 'known';
-  const contextualReply = customerReplyAfterAssistantQuestion(messages, /conhece.{0,30}(?:trabalho|fotos)|dar uma olhada.{0,30}fotos|nosso trabalho/);
+  const contextualReply = customerReplyAfterAssistantQuestion(messages, FAMILIARITY_QUESTION);
   if (/\b(?:nao|nunca|ainda nao)\b/.test(contextualReply)) return 'unknown';
   if (/\b(?:sim|ja|conheco|instagram|acompanho|vi)\b/.test(contextualReply)) return 'known';
+  // Perguntar a mesma coisa três vezes é o que mais irrita. Se ela já falou
+  // outra coisa duas vezes seguidas, a gente para de insistir e segue: quem não
+  // responde se conhece o trabalho não está pedindo pra ver o portfólio.
+  if (messages.filter((message) => assistantAsked(message, FAMILIARITY_QUESTION)).length >= 2) return 'known';
   return 'not_asked';
 }
 
