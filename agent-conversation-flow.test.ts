@@ -429,3 +429,62 @@ test('silêncio depois da pergunta mantém a etapa aberta', () => {
     ['assistant', 'Me conta mais de como você tinha pensado em registrar esse momento de vocês?'],
   ], 'ask_creative_intent');
 });
+
+test('reconhece os nomes que o cliente usa para marca pessoal', () => {
+  for (const fala of [
+    'Oi, quero fazer um book profissional pro LinkedIn',
+    'preciso de fotos pro meu LinkedIn',
+    'quero um headshot',
+  ]) {
+    const result = flow([['user', fala]]);
+    assert.equal(result.niche, 'marca_pessoal', fala);
+    assert.notEqual(result.move, 'ask_niche', fala);
+  }
+});
+
+test('a pergunta de intenção usa o vocabulário do nicho, nunca a frase de gestante', () => {
+  const esperado: Array<[string, RegExp]> = [
+    ['Oi, quero fazer um book profissional pro LinkedIn', /usar essas fotos|aparecer/i],
+    ['quero ensaio de familia', /quem vai participar/i],
+    ['quero smash the cake', /tema ou cores/i],
+  ];
+  for (const [fala, padrao] of esperado) {
+    const result = flow([['user', fala]]);
+    assert.match(result.fallback_reply, padrao, fala);
+    assert.doesNotMatch(result.fallback_reply, /esse momento de voc[êe]s/i, fala);
+  }
+  // gestante mantém a frase validada da casa
+  assert.match(
+    flow([['user', 'quero ensaio gestante'], ['assistant', 'Com quantas semanas você está?'], ['user', '30']]).fallback_reply,
+    /esse momento de voc[êe]s/i,
+  );
+});
+
+test('etapa respondida não é repetida, em qualquer nicho', () => {
+  // newborn: a pergunta da etapa 3 é a do nicho, não a de gestante
+  assertMove([
+    ['user', 'queria fazer newborn'],
+    ['assistant', 'O bebê já nasceu?'],
+    ['user', 'ainda não, previsão 20 de outubro'],
+    ['assistant', 'Você pensou em fotos só do bebê ou com vocês e os irmãos junto?'],
+    ['user', 'queria com a gente e a irmã mais velha'],
+  ], 'ask_work_familiarity');
+
+  // família
+  assertMove([
+    ['user', 'queria saber sobre ensaio de família'],
+    ['assistant', 'Quem vai participar do ensaio?'],
+    ['user', 'somos eu, meu marido e dois filhos pequenos'],
+  ], 'ask_work_familiarity');
+});
+
+test('"só consigo sábado" fecha a etapa de agenda e segue pro orçamento', () => {
+  const result = assertMove([
+    ['user', 'quero ensaio gestante, tô de 30 semanas, já conheço vocês pelo Instagram'],
+    ['assistant', 'Me conta mais de como você tinha pensado em registrar esse momento de vocês?'],
+    ['user', 'algo natural'],
+    ['assistant', 'E para vocês é tranquilo fazer as fotos de meio de semana?'],
+    ['user', 'Só consigo aos sábados'],
+  ], 'send_quote');
+  assert.equal(result.handoff_reason, null);
+});

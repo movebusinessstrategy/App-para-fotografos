@@ -85,7 +85,10 @@ const NICHE_PATTERNS: Array<[string, RegExp]> = [
   ['infantil', /\bensaio.{0,18}infantil|fotos?.{0,18}(?:da|de uma?) crian[cç]a\b/i],
   ['casal', /\bcasal|namorad|noiv[ao]\b/i],
   ['feminino', /\bfeminino|retrato feminino\b/i],
-  ['marca_pessoal', /\bmarca pessoal|ensaio (?:profissional|corporativ[ao])|fotos? corporativ[ao]s?\b/i],
+  // "book profissional", "foto pro LinkedIn" e "headshot" são os nomes que a
+  // pessoa usa; "marca pessoal" é o nome interno do pacote. Sem isso o nicho
+  // ficava indefinido e a Lia repetia "qual tipo de ensaio" pra sempre.
+  ['marca_pessoal', /\bmarca pessoal|ensaio (?:profissional|corporativ[ao])|fotos? corporativ[ao]s?|book (?:profissional|corporativo)|linked ?in|headshot|foto de perfil profissional|fotos? (?:profissionais|para o? (?:meu )?trabalho)\b/i],
   ['revelacao', /\brevela[cç][aã]o\b/i],
   ['batizado', /\bbatizad[ao]|batismo\b/i],
 ];
@@ -95,7 +98,7 @@ const NICHE_PRIORITY = new Map(NICHE_PATTERNS.map(([niche], index) => [niche, in
 const MOVE_INSTRUCTIONS: Record<ConversationFlowMove, string> = {
   ask_niche: 'Descubra somente qual tipo de ensaio a pessoa procura.',
   ask_lifecycle: 'Se for gestante, pergunte: "Com quantas semanas você está?". Se for newborn, descubra primeiro se o bebê já nasceu; se nasceu, pergunte quantos dias ele tem.',
-  ask_creative_intent: 'Reconheça a fase da gestação ou do bebê em uma frase curta e então pergunte: "Me conta mais de como você tinha pensado em registrar esse momento de vocês?". Em outro balão, convide: "Caso tenha algumas referências, pode me mandar aqui 🤍".',
+  ask_creative_intent: 'Reconheça em uma frase curta o que a pessoa acabou de dizer (a fase da gestação, a idade do bebê, a data da festa, o uso que ela vai dar às fotos) e então faça UMA pergunta pra entender o que ela quer, no vocabulário DO NICHO DELA. Gestante: "Me conta mais de como você tinha pensado em registrar esse momento de vocês?". Newborn: se quer só o bebê ou com os pais e irmãos. Smash e aniversário: tema ou cores. Marca pessoal: onde vai usar as fotos e como quer aparecer. Feminino: como ela quer se ver. Família: quem vai participar. Casal: como os dois imaginaram. NUNCA diga "esse momento de vocês" para quem vai aparecer sozinha ou para foto de trabalho. Em outro balão, quando fizer sentido, convide: "Caso tenha algumas referências, pode me mandar aqui 🤍".',
   ask_work_familiarity: 'Reconheça de verdade o estilo ou a ideia que ela contou e pergunte: "E você já conhece um pouco do nosso trabalho? Chegou a dar uma olhada em algumas de nossas fotos?". Não faça esta pergunta se ela já disse que conhece, veio pelo Instagram ou mandou um trabalho do próprio estúdio.',
   share_portfolio: 'Ela ainda não conhece o trabalho. Diga que vai mostrar alguns ensaios, envie somente o portfólio aprovado do nicho e termine perguntando o que ela achou. Nunca invente URL nem diga que enviou fotos se nenhum material aprovado estiver disponível.',
   ask_portfolio_reaction: 'Os trabalhos do estúdio já foram apresentados. Pergunte somente o que ela achou, sem repetir a qualificação.',
@@ -190,7 +193,10 @@ function lifecycleAcknowledgement(niche: string | null, customerText: string): s
 // perguntar. Sem essa segunda porta, qualquer resposta fora da lista de
 // palavras ("não tinha nada em mente", "mais na parte do estúdio") deixava a
 // etapa aberta e a Lia repetia a mesma pergunta pra sempre.
-const CREATIVE_INTENT_QUESTION = /(?:como|me conta).{0,70}(?:pens|imagin|registr)|referenc/;
+// Precisa cobrir TODAS as redações da etapa, inclusive as por nicho
+// (CREATIVE_INTENT_BY_NICHE). Se a pergunta feita não casar aqui, a etapa
+// nunca fecha e a Lia repete a mesma pergunta depois de já ter sido respondida.
+const CREATIVE_INTENT_QUESTION = /(?:como|me conta).{0,70}(?:pens|imagin|registr)|referenc|pensou em fotos|ideia de tema|tema ou cores|usar essas fotos|quer aparecer|quer se ver|quem vai participar|imaginou (?:a cobertura|esse ensaio)|tinham pensado esse ensaio/;
 
 function creativeIntentDescribed(customerText: string): boolean {
   return /\b(?:referenc|inspir|pensei (?:em|num|que)|imaginei|como (?:eu )?queria|queria (?:algo|fotos?|um ensaio) (?:mais )?(?:natural|classico|externo|(?:no|de) estudio)|registrar (?:esse|este|o) momento|estilo|natural|classico|externo|(?:no|de) estudio|fotos? (?:de|no) estudio|nao tenho (?:uma )?ideia|sem referenc)|\[(?:foto|imagem)/.test(customerText);
@@ -252,7 +258,10 @@ function lifecycleContextText(
 }
 
 function workFamiliarity(messages: LearningMessage[], customerText: string): WorkFamiliarity {
-  const explicitNo = /\b(?:nao|nunca|ainda nao).{0,18}(?:conheco|vi|acompanho).{0,30}(?:trabalho|voces|fotos)?\b/.test(customerText);
+  // "vi" precisa de limite de palavra: sem isso, "ainda não, previsão 20 de
+  // outubro" casava como "não ... vi" e a cliente era tratada como quem não
+  // conhece o trabalho, pulando a pergunta e mandando portfólio sem motivo.
+  const explicitNo = /\b(?:nao|nunca|ainda nao).{0,18}\b(?:conheco|vi|acompanho)\b.{0,30}(?:trabalho|voces|fotos)?\b/.test(customerText);
   if (explicitNo) return 'unknown';
   const explicitYes = /\b(?:ja conheco|conheco (?:o )?trabalho|vi.{0,40}instagram|vim.{0,20}instagram|acompanho|ja vi.{0,30}(?:fotos|trabalho))\b/.test(customerText);
   if (explicitYes) return 'known';
@@ -309,11 +318,14 @@ function scheduleKnown(messages: LearningMessage[], customerText: string): boole
   if (explicitPreference) {
     return true;
   }
+  // Perguntou e a pessoa respondeu qualquer coisa? A etapa está cumprida.
+  // Exigir palavra-chave na resposta fazia a Lia perguntar "é tranquilo no
+  // meio de semana?" logo depois de a cliente dizer que só consegue sábado.
   const reply = customerReplyAfterAssistantQuestion(
     messages,
     /(?:meio de semana|durante a semana|dia de semana|segunda|terca|quarta|quinta|sexta)/,
   );
-  return /\b(?:sim|tranquil|consigo|podemos|pode ser|sem problema|nao consigo|nao da|so fim de semana)\b/.test(reply);
+  return reply.trim().length > 0;
 }
 
 function quoteWasSent(customerText: string, assistantText: string): boolean {
@@ -520,7 +532,11 @@ function replyMatchesMove(reply: string, flow: ConversationFlowAnalysis): boolea
   if (flow.move !== 'send_quote' && /###pdf:[a-z_]+###/i.test(reply)) return false;
   const patterns: Partial<Record<ConversationFlowMove, RegExp>> = {
     ask_niche: /\b(?:qual|que|tipo).{0,30}(?:ensaio|fotos?|sessao).*[?]/,
-    ask_creative_intent: /\b(?:como|me conta).{0,70}(?:pens|imagin|registr|momento).*[?]/,
+    // Qualquer pergunta que explore o que a pessoa quer serve. O padrão antigo
+    // exigia "como/me conta" + "pens/imagin/registr" e derrubava perguntas boas
+    // e específicas do nicho ("como quer aparecer nessas fotos?"), trocando-as
+    // pela frase decorada de gestante.
+    ask_creative_intent: /\b(?:pens|imagin|registr|aparecer|ideia|tema|estilo|quem vai|onde|gostaria|procura|busca|momento).*[?]/,
     ask_work_familiarity: /\b(?:conhece|conhecia|viu|olhada).{0,50}(?:trabalho|fotos?|ensaio).*[?]/,
     ask_portfolio_reaction: /\b(?:o que achou|gostou|achou das).*[?]/,
     clarify_portfolio_mismatch: /\b(?:o que|como).{0,50}(?:diferente|mudaria|buscando|imaginou|gostaria).*[?]/,
@@ -548,10 +564,34 @@ function quoteFallback(niche: string | null, lastCustomer: string): string {
   return `Perfeito 😊 Vou te mandar os nossos pacotes por aqui. Você me diz qual gostou mais e depois a gente vê uma data para vocês, pode ser?\n\n${token}`;
 }
 
+// "esse momento de vocês" é linguagem de gestante e não cabe em quem vai
+// aparecer sozinha nem em foto de trabalho. Cada nicho tem a sua pergunta.
+const CREATIVE_INTENT_BY_NICHE: Record<string, string> = {
+  gestante: 'Me conta mais de como você tinha pensado em registrar esse momento de vocês?',
+  newborn: 'Você pensou em fotos só do bebê ou com vocês e os irmãos junto?',
+  smash_the_cake: 'Você já tem uma ideia de tema ou cores pro smash?',
+  aniversario: 'Você já tem uma ideia de tema pra festa?',
+  cha_revelacao: 'Como você imaginou a cobertura do chá?',
+  revelacao: 'Como você imaginou esse ensaio?',
+  batizado: 'Como você imaginou a cobertura do batizado?',
+  marca_pessoal: 'Onde você vai usar essas fotos e como quer aparecer nelas?',
+  feminino: 'Como você quer se ver nessas fotos?',
+  familia: 'Quem vai participar do ensaio?',
+  casal: 'Como vocês tinham pensado esse ensaio?',
+  infantil: 'Como você imaginou esse ensaio?',
+};
+
 function creativeIntentFallback(niche: string | null, customerText: string): string {
   const recognition = lifecycleAcknowledgement(niche, customerText);
   const prefix = recognition ? `${recognition} 😊\n\n` : '';
-  return `${prefix}Me conta mais de como você tinha pensado em registrar esse momento de vocês?\n\nCaso tenha algumas referências, pode me mandar aqui 🤍`;
+  const question = (niche && CREATIVE_INTENT_BY_NICHE[niche])
+    || 'Me conta mais de como você imaginou esse ensaio?';
+  // O convite de referência só faz sentido quando a pessoa pode ter inspiração
+  // visual salva; em cobertura de evento ele soa deslocado.
+  const invite = niche === 'aniversario' || niche === 'batizado' || niche === 'cha_revelacao'
+    ? ''
+    : '\n\nCaso tenha algumas referências, pode me mandar aqui 🤍';
+  return `${prefix}${question}${invite}`;
 }
 
 function fallbackForMove(
