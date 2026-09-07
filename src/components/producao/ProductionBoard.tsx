@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Calendar, Camera, Clock, Pencil, Check, X, MoveRight, Tag, UserCircle, Star, GripHorizontal, Trash2, CircleDollarSign, AlertCircle } from "lucide-react";
+import { Calendar, Camera, Clock, Pencil, Check, X, MoveRight, Tag, UserCircle, Star, GripHorizontal, Trash2, CircleDollarSign, AlertCircle, Receipt } from "lucide-react";
 import { Job, ProductionProcess, ProductionStageV2, TeamMember } from "../../types";
 import { parseDate } from "../../utils/date";
 import { cn } from "../../utils/cn";
@@ -287,7 +287,7 @@ function StageColumn(props: {
                   <div className="flex flex-wrap gap-1 mb-2">
                     {job.labels.map(label => (
                       <span key={label} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold text-white" style={{ backgroundColor: getLabelColor(label) }}>
-                        <Tag size={8} /> {label}
+                        {label === 'Nota fiscal emitida' ? <Receipt size={8} /> : <Tag size={8} />} {label}
                       </span>
                     ))}
                   </div>

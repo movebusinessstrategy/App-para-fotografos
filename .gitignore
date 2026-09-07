@@ -1,4 +1,5 @@
 node_modules/
+.wrangler/
 build/
 dist/
 coverage/
@@ -44,3 +45,10 @@ workers/**/.wrangler/
 *.ofx
 *.qfx
 private-finance/
+
+# Documentos de negócio do estúdio (preços, plano de aquisição, relatório de
+# anúncios). O repositório é público: estes não sobem.
+docs/plano-integrado-aquisicao-*
+docs/relatorio-meta-ads-*
+docs/ia-oficial-whatsapp-instrucoes-*
+docs/mockups/

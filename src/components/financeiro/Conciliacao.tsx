@@ -923,7 +923,7 @@ function StatusBadge({ transaction }: { transaction: Transacao }) {
   const status = transactionStatus(transaction);
   const meta = STATUS_META[status];
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${meta.className}`}>
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold md:text-[11px] ${meta.className}`}>
       {status === 'conciliado' && <Check className="h-3 w-3" />}
       {status === 'sugerido' && <Sparkles className="h-3 w-3" />}
       {status === 'transferencia' && <ArrowRightLeft className="h-3 w-3" />}
@@ -937,7 +937,7 @@ function Confidence({ value }: { value: number | null }) {
   const tone = value >= 90
     ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-300 dark:bg-emerald-900/20'
     : 'text-blue-700 bg-blue-50 dark:text-blue-300 dark:bg-blue-900/20';
-  return <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${tone}`}>{value}% confiança</span>;
+  return <span className={`rounded-md px-1.5 py-0.5 text-xs font-semibold md:text-[10px] ${tone}`}>{value}% confiança</span>;
 }
 
 function Metric({ label, value, detail, tone = 'neutral' }: {
@@ -1069,8 +1069,8 @@ function PreviewModal({ preview, accountName, confirming, onCancel, onConfirm }:
   }, [preview.banco_detectado, preview.conta_detectada, preview.correcao_legado?.preview_token, preview.nome_arquivo]);
 
   return (
-    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-gray-950/45 p-3 backdrop-blur-[2px]" onClick={onCancel}>
-      <div className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900" onClick={event => event.stopPropagation()}>
+    <div className="fixed inset-0 z-[1000] flex items-end justify-center bg-gray-950/45 p-0 backdrop-blur-[2px] sm:items-center sm:p-3" onClick={onCancel}>
+      <div className="flex max-h-[calc(100dvh-1rem)] w-full max-w-3xl flex-col overflow-hidden rounded-t-2xl border border-gray-200 bg-white shadow-2xl sm:max-h-[92vh] sm:rounded-2xl dark:border-gray-700 dark:bg-gray-900" onClick={event => event.stopPropagation()}>
         <div className="flex items-start justify-between border-b border-gray-100 px-5 py-4 dark:border-gray-800">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -1162,14 +1162,14 @@ function PreviewModal({ preview, accountName, confirming, onCancel, onConfirm }:
           </div>
 
           <div className="mt-4 overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700">
-            <div className="grid grid-cols-[88px_minmax(0,1fr)_110px] gap-3 border-b border-gray-100 bg-gray-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:border-gray-700 dark:bg-gray-800/60">
+            <div className="hidden grid-cols-[88px_minmax(0,1fr)_110px] gap-3 border-b border-gray-100 bg-gray-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-gray-400 sm:grid dark:border-gray-700 dark:bg-gray-800/60">
               <span>Data</span><span>Descrição</span><span className="text-right">Valor</span>
             </div>
             {preview.transacoes.slice(0, 8).map((transaction, index) => (
-              <div key={transaction.id || transaction.fit_id || transaction.fingerprint || index} className="grid grid-cols-[88px_minmax(0,1fr)_110px] gap-3 border-b border-gray-100 px-3 py-2.5 text-sm last:border-0 dark:border-gray-800">
+              <div key={transaction.id || transaction.fit_id || transaction.fingerprint || index} className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 border-b border-gray-100 px-3 py-2.5 text-sm last:border-0 sm:grid-cols-[88px_minmax(0,1fr)_110px] sm:gap-3 dark:border-gray-800">
                 <span className="text-gray-500">{fmtDate(transaction.data)}</span>
-                <span className="truncate text-gray-700 dark:text-gray-200">{transaction.descricao || 'Sem descrição'}</span>
-                <span className={`text-right font-semibold ${transaction.tipo === 'credito' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                <span className="col-span-2 row-start-2 truncate text-gray-700 sm:col-auto sm:row-auto dark:text-gray-200">{transaction.descricao || 'Sem descrição'}</span>
+                <span className={`col-start-2 row-start-1 text-right font-semibold sm:col-auto sm:row-auto ${transaction.tipo === 'credito' ? 'text-emerald-600' : 'text-rose-600'}`}>
                   {transaction.tipo === 'credito' ? '+' : '-'}{fmtBRL(transactionValue(transaction))}
                 </span>
               </div>
@@ -1387,8 +1387,8 @@ function RollbackPreviewModal({ preview, accountName, confirming, error, onCance
   useEffect(() => setConfirmed(false), [preview.preview_token]);
 
   return (
-    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-gray-950/45 p-3 backdrop-blur-[2px]" onClick={onCancel}>
-      <div className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900" onClick={event => event.stopPropagation()}>
+    <div className="fixed inset-0 z-[1000] flex items-end justify-center bg-gray-950/45 p-0 backdrop-blur-[2px] sm:items-center sm:p-3" onClick={onCancel}>
+      <div className="flex max-h-[calc(100dvh-1rem)] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl border border-gray-200 bg-white shadow-2xl sm:max-h-[92vh] sm:rounded-2xl dark:border-gray-700 dark:bg-gray-900" onClick={event => event.stopPropagation()}>
         <div className="flex items-start justify-between border-b border-gray-100 px-5 py-4 dark:border-gray-800">
           <div>
             <div className="flex items-center gap-2"><Undo2 className="h-4 w-4 text-amber-600" /><h3 className="font-semibold text-gray-900 dark:text-white">Revisar reversão do lote</h3></div>
@@ -1742,8 +1742,8 @@ function ReconcileModal(props: ReconcileModalProps) {
   });
   const isCredit = transaction.tipo === 'credito';
   return (
-    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-gray-950/45 p-3 backdrop-blur-[2px]" onClick={onClose}>
-      <div className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900" onClick={event => event.stopPropagation()}>
+    <div className="fixed inset-0 z-[1000] flex items-end justify-center bg-gray-950/45 p-0 backdrop-blur-[2px] sm:items-center sm:p-3" onClick={onClose}>
+      <div className="flex max-h-[calc(100dvh-1rem)] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl border border-gray-200 bg-white shadow-2xl sm:max-h-[92vh] sm:rounded-2xl dark:border-gray-700 dark:bg-gray-900" onClick={event => event.stopPropagation()}>
         <div className="flex items-start justify-between border-b border-gray-100 px-5 py-4 dark:border-gray-800">
           <div className="min-w-0">
             <h3 className="font-semibold text-gray-900 dark:text-white">Conciliar movimentação</h3>
@@ -1832,8 +1832,8 @@ function TransferSelectionModal({ transaction, candidates, loading, saving, erro
   onConfirm: (candidate: TransferCandidate) => void;
 }) {
   return (
-    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-gray-950/45 p-3 backdrop-blur-[2px]" onClick={onClose}>
-      <div className="flex max-h-[92vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900" onClick={event => event.stopPropagation()}>
+    <div className="fixed inset-0 z-[1000] flex items-end justify-center bg-gray-950/45 p-0 backdrop-blur-[2px] sm:items-center sm:p-3" onClick={onClose}>
+      <div className="flex max-h-[calc(100dvh-1rem)] w-full max-w-xl flex-col overflow-hidden rounded-t-2xl border border-gray-200 bg-white shadow-2xl sm:max-h-[92vh] sm:rounded-2xl dark:border-gray-700 dark:bg-gray-900" onClick={event => event.stopPropagation()}>
         <div className="flex items-start justify-between border-b border-gray-100 px-5 py-4 dark:border-gray-800">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -1916,19 +1916,19 @@ function TransactionActions({ transaction, busy, onReview, onConfirm, onTransfer
   const status = transactionStatus(transaction);
   if (status === 'conciliado' || status === 'transferencia' || status === 'ignorado') {
     return (
-      <button onClick={onUndo} disabled={busy} className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-100 disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800">
+      <button onClick={onUndo} disabled={busy} className="min-h-10 rounded-lg px-3 py-2 text-sm font-medium text-gray-500 hover:bg-gray-100 disabled:opacity-50 md:min-h-0 md:px-2.5 md:py-1.5 md:text-xs dark:text-gray-400 dark:hover:bg-gray-800">
         {status === 'ignorado' ? 'Restaurar' : 'Desfazer'}
       </button>
     );
   }
   return (
-    <div className="flex flex-wrap items-center gap-1.5 md:justify-end">
+    <div className="flex w-full flex-wrap items-center gap-1.5 md:justify-end">
       {status === 'sugerido' && suggestionId(transaction) && (
-        <button onClick={onConfirm} disabled={busy} className="rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">Confirmar sugestão</button>
+        <button onClick={onConfirm} disabled={busy} className="min-h-10 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50 md:min-h-0 md:px-2.5 md:py-1.5 md:text-xs">Confirmar sugestão</button>
       )}
-      <button onClick={onReview} disabled={busy} className="rounded-lg bg-gray-900 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-50 dark:bg-white dark:text-gray-900">Revisar</button>
-      <button onClick={onTransfer} disabled={busy} className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-50 dark:text-violet-300 dark:hover:bg-violet-900/20">Transferência</button>
-      <button onClick={onIgnore} disabled={busy} className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-100 disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800">Ignorar</button>
+      <button onClick={onReview} disabled={busy} className="min-h-10 rounded-lg bg-gray-900 px-3 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 md:min-h-0 md:px-2.5 md:py-1.5 md:text-xs dark:bg-white dark:text-gray-900">Revisar</button>
+      <button onClick={onTransfer} disabled={busy} className="min-h-10 rounded-lg px-3 py-2 text-sm font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-50 md:min-h-0 md:px-2.5 md:py-1.5 md:text-xs dark:text-violet-300 dark:hover:bg-violet-900/20">Transferência</button>
+      <button onClick={onIgnore} disabled={busy} className="min-h-10 rounded-lg px-3 py-2 text-sm font-medium text-gray-500 hover:bg-gray-100 disabled:opacity-50 md:min-h-0 md:px-2.5 md:py-1.5 md:text-xs dark:text-gray-400 dark:hover:bg-gray-800">Ignorar</button>
     </div>
   );
 }
@@ -3000,12 +3000,12 @@ export default function Conciliacao() {
               const linkedReceipts = transactionReceipts(transaction);
               const linkedClients = transactionClientsSummary(transaction);
               return (
-                <div key={transaction.id} className="grid gap-3 border-b border-gray-100 px-4 py-4 last:border-0 md:grid-cols-[92px_minmax(0,1fr)_125px_170px_260px] md:items-center dark:border-gray-800">
-                  <div>
+                <div key={transaction.id} className="m-2 grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-2 rounded-xl border border-gray-200 bg-white px-3 py-3 md:m-0 md:grid-cols-[92px_minmax(0,1fr)_125px_170px_260px] md:gap-3 md:rounded-none md:border-x-0 md:border-t-0 md:px-4 md:py-4 md:items-center dark:border-gray-700 dark:bg-gray-900 md:dark:border-gray-800">
+                  <div className="col-start-1 row-start-1 md:col-auto md:row-auto">
                     <span className="mb-0.5 block text-[10px] font-semibold uppercase text-gray-400 md:hidden">Data</span>
                     <span className="text-sm text-gray-600 dark:text-gray-300">{fmtDate(transaction.data)}</span>
                   </div>
-                  <div className="min-w-0">
+                  <div className="col-span-2 min-w-0 md:col-auto">
                     <p className="truncate text-sm font-medium text-gray-900 dark:text-white">{transaction.descricao || 'Sem descrição'}</p>
                     {linkedClients && (
                       <p className="mt-0.5 truncate text-xs font-medium text-violet-700 dark:text-violet-300">
@@ -3038,23 +3038,25 @@ export default function Conciliacao() {
                       </div>
                     ) : null}
                   </div>
-                  <div className="md:text-right">
+                  <div className="col-start-2 row-start-1 text-right md:col-auto md:row-auto">
                     <span className="mb-0.5 block text-[10px] font-semibold uppercase text-gray-400 md:hidden">Valor</span>
                     <span className={`text-sm font-semibold ${transaction.tipo === 'credito' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
                       {transaction.tipo === 'credito' ? <ArrowDownLeft className="mr-1 inline h-3.5 w-3.5" /> : <ArrowUpRight className="mr-1 inline h-3.5 w-3.5" />}
                       {fmtBRL(transactionValue(transaction))}
                     </span>
                   </div>
-                  <div className="flex flex-wrap items-center gap-1.5"><StatusBadge transaction={transaction} /><Confidence value={confidence} /></div>
-                  <TransactionActions
-                    transaction={transaction}
-                    busy={actionId === transaction.id}
-                    onReview={() => openReconciliation(transaction)}
-                    onConfirm={() => confirmSuggestion(transaction)}
-                    onTransfer={() => openTransferReview(transaction)}
-                    onIgnore={() => ignoreTransaction(transaction)}
-                    onUndo={() => undoTransaction(transaction)}
-                  />
+                  <div className="col-span-2 flex flex-wrap items-center gap-1.5 md:col-auto"><StatusBadge transaction={transaction} /><Confidence value={confidence} /></div>
+                  <div className="col-span-2 border-t border-gray-100 pt-2 md:col-auto md:border-0 md:pt-0 dark:border-gray-800">
+                    <TransactionActions
+                      transaction={transaction}
+                      busy={actionId === transaction.id}
+                      onReview={() => openReconciliation(transaction)}
+                      onConfirm={() => confirmSuggestion(transaction)}
+                      onTransfer={() => openTransferReview(transaction)}
+                      onIgnore={() => ignoreTransaction(transaction)}
+                      onUndo={() => undoTransaction(transaction)}
+                    />
+                  </div>
                 </div>
               );
             })}

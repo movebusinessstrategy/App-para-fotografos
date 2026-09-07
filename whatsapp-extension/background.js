@@ -106,6 +106,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true; // indica resposta assíncrona
 });
 
+chrome.notifications?.onClicked?.addListener(async (notificationId) => {
+  if (notificationId !== 'lia-needs-human') return;
+  try {
+    const { apiBase } = await getAuth();
+    await chrome.tabs.create({ url: `${apiBase}/agente` });
+    chrome.notifications.clear(notificationId);
+  } catch { /* sessão expirada: o badge no WhatsApp continua visível */ }
+});
+
 async function handleMessage(message) {
   switch (message.type) {
     case 'OPEN_LOGIN_TAB': {
@@ -343,6 +352,30 @@ async function handleMessage(message) {
         method: 'POST',
         body: JSON.stringify({ messages: message.messages || [] }),
       });
+    }
+    case 'GET_AGENT_ATTENTION': {
+      // Fila operacional da Lia: só retorna estados; nenhum conteúdo de
+      // conversa é usado pela notificação do navegador.
+      return apiFetch('/api/agent/atendimentos');
+    }
+    case 'NOTIFY_AGENT_ATTENTION': {
+      const count = Math.max(1, Number(message.count) || 1);
+      if (chrome.notifications?.create) {
+        await chrome.notifications.create('lia-needs-human', {
+          type: 'basic',
+          iconUrl: chrome.runtime.getURL('icons/icon.png'),
+          title: 'Lia precisa de você',
+          message: `${count} atendimento${count === 1 ? '' : 's'} aguardando uma pessoa no WhatsApp.`,
+          priority: 2,
+          requireInteraction: true,
+        });
+      }
+      return { ok: true };
+    }
+    case 'OPEN_AGENT_ATTENTION': {
+      const { apiBase } = await getAuth();
+      await chrome.tabs.create({ url: `${apiBase}/agente` });
+      return { ok: true };
     }
     case 'SYNC_STAGE_LABELS': {
       // Sincroniza as etiquetas do WhatsApp com as etapas do funil (todos os leads)

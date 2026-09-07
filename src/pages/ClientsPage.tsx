@@ -941,17 +941,17 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
 
       {/* BARRA DE FILTROS */}
       <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100 dark:border-gray-800 bg-gradient-to-r from-gray-50 dark:from-gray-800/50 to-white dark:to-gray-900">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="relative">
+        <div className="border-b border-gray-100 bg-gradient-to-r from-gray-50 to-white px-4 py-4 dark:border-gray-800 dark:from-gray-800/50 dark:to-gray-900 sm:px-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 items-center gap-2 sm:gap-4">
+              <div className="relative min-w-0 flex-1 sm:flex-none">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500" size={18} />
                 <input
                   type="text"
                   value={searchName}
                   onChange={(e) => setSearchName(e.target.value)}
                   placeholder="Buscar cliente..."
-                  className="pl-10 pr-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl outline-none text-sm text-gray-700 dark:text-gray-200 w-64 focus:border-gold-300 dark:focus:border-gold-500 focus:ring-2 focus:ring-gold-100 dark:focus:ring-gold-500/20 transition-all placeholder:text-gray-400 dark:placeholder:text-gray-500"
+                  className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-10 pr-4 text-sm text-gray-700 outline-none transition-all placeholder:text-gray-400 focus:border-gold-300 focus:ring-2 focus:ring-gold-100 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:placeholder:text-gray-500 dark:focus:border-gold-500 dark:focus:ring-gold-500/20 sm:w-64"
                 />
                 {searchName && (
                   <button 
@@ -984,7 +984,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
               </button>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center justify-between gap-3 sm:justify-end">
               <div className="text-sm text-gray-500 dark:text-gray-400">
                 <span className="font-semibold text-gray-700 dark:text-gray-200">{filteredClients.length}</span>
                 {filteredClients.length !== clients.length && (
@@ -1147,8 +1147,8 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
         )}
 
         {/* TABELA */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
+        <div>
+          <table className="responsive-card-table w-full text-left">
             <thead className="bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">
               <tr>
                 <th className="px-4 py-4 font-medium w-12">
@@ -1169,7 +1169,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
             <tbody className="divide-y divide-gray-50 dark:divide-gray-800">
               {paginatedClients.map((client) => (
                 <tr key={client.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors group">
-                  <td className="px-4 py-4">
+                  <td data-label="Selecionar" className="px-4 py-4">
                     <input
                       type="checkbox"
                       checked={selectedClientIds.includes(client.id)}
@@ -1178,7 +1178,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                     />
                   </td>
 
-                  <td className="px-6 py-4">
+                  <td data-label="Cliente" className="px-6 py-4">
                     <div className="flex items-center gap-2">
                       <div className="font-semibold text-gray-900 dark:text-white">{client.name}</div>
                       <span className={cn(
@@ -1193,7 +1193,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                     </div>
                   </td>
 
-                  <td className="px-6 py-4">
+                  <td data-label="Contato" className="px-6 py-4">
                     <div className="flex items-center gap-2 group/phone">
                       <div className="text-sm text-gray-700 dark:text-gray-300">{client.phone}</div>
                       <button 
@@ -1213,12 +1213,12 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                     )}
                   </td>
 
-                  <td className="px-6 py-4">
+                  <td data-label="Investimento" className="px-6 py-4">
                     <div className="font-semibold text-gray-900 dark:text-white">R$ {(client.total_invested ?? 0).toLocaleString('pt-BR')}</div>
                     <div className="text-xs text-gray-500 dark:text-gray-400">{client.jobs?.length || 0} trabalhos realizados</div>
                   </td>
 
-                  <td className="px-6 py-4">
+                  <td data-label="Status" className="px-6 py-4">
                     <span className={cn(
                       "px-2 py-1 rounded-full text-[10px] font-bold uppercase",
                       client.status === 'active' 
@@ -1229,8 +1229,8 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
                     </span>
                   </td>
 
-                  <td className="px-6 py-4 text-right">
-                    <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <td data-label="Ações" className="px-6 py-4 text-right">
+                    <div className="flex items-center justify-end gap-2 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100">
                       <button 
                         type="button"
                         onClick={() => { setSelectedClient(client); setShowModal(true); }}
@@ -2245,4 +2245,3 @@ function ClientModal({ client: initialClient, onClose, onSave, onContactOpp }: {
     </div>
   );
 }
-

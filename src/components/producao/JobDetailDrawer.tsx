@@ -4,7 +4,7 @@ import {
   CheckSquare, Square, Trash2, Plus, Image, Images, Clock,
   ChevronRight, Tag, FileText, LogOut, Workflow, Check,
   DollarSign, Package, Layers, Briefcase, Search, CreditCard,
-  Pencil, RefreshCw
+  Maximize2, Pencil, Receipt, RefreshCw
 } from "lucide-react";
 import { SearchableSelect } from "../ui/SearchableSelect";
 import { ContractGenerator } from "../contracts/ContractGenerator";
@@ -12,11 +12,13 @@ import { TemplatePickerModal } from "../contracts/TemplatePickerModal";
 import { authFetch } from "../../utils/authFetch";
 import { useAuth } from "../../contexts/AuthContext";
 import { useApi } from "../../utils/useApi";
-import { parseDate } from "../../utils/date";
 import { cn } from "../../utils/cn";
 import { ContractTemplate } from "../../types";
 import { buildContractDataFromTemplate } from "../../utils/contractTemplate";
 import { JobWithProduction } from "./ProductionBoard";
+import { DossierSection } from "./DossierSection";
+import { JobReminderSection } from "./JobReminderSection";
+import { JobScheduleSection } from "./JobScheduleSection";
 
 function ContractStatusPill({ status, signers }: { status: 'draft' | 'pending_signature' | 'signed' | 'cancelled'; signers?: Array<{ status: string }> }) {
   const map = {
@@ -141,6 +143,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
   const [client, setClient] = useState<ClientDetail | null>(null);
   const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
   const [testimonials, setTestimonials] = useState<Testimonial[]>([]);
+  const [selectedTestimonial, setSelectedTestimonial] = useState<Testimonial | null>(null);
   const [stageHistory, setStageHistory] = useState<StageHistory[]>([]);
   const [newItem, setNewItem] = useState("");
   const [newCaption, setNewCaption] = useState("");
@@ -155,53 +158,6 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
   const [editLabelColor, setEditLabelColor] = useState("#6366f1");
   const [labelPalette, setLabelPalette] = useState<{ id: string; name: string; color: string }[]>([]);
   const [newLabelName, setNewLabelName] = useState("");
-  // Dossiê de alinhamento (IA) — gerado no ganho; aqui só consulta/regera/baixa
-  const [dossier, setDossier] = useState<any | null>(null);
-  const [dossierBusy, setDossierBusy] = useState(false);
-
-  useEffect(() => {
-    setDossier(null);
-    if (!job) return;
-    let on = true;
-    authFetch(`/api/jobs/${job.id}/dossie`)
-      .then(r => (r.ok ? r.json() : null))
-      .then(d => { if (on) setDossier(d); })
-      .catch(() => {});
-    return () => { on = false; };
-  }, [job?.id]);
-
-  const abrirDossiePdf = async () => {
-    if (!job) return;
-    setDossierBusy(true);
-    try {
-      const r = await authFetch(`/api/jobs/${job.id}/dossie/pdf`);
-      if (!r.ok) {
-        const e = await r.json().catch(() => ({}));
-        throw new Error(e.error || 'Dossiê ainda não gerado.');
-      }
-      const blob = await r.blob();
-      window.open(URL.createObjectURL(blob), '_blank');
-    } catch (e: any) {
-      alert(e.message);
-    } finally {
-      setDossierBusy(false);
-    }
-  };
-
-  const regerarDossie = async () => {
-    if (!job) return;
-    setDossierBusy(true);
-    try {
-      const r = await authFetch(`/api/jobs/${job.id}/dossie/regenerate`, { method: 'POST' });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d.error || 'Não foi possível gerar o dossiê.');
-      setDossier(d);
-    } catch (e: any) {
-      alert(e.message);
-    } finally {
-      setDossierBusy(false);
-    }
-  };
   const [newLabelColor, setNewLabelColor] = useState("#6366f1");
   const [contractId, setContractId] = useState<number | null>(null);
   const [creatingContract, setCreatingContract] = useState(false);
@@ -373,6 +329,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
     setClient(null);
     setChecklist([]);
     setTestimonials([]);
+    setSelectedTestimonial(null);
     setStageHistory([]);
     setLabels(job.labels || []);
     setDealItems([]); setJobItems([]); setPayments([]);
@@ -597,7 +554,6 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
 
   if (!job) return null;
 
-  const jobDate = job.job_date ? parseDate(job.job_date) : null;
   const currentStageName = stages.find(s => s.id === job.production_stage)?.name || "-";
 
   const handleAddItem = async () => {
@@ -749,16 +705,12 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
       {/* Drawer */}
       <div className="fixed right-0 top-0 z-50 flex h-full w-full max-w-md flex-col bg-white shadow-2xl dark:bg-gray-900">
         {/* Header */}
-        <div className="flex items-start justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-700">
-          <div>
-            <h2 className="text-lg font-bold text-gray-900 dark:text-white">
+        <div className="border-b border-gray-200 px-5 py-4 dark:border-gray-700">
+          <div className="flex items-start justify-between gap-2">
+            <h2 className="min-w-0 flex-1 text-lg font-bold text-gray-900 dark:text-white">
               {job.client_name || job.job_name || "Trabalho"}
             </h2>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              {job.job_type} · {jobDate?.toLocaleDateString("pt-BR")}
-            </p>
-          </div>
-          <div className="flex items-center gap-1">
+            <div className="flex flex-shrink-0 items-center gap-1">
             {!isProductionOnly && (
               <button
                 onClick={handleOpenContract}
@@ -792,7 +744,12 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
             >
               <X size={18} />
             </button>
+            </div>
           </div>
+          <JobScheduleSection
+            job={job}
+            onSaved={(patch) => onJobUpdate?.(job.id, patch)}
+          />
         </div>
 
         {/* Stage pill + value */}
@@ -893,6 +850,8 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                 )}
               </section>
 
+              <JobReminderSection job={job} />
+
               {/* Observações - editável inline */}
               <EditableNotesSection
                 jobId={job.id}
@@ -919,7 +878,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                       className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold text-white"
                       style={{ backgroundColor: labelColor(label) }}
                     >
-                      <Tag size={10} />
+                      {label === 'Nota fiscal emitida' ? <Receipt size={10} /> : <Tag size={10} />}
                       {label}
                       <button onClick={() => handleRemoveLabel(label)} className="ml-0.5 text-white/70 hover:text-white">
                         <X size={10} />
@@ -1179,43 +1138,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                 )}
               </section>
 
-              {/* Dossiê de alinhamento (IA analisa a conversa da venda) */}
-              <section>
-                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
-                  Dossiê de alinhamento
-                </h3>
-                <div className="space-y-2">
-                  <p className="text-xs text-gray-500 dark:text-gray-400">
-                    {dossier?.status === 'ready'
-                      ? `Gerado pela IA a partir da conversa do WhatsApp em ${new Date(dossier.updated_at || dossier.created_at).toLocaleDateString('pt-BR')} — falas e fotos de referência da cliente.`
-                      : dossier?.status === 'error'
-                      ? `Não foi possível gerar: ${dossier.error || 'erro desconhecido'}`
-                      : dossier?.status === 'generating'
-                      ? 'Gerando o dossiê…'
-                      : 'Ainda não gerado — a IA analisa a conversa da venda e monta o dossiê pro alinhamento.'}
-                  </p>
-                  <div className="flex gap-2">
-                    {dossier?.status === 'ready' && (
-                      <button
-                        onClick={abrirDossiePdf}
-                        disabled={dossierBusy}
-                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-700 dark:text-emerald-300 text-sm font-semibold rounded-lg transition-colors disabled:opacity-60"
-                      >
-                        <FileText size={14} />
-                        Baixar PDF
-                      </button>
-                    )}
-                    <button
-                      onClick={regerarDossie}
-                      disabled={dossierBusy}
-                      className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 text-sm font-semibold rounded-lg transition-colors disabled:opacity-60"
-                    >
-                      <RefreshCw size={14} className={dossierBusy ? 'animate-spin' : ''} />
-                      {dossier?.status === 'ready' ? 'Regerar' : 'Gerar dossiê'}
-                    </button>
-                  </div>
-                </div>
-              </section>
+              <DossierSection jobId={job.id} />
 
               {/* Galeria de seleção de fotos (proofing) */}
               <GallerySection jobId={job.id} />
@@ -1653,15 +1576,20 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                 <div className="grid grid-cols-2 gap-3">
                   {testimonials.map(t => (
                     <div key={t.id} className="group relative overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700">
-                      <img
-                        src={t.photo_data}
-                        alt={t.caption || "Depoimento"}
-                        className="h-36 w-full object-cover"
-                      />
+                      <button onClick={() => setSelectedTestimonial(t)} className="relative block w-full text-left" aria-label="Abrir depoimento em tela cheia">
+                        <img
+                          src={t.photo_data}
+                          alt={t.caption || "Depoimento"}
+                          className="h-36 w-full object-cover transition-transform group-hover:scale-[1.02]"
+                        />
+                        <span className="absolute bottom-2 right-2 flex items-center gap-1 rounded-full bg-black/65 px-2 py-1 text-[10px] font-semibold text-white">
+                          <Maximize2 size={10} /> Ver completo
+                        </span>
+                      </button>
                       {t.caption && (
-                        <p className="bg-white px-2 py-1 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+                        <button onClick={() => setSelectedTestimonial(t)} className="line-clamp-2 w-full bg-white px-2 py-1.5 text-left text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300">
                           {t.caption}
-                        </p>
+                        </button>
                       )}
                       <button
                         onClick={() => handleDeleteTestimonial(t.id)}
@@ -1721,6 +1649,18 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
           onClose={() => setTemplatePickerOpen(false)}
           onPick={({ template, sundaySession, surcharge }) => createContractWithTemplate(template, sundaySession, surcharge)}
         />
+      )}
+
+      {selectedTestimonial && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/90 p-4" role="dialog" aria-modal="true" onClick={() => setSelectedTestimonial(null)}>
+          <button onClick={() => setSelectedTestimonial(null)} className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20" aria-label="Fechar depoimento">
+            <X size={20} />
+          </button>
+          <div className="flex max-h-[94vh] max-w-[94vw] flex-col items-center gap-3" onClick={(event) => event.stopPropagation()}>
+            <img src={selectedTestimonial.photo_data} alt={selectedTestimonial.caption || "Depoimento"} className="min-h-0 max-h-[82vh] max-w-full object-contain" />
+            {selectedTestimonial.caption && <p className="max-w-2xl rounded-xl bg-white/10 px-4 py-3 text-center text-sm leading-relaxed text-white">{selectedTestimonial.caption}</p>}
+          </div>
+        </div>
       )}
 
       {/* Confirm remove from production */}

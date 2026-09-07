@@ -85,6 +85,15 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
     setShowJobModal(true);
   };
 
+  const handleMonthDayClick = (date: Date) => {
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      setCurrentDate(date);
+      setView('day');
+      return;
+    }
+    handleDayClick(date);
+  };
+
   const handleDragStart = (e: React.DragEvent, job: Job) => {
     setDraggedJob(job);
     e.dataTransfer.setData('jobId', job.id.toString());
@@ -124,12 +133,12 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
       <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
         <div className="grid grid-cols-7 bg-gray-50 dark:bg-gray-800 border-b border-gray-100 dark:border-gray-700">
           {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(day => (
-            <div key={day} className="px-4 py-3 text-center text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest">{day}</div>
+            <div key={day} className="px-1 py-3 text-center text-[10px] font-bold uppercase tracking-wide text-gray-400 sm:px-4 sm:text-xs sm:tracking-widest dark:text-gray-500">{day}</div>
           ))}
         </div>
         <div className="grid grid-cols-7">
           {Array.from({ length: monthStart.getDay() }).map((_, i) => (
-            <div key={`empty-${i}`} className="h-32 border-b border-r border-gray-50 dark:border-gray-800 bg-gray-50/30 dark:bg-gray-800/30" />
+            <div key={`empty-${i}`} className="h-20 border-b border-r border-gray-50 bg-gray-50/30 sm:h-32 dark:border-gray-800 dark:bg-gray-800/30" />
           ))}
           
           {days.map(day => {
@@ -142,12 +151,12 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
                 key={day.toString()} 
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => handleDrop(e, day)}
-                onClick={() => handleDayClick(day)}
-                className="h-32 border-b border-r border-gray-50 dark:border-gray-800 p-2 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors cursor-pointer group/day"
+                onClick={() => handleMonthDayClick(day)}
+                className="group/day h-20 cursor-pointer border-b border-r border-gray-50 p-1 transition-colors hover:bg-gray-50 sm:h-32 sm:p-2 dark:border-gray-800 dark:hover:bg-gray-800/50"
               >
                 <div className="flex items-center justify-between mb-1">
                   <div className={cn(
-                    "text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full",
+                    "flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold sm:text-sm",
                     isSameDay(day, new Date()) 
                       ? "bg-gold-600 dark:bg-gold-500 text-white" 
                       : "text-gray-400 dark:text-gray-500 group-hover/day:text-gold-600 dark:group-hover/day:text-gold-400"
@@ -156,7 +165,12 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
                   </div>
                   <Plus size={14} className="text-gray-300 dark:text-gray-600 opacity-0 group-hover/day:opacity-100 transition-opacity" />
                 </div>
-                <div className="space-y-1 overflow-y-auto max-h-20 scrollbar-hide">
+                {dayJobs.length > 0 && (
+                  <span className="mx-auto mt-1 flex h-5 w-5 items-center justify-center rounded-full bg-gold-100 text-[10px] font-bold text-gold-700 sm:hidden dark:bg-gold-500/20 dark:text-gold-300">
+                    {dayJobs.length}
+                  </span>
+                )}
+                <div className="scrollbar-hide hidden max-h-20 space-y-1 overflow-y-auto sm:block">
                   {dayJobs.map(job => (
                     <button
                       key={job.id}
@@ -164,7 +178,7 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
                       onDragStart={(e) => handleDragStart(e, job)}
                       onClick={(e) => handleJobClick(job, e)}
                       className={cn(
-                        "w-full text-left text-[10px] p-1 rounded border truncate font-medium flex items-center gap-1 transition-colors cursor-move",
+                        "flex w-full cursor-move items-center gap-1 truncate rounded border p-1 text-left text-[10px] font-medium transition-colors",
                         job.status === 'pre_reserved'
                           // Pré-reserva: âmbar + 🔒 — data segurada durante a negociação, ainda não confirmada
                           ? "bg-amber-50 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30 border-dashed hover:bg-amber-100 dark:hover:bg-amber-500/25"
@@ -281,8 +295,8 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
     });
 
     return (
-      <div className="max-w-2xl mx-auto space-y-4">
-        <div className="bg-white dark:bg-gray-900 p-6 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm flex items-center justify-between">
+      <div className="mx-auto max-w-2xl space-y-4">
+        <div className="flex items-center justify-between rounded-2xl border border-gray-100 bg-white p-4 shadow-sm sm:p-6 dark:border-gray-800 dark:bg-gray-900">
           <div className="flex items-center gap-4">
             <div className="text-4xl font-bold text-gold-600 dark:text-gold-400">
               {format(currentDate, 'd')}
@@ -307,16 +321,16 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
             <button 
               key={job.id}
               onClick={(e) => handleJobClick(job, e)}
-              className="w-full text-left p-5 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl shadow-sm hover:border-gold-200 dark:hover:border-gold-500/30 hover:shadow-md transition-all flex items-center gap-6 group"
+              className="group flex w-full items-start gap-3 rounded-2xl border border-gray-100 bg-white p-4 text-left shadow-sm transition-all hover:border-gold-200 hover:shadow-md sm:items-center sm:gap-6 sm:p-5 dark:border-gray-800 dark:bg-gray-900 dark:hover:border-gold-500/30"
             >
-              <div className="w-24 text-center border-r border-gray-100 dark:border-gray-800 pr-6">
-                <div className="text-xl font-bold text-gray-900 dark:text-white">{job.job_time || '00:00'}</div>
+              <div className="w-16 shrink-0 border-r border-gray-100 pr-3 text-center sm:w-24 sm:pr-6 dark:border-gray-800">
+                <div className="text-base font-bold text-gray-900 sm:text-xl dark:text-white">{job.job_time || '00:00'}</div>
                 {job.job_end_time && <div className="text-xs text-gray-400 dark:text-gray-500">até {job.job_end_time}</div>}
                 <div className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase mt-1">Horário</div>
               </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2 mb-1">
-                  <h4 className="text-lg font-bold text-gray-900 dark:text-white group-hover:text-gold-600 dark:group-hover:text-gold-400 transition-colors">
+              <div className="min-w-0 flex-1">
+                <div className="mb-1 flex flex-wrap items-center gap-2">
+                  <h4 className="text-base font-bold text-gray-900 transition-colors group-hover:text-gold-600 sm:text-lg dark:text-white dark:group-hover:text-gold-400">
                     {job.client_name || job.job_name || 'Tarefa'}
                   </h4>
                   {job.status === 'pre_reserved' && (
@@ -324,7 +338,7 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
                   )}
                   {job.google_event_id && <CalendarIcon size={16} className="text-gold-400" />}
                 </div>
-                <div className="flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
+                <div className="flex flex-wrap items-center gap-2 text-sm text-gray-500 sm:gap-4 dark:text-gray-400">
                   <div className="flex items-center gap-1.5">
                     <Camera size={16} className="text-gray-400 dark:text-gray-500" />
                     {job.job_type}
@@ -337,7 +351,7 @@ function CalendarView({ jobs, clients, onUpdate }: { jobs: Job[], clients: Clien
                   )}
                 </div>
               </div>
-              <ChevronRight className="text-gray-300 dark:text-gray-600 group-hover:text-gold-600 dark:group-hover:text-gold-400 transition-colors" />
+              <ChevronRight className="hidden text-gray-300 transition-colors group-hover:text-gold-600 sm:block dark:text-gray-600 dark:group-hover:text-gold-400" />
             </button>
           ))}
           {dayJobs.length === 0 && (

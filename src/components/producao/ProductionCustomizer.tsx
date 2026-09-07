@@ -8,11 +8,13 @@ import {
   SortableContext, useSortable, verticalListSortingStrategy, arrayMove,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { X, Plus, Trash2, GripVertical, Check, Pencil, Settings, Star } from 'lucide-react';
+import { X, Plus, Trash2, GripVertical, Check, Pencil, Settings, Star, MessageSquareText, Save, Send } from 'lucide-react';
 import { ProductionProcess, ProductionStageV2 } from '../../types';
 import { authFetch } from '../../utils/authFetch';
 import { ConfirmModal } from '../ui/ConfirmModal';
 
+const DEFAULT_REMINDER_MESSAGE =
+  'Oi, {cliente}! Passando para lembrar do seu {tipo} no dia {data}, às {hora}. Qualquer dúvida, estou por aqui. 📸';
 
 interface ProductionCustomizerProps {
   open: boolean;
@@ -27,6 +29,11 @@ export function ProductionCustomizer({ open, processes, stages, onClose, onUpdat
   const [localStages, setLocalStages] = useState<ProductionStageV2[]>([]);
   const [activeProcessId, setActiveProcessId] = useState('');
   const [saving, setSaving] = useState(false);
+  const [reminderMessage, setReminderMessage] = useState(DEFAULT_REMINDER_MESSAGE);
+  const [testPhone, setTestPhone] = useState('');
+  const [reminderBusy, setReminderBusy] = useState(false);
+  const [reminderMigrationNeeded, setReminderMigrationNeeded] = useState(false);
+  const [reminderFeedback, setReminderFeedback] = useState<{ tone: 'ok' | 'warn'; text: string } | null>(null);
 
   // Editing process name
   const [editingProcessId, setEditingProcessId] = useState<string | null>(null);
@@ -64,6 +71,22 @@ export function ProductionCustomizer({ open, processes, stages, onClose, onUpdat
       setActiveProcessId(processes[0].id);
     }
   }, [processes, activeProcessId]);
+
+  useEffect(() => {
+    if (!open) return;
+    setReminderFeedback(null);
+    setReminderMigrationNeeded(false);
+    authFetch('/api/production/reminder-settings')
+      .then(async response => ({ response, data: await response.json().catch(() => ({})) }))
+      .then(({ response, data }) => {
+        if (response.status === 422 && data.error === 'MIGRATION_NEEDED') {
+          setReminderMigrationNeeded(true);
+          return;
+        }
+        if (response.ok && data.message) setReminderMessage(data.message);
+      })
+      .catch(() => {});
+  }, [open]);
 
   const currentStages = localStages
     .filter(s => s.process_id === activeProcessId)
@@ -262,6 +285,51 @@ export function ProductionCustomizer({ open, processes, stages, onClose, onUpdat
       });
       onUpdated();
     } catch (_) {} finally { setSaving(false); }
+  };
+
+  const saveReminderMessage = async () => {
+    if (!reminderMessage.trim()) return;
+    setReminderBusy(true);
+    setReminderFeedback(null);
+    try {
+      const response = await authFetch('/api/production/reminder-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: reminderMessage }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.status === 422 && data.error === 'MIGRATION_NEEDED') {
+        setReminderMigrationNeeded(true);
+        return;
+      }
+      if (!response.ok) throw new Error(data.error || 'Não foi possível salvar a mensagem.');
+      setReminderFeedback({ tone: 'ok', text: 'Mensagem padrão salva.' });
+    } catch (error: any) {
+      setReminderFeedback({ tone: 'warn', text: error?.message || 'Não foi possível salvar a mensagem.' });
+    } finally {
+      setReminderBusy(false);
+    }
+  };
+
+  const sendReminderTest = async () => {
+    if (!testPhone.trim() || !reminderMessage.trim()) return;
+    setReminderBusy(true);
+    setReminderFeedback(null);
+    try {
+      const response = await authFetch('/api/production/reminder-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: testPhone, message: reminderMessage }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Não foi possível enviar o teste.');
+      const suffix = data.channel === 'meta_template' ? ' usando o template aprovado do Meta.' : '.';
+      setReminderFeedback({ tone: 'ok', text: `Teste enviado para o número informado${suffix}` });
+    } catch (error: any) {
+      setReminderFeedback({ tone: 'warn', text: error?.message || 'Não foi possível enviar o teste.' });
+    } finally {
+      setReminderBusy(false);
+    }
   };
 
   if (!open) return null;
@@ -494,6 +562,72 @@ export function ProductionCustomizer({ open, processes, stages, onClose, onUpdat
                 </div>
               </div>
             )}
+
+            <div className="border-t border-gray-100 dark:border-gray-800" />
+
+            <div className="space-y-3">
+              <div>
+                <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                  <MessageSquareText size={12} /> Lembrete do ensaio
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-gray-500 dark:text-gray-400">
+                  Defina o texto usado nos cards da Produção. O envio real sempre exige uma tela de confirmação.
+                </p>
+              </div>
+
+              {reminderMigrationNeeded ? (
+                <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
+                  A configuração do lembrete precisa da atualização de banco 065.
+                </p>
+              ) : (
+                <>
+                  <textarea
+                    value={reminderMessage}
+                    onChange={event => setReminderMessage(event.target.value)}
+                    rows={5}
+                    className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm leading-relaxed text-gray-800 outline-none focus:border-gold-400 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+                  />
+                  <p className="text-[10px] leading-relaxed text-gray-400">
+                    Campos disponíveis: {'{cliente}'}, {'{tipo}'}, {'{data}'} e {'{hora}'}.
+                  </p>
+                  <button
+                    onClick={saveReminderMessage}
+                    disabled={reminderBusy || !reminderMessage.trim()}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-gray-900 py-2 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-50 dark:bg-white dark:text-gray-900"
+                  >
+                    <Save size={13} /> Salvar mensagem padrão
+                  </button>
+
+                  <div className="rounded-xl border border-gray-200 p-3 dark:border-gray-700">
+                    <p className="text-xs font-semibold text-gray-800 dark:text-gray-200">Testar antes de usar</p>
+                    <p className="mt-0.5 text-[10px] leading-relaxed text-gray-400">O número serve apenas para este teste e não fica salvo.</p>
+                    <div className="mt-2 flex gap-2">
+                      <input
+                        type="tel"
+                        value={testPhone}
+                        onChange={event => setTestPhone(event.target.value)}
+                        placeholder="(43) 99999-9999"
+                        className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none focus:border-gold-400 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+                      />
+                      <button
+                        onClick={sendReminderTest}
+                        disabled={reminderBusy || !testPhone.trim() || !reminderMessage.trim()}
+                        className="flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                      >
+                        <Send size={13} /> Enviar teste
+                      </button>
+                    </div>
+                    <p className="mt-2 text-[10px] text-gray-400">No teste: cliente = Cliente teste, data = amanhã e horário = 10:00.</p>
+                  </div>
+                </>
+              )}
+
+              {reminderFeedback && (
+                <p className={reminderFeedback.tone === 'ok' ? 'rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' : 'rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-500/10 dark:text-amber-300'}>
+                  {reminderFeedback.text}
+                </p>
+              )}
+            </div>
           </div>
 
           {/* Footer */}

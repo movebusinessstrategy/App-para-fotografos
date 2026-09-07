@@ -558,7 +558,7 @@ export default function Relatorios() {
             </div>
           ) : (
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-              <table className="w-full text-sm">
+              <table className="responsive-card-table w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400">
                     {colunas.map(col => (
@@ -576,7 +576,7 @@ export default function Relatorios() {
                         const isNum = typeof val === 'number';
                         const isMoney = isNum && (col.toLowerCase().includes('valor') || col.toLowerCase().includes('total') || col.toLowerCase().includes('receita') || col.toLowerCase().includes('despesa'));
                         return (
-                          <td key={col} className={`px-4 py-3 ${isNum ? 'text-right font-medium' : 'text-left'} text-gray-800 dark:text-gray-200`}>
+                          <td data-label={col} key={col} className={`px-4 py-3 ${isNum ? 'text-right font-medium' : 'text-left'} text-gray-800 dark:text-gray-200`}>
                             {isMoney ? fmtBRL(val as number) : String(val ?? '-')}
                           </td>
                         );

@@ -28,7 +28,8 @@ export interface DossierPdfInput {
   jobLabel?: string | null; // "Gestante — 15/08/2026 — 14:00"
   generatedAt: string;      // ISO
   content: Partial<DossierContent>;
-  photos: DossierPhoto[];
+  referencePhotos: DossierPhoto[];
+  paymentPhotos: DossierPhoto[];
 }
 
 // Converte a mídia bruta (qualquer formato que o WhatsApp mande, incl. webp)
@@ -125,9 +126,9 @@ function drawListSection(doc: jsPDF, cur: Cursor, title: string, items: string[]
   drawBullets(doc, cur, list, { quote: opts.quote, italic: opts.quote });
 }
 
-function drawPhotos(doc: jsPDF, cur: Cursor, photos: DossierPhoto[]) {
+function drawPhotos(doc: jsPDF, cur: Cursor, title: string, photos: DossierPhoto[]) {
   if (!photos.length) return;
-  drawSectionTitle(doc, cur, 'Fotos de referência da cliente');
+  drawSectionTitle(doc, cur, title);
   const gap = 6;
   const colW = (CONTENT_W - gap) / 2;
   for (let i = 0; i < photos.length; i += 2) {
@@ -172,8 +173,11 @@ export function buildDossierPdf(d: DossierPdfInput): Buffer {
   drawListSection(doc, cur, 'Falas de referência', c.falas_referencia, { quote: true });
   drawListSection(doc, cur, 'Preferências', c.preferencias);
   drawListSection(doc, cur, 'Combinados', c.combinados);
+  drawListSection(doc, cur, 'Pagamentos e comprovantes', c.pagamentos);
+  drawListSection(doc, cur, 'Links importantes', c.links_importantes);
   drawListSection(doc, cur, 'Evitar / cuidados', c.evitar, { color: '#b91c1c' });
-  drawPhotos(doc, cur, d.photos || []);
+  drawPhotos(doc, cur, 'Fotos de referência da cliente', d.referencePhotos || []);
+  drawPhotos(doc, cur, 'Comprovantes de pagamento', d.paymentPhotos || []);
   drawFooters(doc);
   return Buffer.from(doc.output('arraybuffer'));
 }

@@ -28,9 +28,9 @@ export default function Header({ title, userInitial, userEmail, onSignOut, onMen
   }, [menuOpen]);
 
   return (
-    <header className="h-16 bg-luxury-paper/80 dark:bg-[#070707]/80 backdrop-blur-xl border-b border-black/5 dark:border-white/5 px-4 md:px-8 flex items-center justify-between sticky top-0 z-30">
+    <header className="h-16 shrink-0 bg-luxury-paper/80 dark:bg-[#070707]/80 backdrop-blur-xl border-b border-black/5 dark:border-white/5 px-3 md:px-8 flex items-center justify-between sticky top-0 z-30">
       {/* Lado esquerdo */}
-      <div className="flex items-center gap-3">
+      <div className="flex min-w-0 items-center gap-2.5 md:gap-3">
         {/* Botão Menu - apenas mobile */}
         <button
           onClick={onMenuClick}
@@ -40,7 +40,7 @@ export default function Header({ title, userInitial, userEmail, onSignOut, onMen
           <Menu size={24} />
         </button>
 
-        <h2 className="text-lg font-bold tracking-tight capitalize truncate text-luxury-black dark:text-white">{title}</h2>
+        <h2 className="truncate text-base font-bold tracking-tight capitalize text-luxury-black dark:text-white sm:text-lg">{title}</h2>
       </div>
 
       {/* Lado direito (busca global removida — não buscava nada e roubava espaço) */}
@@ -66,7 +66,7 @@ export default function Header({ title, userInitial, userEmail, onSignOut, onMen
           </button>
 
           {menuOpen && (
-            <div className="absolute right-0 top-12 w-60 bg-white dark:bg-[#161616] rounded-2xl shadow-xl shadow-black/10 border border-black/5 dark:border-white/10 overflow-hidden z-40">
+            <div className="absolute right-0 top-12 w-60 max-w-[calc(100vw-1.5rem)] bg-white dark:bg-[#161616] rounded-2xl shadow-xl shadow-black/10 border border-black/5 dark:border-white/10 overflow-hidden z-40">
               {/* Header do menu - info do usuário */}
               <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700">
                 <div className="text-xs text-gray-500 dark:text-gray-400">Logado como</div>

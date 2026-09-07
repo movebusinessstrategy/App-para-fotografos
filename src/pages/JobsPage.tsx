@@ -2,7 +2,7 @@ import React, { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { BarChart2, Workflow, Edit2, Inbox, LayoutGrid, List, ListChecks, Plus, Search, Settings, Tag, Trash2, X } from "lucide-react";
+import { BarChart2, Workflow, Edit2, Inbox, LayoutGrid, List, ListChecks, Plus, Receipt, Search, Settings, Tag, Trash2, X } from "lucide-react";
 import GerenciaPage from "./GerenciaPage";
 import TasksPage from "./TasksPage";
 import { SearchableSelect } from "../components/ui/SearchableSelect";
@@ -241,7 +241,7 @@ export default function JobsPage() {
               <UsageBar resource="jobs" />
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex w-full min-w-0 flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-center">
             {activeTab === "funil" && processes.length > 0 && (
               <button
                 onClick={() => setCustomizerOpen(true)}
@@ -252,11 +252,11 @@ export default function JobsPage() {
               </button>
             )}
             {/* View toggle */}
-            <div className="flex bg-gray-100 dark:bg-gray-800 rounded-xl p-1 gap-1">
+            <div className="flex w-full gap-1 overflow-x-auto rounded-xl bg-gray-100 p-1 dark:bg-gray-800 sm:w-auto">
               <button
                 onClick={() => setActiveTab("funil")}
                 className={cn(
-                  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
+                  'flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
                   activeTab === "funil"
                     ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
                     : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
@@ -268,7 +268,7 @@ export default function JobsPage() {
               <button
                 onClick={() => setActiveTab("lista")}
                 className={cn(
-                  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
+                  'flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
                   activeTab === "lista"
                     ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
                     : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
@@ -281,7 +281,7 @@ export default function JobsPage() {
               <button
                 onClick={() => setActiveTab("vendas")}
                 className={cn(
-                  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
+                  'flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
                   activeTab === "vendas"
                     ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
                     : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
@@ -295,7 +295,7 @@ export default function JobsPage() {
               <button
                 onClick={() => setActiveTab("gerencia")}
                 className={cn(
-                  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
+                  'flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
                   activeTab === "gerencia"
                     ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
                     : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
@@ -308,7 +308,7 @@ export default function JobsPage() {
               <button
                 onClick={() => setActiveTab("tarefas")}
                 className={cn(
-                  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
+                  'flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
                   activeTab === "tarefas"
                     ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
                     : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
@@ -323,7 +323,7 @@ export default function JobsPage() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => navigate("/vendas?novo=1")}
-                  className="flex items-center gap-2 px-4 py-2 bg-gold-600 dark:bg-gold-500 text-white rounded-xl font-semibold hover:bg-gold-700 dark:hover:bg-gold-600 shadow-md shadow-gold-100 dark:shadow-gold-500/20 transition-all text-sm"
+                  className="flex w-full items-center justify-center gap-2 px-4 py-2 bg-gold-600 dark:bg-gold-500 text-white rounded-xl font-semibold hover:bg-gold-700 dark:hover:bg-gold-600 shadow-md shadow-gold-100 dark:shadow-gold-500/20 transition-all text-sm sm:w-auto"
                 >
                   <Plus size={16} />
                   Nova venda
@@ -463,7 +463,7 @@ export default function JobsPage() {
         ) : (
           /* ── Lista ── */
           <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm overflow-hidden">
-            <table className="w-full text-left">
+            <table className="responsive-card-table w-full text-left">
               <thead className="bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider">
                 <tr>
                   <th className="px-6 py-3 font-semibold">Cliente</th>
@@ -482,7 +482,7 @@ export default function JobsPage() {
                   const stageInfo = getStageLabel(job);
                   return (
                     <tr key={job.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors group">
-                      <td className="px-6 py-4">
+                      <td data-label="Cliente" className="px-6 py-4">
                         <button
                           onClick={() => setSelectedJob(job)}
                           className="flex items-center gap-2 font-medium text-gray-900 dark:text-white hover:text-gold-600 dark:hover:text-gold-400 transition-colors text-left"
@@ -491,17 +491,17 @@ export default function JobsPage() {
                           {job.client_name || clients.find(c => c.id === job.client_id)?.name || job.job_name || "Trabalho"}
                         </button>
                       </td>
-                      <td className="px-6 py-4 text-gray-600 dark:text-gray-300 text-sm">{job.job_type}</td>
-                      <td className="px-6 py-4 text-gray-500 dark:text-gray-400 text-sm">
+                      <td data-label="Tipo" className="px-6 py-4 text-gray-600 dark:text-gray-300 text-sm">{job.job_type}</td>
+                      <td data-label="Data" className="px-6 py-4 text-gray-500 dark:text-gray-400 text-sm">
                         {jobDate ? format(jobDate, "dd/MM/yyyy", { locale: ptBR }) : "-"}
                         {job.job_time && <span className="text-xs text-gray-400"> · {job.job_time}</span>}
                       </td>
                       {!isProductionOnly && (
-                        <td className="px-6 py-4 font-semibold text-gray-900 dark:text-white text-sm">
+                        <td data-label="Valor" className="px-6 py-4 font-semibold text-gray-900 dark:text-white text-sm">
                           R$ {(job.amount ?? 0).toLocaleString("pt-BR")}
                         </td>
                       )}
-                      <td className="px-6 py-4">
+                      <td data-label="Etapa" className="px-6 py-4">
                         {stageInfo ? (
                           <div>
                             <span
@@ -518,7 +518,7 @@ export default function JobsPage() {
                           <span className="text-xs text-gray-400">-</span>
                         )}
                       </td>
-                      <td className="px-6 py-4">
+                      <td data-label="Etiquetas" className="px-6 py-4">
                         <div className="flex flex-wrap gap-1">
                           {(job.labels || []).map(label => (
                             <span
@@ -526,13 +526,13 @@ export default function JobsPage() {
                               className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold text-white"
                               style={{ backgroundColor: labelColor(label) }}
                             >
-                              <Tag size={8} />
+                              {label === 'Nota fiscal emitida' ? <Receipt size={8} /> : <Tag size={8} />}
                               {label}
                             </span>
                           ))}
                         </div>
                       </td>
-                      <td className="px-6 py-4">
+                      <td data-label="Status" className="px-6 py-4">
                         <span className={cn(
                           "px-2 py-1 rounded-full text-[10px] font-bold uppercase",
                           job.status === "completed"
@@ -544,8 +544,8 @@ export default function JobsPage() {
                           {job.status === "scheduled" ? "Agendado" : job.status === "completed" ? "Concluído" : "Cancelado"}
                         </span>
                       </td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex items-center gap-2 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                      <td data-label="Ações" className="px-6 py-4 text-right">
+                        <div className="flex items-center gap-2 justify-end opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100">
                           <button
                             onClick={() => { setEditingJob(job); setShowModal(true); }}
                             className="p-2 text-gray-500 dark:text-gray-400 hover:text-gold-600 dark:hover:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-500/10 rounded-lg transition-colors"

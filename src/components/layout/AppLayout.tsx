@@ -73,6 +73,7 @@ export default function AppLayout() {
   useKeepAlive();
 
   const pageTitle = useMemo(() => {
+    if (location.pathname.startsWith('/configuracoes')) return 'Configurações';
     return TITLE_MAP[location.pathname] || "Dashboard";
   }, [location.pathname]);
 
@@ -94,7 +95,7 @@ export default function AppLayout() {
   };
 
   return (
-    <div className="flex h-screen bg-luxury-paper dark:bg-[#070707] text-luxury-black dark:text-gray-100 font-sans">
+    <div className="flex h-dvh max-w-full overflow-hidden bg-luxury-paper dark:bg-[#070707] text-luxury-black dark:text-gray-100 font-sans">
       <Sidebar
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
@@ -124,7 +125,7 @@ export default function AppLayout() {
           >
             {/* /vendas e /whatsapp não têm padding — o chat precisa ocupar
                 a tela inteira pra ficar parecido com o WhatsApp Web. */}
-            {location.pathname.startsWith('/vendas') || location.pathname.startsWith('/whatsapp') || location.pathname.startsWith('/pos-venda') ? (
+            {location.pathname.startsWith('/vendas') || location.pathname.startsWith('/whatsapp') || location.pathname.startsWith('/pos-venda') || location.pathname.startsWith('/finance') ? (
               <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
                 <Outlet context={{ openContactModal }} />
               </div>
