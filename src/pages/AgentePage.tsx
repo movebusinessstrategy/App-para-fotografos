@@ -115,7 +115,7 @@ const NICHOS_TESTE: { label: string; abre: string }[] = [
   { label: "Marca Pessoal", abre: "Olá! Preciso de fotos pra minha marca pessoal" },
   { label: "Revelação", abre: "Oi! Queria saber do ensaio de revelação" },
   { label: "Anunciação", abre: "Oi! Queria saber sobre o ensaio de anunciação da gravidez" },
-  { label: "Baby", abre: "Oi! Queria informações sobre o ensaio baby" },
+  { label: "Bebê 2-11 meses", abre: "Oi! Queria fotos do meu bebê, ele tem 6 meses" },
   { label: "Batizado", abre: "Olá! Vocês fotografam batizado?" },
   { label: "Aniversário", abre: "Oi! Queria um orçamento para fotos de aniversário" },
   { label: "Chá Revelação", abre: "Oi! Queria saber sobre fotos para chá revelação" },
@@ -124,8 +124,8 @@ const NICHO_LABEL: Record<string, string> = {
   gestante: "Gestante", newborn: "Newborn", smash_the_cake: "Smash the Cake",
   familia: "Família", infantil: "Infantil", casal: "Casal", feminino: "Feminino",
   marca_pessoal: "Marca Pessoal", revelacao: "Revelação", anunciacao: "Anunciação",
-  baby: "Baby", batizado: "Batizado", aniversario: "Aniversário",
-  cha_revelacao: "Chá Revelação",
+  batizado: "Batizado", aniversario: "Aniversário",
+  cha_revelacao: "Chá Revelação", produtos: "Produtos",
 };
 
 function anonymizePlaygroundText(text: string): string {

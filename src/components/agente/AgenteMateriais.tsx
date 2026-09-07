@@ -22,10 +22,12 @@ const NICHOS: { value: string; label: string }[] = [
   { value: "marca_pessoal", label: "Marca Pessoal" },
   { value: "revelacao", label: "Revelação" },
   { value: "anunciacao", label: "Anunciação" },
-  { value: "baby", label: "Baby" },
   { value: "batizado", label: "Batizado" },
   { value: "aniversario", label: "Aniversário" },
   { value: "cha_revelacao", label: "Chá Revelação" },
+  // Não é ensaio: é o catálogo de álbuns, revelações e caixas, que a Lia manda
+  // quando perguntam por esses itens.
+  { value: "produtos", label: "Produtos (álbuns e revelações)" },
 ];
 
 const nichoLabel = (v: string) =>
