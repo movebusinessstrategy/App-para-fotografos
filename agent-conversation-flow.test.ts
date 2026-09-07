@@ -4,6 +4,7 @@ import {
   analyzeConversationFlow,
   enforceConversationFlowReply,
   enforceSingleQuestion,
+  splitColonBeforeQuestion,
   type ConversationFlowAnalysis,
   type ConversationFlowMove,
 } from './agent-conversation-flow.js';
@@ -616,4 +617,22 @@ test('não pergunta a mesma coisa três vezes, mas ainda ouve quem responde', ()
   assert.notEqual(flow([...base, ['user', 'mas eu queria muito ao ar livre mesmo assim']]).move, 'ask_work_familiarity');
   // Respondeu que não conhece: manda o portfólio, mesmo na segunda pergunta.
   assert.equal(flow([...base, ['user', 'não conheço vocês ainda']]).move, 'share_portfolio');
+});
+
+test('dois-pontos que gruda preâmbulo e pergunta vira balão separado', () => {
+  const corta = splitColonBeforeQuestion;
+  assert.equal(
+    corta('Te passo os valores certinhos, só preciso entender uma coisinha antes: com quantas semanas você está?'),
+    'Te passo os valores certinhos, só preciso entender uma coisinha antes\n\nCom quantas semanas você está?',
+  );
+  // Hora e link têm dois-pontos e não podem ser quebrados.
+  assert.equal(corta('Consigo às 16:30, fica bom pra você?'), 'Consigo às 16:30, fica bom pra você?');
+  assert.equal(
+    corta('Esse aqui é bem o clima que você falou https://x.com/a/b/ o que você achou?'),
+    'Esse aqui é bem o clima que você falou https://x.com/a/b/ o que você achou?',
+  );
+  // Sem pergunta depois do dois-pontos, não mexe.
+  assert.equal(corta('Trabalhamos assim: estúdio e área externa.'), 'Trabalhamos assim: estúdio e área externa.');
+  // Token de hand-off tem dois-pontos e precisa sair intacto.
+  assert.equal(corta('###HUMANO:disponibilidade###'), '###HUMANO:disponibilidade###');
 });

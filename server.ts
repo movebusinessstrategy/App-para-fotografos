@@ -27068,6 +27068,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   startFollowUpWorker();
   startMarketingConversionWorker();
+  startAgentPendingReplyWorker();
   startMarketingRetentionWorker();
 
   // ── Baileys: upload de mídia para Supabase Storage ───────────────────────
@@ -27274,7 +27275,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('wa_number', waNumber)
       .in('phone', agentPhoneVariants(phone));
     if (!error) return;
-    const missingStateColumns = error.code === '42703'
+    // PGRST204 = coluna ausente no schema cache do PostgREST; 42703 = do Postgres.
+    const missingStateColumns = error.code === '42703' || error.code === 'PGRST204'
       || /agent_status|handoff_reason|handoff_requested_at|human_assumed_at|last_agent_action_at/.test(error.message || '');
     if (!missingStateColumns) throw error;
     await supabaseAdmin.from('wa_conversations')
@@ -27683,13 +27685,20 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     channel: AgentChannel,
   ) {
     if (!supabaseAdmin) return;
-    const activeNumber = channel === 'baileys'
-      ? registeredSlotNumber(userId, 'main')
-      : await activeMetaNumber(supabaseAdmin, userId);
-    if (activeNumber !== waNumber) return;
     const key = `${userId}|${waNumber}|${phone}|${channel}`;
     let claimedMessageId = '';
     try {
+      // Esta consulta ficava FORA do try: quando ela falhava (Supabase
+      // instável, por exemplo), a função inteira rejeitava e o
+      // `.catch(() => {})` de quem chama engolia sem log nenhum — a conversa
+      // era abandonada em silêncio.
+      const activeNumber = channel === 'baileys'
+        ? registeredSlotNumber(userId, 'main')
+        : await activeMetaNumber(supabaseAdmin, userId);
+      if (activeNumber !== waNumber) {
+        console.warn(`[Lia autônoma] número do canal não bate (${channel}: ${activeNumber || 'vazio'} ≠ ${waNumber}) | ${phone}`);
+        return;
+      }
       if (Date.now() - (lastAutoReplyAt.get(key) || 0) < 8000) return; // cooldown anti-duplicidade
       const { data: cfg } = await supabaseAdmin.from('ai_agent_config').select('*').eq('user_id', userId).maybeSingle();
       if (!cfg?.enabled || !cfg?.auto_send) return; // só se ligado E autônomo on
@@ -27904,8 +27913,62 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       : AGENT_REPLY_DEBOUNCE_MS;
     autoReplyTimers.set(key, setTimeout(() => {
       autoReplyTimers.delete(key);
-      runAutonomousReply(userId, phone, waNumber, channel).catch(() => {});
+      runAutonomousReply(userId, phone, waNumber, channel)
+        .catch((e) => console.warn('[Lia autônoma] falhou fora do try:', e?.message));
     }, delay));
+  }
+
+  // Rede de segurança do agendamento. O timer acima vive em MEMÓRIA: restart,
+  // deploy ou queda perdiam a resposta pra sempre, sem log e sem hand-off — a
+  // conversa ficava abandonada e ninguém ficava sabendo. Este worker varre as
+  // conversas cuja última mensagem é do cliente e já passou do tempo de espera,
+  // e reativa a resposta. O runAutonomousReply revalida tudo sozinho (última
+  // mensagem, hand-off, cooldown), então rodar de novo é seguro e idempotente.
+  // Janela curta de propósito: responder mensagem de horas atrás soa estranho
+  // e pode atropelar quem a equipe já atendeu por outro caminho.
+  const AGENT_SWEEP_WINDOW_MS = 2 * 3600_000;
+  function startAgentPendingReplyWorker(): void {
+    if (!supabaseAdmin) return;
+    let rodando = false;
+    const run = async () => {
+      if (rodando || !supabaseAdmin) return;
+      rodando = true;
+      try {
+        const agora = Date.now();
+        const { data: paradas, error } = await supabaseAdmin.from('wa_conversations')
+          .select('user_id, phone, wa_number')
+          .eq('needs_human', false)
+          .gte('last_message_at', new Date(agora - AGENT_SWEEP_WINDOW_MS).toISOString())
+          .lte('last_message_at', new Date(agora - AGENT_REPLY_DEBOUNCE_MEDIA_MS - 30_000).toISOString())
+          .order('last_message_at', { ascending: false })
+          .limit(40);
+        if (error) throw error;
+        for (const conversa of paradas || []) {
+          const userId = String(conversa.user_id || '');
+          const phone = String(conversa.phone || '');
+          const waNumber = String(conversa.wa_number || '');
+          if (!userId || !phone || !waNumber) continue;
+          // Só entra se a ÚLTIMA mensagem ainda for do cliente.
+          const { data: ultimas } = await supabaseAdmin.from('wa_messages')
+            .select('from_me').eq('user_id', userId).eq('wa_number', waNumber)
+            .in('phone', agentPhoneVariants(phone))
+            .order('timestamp', { ascending: false }).limit(1);
+          if (!ultimas?.length || ultimas[0].from_me) continue;
+          const canal = await activeAgentChannel(supabaseAdmin, userId, waNumber);
+          if (!canal) continue;
+          console.log(`[Lia resgate] resposta pendente reativada | ${phone}`);
+          await runAutonomousReply(userId, phone, waNumber, canal)
+            .catch((e) => console.warn('[Lia resgate] falhou:', e?.message));
+        }
+      } catch (e: any) {
+        console.warn('[Lia resgate] varredura falhou:', e?.message);
+      } finally {
+        rodando = false;
+      }
+    };
+    const timer = setInterval(() => { void run(); }, 120_000);
+    timer.unref();
+    setTimeout(() => { void run(); }, 20_000).unref();
   }
 
   BaileysManager.setMessageHandler(async (sessionKey, msg, sock, isHistory = false, downloadHistoryMedia = false) => {

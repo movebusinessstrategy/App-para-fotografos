@@ -551,7 +551,25 @@ function stripForcedOpeningPraise(reply: unknown): string {
   return cleaned.charAt(0).toLocaleUpperCase('pt-BR') + cleaned.slice(1);
 }
 
+// Ninguém escreve "só preciso entender uma coisinha antes: com quantas semanas
+// você está?" no WhatsApp — manda em duas mensagens. Quando o dois-pontos gruda
+// um preâmbulo na pergunta, vira balão separado. Preserva hora (16:30, dígito
+// antes) e URL (://), que também têm dois-pontos.
+export function splitColonBeforeQuestion(text: string): string {
+  return text.split('\n').map((linha) => {
+    if (linha.includes('://')) return linha;
+    const parte = linha.match(/^(.{6,}?[^\d\s]):[ \t]+(\S.*\?)[ \t]*$/);
+    if (!parte) return linha;
+    const [, antes, pergunta] = parte;
+    return `${antes}\n\n${pergunta.charAt(0).toUpperCase()}${pergunta.slice(1)}`;
+  }).join('\n');
+}
+
 export function enforceConversationFlowReply(reply: unknown, flow: ConversationFlowAnalysis): string {
+  return splitColonBeforeQuestion(conversationFlowReply(reply, flow));
+}
+
+function conversationFlowReply(reply: unknown, flow: ConversationFlowAnalysis): string {
   const text = enforceSingleQuestion(stripForcedOpeningPraise(reply));
   if (flow.handoff_reason) return `###HUMANO:${flow.handoff_reason}###`;
   const handoffMatch = text.match(/###HUMANO(?::([a-z_]+))?###/i);
