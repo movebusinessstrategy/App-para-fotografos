@@ -27279,8 +27279,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const missingStateColumns = error.code === '42703' || error.code === 'PGRST204'
       || /agent_status|handoff_reason|handoff_requested_at|human_assumed_at|last_agent_action_at/.test(error.message || '');
     if (!missingStateColumns) throw error;
+    // Sem as colunas da migration 069, grava o que a tabela JÁ tem. O
+    // last_agent_reply_at estava sendo descartado junto, e por isso o CRM
+    // nunca mostrava que a Lia tinha atendido a conversa.
+    const legado: Record<string, unknown> = { needs_human: status === 'needs_human' };
+    if (extra.last_agent_reply_at) legado.last_agent_reply_at = extra.last_agent_reply_at;
     await supabaseAdmin.from('wa_conversations')
-      .update({ needs_human: status === 'needs_human' })
+      .update(legado)
       .eq('user_id', userId)
       .eq('wa_number', waNumber)
       .in('phone', agentPhoneVariants(phone));
