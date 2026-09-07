@@ -10250,18 +10250,22 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
       throw error;
     }
+    // Campo AUSENTE no corpo fica como está; só o que veio é gravado. Antes,
+    // persona/objetivo/conhecimento/regras eram zerados quando não vinham, e
+    // como isto é um upsert, um PUT parcial (o interruptor, por exemplo)
+    // apagava a base de conhecimento inteira.
     const baseRow: any = {
       user_id: userId,
-      enabled: !!enabled,
-      persona: typeof persona === 'string' ? persona : null,
-      objective: typeof objective === 'string' ? objective : null,
-      knowledge: typeof knowledge === 'string' ? knowledge : null,
-      rules: typeof rules === 'string' ? rules : null,
+      ...(enabled !== undefined ? { enabled: !!enabled } : {}),
+      ...(persona !== undefined ? { persona: typeof persona === 'string' ? persona : null } : {}),
+      ...(objective !== undefined ? { objective: typeof objective === 'string' ? objective : null } : {}),
+      ...(knowledge !== undefined ? { knowledge: typeof knowledge === 'string' ? knowledge : null } : {}),
+      ...(rules !== undefined ? { rules: typeof rules === 'string' ? rules : null } : {}),
       updated_at: new Date().toISOString(),
     };
     const row = {
       ...baseRow,
-      sales_strategy: typeof sales_strategy === 'string' ? sales_strategy : null,
+      ...(sales_strategy !== undefined ? { sales_strategy: typeof sales_strategy === 'string' ? sales_strategy : null } : {}),
       ...(auto_send !== undefined ? { auto_send: !!auto_send } : {}),
       ...(use_client_history !== undefined ? { use_client_history: !!use_client_history } : {}),
       ...(attendant_name !== undefined ? { attendant_name: typeof attendant_name === 'string' ? attendant_name.trim() : null } : {}),

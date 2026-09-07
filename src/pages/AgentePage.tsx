@@ -209,6 +209,7 @@ export default function AgentePage() {
   // ── Configuração ──────────────────────────────────────────────
   const [enabled, setEnabled] = useState(false);
   const [autoSend, setAutoSend] = useState(false);
+  const [togglingAuto, setTogglingAuto] = useState(false);
   const [useClientHistory, setUseClientHistory] = useState(false);
   const [persona, setPersona] = useState("");
   const [objective, setObjective] = useState("");
@@ -344,17 +345,40 @@ export default function AgentePage() {
     }
   }
 
-  function toggleAutonomousService() {
+  // A chave GRAVA sozinha. Antes ela só mexia no estado da tela: ficava verde
+  // na hora e o dono saía achando que tinha ligado, mas nada ia pro banco sem
+  // clicar em "Aplicar agora" — a IA passou dias desligada por causa disso.
+  async function toggleAutonomousService() {
+    if (togglingAuto) return;
     const isActive = enabled && autoSend;
+    // Pausar mexe só no envio autônomo (o modo de sugestão continua). Ligar
+    // acende os dois, porque o autônomo depende do motor do agente.
+    const alvo = { enabled: isActive ? enabled : true, auto_send: !isActive };
     setSaved(false);
-    if (isActive) {
-      // Pausa apenas o envio autônomo. O modo de sugestão continua disponível.
-      setAutoSend(false);
-      return;
+    setError(null);
+    setTogglingAuto(true);
+    setEnabled(alvo.enabled);
+    setAutoSend(alvo.auto_send);
+    try {
+      // SÓ os dois campos: mandar o formulário inteiro daqui sobrescreveria a
+      // base de conhecimento com o que está na tela, que pode estar velha.
+      const res = await authFetch("/api/agent/config", {
+        method: "PUT",
+        body: JSON.stringify(alvo),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Erro ao salvar.");
+      }
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e: any) {
+      setEnabled(enabled);
+      setAutoSend(autoSend);
+      setError(e?.message || "Não consegui mudar o atendimento automático.");
+    } finally {
+      setTogglingAuto(false);
     }
-    // O autônomo depende do motor do agente: um único controle liga os dois.
-    setEnabled(true);
-    setAutoSend(true);
   }
 
   async function sendMessage(raw: string) {
@@ -555,7 +579,9 @@ export default function AgentePage() {
                 <button
                   type="button"
                   onClick={toggleAutonomousService}
+                  disabled={togglingAuto}
                   role="switch"
+                  aria-busy={togglingAuto}
                   aria-checked={enabled && autoSend}
                   aria-label={enabled && autoSend ? "Pausar atendimento automático" : "Ligar atendimento automático"}
                   className={cn(
