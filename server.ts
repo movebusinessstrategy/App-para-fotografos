@@ -84,6 +84,7 @@ import {
 import { createOpenAIAgentProvider } from './openai-agent-provider.js';
 import { buildDossierPdf, normalizePhotoToJpeg, DossierPhoto } from './dossier-pdf.js';
 import { loadDossierLogo } from './dossier-brand.js';
+import { buildDossierTranscript, pickDossierPhotoIds } from './dossier-transcript.js';
 import { prepareDossierPlan, applyDossierAnswers, saveDossierContent, validatedReferenceNotes } from './dossier-workflow.js';
 import * as plugnotas from './plugnotas.js';
 import * as nfseNacional from './nfse-nacional.js';
@@ -10460,15 +10461,6 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Ao marcar GANHO, a IA analisa a conversa do WhatsApp e monta o dossiê pro
   // time de produção: o que a cliente quer, falas/fotos de referência,
   // preferências e combinados. Persistido em alignment_dossiers (migration 058).
-  function pickDossierPhotoIds(msgs: any[], indices: unknown): string[] {
-    const list = Array.isArray(indices) ? indices : [];
-    return list
-      .map((index) => msgs[Number(index)])
-      .filter((message: any) => message && !message.from_me && message.type === 'image')
-      .map((message: any) => String(message.message_id))
-      .filter(Boolean);
-  }
-
   function extractConversationLinks(msgs: any[]): string[] {
     const links = new Set<string>();
     for (const message of msgs) {
@@ -10508,7 +10500,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const variants = brazilianPhoneVariants(phoneDigits);
     const { data: msgsDesc } = await db.from('wa_messages')
-      .select('message_id, body, from_me, timestamp, type, media_url')
+      .select('message_id, body, from_me, timestamp, type, media_url, transcription')
       .eq('user_id', userId)
       .in('phone', variants)
       .order('timestamp', { ascending: false })
@@ -10519,19 +10511,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (previousDossier?.status !== 'ready') await db.from('alignment_dossiers')
       .upsert({ ...upsertBase, status: 'generating', error: null }, { onConflict: 'user_id,deal_id' });
 
-    // Transcript numerado: a IA devolve os índices das fotos de referência
-    const lines: string[] = [];
-    msgs.forEach((m: any, i: number) => {
-      const who = m.from_me ? 'ESTÚDIO' : 'CLIENTE';
-      const isText = !m.type || m.type === 'chat' || m.type === 'text';
-      const marker = m.type === 'image' ? '[FOTO] ' : (isText ? '' : `[${String(m.type).toUpperCase()}] `);
-      const body = String(m.body || '').trim();
-      if (!marker && !body) return;
-      lines.push(`[#${i}] ${who}: ${marker}${body}`.trim());
-    });
-
     try {
-      const content = await analyzeDossierWithAI(lines.join('\n'));
+      const content = await analyzeDossierWithAI(buildDossierTranscript(msgs));
       // Índices → message_ids de fotos DA CLIENTE com mídia salva
       const paymentIds = pickDossierPhotoIds(msgs, content.fotos_pagamento_indices);
       const paymentSet = new Set(paymentIds);
