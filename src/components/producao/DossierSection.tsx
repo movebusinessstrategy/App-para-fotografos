@@ -20,7 +20,8 @@ function References({ model, readOnly }: { model: DossierController; readOnly: b
     {!model.mediaLoading && !photos.length && <p className="dossier-muted">Nenhuma foto de referência identificada nesta conversa.</p>}
     <div className="dossier-photos">{photos.map((photo, i) => <figure key={photo.id} className={excluded.includes(photo.id) ? 'dossier-photo-excluded' : ''}>
       {photo.data_url ? <button className="dossier-photo" onClick={() => setSelected(photo)} aria-label={`Ampliar referência ${i + 1}`}><img src={photo.data_url} alt={`Referência ${i + 1} compartilhada na conversa`} /></button> : <div className="dossier-photo-missing">Esta imagem não está disponível. Confira o arquivo no WhatsApp.</div>}
-      <figcaption><span className="dossier-label">Referência {String(i + 1).padStart(2, '0')}</span><p>{photo.caption || 'Ela enviou esta imagem, mas ainda não explicou o que gostaria de aproveitar.'}</p>
+      <figcaption><span className="dossier-label">Referência {String(i + 1).padStart(2, '0')}</span><p>{photo.caption || (photo.recovered ? 'Imagem recuperada da conversa. Confira o que aproveitar para o ensaio.' : 'Ela enviou esta imagem, mas ainda não explicou o que gostaria de aproveitar.')}</p>
+        {photo.needs_review && <p className="dossier-muted">Confira esta imagem antes de marcar “Usar no dossiê”.</p>}
         {photo.quote && <blockquote>“{photo.quote}”</blockquote>}
         {!readOnly && <label className="dossier-photo-choice"><input type="checkbox" checked={!excluded.includes(photo.id)} disabled={model.busy} onChange={() => toggle(photo.id)} />Usar no dossiê</label>}
       </figcaption>

@@ -85,6 +85,7 @@ import { createOpenAIAgentProvider } from './openai-agent-provider.js';
 import { buildDossierPdf, normalizePhotoToJpeg, DossierPhoto } from './dossier-pdf.js';
 import { loadDossierLogo } from './dossier-brand.js';
 import { buildDossierTranscript, pickDossierPhotoIds } from './dossier-transcript.js';
+import { loadDossierConversationPhotos } from './dossier-media.js';
 import { prepareDossierPlan, applyDossierAnswers, saveDossierContent, validatedReferenceNotes } from './dossier-workflow.js';
 import * as plugnotas from './plugnotas.js';
 import * as nfseNacional from './nfse-nacional.js';
@@ -1691,7 +1692,7 @@ async function startServer() {
   });
 
   // Health check — used by frontend to warm up Render free tier
-  app.get('/api/health', (_req, res) => res.json({ ok: true }));
+  app.get('/api/health', (_req, res) => res.json({ ok: true, dossierVersion: 'conversation-photos-v3', revision: process.env.RENDER_GIT_COMMIT || null }));
 
   // ============ DATA DELETION (LGPD + Meta App Review requirement) ============
   // 2 endpoints públicos (sem requireAuth) pra atender:
@@ -10565,6 +10566,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     } catch { return null; }
   }
 
+  async function withConversationPhotos(userId: string, dossier: any) {
+    if (!dossier || !supabaseAdmin) return dossier;
+    return loadDossierConversationPhotos(supabaseAdmin, userId, dossier, brazilianPhoneVariants(dossier.phone || ''));
+  }
+
   type DossierPhotoKind = 'reference' | 'payment';
   interface DossierPhotoAsset {
     id: string;
@@ -10605,10 +10611,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   }
 
   app.get('/api/jobs/:id/dossie', requireAuth, requirePermission('jobs'), async (req, res) => {
-    const userId = (req as any).userId;
-    const dossier = await findDossierByJob(userId, Number(req.params.id));
-    if (!dossier) return res.status(404).json({ error: 'Dossiê ainda não gerado.' });
-    res.json(dossier);
+    try {
+      const userId = (req as any).userId;
+      const dossier = await findDossierByJob(userId, Number(req.params.id));
+      if (!dossier) return res.status(404).json({ error: 'Dossiê ainda não gerado.' });
+      res.json(await withConversationPhotos(userId, dossier));
+    } catch { res.status(503).json({ error: 'Não foi possível buscar as fotos da conversa. Reabra o ensaio para tentar novamente.' }); }
   });
 
   app.post('/api/jobs/:id/dossie/regenerate', requireAuth, requirePermission('jobs'), denyProductionOnly, async (req, res) => {
@@ -10625,7 +10633,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         const d = await findDossierByJob(userId, jobId);
         return res.status(422).json({ error: d?.error || 'Não foi possível gerar o dossiê.' });
       }
-      res.json(dossier);
+      res.json(await withConversationPhotos(userId, dossier));
     } catch (e: any) {
       res.status(500).json({ error: e?.message || 'Erro ao gerar o dossiê.' });
     }
@@ -10642,14 +10650,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       if (!dossier) throw new Error('Não foi possível ler a conversa. O último dossiê foi preservado.');
       const channels = (await Promise.all(['main', 'posvenda'].map(slot => inboxWaNumber(db, userId, slot)))).filter(Boolean);
       const alignment = await prepareDossierPlan(db, userId, jobId, brazilianPhoneVariants(dossier.phone || ''), channels);
-      res.json(await saveDossierContent(db, userId, dossier, { ...dossier.content, alignment }));
+      res.json(await withConversationPhotos(userId, await saveDossierContent(db, userId, dossier, { ...dossier.content, alignment })));
     } catch (error: any) { res.status(400).json({ error: error.message || 'Não foi possível preparar o ensaio.' }); }
   });
 
   app.post('/api/jobs/:id/dossie/choices', requireAuth, requirePermission('jobs'), denyProductionOnly, async (req, res) => {
     try {
       const userId = (req as any).userId;
-      const dossier = await findDossierByJob(userId, Number(req.params.id));
+      const dossier = await withConversationPhotos(userId, await findDossierByJob(userId, Number(req.params.id)));
       if (!dossier || !supabaseAdmin) return res.status(404).json({ error: 'Leia a conversa primeiro.' });
       if (req.body.updatedAt !== dossier.updated_at) throw new Error('O dossiê mudou. Leia a conversa novamente.');
       const content = { ...dossier.content };
@@ -10661,15 +10669,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   app.get('/api/jobs/:id/dossie/media', requireAuth, requirePermission('jobs'), async (req, res) => {
     const userId = (req as any).userId;
-    const dossier = await findDossierByJob(userId, Number(req.params.id));
+    let dossier = await findDossierByJob(userId, Number(req.params.id));
     if (!dossier || dossier.status !== 'ready') return res.json([]);
     try {
+      dossier = await withConversationPhotos(userId, dossier);
       const assets = await loadDossierPhotoAssets(userId, dossier);
       const byId = new Map(assets.map(asset => [asset.id, asset]));
       res.json(dossierPhotoRefs(dossier).map(ref => ({ ...ref,
         data_url: byId.has(ref.id) ? `data:image/jpeg;base64,${byId.get(ref.id)!.photo.jpeg.toString('base64')}` : null,
         caption: dossier.content?.reference_notes?.[ref.id]?.caption || '',
         quote: dossier.content?.reference_notes?.[ref.id]?.quote || '',
+        recovered: dossier.content?.recovered_reference_ids?.includes(ref.id) || false,
+        needs_review: dossier.content?.reference_review_ids?.includes(ref.id) || false,
         unavailable: !byId.has(ref.id),
       })));
     } catch (error: any) {
@@ -10682,7 +10693,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const userId = (req as any).userId;
     const db = supabaseAdmin;
     const jobId = Number(req.params.id);
-    const dossier = await findDossierByJob(userId, jobId);
+    let dossier = await findDossierByJob(userId, jobId);
     if (!dossier || dossier.status !== 'ready') {
       return res.status(404).json({ error: dossier?.error || 'Dossiê ainda não gerado.' });
     }
@@ -10696,6 +10707,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
     }
     try {
+      dossier = await withConversationPhotos(userId, dossier);
       const includeImages = req.query.include_images !== '0';
       const assets = includeImages ? await loadDossierPhotoAssets(userId, dossier) : [];
       const excluded = new Set(dossier.content?.excluded_reference_ids || []);

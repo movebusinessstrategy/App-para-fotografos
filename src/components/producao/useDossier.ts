@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { authFetch } from '../../utils/authFetch';
 import type { DossierPlan } from '../../../dossier-workflow';
-export interface DossierMedia { id: string; kind: 'reference' | 'payment'; data_url: string | null; caption: string; quote?: string; unavailable?: boolean }
+export interface DossierMedia { id: string; kind: 'reference' | 'payment'; data_url: string | null; caption: string; quote?: string; unavailable?: boolean; recovered?: boolean; needs_review?: boolean }
 export interface StudioDossier { id: string; client_name: string; phone: string; status: string; updated_at: string;
   content: { resumo?: string; preferencias?: string[]; o_que_quer?: string[]; alignment?: DossierPlan; excluded_reference_ids?: string[] } }
 export const pendingMessage = (plan: DossierPlan) => ['Vamos combinar os últimos detalhes do seu ensaio? 😊', ...plan.questions.map(q => q.message)].join('\n\n');
