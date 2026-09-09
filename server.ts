@@ -83,6 +83,8 @@ import {
 } from './agent-replay-service.js';
 import { createOpenAIAgentProvider } from './openai-agent-provider.js';
 import { buildDossierPdf, normalizePhotoToJpeg, DossierPhoto } from './dossier-pdf.js';
+import { loadDossierLogo } from './dossier-brand.js';
+import { prepareDossierPlan, applyDossierAnswers, saveDossierContent, validatedReferenceNotes } from './dossier-workflow.js';
 import * as plugnotas from './plugnotas.js';
 import * as nfseNacional from './nfse-nacional.js';
 import { understandMedia } from './media-understanding.js';
@@ -10462,10 +10464,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const list = Array.isArray(indices) ? indices : [];
     return list
       .map((index) => msgs[Number(index)])
-      .filter((message: any) => message && !message.from_me && message.type === 'image' && message.media_url)
+      .filter((message: any) => message && !message.from_me && message.type === 'image')
       .map((message: any) => String(message.message_id))
-      .filter(Boolean)
-      .slice(0, 12);
+      .filter(Boolean);
   }
 
   function extractConversationLinks(msgs: any[]): string[] {
@@ -10485,6 +10486,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .select('id, contact_name, title, contact_phone, converted_job_id')
       .eq('id', dealId).eq('user_id', userId).single();
     if (!deal) throw new Error('Venda não encontrada.');
+    const { data: previousDossier } = await db.from('alignment_dossiers').select('content,status')
+      .eq('user_id', userId).eq('deal_id', dealId).maybeSingle();
 
     const upsertBase = {
       user_id: userId,
@@ -10496,7 +10499,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     };
     const fail = async (msg: string) => {
       await db.from('alignment_dossiers')
-        .upsert({ ...upsertBase, status: 'error', error: msg }, { onConflict: 'user_id,deal_id' });
+        .upsert({ ...upsertBase, status: previousDossier?.status === 'ready' ? 'ready' : 'error', error: msg }, { onConflict: 'user_id,deal_id' });
       return null;
     };
 
@@ -10513,7 +10516,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const msgs = (msgsDesc || []).reverse();
     if (!msgs.length) return fail('Sem conversa do WhatsApp registrada pra este lead.');
 
-    await db.from('alignment_dossiers')
+    if (previousDossier?.status !== 'ready') await db.from('alignment_dossiers')
       .upsert({ ...upsertBase, status: 'generating', error: null }, { onConflict: 'user_id,deal_id' });
 
     // Transcript numerado: a IA devolve os índices das fotos de referência
@@ -10540,12 +10543,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       ]);
       const stored: any = {
         ...content,
+        alignment: previousDossier?.content?.alignment,
+        excluded_reference_ids: previousDossier?.content?.excluded_reference_ids || [],
+        reference_notes: validatedReferenceNotes(msgs, refIds, content.referencias),
         links_importantes: [...links].filter(Boolean).slice(0, 20),
         reference_photo_ids: refIds,
         payment_photo_ids: paymentIds,
       };
       delete stored.fotos_referencia_indices;
       delete stored.fotos_pagamento_indices;
+      delete stored.referencias;
       const { data: saved } = await db.from('alignment_dossiers')
         .upsert({ ...upsertBase, content: stored, status: 'ready', error: null }, { onConflict: 'user_id,deal_id' })
         .select().single();
@@ -10589,8 +10596,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const references = Array.isArray(content.reference_photo_ids) ? content.reference_photo_ids : [];
     const payments = Array.isArray(content.payment_photo_ids) ? content.payment_photo_ids : [];
     return [
-      ...references.slice(0, 12).map((id: unknown) => ({ id: String(id), kind: 'reference' as const })),
-      ...payments.slice(0, 12).map((id: unknown) => ({ id: String(id), kind: 'payment' as const })),
+      ...references.map((id: unknown) => ({ id: String(id), kind: 'reference' as const })),
+      ...payments.map((id: unknown) => ({ id: String(id), kind: 'payment' as const })),
     ].filter((item) => item.id);
   }
 
@@ -10599,29 +10606,31 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const refs = dossierPhotoRefs(dossier);
     if (!db || !refs.length) return [];
     const ids = [...new Set(refs.map((item) => item.id))];
-    const { data: rows } = await db.from('wa_messages')
+    const { data: rows, error } = await db.from('wa_messages')
       .select('message_id, media_url')
       .eq('user_id', userId)
+      .eq('from_me', false)
       .in('message_id', ids);
+    if (error) throw new Error('Não foi possível consultar as imagens da conversa.');
     const mediaById = new Map((rows || []).map((row: any) => [String(row.message_id), String(row.media_url || '')]));
     const assets: DossierPhotoAsset[] = [];
     for (const ref of refs) {
       const raw = await fetchMediaBuffer(mediaById.get(ref.id) || '');
       if (!raw) continue;
       const photo = await normalizePhotoToJpeg(raw);
-      if (photo) assets.push({ ...ref, photo });
+      if (photo) assets.push({ ...ref, photo: { ...photo, id: ref.id, caption: dossier.content?.reference_notes?.[ref.id]?.caption } });
     }
     return assets;
   }
 
-  app.get('/api/jobs/:id/dossie', requireAuth, async (req, res) => {
+  app.get('/api/jobs/:id/dossie', requireAuth, requirePermission('jobs'), async (req, res) => {
     const userId = (req as any).userId;
     const dossier = await findDossierByJob(userId, Number(req.params.id));
     if (!dossier) return res.status(404).json({ error: 'Dossiê ainda não gerado.' });
     res.json(dossier);
   });
 
-  app.post('/api/jobs/:id/dossie/regenerate', requireAuth, async (req, res) => {
+  app.post('/api/jobs/:id/dossie/regenerate', requireAuth, requirePermission('jobs'), denyProductionOnly, async (req, res) => {
     const userId = (req as any).userId;
     const db = supabaseAdmin;
     if (!db) return res.status(500).json({ error: 'Dossiê indisponível neste servidor.' });
@@ -10641,16 +10650,46 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
   });
 
-  app.get('/api/jobs/:id/dossie/media', requireAuth, async (req, res) => {
+  app.post('/api/jobs/:id/dossie/prepare', requireAuth, requirePermission('jobs'), denyProductionOnly, async (req, res) => {
+    try {
+      const userId = (req as any).userId, jobId = Number(req.params.id);
+      const db = supabaseAdmin;
+      if (!db) return res.status(503).json({ error: 'Dossiê indisponível.' });
+      const { data: deal } = await db.from('deals').select('id').eq('user_id', userId).eq('converted_job_id', jobId).maybeSingle();
+      if (!deal) return res.status(404).json({ error: 'Vincule a conversa da venda a este trabalho para preparar o ensaio.' });
+      const dossier = await generateAlignmentDossier(userId, deal.id);
+      if (!dossier) throw new Error('Não foi possível ler a conversa. O último dossiê foi preservado.');
+      const channels = (await Promise.all(['main', 'posvenda'].map(slot => inboxWaNumber(db, userId, slot)))).filter(Boolean);
+      const alignment = await prepareDossierPlan(db, userId, jobId, brazilianPhoneVariants(dossier.phone || ''), channels);
+      res.json(await saveDossierContent(db, userId, dossier, { ...dossier.content, alignment }));
+    } catch (error: any) { res.status(400).json({ error: error.message || 'Não foi possível preparar o ensaio.' }); }
+  });
+
+  app.post('/api/jobs/:id/dossie/choices', requireAuth, requirePermission('jobs'), denyProductionOnly, async (req, res) => {
+    try {
+      const userId = (req as any).userId;
+      const dossier = await findDossierByJob(userId, Number(req.params.id));
+      if (!dossier || !supabaseAdmin) return res.status(404).json({ error: 'Leia a conversa primeiro.' });
+      if (req.body.updatedAt !== dossier.updated_at) throw new Error('O dossiê mudou. Leia a conversa novamente.');
+      const content = { ...dossier.content };
+      if (req.body.answers && content.alignment) content.alignment = applyDossierAnswers(content.alignment, req.body.answers);
+      if (Array.isArray(req.body.excludedReferences)) content.excluded_reference_ids = req.body.excludedReferences.filter((id: unknown) => content.reference_photo_ids?.includes(id));
+      res.json(await saveDossierContent(supabaseAdmin, userId, dossier, content));
+    } catch (error: any) { res.status(400).json({ error: error.message || 'Não foi possível salvar.' }); }
+  });
+
+  app.get('/api/jobs/:id/dossie/media', requireAuth, requirePermission('jobs'), async (req, res) => {
     const userId = (req as any).userId;
     const dossier = await findDossierByJob(userId, Number(req.params.id));
     if (!dossier || dossier.status !== 'ready') return res.json([]);
     try {
       const assets = await loadDossierPhotoAssets(userId, dossier);
-      res.json(assets.map((asset) => ({
-        id: asset.id,
-        kind: asset.kind,
-        data_url: `data:image/jpeg;base64,${asset.photo.jpeg.toString('base64')}`,
+      const byId = new Map(assets.map(asset => [asset.id, asset]));
+      res.json(dossierPhotoRefs(dossier).map(ref => ({ ...ref,
+        data_url: byId.has(ref.id) ? `data:image/jpeg;base64,${byId.get(ref.id)!.photo.jpeg.toString('base64')}` : null,
+        caption: dossier.content?.reference_notes?.[ref.id]?.caption || '',
+        quote: dossier.content?.reference_notes?.[ref.id]?.quote || '',
+        unavailable: !byId.has(ref.id),
       })));
     } catch (error: any) {
       console.error('[dossie media] erro:', error?.message || error);
@@ -10658,7 +10697,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
   });
 
-  app.get('/api/jobs/:id/dossie/pdf', requireAuth, async (req, res) => {
+  app.get('/api/jobs/:id/dossie/pdf', requireAuth, requirePermission('jobs'), async (req, res) => {
     const userId = (req as any).userId;
     const db = supabaseAdmin;
     const jobId = Number(req.params.id);
@@ -10678,13 +10717,24 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     try {
       const includeImages = req.query.include_images !== '0';
       const assets = includeImages ? await loadDossierPhotoAssets(userId, dossier) : [];
+      const excluded = new Set(dossier.content?.excluded_reference_ids || []);
+      const referencePhotos = assets.filter(asset => asset.kind === 'reference' && !excluded.has(asset.id)).map(asset => asset.photo);
+      const expectedPhotos = dossierPhotoRefs(dossier).filter(ref => ref.kind === 'reference' && !excluded.has(ref.id)).length;
+      const { data: company } = await db!.from('company_info').select('trade_name,logo_url').eq('user_id', userId).maybeSingle();
+      const logo = await loadDossierLogo(company?.trade_name || '', company?.logo_url || '', fetchMediaBuffer);
       const pdf = buildDossierPdf({
         clientName: dossier.client_name || 'Cliente',
         phone: dossier.phone,
         jobLabel,
         generatedAt: dossier.updated_at || dossier.created_at,
         content: dossier.content || {},
-        referencePhotos: assets.filter((asset) => asset.kind === 'reference').map((asset) => asset.photo),
+        studioName: company?.trade_name || 'Estúdio',
+        logo,
+        audience: req.query.audience === 'internal' ? 'internal' : 'client',
+        choices: dossier.content?.alignment?.choices,
+        questions: dossier.content?.alignment?.questions,
+        missingPhotos: includeImages ? Math.max(0, expectedPhotos - referencePhotos.length) : expectedPhotos,
+        referencePhotos,
         paymentPhotos: assets.filter((asset) => asset.kind === 'payment').map((asset) => asset.photo),
       });
       const slug = String(dossier.client_name || 'cliente')

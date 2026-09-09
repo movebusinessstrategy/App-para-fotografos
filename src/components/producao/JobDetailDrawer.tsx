@@ -1138,7 +1138,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                 )}
               </section>
 
-              <DossierSection jobId={job.id} />
+              <DossierSection jobId={job.id} readOnly={isProductionOnly} />
 
               {/* Galeria de seleção de fotos (proofing) */}
               <GallerySection jobId={job.id} />

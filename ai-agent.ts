@@ -193,6 +193,7 @@ export interface DossierContent {
   evitar: string[];
   fotos_referencia_indices: number[];
   fotos_pagamento_indices: number[];
+  referencias?: Array<{ foto_indice: number; fala_indice: number; trecho: string; detalhe: string }>;
 }
 
 export async function analyzeDossierWithAI(transcript: string): Promise<DossierContent> {
@@ -223,6 +224,7 @@ Retorne JSON com exatamente estas chaves:
 - "evitar": o que a cliente NÃO quer / cuidados (inseguranças, restrições, traumas de outras experiências).
 - "fotos_referencia_indices": índices ([#N]) das mensagens com [FOTO] enviadas PELA CLIENTE que são REFERÊNCIA do que ela quer (inspiração/exemplo). NÃO inclua comprovantes de pagamento, documentos, prints de conversa ou fotos irrelevantes. Se não der pra saber, inclua as fotos que ela mandou perto de falas sobre estilo/inspiração.
 - "fotos_pagamento_indices": índices ([#N]) das mensagens com [FOTO] enviadas PELA CLIENTE que são comprovantes, recibos, telas ou confirmações de pagamento. Não misture com fotos de referência.
+- "referencias": para cada foto de referência, quando a cliente explicou o que gostou, retorne {"foto_indice":N,"fala_indice":N,"trecho":"citação literal da cliente","detalhe":"o que aproveitar desta referência"}. foto_indice aponta para a foto; fala_indice para a mensagem que explica a escolha. Não descreva elementos visuais que você não viu. Se ela não explicou, omita o item: não invente legenda.
 
 Regras: campos sem informação → lista vazia (ou "" no resumo). NUNCA invente dado que não está na conversa. Escreva em português do Brasil, direto e útil pra equipe.
 
@@ -254,6 +256,7 @@ ${text}`,
     pagamentos: arr(parsed.pagamentos),
     links_importantes: arr(parsed.links_importantes),
     evitar: arr(parsed.evitar),
+    referencias: Array.isArray(parsed.referencias) ? parsed.referencias : [],
     fotos_referencia_indices: (Array.isArray(parsed.fotos_referencia_indices) ? parsed.fotos_referencia_indices : [])
       .map((n: any) => Number(n))
       .filter((n: number) => Number.isFinite(n)),

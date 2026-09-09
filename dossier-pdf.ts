@@ -1,183 +1,175 @@
-// Gera o PDF do dossiê de alinhamento (A4) — resumo da venda, falas de
-// referência da cliente, preferências, combinados e as fotos de referência
-// que ela mandou na conversa. Visual sóbrio: cabeçalho verde-oceano, seções
-// com título em teal, citações em itálico. Fontes padrão (sans) do jsPDF.
+// Dossiê editorial para conferência do ensaio: identidade do estúdio e fotos integrais.
 import { jsPDF } from 'jspdf';
 import sharp from 'sharp';
 import type { DossierContent } from './ai-agent.js';
 
-const PAGE_W = 210;
-const PAGE_H = 297;
-const MARGIN = 16;
-const CONTENT_W = PAGE_W - MARGIN * 2;
-const FOOT_Y = PAGE_H - 10;
-
-const TEAL = '#008069';
-const INK = '#1f2937';
-const GRAY = '#6b7280';
-
-export interface DossierPhoto {
-  jpeg: Buffer;
-  width: number;
-  height: number;
-}
-
+const W = 210, H = 297, M = 20, CW = W - M * 2;
+const INK = '#211f1b', MUTED = '#57524a', GOLD = '#8b6e3c', PAPER = '#fbf8f2', LINE = '#e7decd';
+export interface DossierPhoto { jpeg: Buffer; width: number; height: number; id?: string; caption?: string }
+export interface DossierLogo { png: Buffer; width: number; height: number }
 export interface DossierPdfInput {
-  clientName: string;
-  phone?: string | null;
-  jobLabel?: string | null; // "Gestante — 15/08/2026 — 14:00"
-  generatedAt: string;      // ISO
-  content: Partial<DossierContent>;
-  referencePhotos: DossierPhoto[];
-  paymentPhotos: DossierPhoto[];
+  clientName: string; phone?: string | null; jobLabel?: string | null; generatedAt: string;
+  content: Partial<DossierContent>; referencePhotos: DossierPhoto[]; paymentPhotos: DossierPhoto[];
+  studioName?: string; logo?: DossierLogo | null; audience?: 'client' | 'internal';
+  choices?: Array<{ title: string; value: string }>;
+  questions?: Array<{ title: string; question: string }>;
+  missingPhotos?: number; example?: boolean;
 }
-
-// Converte a mídia bruta (qualquer formato que o WhatsApp mande, incl. webp)
-// pra JPEG compacto pro PDF. Retorna null se não for imagem decodificável.
 export async function normalizePhotoToJpeg(input: Buffer): Promise<DossierPhoto | null> {
   try {
-    const jpeg = await sharp(input)
-      .rotate() // respeita EXIF
-      .resize({ width: 900, withoutEnlargement: true })
-      .jpeg({ quality: 72 })
-      .toBuffer();
+    const jpeg = await sharp(input).rotate().resize({ width: 1400, withoutEnlargement: true })
+      .flatten({ background: '#ffffff' }).jpeg({ quality: 88 }).toBuffer();
     const meta = await sharp(jpeg).metadata();
-    return { jpeg, width: meta.width || 900, height: meta.height || 900 };
-  } catch {
-    return null;
+    return { jpeg, width: meta.width || 1400, height: meta.height || 1400 };
+  } catch { return null; }
+}
+export async function normalizeDossierLogo(input: Buffer): Promise<DossierLogo | null> {
+  try {
+    const { data, info } = await sharp(input).rotate()
+      .resize({ width: 1200, height: 400, fit: 'inside', withoutEnlargement: true })
+      .png().toBuffer({ resolveWithObject: true });
+    return { png: data, width: info.width, height: info.height };
+  } catch { return null; }
+}
+interface Layout { doc: jsPDF; y: number; input: DossierPdfInput }
+function text(doc: jsPDF, value: string) {
+  return String(value).replace(/[–—−]/g, '-').replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
+    .replace(/[^\u0020-\u007E\u00A0-\u00FF\n]/g, '').trim();
+}
+function page(l: Layout, first = false) {
+  if (!first) l.doc.addPage();
+  l.doc.setFillColor(PAPER); l.doc.rect(0, 0, W, H, 'F');
+  l.y = 35;
+}
+function brand(l: Layout) {
+  l.doc.setTextColor(INK); l.doc.setFont('times', 'normal'); l.doc.setFontSize(14);
+  const logo = l.input.logo;
+  if (logo) {
+    const scale = Math.min(48 / logo.width, 14 / logo.height);
+    const width = logo.width * scale, height = logo.height * scale;
+    l.doc.addImage(logo.png, 'PNG', M, 7 + (14 - height) / 2, width, height);
+  } else {
+    l.doc.text(text(l.doc, l.input.studioName || 'Estúdio'), M, 17);
   }
+  l.doc.setFont('helvetica', 'normal'); l.doc.setFontSize(7.5); l.doc.setTextColor(GOLD);
+  l.doc.text(l.input.example ? 'EXEMPLO DE APRESENTAÇÃO' : 'SEU ENSAIO', W - M, 17, { align: 'right' });
+  l.doc.setDrawColor(LINE); l.doc.setLineWidth(.25); l.doc.line(M, 23, W - M, 23);
 }
-
-interface Cursor { y: number }
-
-function ensureSpace(doc: jsPDF, cur: Cursor, needed: number) {
-  if (cur.y + needed <= PAGE_H - 16) return;
-  doc.addPage();
-  cur.y = MARGIN;
+function room(l: Layout, size: number) { if (l.y + size > H - 24) page(l); }
+function label(l: Layout, title: string) {
+  room(l, 16); l.doc.setFont('helvetica', 'bold'); l.doc.setFontSize(8); l.doc.setTextColor(GOLD);
+  l.doc.text(text(l.doc, title).toUpperCase(), M, l.y); l.y += 7;
 }
-
-function drawHeader(doc: jsPDF, d: DossierPdfInput, cur: Cursor) {
-  doc.setFillColor(TEAL);
-  doc.rect(0, 0, PAGE_W, 30, 'F');
-  doc.setTextColor('#ffffff');
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(16);
-  doc.text('Dossiê de Alinhamento', MARGIN, 13);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(11);
-  const meta = [d.clientName, d.jobLabel, d.phone ? `+${String(d.phone).replace(/\D/g, '')}` : '']
-    .filter(Boolean).join('   •   ');
-  doc.text(meta, MARGIN, 21);
-  doc.setFontSize(8);
-  const when = new Date(d.generatedAt);
-  doc.text(`Gerado pela IA a partir da conversa do WhatsApp — ${when.toLocaleDateString('pt-BR')} ${when.toLocaleTimeString('pt-BR').slice(0, 5)}`, MARGIN, 26.5);
-  cur.y = 38;
+function paragraph(l: Layout, value: string, width = CW, x = M, size = 10) {
+  l.doc.setFont('helvetica', 'normal'); l.doc.setFontSize(size); l.doc.setTextColor(MUTED);
+  const lines: string[] = l.doc.splitTextToSize(text(l.doc, value), width);
+  for (const line of lines) { room(l, 5.4); l.doc.text(line, x, l.y); l.y += 5.4; }
+  l.y += 3;
 }
-
-function drawSectionTitle(doc: jsPDF, cur: Cursor, title: string, color = TEAL) {
-  ensureSpace(doc, cur, 14);
-  doc.setTextColor(color);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11.5);
-  doc.text(title.toUpperCase(), MARGIN, cur.y);
-  doc.setDrawColor(color);
-  doc.setLineWidth(0.4);
-  doc.line(MARGIN, cur.y + 1.6, MARGIN + CONTENT_W, cur.y + 1.6);
-  cur.y += 7;
+function title(l: Layout, value: string) {
+  room(l, 23); l.doc.setFont('times', 'normal'); l.doc.setTextColor(INK); l.doc.setFontSize(26);
+  l.doc.text(value, M, l.y); l.y += 13;
 }
-
-function drawParagraph(doc: jsPDF, cur: Cursor, text: string) {
-  doc.setTextColor(INK);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
-  const lines = doc.splitTextToSize(text, CONTENT_W);
-  for (const line of lines) {
-    ensureSpace(doc, cur, 5.2);
-    doc.text(line, MARGIN, cur.y);
-    cur.y += 5;
+function photo(l: Layout, p: DossierPhoto, x: number, y: number, w: number, h: number) {
+  const scale = Math.min(w / p.width, h / p.height);
+  const iw = p.width * scale, ih = p.height * scale;
+  l.doc.setFillColor('#f4efe5'); l.doc.rect(x, y, w, h, 'F');
+  l.doc.addImage(p.jpeg, 'JPEG', x + (w - iw) / 2, y + (h - ih) / 2, iw, ih, undefined, 'FAST');
+}
+function intro(l: Layout) {
+  const hero = l.input.referencePhotos[0];
+  l.doc.setFont('times', 'normal'); l.doc.setFontSize(34); l.doc.setTextColor(INK);
+  l.doc.text('O seu ensaio,', M, 45); l.doc.text('do seu jeito.', M, 59);
+  l.y = 76; label(l, l.input.clientName);
+  paragraph(l, l.input.jobLabel || 'Vamos preparar suas fotos.', hero ? 78 : CW, M, 10);
+  paragraph(l, 'Reunimos suas ideias, as referências e os detalhes que conversamos. Vamos conferir tudo com carinho?', hero ? 78 : CW, M, 10);
+  if (hero) { photo(l, hero, 113, 33, 77, 108); l.y = Math.max(l.y, 153); }
+  else l.y = Math.max(l.y, 118);
+  if (l.input.example) paragraph(l, 'Cliente fictícia. Fotos dos materiais do estúdio usadas apenas para demonstrar o dossiê.', CW, M, 8);
+}
+function choices(l: Layout) {
+  const rows = l.input.choices || [];
+  if (!rows.length) {
+    if (l.input.content.resumo) { label(l, 'O que imaginamos'); paragraph(l, l.input.content.resumo); }
+    list(l, 'Suas preferências', l.input.content.preferencias);
+    list(l, 'Ideias para o ensaio', l.input.content.o_que_quer); return;
   }
-  cur.y += 2;
+  label(l, 'O que já combinamos');
+  for (let i = 0; i < rows.length; i += 2) choiceRow(l, rows.slice(i, i + 2));
 }
-
-function drawBullets(doc: jsPDF, cur: Cursor, items: string[], opts: { italic?: boolean; quote?: boolean } = {}) {
-  doc.setTextColor(INK);
-  doc.setFont('helvetica', opts.italic ? 'italic' : 'normal');
-  doc.setFontSize(10);
-  for (const item of items) {
-    const body = opts.quote ? `“${item}”` : item;
-    const lines = doc.splitTextToSize(body, CONTENT_W - 6);
-    ensureSpace(doc, cur, lines.length * 5 + 2);
-    doc.setTextColor(opts.quote ? GRAY : TEAL);
-    doc.text(opts.quote ? '›' : '•', MARGIN + 1, cur.y);
-    doc.setTextColor(INK);
-    lines.forEach((line: string, i: number) => {
-      doc.text(line, MARGIN + 6, cur.y);
-      if (i < lines.length - 1) cur.y += 5;
-    });
-    cur.y += 6;
+function choiceRow(l: Layout, rows: Array<{title: string; value: string}>) {
+  l.doc.setFont('helvetica', 'normal'); l.doc.setFontSize(10);
+  const values = rows.map(row => l.doc.splitTextToSize(text(l.doc, row.value), 79) as string[]);
+  const height = Math.max(...values.map(lines => lines.length)) * 5 + 13;
+  if (height > 90) {
+    for (const row of rows) { label(l, row.title); paragraph(l, row.value); } return;
   }
-  cur.y += 1;
+  room(l, height); const y = l.y;
+  rows.forEach((row, i) => {
+    const x = M + i * 88;
+    l.doc.setFont('helvetica', 'bold'); l.doc.setFontSize(9); l.doc.setTextColor(INK);
+    l.doc.text(text(l.doc, row.title), x, y);
+    l.doc.setFont('helvetica', 'normal'); l.doc.setFontSize(10); l.doc.setTextColor(MUTED);
+    l.doc.text(values[i], x, y + 6);
+  }); l.y += height;
 }
 
-function drawListSection(doc: jsPDF, cur: Cursor, title: string, items: string[] | undefined, opts: { color?: string; quote?: boolean } = {}) {
-  const list = (items || []).map((s) => String(s).trim()).filter(Boolean);
-  if (!list.length) return;
-  drawSectionTitle(doc, cur, title, opts.color || TEAL);
-  drawBullets(doc, cur, list, { quote: opts.quote, italic: opts.quote });
+function list(l: Layout, name: string, values: string[] | undefined) {
+  if (!values?.length) return;
+  label(l, name); for (const value of values) paragraph(l, value);
 }
-
-function drawPhotos(doc: jsPDF, cur: Cursor, title: string, photos: DossierPhoto[]) {
-  if (!photos.length) return;
-  drawSectionTitle(doc, cur, title);
-  const gap = 6;
-  const colW = (CONTENT_W - gap) / 2;
+function references(l: Layout) {
+  const photos = l.input.referencePhotos;
+  if (!photos.length && !l.input.missingPhotos) return;
+  page(l); title(l, 'Suas referências');
+  paragraph(l, l.input.example ? 'Exemplos visuais dos materiais do Estúdio Pitori.' : 'As imagens que você compartilhou para nos mostrar o que imagina.');
   for (let i = 0; i < photos.length; i += 2) {
+    l.doc.setFont('helvetica', 'normal'); l.doc.setFontSize(9);
     const row = photos.slice(i, i + 2);
-    const heights = row.map((p) => Math.min(colW * (p.height / p.width), 110));
-    const rowH = Math.max(...heights);
-    ensureSpace(doc, cur, rowH + 6);
+    const captions = row.map(p => l.doc.splitTextToSize(text(l.doc, p.caption || 'Imagem compartilhada como inspiração. O detalhe a aproveitar ainda precisa ser confirmado.'), 82) as string[]);
+    const height = 119 + Math.max(...captions.map(lines => lines.length)) * 4.2;
+    room(l, height);
+    const y = l.y;
     row.forEach((p, j) => {
-      const h = heights[j];
-      const w = Math.min(colW, h * (p.width / p.height));
-      const x = MARGIN + j * (colW + gap) + (colW - w) / 2;
-      const dataUrl = `data:image/jpeg;base64,${p.jpeg.toString('base64')}`;
-      doc.addImage(dataUrl, 'JPEG', x, cur.y, w, h);
+      const x = M + j * 88;
+      photo(l, p, x, y, 82, 100);
+      l.doc.setFont('helvetica', 'bold'); l.doc.setFontSize(8); l.doc.setTextColor(GOLD);
+      l.doc.text(`REFERÊNCIA ${String(i + j + 1).padStart(2, '0')}`, x, y + 107);
+      l.doc.setFont('helvetica', 'normal'); l.doc.setFontSize(9); l.doc.setTextColor(MUTED);
+      l.doc.text(captions[j], x, y + 113);
     });
-    cur.y += rowH + 6;
+    l.y = y + height;
+  }
+  if (l.input.missingPhotos) paragraph(l, `${l.input.missingPhotos} referência(s) não puderam ser recuperadas. Vamos conferir essas imagens antes de finalizar.`, CW, M, 9);
+}
+function questions(l: Layout) {
+  const pending = l.input.questions || [];
+  if (!pending.length) return;
+  room(l, 42); title(l, 'Só falta combinar');
+  paragraph(l, 'Você pode responder pelo WhatsApp. Vamos acrescentar suas escolhas aqui.');
+  pending.forEach((item, index) => { room(l, 20); label(l, `${index + 1}. ${item.title}`); paragraph(l, item.question); });
+}
+function internalNotes(l: Layout) {
+  if (l.input.audience !== 'internal') return;
+  page(l); title(l, 'Notas da equipe');
+  list(l, 'Combinados da venda', l.input.content.combinados);
+  list(l, 'Pagamentos', l.input.content.pagamentos);
+  list(l, 'Cuidados', l.input.content.evitar);
+  list(l, 'Links internos', l.input.content.links_importantes);
+  for (const p of l.input.paymentPhotos) { room(l, 100); photo(l, p, M, l.y, 80, 90); l.y += 100; }
+}
+function finish(l: Layout) {
+  room(l, 20); l.doc.setDrawColor(LINE); l.doc.line(M, l.y, W - M, l.y); l.y += 7;
+  paragraph(l, 'É assim que você imaginou? Se quiser mudar algo, é só nos contar.', CW, M, 11);
+  const pages = l.doc.getNumberOfPages();
+  for (let n = 1; n <= pages; n++) {
+    l.doc.setPage(n); brand(l); l.doc.setFont('helvetica', 'normal'); l.doc.setFontSize(7.5); l.doc.setTextColor(MUTED);
+    l.doc.text(l.input.audience === 'internal' ? 'Uso interno da equipe' : 'Preparado para conferirmos juntos', M, H - 12);
+    l.doc.text(`${n} / ${pages}`, W - M, H - 12, { align: 'right' });
   }
 }
-
-function drawFooters(doc: jsPDF) {
-  const pages = doc.getNumberOfPages();
-  for (let i = 1; i <= pages; i++) {
-    doc.setPage(i);
-    doc.setTextColor(GRAY);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.text('Dossiê gerado automaticamente pelo CRM — confira os combinados antes do ensaio.', MARGIN, FOOT_Y);
-    doc.text(`${i}/${pages}`, PAGE_W - MARGIN, FOOT_Y, { align: 'right' });
-  }
-}
-
-export function buildDossierPdf(d: DossierPdfInput): Buffer {
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
-  const cur: Cursor = { y: MARGIN };
-  drawHeader(doc, d, cur);
-
-  const c = d.content || {};
-  if (c.resumo && String(c.resumo).trim()) {
-    drawSectionTitle(doc, cur, 'Resumo');
-    drawParagraph(doc, cur, String(c.resumo).trim());
-  }
-  drawListSection(doc, cur, 'O que a cliente quer', c.o_que_quer);
-  drawListSection(doc, cur, 'Falas de referência', c.falas_referencia, { quote: true });
-  drawListSection(doc, cur, 'Preferências', c.preferencias);
-  drawListSection(doc, cur, 'Combinados', c.combinados);
-  drawListSection(doc, cur, 'Pagamentos e comprovantes', c.pagamentos);
-  drawListSection(doc, cur, 'Links importantes', c.links_importantes);
-  drawListSection(doc, cur, 'Evitar / cuidados', c.evitar, { color: '#b91c1c' });
-  drawPhotos(doc, cur, 'Fotos de referência da cliente', d.referencePhotos || []);
-  drawPhotos(doc, cur, 'Comprovantes de pagamento', d.paymentPhotos || []);
-  drawFooters(doc);
-  return Buffer.from(doc.output('arraybuffer'));
+export function buildDossierPdf(input: DossierPdfInput): Buffer {
+  const l: Layout = { doc: new jsPDF({ unit: 'mm', format: 'a4', compress: true }), y: M, input };
+  page(l, true); intro(l); choices(l); references(l); questions(l); internalNotes(l); finish(l);
+  return Buffer.from(l.doc.output('arraybuffer'));
 }
