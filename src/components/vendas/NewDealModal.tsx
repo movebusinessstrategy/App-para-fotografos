@@ -10,6 +10,8 @@ import { useSellers } from "../../hooks/useSellers";
 import { SellerPicker } from "./SellerPicker";
 import { useTiposEnsaio } from "../../hooks/useTiposEnsaio";
 import { useAuth } from "../../contexts/AuthContext";
+import { SaleDiscountField } from './SaleDiscountField';
+import { salePricing } from '../../utils/salePricing';
 
 const LEAD_SOURCES = ["WhatsApp", "Instagram", "Facebook", "Google", "Indicação", "Site", "Outro"];
 
@@ -49,9 +51,11 @@ const CATALOG_ICONS: Record<CatalogType, React.ReactNode> = {
   servico: <Tag size={11} />,
 };
 
-async function requireCreatedDeal(response: Response): Promise<{ id: number | string }> {
+async function requireCreatedDeal(response: Response): Promise<{ id: number | string; items_saved?: boolean; deduped?: boolean }> {
   const body = await response.json().catch(() => null) as {
     id?: number | string;
+    items_saved?: boolean;
+    deduped?: boolean;
     error?: string;
     message?: string;
   } | null;
@@ -60,7 +64,7 @@ async function requireCreatedDeal(response: Response): Promise<{ id: number | st
     throw new Error(body?.message || body?.error || `Não foi possível criar o negócio (HTTP ${response.status}).`);
   }
   if (!body?.id) throw new Error("O servidor não confirmou a criação do negócio.");
-  return { id: body.id };
+  return { id: body.id, items_saved: body.items_saved === true, deduped: body.deduped === true };
 }
 
 export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewDealModalProps) {
@@ -87,6 +91,7 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
     campaign_id: "",
   });
   const [items, setItems] = useState<PendingItem[]>([]);
+  const [discount, setDiscount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [campaigns, setCampaigns] = useState<SaleCampaign[]>([]);
@@ -179,6 +184,7 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
     setLoading(true);
     setSubmitError("");
     try {
+      const price = salePricing(valueToUse, discount);
       // Tipo de ensaio vai como meta nas notas — mesmo formato que a extensão
       // já usa/lê ("Tipo de ensaio: X" na primeira linha, via getDealShootType)
       const notesWithMeta = [
@@ -198,13 +204,16 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
           lead_source: form.lead_source || null,
           client_id: form.client_id ? Number(form.client_id) : null,
           campaign_id: form.campaign_id || null,
-          value: valueToUse,
+          value: price.net,
+          sale_gross_amount: price.gross,
+          discount: price.discount,
+          items,
         }),
       });
       const created = await requireCreatedDeal(dealRes);
 
       // 2. Adiciona itens (em paralelo)
-      if (created?.id && items.length > 0) {
+      if (created?.id && !created.items_saved && !created.deduped && items.length > 0) {
         await Promise.all(items.map(it => authFetch(`/api/deals/${created.id}/items`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -227,6 +236,7 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
         campaign_id: "",
       });
       setItems([]);
+      setDiscount(0);
       onCreated();
       onClose();
     } catch (error) {
@@ -462,6 +472,7 @@ export function NewDealModal({ open, stages, clients, onClose, onCreated }: NewD
           </div>
           )}
 
+          {canSeeFinance && <SaleDiscountField gross={valueToUse} discount={discount} onChange={setDiscount} />}
           <div className="grid grid-cols-2 gap-4">
             {canSeeFinance && (
             <div>

@@ -1,5 +1,5 @@
-import React, { useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { BarChart2, Workflow, Edit2, Inbox, LayoutGrid, List, ListChecks, Plus, Receipt, Search, Settings, Tag, Trash2, X } from "lucide-react";
@@ -78,6 +78,13 @@ export default function JobsPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [selectedJob, setSelectedJob] = useState<JobWithProduction | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedJob = Number(searchParams.get('job')) || null;
+  useEffect(() => {
+    if (!requestedJob) return;
+    const target = jobs.find(job => job.id === requestedJob);
+    if (target) setSelectedJob(target);
+  }, [requestedJob, jobs]);
   const [confirmModal, setConfirmModal] = useState<{
     open: boolean;
     onConfirm: () => void;
@@ -593,7 +600,7 @@ export default function JobsPage() {
       <JobDetailDrawer
         job={selectedJob}
         stages={stages.map(s => ({ id: s.id, name: s.name }))}
-        onClose={() => setSelectedJob(null)}
+        onClose={() => { setSelectedJob(null); setSearchParams(params => { params.delete('job'); return params; }); }}
         onStageChange={(jobId, stageId) => {
           handleStageChange(jobId, stageId);
           setSelectedJob(prev => prev ? { ...prev, production_stage: stageId, production_stage_entered_at: new Date().toISOString() } : null);

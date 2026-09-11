@@ -10,6 +10,9 @@ import { normalizeText } from "../../utils/normalizeText";
 import { todayLocalISO } from "../../utils/date";
 import { useTiposEnsaio, tiposComValorAtual } from "../../hooks/useTiposEnsaio";
 import { SearchableSelect } from "../ui/SearchableSelect";
+import { SaleDiscountField } from '../vendas/SaleDiscountField';
+import { SaleSessionFields, type SaleSessionDraft } from '../vendas/SaleSessionFields';
+import { dealGross, moneyCents, salePricing } from '../../utils/salePricing';
 
 type CatalogType = "combo" | "produto" | "servico";
 
@@ -60,6 +63,8 @@ interface DuplicateWarning {
 type CalendarSyncStatus = "synced" | "already_synced" | "not_connected" | "skipped" | "failed";
 
 interface ConversionResponse {
+  jobs?: Array<{ id: number; job_type: string; job_date: string | null; calendar_sync_status?: CalendarSyncStatus }>;
+  items_saved?: boolean;
   calendar_sync_status?: CalendarSyncStatus | null;
   calendar_synced?: boolean | null;
   google_event_id?: string | null;
@@ -147,6 +152,12 @@ function syncedCalendarFeedback(conversion: ConversionResponse): CompletionFeedb
 }
 
 function buildCompletionFeedback(conversion: ConversionResponse, createdJob: boolean): CompletionFeedback {
+  if (conversion.jobs?.length) {
+    const pending = conversion.jobs.filter(job => !job.job_date).length;
+    const failed = conversion.jobs.some(job => ['failed', 'not_connected'].includes(job.calendar_sync_status || ''));
+    return { tone: failed ? 'warning' : 'success', title: 'Venda salva', message:
+      `${conversion.jobs.length} ensaio(s) com cards e contratos independentes.${pending ? ` ${pending} aguardando definição de data.` : ''}${failed ? ' Há agendamentos pendentes de sincronização com o Google Agenda; confira na Produção.' : ''}` };
+  }
   if (!createdJob) {
     return { tone: "success", title: "Venda convertida", message: "A venda foi concluída com sucesso." };
   }
@@ -213,6 +224,9 @@ export function DealConversionModal({
   const [showClientPicker, setShowClientPicker] = useState(false);
   const [jobTypeTouched, setJobTypeTouched] = useState(false);
   const [sinalAmount, setSinalAmount] = useState(0);
+  const [saleDiscount, setSaleDiscount] = useState(0);
+  const [scheduleLater, setScheduleLater] = useState(false);
+  const [additionalSessions, setAdditionalSessions] = useState<SaleSessionDraft[]>([]);
   // Venda especial / Campanha (opcional). "" => sem campanha.
   const [campaignId, setCampaignId] = useState<string>("");
   const [campaigns, setCampaigns] = useState<SaleCampaign[]>([]);
@@ -340,10 +354,13 @@ export function DealConversionModal({
       setJobData((prev) => ({
         ...prev,
         job_name: workName,
-        amount: deal.value || 0,
+        amount: dealGross(deal),
         notes: deal.notes || "",
       }));
       setSinalAmount(0);
+      setSaleDiscount(Number(deal.discount) || 0);
+      setScheduleLater(false);
+      setAdditionalSessions([]);
       setNewItems([]);
       setSoldDate(todayLocalISO());
       setCampaignId(deal.campaign_id || "");
@@ -421,11 +438,11 @@ export function DealConversionModal({
 
   // Deriva o payment_status automaticamente do sinal
   const autoPaymentStatus = useMemo(() => {
-    const total = jobData.amount || 0;
+    const total = Math.max(0, jobData.amount - saleDiscount);
     if (sinalAmount <= 0) return "pending";
     if (sinalAmount >= total) return "paid";
     return "partial";
-  }, [sinalAmount, jobData.amount]);
+  }, [sinalAmount, jobData.amount, saleDiscount]);
 
   // Sincroniza payment_status com o sinal
   useEffect(() => {
@@ -472,6 +489,15 @@ export function DealConversionModal({
       client: conversionMode === "new" && createClient ? clientData : undefined,
       inviteEmail: conversionMode === "existing" ? existingInviteEmail.trim() : undefined,
       job: buildJobPayload(),
+      ...(createJob ? {
+        gross_amount: jobData.amount,
+        discount: saleDiscount,
+        sessions: [{ ...jobData, schedule_later: scheduleLater,
+          job_name: additionalSessions.length ? jobData.job_type : jobData.job_name,
+          gross_amount: (moneyCents(jobData.amount) - additionalSessions.reduce((sum, session) => sum + moneyCents(session.gross_amount), 0)) / 100,
+        }, ...additionalSessions],
+      } : {}),
+      items: newItems,
       campaign_id: campaignId || undefined,
       sinalAmount: sinalAmount > 0 ? sinalAmount : undefined,
       converted_at: soldDate || undefined,
@@ -525,7 +551,7 @@ export function DealConversionModal({
 
       const conversion: ConversionResponse = await response.json().catch(() => ({}));
       setDuplicateWarning(null);
-      const warnings = await persistNewItems();
+      const warnings = conversion.items_saved ? [] : await persistNewItems();
       setCompletionWarnings(warnings);
       setCompletionFeedback(buildCompletionFeedback(conversion, createJob));
     } catch (error) {
@@ -564,8 +590,15 @@ export function DealConversionModal({
   const hasRequiredClient = conversionMode === "existing"
     ? selectedClientId !== null 
     : (createClient ? (clientData.name && clientData.phone) : true);
-  const hasCompleteJobSchedule = hasRequiredJobSchedule(jobData);
-  const canSubmit = Boolean(hasRequiredClient) && (!createJob || hasCompleteJobSchedule);
+  const hasCompleteJobSchedule = (scheduleLater || hasRequiredJobSchedule(jobData)) && additionalSessions.every(session =>
+    Boolean(session.job_type) && (session.schedule_later || hasRequiredJobSchedule(session)));
+  let validPricing = true;
+  try {
+    const price = salePricing(jobData.amount, saleDiscount);
+    validPricing = moneyCents(sinalAmount) <= moneyCents(price.net)
+      && additionalSessions.reduce((sum, session) => sum + moneyCents(session.gross_amount), 0) <= moneyCents(price.gross);
+  } catch { validPricing = false; }
+  const canSubmit = Boolean(hasRequiredClient) && (!createJob || (hasCompleteJobSchedule && validPricing));
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[90] flex items-center justify-center p-4">
@@ -827,7 +860,7 @@ export function DealConversionModal({
 
           {/* ====== RESUMO FINANCEIRO ====== */}
           {(() => {
-            const total = jobData.amount || 0;
+            const total = Math.max(0, jobData.amount - saleDiscount);
             const restante = Math.max(0, total - sinalAmount);
             const pct = total > 0 ? Math.min(100, (sinalAmount / total) * 100) : 0;
             const pctFormatted = pct.toFixed(0);
@@ -1208,7 +1241,7 @@ export function DealConversionModal({
                   <div className="w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-900/50 flex items-center justify-center">
                     <Briefcase size={16} className="text-purple-600 dark:text-purple-400" />
                   </div>
-                  <span className="font-semibold text-gray-900 dark:text-white">Dados do Trabalho</span>
+                  <span className="font-semibold text-gray-900 dark:text-white">Ensaios desta venda</span>
                 </div>
                 {expandedSections.job ? (
                   <ChevronUp size={18} className="text-gray-400" />
@@ -1225,6 +1258,9 @@ export function DealConversionModal({
                     <span>A <strong>Data</strong> e o <strong>Início</strong> abaixo agendam o ensaio na sua <strong>Agenda (Google)</strong> e enviam o convite pro e-mail do cliente. Sem Google conectado, fica só registrado aqui.</span>
                   </div>
                   {/* Linha 1: Tipo, Data, Horários */}
+                  <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+                    <input type="checkbox" checked={scheduleLater} onChange={e => setScheduleLater(e.target.checked)} /> Definir data do primeiro ensaio depois
+                  </label>
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                     <div>
                       <label className={labelClasses}>Tipo *</label>
@@ -1247,6 +1283,7 @@ export function DealConversionModal({
                       <label className={labelClasses}>Data *</label>
                       <input
                         type="date"
+                        disabled={scheduleLater}
                         value={jobData.job_date}
                         onChange={(e) => setJobData((p) => ({ ...p, job_date: e.target.value }))}
                         className={`${inputClasses} [color-scheme:light] dark:[color-scheme:dark]`}
@@ -1256,6 +1293,7 @@ export function DealConversionModal({
                       <label className={labelClasses}>Início *</label>
                       <input
                         type="time"
+                        disabled={scheduleLater}
                         value={jobData.job_time}
                         onChange={(e) => setJobData((p) => ({ ...p, job_time: e.target.value }))}
                         className={`${inputClasses} [color-scheme:light] dark:[color-scheme:dark]`}
@@ -1265,6 +1303,7 @@ export function DealConversionModal({
                       <label className={labelClasses}>Término</label>
                       <input
                         type="time"
+                        disabled={scheduleLater}
                         value={jobData.job_end_time}
                         onChange={(e) => setJobData((p) => ({ ...p, job_end_time: e.target.value }))}
                         className={`${inputClasses} [color-scheme:light] dark:[color-scheme:dark]`}
@@ -1286,9 +1325,11 @@ export function DealConversionModal({
                   {/* Linha 3: Valor, Forma de pagamento, Status pagamento */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div>
-                      <label className={labelClasses}>Valor Total *</label>
+                      <label className={labelClasses}>Valor da venda antes do desconto *</label>
                       <input
                         type="number"
+                        min="0"
+                        step="0.01"
                         value={jobData.amount}
                         onChange={(e) => setJobData((p) => ({ ...p, amount: Number(e.target.value) }))}
                         className={`${inputClasses} [color-scheme:light] dark:[color-scheme:dark]`}
@@ -1325,24 +1366,8 @@ export function DealConversionModal({
                     </div>
                   </div>
 
-                  {/* Linha 4: Status do trabalho */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className={labelClasses}>Status do Trabalho</label>
-                      <select
-                        value={jobData.status}
-                        onChange={(e) => setJobData((p) => ({ ...p, status: e.target.value }))}
-                        className={selectClasses}
-                      >
-                        <option value="scheduled" className="bg-white dark:bg-gray-800">Agendado</option>
-                        <option value="in_progress" className="bg-white dark:bg-gray-800">Em Andamento</option>
-                        <option value="editing" className="bg-white dark:bg-gray-800">Em Edição</option>
-                        <option value="completed" className="bg-white dark:bg-gray-800">Concluído</option>
-                        <option value="delivered" className="bg-white dark:bg-gray-800">Entregue</option>
-                        <option value="cancelled" className="bg-white dark:bg-gray-800">Cancelado</option>
-                      </select>
-                    </div>
-                  </div>
+                  <SaleDiscountField gross={jobData.amount} discount={saleDiscount} onChange={setSaleDiscount} />
+                  <SaleSessionFields sessions={additionalSessions} onChange={setAdditionalSessions} types={tiposEnsaio} gross={jobData.amount} discount={saleDiscount} />
 
                   {/* Linha 5: Notas do trabalho */}
                   <div>
@@ -1455,7 +1480,7 @@ export function DealConversionModal({
               )}
               <div className="flex items-center justify-between">
                 <p className="text-xs text-gray-400 dark:text-gray-500">
-                  {createJob && !hasCompleteJobSchedule
+                  {createJob && !validPricing ? 'Revise o desconto, a divisão dos valores e o sinal antes de continuar.' : createJob && !hasCompleteJobSchedule
                     ? "Preencha tipo, data e horário do ensaio para continuar"
                     : <>
                       {conversionMode === "existing" && selectedClientId && `Venda vinculada a ${selectedClient?.name || "cliente selecionado"}`}

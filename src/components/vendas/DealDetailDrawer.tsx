@@ -14,6 +14,9 @@ import { authFetch } from "../../utils/authFetch";
 import { useApi } from "../../utils/useApi";
 import { parseDate } from "../../utils/date";
 import { celebrateSale } from "../../utils/saleCelebration";
+import { SaleDiscountField } from './SaleDiscountField';
+import { SaleSessionList } from './SaleSessionList';
+import { dealGross, salePricing } from '../../utils/salePricing';
 import { DealConversionModal } from "../pipeline/DealConversionModal";
 import { LostDealModal } from "../pipeline/LostDealModal";
 import { useSellers } from "../../hooks/useSellers";
@@ -232,6 +235,7 @@ export function DealDetailDrawer({
 
   // ── Inline editing states ──────────────────────────────────────────────────
   const [dealValueStr, setDealValueStr] = useState("");   // string para permitir apagar
+  const [saleDiscount, setSaleDiscount] = useState(0);
   const [dealDate, setDealDate] = useState("");
   const [dealPriority, setDealPriority] = useState("medium");
   const [savingBasics, setSavingBasics] = useState(false);
@@ -365,7 +369,7 @@ export function DealDetailDrawer({
       if (data.item) {
         setLocalItems(prev => prev.map(i => i.id === tempItem.id ? data.item : i));
       }
-      setDealValueStr(Number(data.total) > 0 ? String(data.total) : '');
+      setDealValueStr(String(localItems.reduce((sum, item) => sum + item.catalog_value * item.quantidade, 0) + value));
       onUpdate({ silent: true });
     } catch (error: any) {
       setLocalItems(prev => prev.filter(i => i.id !== tempItem.id));
@@ -383,7 +387,7 @@ export function DealDetailDrawer({
       const res = await authFetch(`/api/deal-items/${itemId}`, { method: 'DELETE' });
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error || 'Não foi possível remover o item');
-      setDealValueStr(Number(data?.total) > 0 ? String(data.total) : '');
+      setDealValueStr(String(localItems.filter(item => item.id !== itemId).reduce((sum, item) => sum + item.catalog_value * item.quantidade, 0)));
       onUpdate({ silent: true });
     } catch (error: any) {
       if (removed) setLocalItems(prev => [...prev, removed]);
@@ -406,7 +410,7 @@ export function DealDetailDrawer({
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error || 'Não foi possível alterar a quantidade');
-      setDealValueStr(Number(data?.total) > 0 ? String(data.total) : '');
+      setDealValueStr(String(localItems.reduce((sum, row) => sum + row.catalog_value * (row.id === itemId ? newQty : row.quantidade), 0)));
       onUpdate({ silent: true });
     } catch (error: any) {
       setLocalItems(prev => prev.map(i => i.id === itemId ? { ...i, quantidade: item.quantidade } : i));
@@ -434,7 +438,8 @@ export function DealDetailDrawer({
         contact_instagram: deal.contact_instagram || "",
       });
       setSelectedClientId(deal.client_id || null);
-      setDealValueStr(deal.value ? String(deal.value) : "");
+      setDealValueStr(String(dealGross(deal)));
+      setSaleDiscount(Number(deal.discount) || 0);
       setDealDate(deal.expected_close_date || "");
       setDealPriority(deal.priority || "medium");
       setDealTemperature(deal.temperature || 'cold');
@@ -563,8 +568,15 @@ export function DealDetailDrawer({
         expected_close_date: dealDate || null,
         priority: dealPriority as Deal['priority'],
       };
-      if (canSeeFinance) updates.value = parseFloat(dealValueStr) || 0;
+      if (canSeeFinance) {
+        const price = salePricing(Number(dealValueStr) || 0, saleDiscount);
+        updates.sale_gross_amount = price.gross;
+        updates.discount = price.discount;
+      }
       await updateDeal(updates);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Não foi possível salvar os valores.');
+      setSaveState('error');
     } finally {
       setSavingBasics(false);
     }
@@ -701,7 +713,7 @@ export function DealDetailDrawer({
   const pendingFollowUp = followUpTasks.find(task => task.status === 'pending' || task.status === 'processing');
   const latestFollowUp = followUpTasks[0];
   const basicsDirty =
-    (canSeeFinance && (parseFloat(dealValueStr) || 0) !== (Number(deal.value) || 0)) ||
+    (canSeeFinance && ((parseFloat(dealValueStr) || 0) !== dealGross(deal) || saleDiscount !== (Number(deal.discount) || 0))) ||
     (dealDate || '') !== (deal.expected_close_date || '') ||
     dealPriority !== (deal.priority || 'medium');
   const packageHeadline = localItems.length > 0
@@ -1026,7 +1038,7 @@ export function DealDetailDrawer({
                 <div className="flex-shrink-0 text-right">
                   {canSeeFinance && (
                     <p className="text-sm font-bold tabular-nums text-gray-950 dark:text-white">
-                      R$ {(localItems.length > 0 ? itemsTotal : Number(deal.value) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      R$ {(Number(deal.value) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                     </p>
                   )}
                   <button
@@ -1042,6 +1054,8 @@ export function DealDetailDrawer({
             </div>
 
             <div className="flex flex-col gap-3">
+            {deal.converted && <SaleSessionList dealId={deal.id} />}
+            {canSeeFinance && <SaleDiscountField gross={Number(dealValueStr) || 0} discount={saleDiscount} onChange={setSaleDiscount} />}
 
             {/* ── Dados comerciais sempre editáveis ── */}
             <div className="-order-2 rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800/45">

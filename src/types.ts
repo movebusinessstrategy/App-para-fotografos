@@ -40,6 +40,8 @@ export interface Client {
 }
 
 export interface Job {
+  sale_gross_amount?: number | null;
+  sale_discount_amount?: number;
   id: number;
   client_id: number;
   client_name?: string;
@@ -175,6 +177,8 @@ export interface Deal {
   client_id: number | null;
   title: string;
   value: number;
+  discount?: number;
+  sale_gross_amount?: number | null;
   stage: DealStage;
   labels?: string[];
   campaign_id?: string | null;

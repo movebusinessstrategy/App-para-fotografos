@@ -1,4 +1,6 @@
 import express from 'express';
+import { convertSaleSessions, normalizeSaleItems } from './sale-sessions.js';
+import { dealGross, jobSaleBase, moneyCents, salePricing } from './src/utils/salePricing.js';
 import { nonOverlappingTask } from './lib/non-overlapping-task.js';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
@@ -1692,7 +1694,7 @@ async function startServer() {
   });
 
   // Health check — used by frontend to warm up Render free tier
-  app.get('/api/health', (_req, res) => res.json({ ok: true, dossierVersion: 'conversation-photos-v3', revision: process.env.RENDER_GIT_COMMIT || null }));
+  app.get('/api/health', (_req, res) => res.json({ ok: true, saleSessionsVersion: 1, dossierVersion: 'conversation-photos-v3', revision: process.env.RENDER_GIT_COMMIT || null }));
 
   // ============ DATA DELETION (LGPD + Meta App Review requirement) ============
   // 2 endpoints públicos (sem requireAuth) pra atender:
@@ -2330,7 +2332,7 @@ async function startServer() {
   }
   // Remove campos monetários de um job antes de enviar pro papel de produção.
   function stripJobMoney(job: any) {
-    const { amount, amount_paid, payment_status, payment_method, ...rest } = job;
+    const { amount, amount_paid, payment_status, payment_method, sale_gross_amount, sale_discount_amount, ...rest } = job;
     return rest;
   }
   // Membro SEM permissão 'finance' (e que não é dono/admin). Mesma regra do
@@ -2346,7 +2348,7 @@ async function startServer() {
     const items = Array.isArray(deal.items)
       ? deal.items.map((it: any) => ({ ...it, value: null, catalog_value: null }))
       : deal.items;
-    return { ...deal, value: null, estimated_value: null, items };
+    return { ...deal, value: null, estimated_value: null, discount: null, sale_gross_amount: null, items };
   }
 
   // ============ SUPER-ADMIN MIDDLEWARE ============
@@ -5145,7 +5147,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // derivados no .map abaixo; clients(name) é a única relação (só expõe name).
     const { data: jobs } = await supabase
       .from('jobs')
-      .select('id, client_id, deal_id, job_type, job_name, job_date, job_time, job_end_time, amount, payment_status, payment_method, status, production_stage, production_stage_entered_at, position, assignee_id, labels, cover_image_url, notes, created_at, google_event_id, clients(name)')
+      .select('id, client_id, deal_id, job_type, job_name, job_date, job_time, job_end_time, amount, sale_session_index, sale_gross_amount, sale_discount_amount, payment_status, payment_method, status, production_stage, production_stage_entered_at, position, assignee_id, labels, cover_image_url, notes, created_at, google_event_id, clients(name)')
       .eq('user_id', userId)
       .order('job_date', { ascending: false })
       .limit(10000);
@@ -5439,6 +5441,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ criados });
   });
 
+  async function hasMultipleSaleJobs(db: SupabaseClient, userId: string, dealId: number | null) {
+    if (!dealId) return false;
+    const { data, error } = await db.from('jobs').select('id').eq('user_id', userId).eq('deal_id', dealId).limit(2);
+    if (error) throw error;
+    return (data || []).length > 1;
+  }
+
   app.put('/api/jobs/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
@@ -5452,6 +5461,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .single();
 
     if (!oldJob) return res.status(404).json({ error: 'Job not found' });
+
+    if (status === 'cancelled' && await hasMultipleSaleJobs(supabase, userId, oldJob.deal_id)) {
+      return res.status(409).json({ error: 'Cancele os ensaios juntos pela venda para preservar o financeiro.' });
+    }
 
     const scheduleChanged = job_date !== undefined || job_time !== undefined;
     const effectiveJobDate = job_date !== undefined ? job_date : oldJob.job_date;
@@ -5486,7 +5499,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (job_name !== undefined) updatePayload.job_name = job_name;
     // Papel de produção NUNCA grava valores (mesmo que o front mande).
     const prodOnly = isProductionOnly(req);
-    if (amount !== undefined && !prodOnly) updatePayload.amount = amount;
+    if (amount !== undefined && !prodOnly && jobSaleBase(oldJob) === null) updatePayload.amount = amount;
     if (payment_method !== undefined && !prodOnly) updatePayload.payment_method = payment_method;
     if (payment_status !== undefined && !prodOnly) updatePayload.payment_status = payment_status;
     if (status !== undefined) updatePayload.status = status || oldJob.status;
@@ -5671,12 +5684,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const { data: job } = await supabase
         .from('jobs')
         // job_name/job_date entram pro histórico de atividade (quem apagou o quê)
-        .select('google_event_id, job_name, job_date')
+        .select('google_event_id, job_name, job_date, deal_id')
         .eq('id', req.params.id)
         .eq('user_id', userId)
         .single();
 
       if (!job) return res.status(404).json({ error: 'Job not found' });
+
+      if (await hasMultipleSaleJobs(supabase, userId, job.deal_id)) {
+        return res.status(409).json({ error: 'Este ensaio faz parte de uma venda com vários ensaios. Cancele a venda para preservar contratos e pagamentos.' });
+      }
 
       if (job.google_event_id) {
         const deletion = await deleteGoogleCalendarEvent(supabase, job.google_event_id, userId);
@@ -6137,20 +6154,20 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const jobId = Number(req.params.id);
 
     // Verifica ownership do job
-    const { data: job } = await supabase.from('jobs').select('id, amount, notes, payment_method, payment_status, job_type, job_name').eq('id', jobId).eq('user_id', userId).single();
+    const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).eq('user_id', userId).single();
     if (!job) return res.status(404).json({ error: 'Job not found' });
 
     // Busca deal vinculado (converted_job_id = jobId)
     const { data: deal } = await supabase
       .from('deals')
-      .select('id, value, title, discount')
-      .eq('converted_job_id', jobId)
+      .select('*')
+      .eq(job.deal_id ? 'id' : 'converted_job_id', job.deal_id || jobId)
       .eq('user_id', userId)
       .maybeSingle();
 
     // Busca deal_items do deal vinculado
     let dealItems: any[] = [];
-    if (deal?.id) {
+    if (deal?.id && jobSaleBase(job) === null) {
       const { data } = await adminClient.from('deal_items').select('*').eq('deal_id', deal.id).order('created_at');
       dealItems = data || [];
     }
@@ -6184,17 +6201,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     // Recalcula o total real a partir dos itens (auto-corrige payment_status desatualizado)
     const dealItemsTotal = dealItems.reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
-    const jobItemsTotal = jobItems.reduce((s: number, i: any) => s + (i.catalog_value || 0) * (i.quantidade || 1), 0);
+    const jobItemsTotal = jobItems.reduce((s: number, i: any) => s + Math.max(0, (i.catalog_value || 0) * (i.quantidade || 1) - (i.discount_value || 0)), 0);
     // Deal jobs: total = deal_items (se houver) ou deal.value (fallback) + job_items
     // Non-deal jobs: total = job.amount (base manual) + job_items (extras), never overwrite job.amount
     // Desconto do pacote (deal.discount) abate só quando o pacote é sintético (sem deal_items)
     const dealDiscount = Math.max(0, Number((deal as any)?.discount) || 0);
-    const packageGross = deal?.value || job.amount || 0;
+    const packageGross = deal ? dealGross(deal) : job.amount || 0;
     const dealBase = dealItems.length > 0 ? dealItemsTotal : Math.max(0, packageGross - dealDiscount);
-    const realTotal = deal?.id
+    const allocatedBase = jobSaleBase(job);
+    const realTotal = allocatedBase !== null ? allocatedBase + jobItemsTotal : deal?.id
       ? dealBase + jobItemsTotal
       : job.amount + jobItemsTotal;
-    const correctStatus = totalPago <= 0 ? 'pending' : (realTotal > 0 && totalPago >= realTotal) ? 'paid' : 'partial';
+    const correctStatus = realTotal === 0 ? 'paid' : totalPago <= 0 ? 'pending' : totalPago >= realTotal ? 'paid' : 'partial';
 
     // O GET é estritamente somente-leitura. Divergências são devolvidas como
     // aviso e só podem ser persistidas por uma ação explícita de escrita.
@@ -6205,7 +6223,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // - deal jobs sem deal_items → pacote sintético (nome/valor/desconto, source 'deal')
     // - jobs sem negócio vinculado → valor base do trabalho editável (source 'job')
     let packageItem: { name: string; value: number; discount: number; source: 'deal' | 'job' } | null = null;
-    if (deal?.id) {
+    if (allocatedBase !== null) {
+      packageItem = { name: job.job_name || job.job_type, value: Number(job.sale_gross_amount), discount: Number(job.sale_discount_amount), source: 'deal' };
+    } else if (deal?.id) {
       if (dealItems.length === 0 && packageGross > 0) {
         packageItem = {
           name: (deal as any)?.title || (job as any).job_name || (job as any).job_type || 'Pacote',
@@ -6229,8 +6249,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       payments,
       totalPago,
       jobAmount: realTotal,
+      sale_gross_amount: job.sale_gross_amount ?? null,
+      sale_discount_amount: job.sale_discount_amount ?? 0,
       payment_status: correctStatus,
       packageItem,
+      sale: deal ? { id: deal.id, gross: dealGross(deal), discount: deal.discount, value: deal.value } : null,
       legacy_signal_amount: legacySignalAmount > 0 ? legacySignalAmount : null,
       financial_warnings: [
         ...(legacySignalAmount > 0
@@ -6252,8 +6275,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const adminClient = supabaseAdmin || supabase;
     const jobId = Number(req.params.id);
 
-    const { data: job } = await supabase.from('jobs').select('id').eq('id', jobId).eq('user_id', userId).single();
+    const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).eq('user_id', userId).single();
     if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (jobSaleBase(job) !== null) return res.status(409).json({ error: 'Edite o desconto no campo Desconto da venda. O valor deste ensaio é calculado pela venda.' });
 
     const { data: deal } = await supabase
       .from('deals')
@@ -6298,8 +6322,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const adminClient = supabaseAdmin || supabase;
     const jobId = Number(req.params.id);
 
-    const { data: job } = await supabase.from('jobs').select('id, amount').eq('id', jobId).eq('user_id', userId).single();
+    const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).eq('user_id', userId).single();
     if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (jobSaleBase(job) !== null && Number(req.body.discount) > 0) return res.status(409).json({ error: 'Use o campo Desconto da venda antes de registrar o pagamento.' });
 
     const { amount, description, payment_date, payment_method, discount } = req.body;
     const discountVal = Math.max(0, Number(discount) || 0);
@@ -6419,7 +6444,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   // Helper: recalcula amount e payment_status de um job a partir de todos os itens
   async function recalcJobFinancials(supabase: SupabaseClient, adminClient: SupabaseClient, jobId: number, userId: string, dealBaseOverride?: number) {
-    const { data: job } = await supabase.from('jobs').select('id, amount').eq('id', jobId).eq('user_id', userId).single();
+    const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).eq('user_id', userId).single();
     if (!job) return { newAmount: 0, payment_status: 'pending' };
 
     // Busca deal vinculado
@@ -6432,7 +6457,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }, 0);
 
     let realTotal: number;
-    if (deal?.id) {
+    if (jobSaleBase(job) !== null) {
+      realTotal = jobSaleBase(job)! + jobItemsTotal;
+      const { error } = await supabase.from('jobs').update({ amount: realTotal }).eq('id', jobId).eq('user_id', userId);
+      if (error) throw error;
+    } else if (deal?.id) {
       // Job convertido de deal: base = soma dos deal_items (se houver) ou deal.value como fallback.
       // Sem fallback, vendas sem itens detalhados zeravam o job.amount.
       let dealBase: number;
@@ -6459,7 +6488,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const { data: allPayments } = await adminClient.from('job_payments').select('amount').eq('job_id', jobId);
     const totalPago = (allPayments || []).reduce((s: number, p: any) => s + (p.amount || 0), 0);
-    const newStatus = totalPago <= 0 ? 'pending' : (realTotal > 0 && totalPago >= realTotal) ? 'paid' : 'partial';
+    const newStatus = realTotal === 0 ? 'paid' : totalPago <= 0 ? 'pending' : totalPago >= realTotal ? 'paid' : 'partial';
     await supabase.from('jobs').update({ payment_status: newStatus }).eq('id', jobId).eq('user_id', userId);
 
     return { newAmount: realTotal, payment_status: newStatus };
@@ -16449,6 +16478,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     const supabase = (req as any).supabase as SupabaseClient;
     const stages = await ensurePipelineStages(supabase, userId);
     const { client_id, title, value, stage, priority, expected_close_date, next_follow_up, notes, assigned_to, contact_name, contact_phone, contact_email, lead_source, campaign_id } = req.body;
+    let submittedPricing: ReturnType<typeof salePricing> | null = null;
+    if (req.body.sale_gross_amount !== undefined && !memberLacksFinance(req)) {
+      try { submittedPricing = salePricing(req.body.sale_gross_amount, req.body.discount); }
+      catch (error: any) { return res.status(400).json({ error: error.message }); }
+    }
     const nowIso = new Date().toISOString();
     const stageId = stageIdOrDefault(stages, stage);
     const targetStage = stages.find((s) => s.id === stageId);
@@ -16480,7 +16514,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       contact_phone: canonicalPhone,
       contact_email: contact_email || null,
       lead_source: lead_source || null,
-      value: value || 0,
+      value: submittedPricing ? submittedPricing.net : value || 0,
+      ...(submittedPricing ? { sale_gross_amount: submittedPricing.gross, discount: submittedPricing.discount } : {}),
       stage: stageId,
       stage_entered_at: nowIso,
       current_stage_entered_at: nowIso,
@@ -16502,6 +16537,23 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       updated_at: nowIso,
     };
 
+      // Save the complete catalog subtotal and discount together. Adding items
+      // one at a time would temporarily shrink the subtotal and clip the discount.
+      if (submittedPricing) {
+        try {
+          const items = normalizeSaleItems(req.body.items);
+          if (items.length && moneyCents(items.reduce((sum, item) => sum + item.catalog_value * item.quantidade, 0)) !== moneyCents(submittedPricing.gross)) {
+            return res.status(400).json({ error: 'O valor dos itens precisa corresponder ao valor da venda antes do desconto.' });
+          }
+          const { data, error } = await (supabaseAdmin || supabase).rpc('create_deal_priced', {
+            p_user_id: userId, p_payload: payload, p_items: items,
+          });
+          if (error) throw error;
+          return res.json(data);
+        } catch (error: any) {
+          return res.status(400).json({ error: error.message || 'Não foi possível salvar a venda e seu desconto.' });
+        }
+      }
       const { data, error } = await supabase.from('deals').insert(payload).select().single();
       if (error) {
         console.warn('Falha ao inserir com campos estendidos, tentando fallback', error.message);
@@ -16852,6 +16904,33 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
   });
 
+  app.put('/api/deals/:id/pricing', requireAuth, denyProductionOnly, async (req, res) => {
+    if (memberLacksFinance(req)) return res.status(403).json({ error: 'Sem permissão financeira.' });
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data: deal } = await supabase.from('deals').select('*').eq('id', req.params.id).eq('user_id', userId).single();
+    if (!deal) return res.status(404).json({ error: 'Venda não encontrada.' });
+    try {
+      const price = salePricing(req.body.gross ?? dealGross(deal), req.body.discount ?? deal.discount ?? 0);
+      const { data, error } = await (supabaseAdmin || supabase).rpc('update_deal_pricing', {
+        p_user_id: userId, p_deal_id: Number(deal.id), p_gross: price.gross, p_discount: price.discount,
+      });
+      if (error) throw error;
+      return res.json(data);
+    } catch (error: any) { return res.status(400).json({ error: error.message }); }
+  });
+
+  app.get('/api/deals/:id/sessions', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const { data: deal } = await supabase.from('deals').select('id,converted_job_id').eq('id', req.params.id).eq('user_id', userId).single();
+    if (!deal) return res.status(404).json({ error: 'Venda não encontrada.' });
+    const { data, error } = await supabase.from('jobs').select('id,job_name,job_type,job_date,production_stage,status')
+      .eq('user_id', userId).or(`deal_id.eq.${deal.id},id.eq.${Number(deal.converted_job_id) || 0}`).order('id');
+    if (error) return res.status(500).json({ error: 'Não foi possível carregar os ensaios.' });
+    return res.json(data || []);
+  });
+
   app.put('/api/deals/:id', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
@@ -16861,7 +16940,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const { data: existing } = await supabase
       .from('deals')
-      .select('id, stage, stage_entered_at, stage_history, current_stage_entered_at, contact_phone, contact_name, title, converted, converted_at, converted_client_id, converted_job_id')
+      .select('*')
       .eq('id', dealId)
       .eq('user_id', userId)
       .single();
@@ -16885,6 +16964,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (memberLacksFinance(req)) {
       delete updates.value;
       delete updates.estimated_value;
+      delete updates.discount;
+      delete updates.sale_gross_amount;
     }
     const stageChanged = updates.stage && updates.stage !== existing.stage;
 
@@ -16921,6 +17002,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       syncWhatsAppStageLabel(userId, existing.contact_phone, existing.stage, updates.stage, stages);
     }
 
+    if (updates.sale_gross_amount !== undefined || updates.discount !== undefined) {
+      try {
+        const price = salePricing(updates.sale_gross_amount ?? dealGross(existing), updates.discount ?? existing.discount ?? 0);
+        const { error } = await (supabaseAdmin || supabase).rpc('update_deal_pricing', {
+          p_user_id: userId, p_deal_id: dealId, p_gross: price.gross, p_discount: price.discount,
+        });
+        if (error) throw error;
+        delete updates.sale_gross_amount; delete updates.discount; delete updates.value;
+      } catch (error: any) { return res.status(400).json({ error: error.message }); }
+    } else if (existing.sale_gross_amount != null) {
+      delete updates.value;
+    }
     const { error } = await supabase.from('deals').update(updates).eq('id', dealId).eq('user_id', userId);
     if (error) return res.status(500).json({ error: error.message });
 
@@ -16978,6 +17071,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .single();
 
     if (!existing) return res.status(404).json({ error: 'Deal not found' });
+
+    if (await hasMultipleSaleJobs(supabase, userId, existing.id)) {
+      return res.status(409).json({ error: 'Use Cancelar venda para preservar os contratos e pagamentos dos ensaios.' });
+    }
 
     // Excluir o lead libera a data pré-reservada (senão fica um 🔒 órfão na agenda)
     try {
@@ -17152,6 +17249,41 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('user_id', userId)
       .single();
     if (!deal) return res.status(404).json({ error: 'Deal not found' });
+
+    if (req.body.sessions !== undefined) {
+      if (memberLacksFinance(req)) return res.status(403).json({ error: 'Sem permissão para fechar valores da venda.' });
+      if (!supabaseAdmin) return res.status(503).json({ error: 'Conversão indisponível. Tente novamente.' });
+      try {
+        const processes = await ensureProductionProcesses(supabase, userId);
+        const productionStages = await ensureProductionStagesV2(supabase, userId);
+        const firstProcess = [...processes].filter((p: any) => !p.is_special).sort((a, b) => a.position - b.position)[0];
+        const entryStage = productionStages.filter(s => s.process_id === firstProcess?.id).sort((a, b) => a.position - b.position)[0];
+        if (!entryStage) return res.status(400).json({ error: 'Configure uma etapa de entrada na produção.' });
+        const conversion = await convertSaleSessions({ db: supabaseAdmin, userId, deal, body: req.body, entryStage: entryStage.id,
+          updates: { stage: wonStage.id, converted_at: soldAtIso, campaign_id,
+            stage_history: appendStageHistory(deal.stage_history, wonStage.id, wonStage.name, nowIso) } });
+        const convertedJobs = [];
+        for (const session of conversion.jobs || []) {
+          const calendar = session.job_date ? await syncConvertedJobCalendar(supabase, session.id, userId) : { calendar_sync_status: 'skipped' };
+          convertedJobs.push({ ...session, ...calendar });
+        }
+        if (!conversion.already_converted) {
+          await recordStageEvent(supabase, userId, Number(deal.id), deal.stage, wonStage.id, deal.current_stage_entered_at || deal.stage_entered_at);
+          await logActivity(req, { action: 'convert', entityType: 'deal', entityId: deal.id,
+            summary: `Venda fechada com ${convertedJobs.length} ensaio(s) independentes`, details: { job_ids: convertedJobs.map(j => j.id) } });
+          syncWhatsAppStageLabel(userId, deal.contact_phone, deal.stage, wonStage.id, stages);
+          await supabase.from('opportunities').update({ status: 'converted' })
+            .eq('user_id', userId).eq('client_id', conversion.client_id)
+            .in('status', ['em_kanban', 'future', 'active', 'urgent', 'pendente']);
+          generateAlignmentDossier(userId, Number(deal.id)).catch((error: any) =>
+            console.warn('[dossie] geração no convert falhou:', error?.message));
+        }
+        return res.json({ ...conversion, jobs: convertedJobs });
+      } catch (error: any) {
+        if (error.code === 'duplicate_job') return res.status(409).json({ error: error.code, message: error.message, existing: error.existing });
+        return res.status(400).json({ error: error.message || 'Não foi possível salvar os ensaios.' });
+      }
+    }
 
     const existingConversion = await repairAlreadyConvertedDeal(supabase, userId, deal, wonStage);
     if (existingConversion?.status) {
@@ -17587,6 +17719,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   async function syncDealAndJob(supabase: SupabaseClient, adminClient: SupabaseClient, dealId: number, userId: string) {
     const { data: items } = await adminClient.from('deal_items').select('catalog_value, quantidade').eq('deal_id', dealId);
     const total = (items || []).reduce((s: number, i: any) => s + ((i.catalog_value || 0) * (i.quantidade || 1)), 0);
+    const { data: currentDeal } = await supabase.from('deals').select('*').eq('id', dealId).eq('user_id', userId).single();
+    if (currentDeal?.sale_gross_amount != null) {
+      const { error } = await adminClient.rpc('update_deal_pricing', { p_user_id: userId, p_deal_id: dealId,
+        p_gross: total, p_discount: Math.min(total, Number(currentDeal.discount) || 0) });
+      if (error) throw error;
+      return { total: Math.max(0, total - Number(currentDeal.discount || 0)), job: null };
+    }
     await supabase.from('deals').update({ value: total }).eq('id', dealId).eq('user_id', userId);
     const { data: deal } = await supabase.from('deals').select('converted_job_id').eq('id', dealId).eq('user_id', userId).maybeSingle();
     let job: any = null;
@@ -22019,6 +22158,24 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (dealErr || !deal) {
       console.warn('[cancel-sale] deal não encontrado:', dealErr?.message);
       return res.status(404).json({ error: 'Venda não encontrada' });
+    }
+
+    const { data: groupedJobs, error: groupedError } = await supabase.from('jobs').select('id,google_event_id')
+      .eq('user_id', userId).eq('deal_id', deal.id);
+    if (groupedError) return res.status(500).json({ error: 'Não foi possível conferir os ensaios da venda.' });
+    if ((groupedJobs || []).length > 1) {
+      for (const session of groupedJobs!) {
+        if (!session.google_event_id) continue;
+        const deletion = await deleteGoogleCalendarEvent(supabase, session.google_event_id, userId);
+        if (!deletion.deleted) return res.status(502).json(calendarDeleteRetryPayload(deletion));
+      }
+      const { error } = await adminClient.rpc('cancel_deal_sessions', { p_user_id: userId, p_deal_id: Number(deal.id),
+        p_updates: { stage: lostStage.id, reason: req.body?.reason || 'Venda cancelada',
+          stage_history: appendStageHistory(deal.stage_history, lostStage.id, lostStage.name, new Date().toISOString()) } });
+      if (error) return res.status(500).json({ error: error.message });
+      await logActivity(req, { action: 'cancel_sale', entityType: 'deal', entityId: deal.id,
+        summary: 'Venda e todos os ensaios cancelados; contratos e pagamentos preservados', details: { job_ids: groupedJobs!.map(j => j.id) } });
+      return res.json({ success: true, jobs_cancelled: groupedJobs!.length });
     }
 
     let jobDeleted = false;

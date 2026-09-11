@@ -7,6 +7,8 @@ import {
   Maximize2, Pencil, Receipt, RefreshCw
 } from "lucide-react";
 import { SearchableSelect } from "../ui/SearchableSelect";
+import { JobSalePricing, type SalePrice } from './JobSalePricing';
+import { SaleSessionList } from '../vendas/SaleSessionList';
 import { ContractGenerator } from "../contracts/ContractGenerator";
 import { TemplatePickerModal } from "../contracts/TemplatePickerModal";
 import { authFetch } from "../../utils/authFetch";
@@ -263,6 +265,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
 
   // ── Financeiro ──
   const [dealItems, setDealItems] = useState<CatalogItem[]>([]);
+  const [salePrice, setSalePrice] = useState<SalePrice | null>(null);
   const [packageItem, setPackageItem] = useState<{ name: string; value: number; discount: number; source: 'deal' | 'job' } | null>(null);
   const [jobItems, setJobItems] = useState<CatalogItem[]>([]);
   const [payments, setPayments] = useState<JobPayment[]>([]);
@@ -296,6 +299,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
         const data = await res.json();
         setDealItems(data.dealItems || []);
         setPackageItem(data.packageItem || null);
+        setSalePrice(data.sale || null);
         setJobItems(data.jobItems || []);
         setPayments(data.payments || []);
         setJobAmount(data.jobAmount || 0);
@@ -305,6 +309,8 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
             amount: data.jobAmount,
             payment_status: data.payment_status,
             amount_paid: data.totalPago,
+            sale_gross_amount: data.sale_gross_amount,
+            sale_discount_amount: data.sale_discount_amount,
           });
         }
       }
@@ -1151,7 +1157,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
             const addedItemsTotal = jobItems.reduce((s, i) => s + i.catalog_value * i.quantidade, 0);
             // Jobs com deal: soma os itens frescos da resposta (nunca depende de job.amount)
             // Jobs sem deal: usa jobAmount do servidor (base manual + extras)
-            const totalGeral = dealItems.length > 0 ? dealItemsTotal + addedItemsTotal : jobAmount;
+            const totalGeral = jobAmount;
             const totalPago = payments.reduce((s, p) => s + p.amount, 0);
             const restante = Math.max(0, totalGeral - totalPago);
             const pct = totalGeral > 0 ? Math.min(100, (totalPago / totalGeral) * 100) : 0;
@@ -1276,6 +1282,8 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                     </div>
 
                     {/* ── Itens do negócio (deal) / valor base do trabalho ── */}
+                    {salePrice && <JobSalePricing sale={salePrice} onSaved={() => loadFinanceiro(job.id)} />}
+                    {job.deal_id && <SaleSessionList dealId={job.deal_id} currentJobId={job.id} />}
                     {(dealItems.length > 0 || packageItem) && (
                       <section>
                         <div className="flex items-center justify-between mb-2">
@@ -1342,7 +1350,12 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                                 </button>
                               </div>
                             );
-                          }) : packageItem && (
+                          }) : packageItem && (job.sale_gross_amount != null ? (
+                            <div className="flex flex-wrap justify-between gap-2 rounded-lg border border-gray-200 p-3 text-sm dark:border-gray-700">
+                              <span>{packageItem.name}</span><strong>{formatCurrency(packageItem.value - packageItem.discount)}</strong>
+                              <p className="w-full text-xs text-gray-500">Parte deste ensaio na venda, já com desconto.</p>
+                            </div>
+                          ) : (
                             /* Pacote vendido sem itens detalhados - editável/trocável */
                             <PackageEditor
                               pkg={packageItem}
@@ -1351,7 +1364,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                               catalogServicos={catalogServicos}
                               onSave={handleSavePackage}
                             />
-                          )}
+                          ))}
                           {dealItems.length > 0 && showAddJobItem && addTarget === 'deal' && renderItemSelector()}
                         </div>
                       </section>
@@ -1466,7 +1479,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                       {/* Formulário novo pagamento */}
                       <div className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800 space-y-2">
                         <p className="text-[11px] font-semibold text-gray-400 uppercase">Registrar pagamento</p>
-                        <div className="grid grid-cols-3 gap-2">
+                        <div className={`grid gap-2 ${job.sale_gross_amount != null ? "grid-cols-2" : "grid-cols-3"}`}>
                           <div>
                             <label className="text-[10px] text-gray-400 mb-0.5 block">Valor</label>
                             <input
@@ -1477,6 +1490,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                               className="w-full border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 rounded-lg px-2 py-1.5 text-sm text-gray-900 dark:text-white outline-none focus:border-emerald-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                             />
                           </div>
+                          {job.sale_gross_amount == null && (
                           <div>
                             <label className="text-[10px] text-gray-400 mb-0.5 block" title="Abate do valor total do trabalho">Desconto</label>
                             <input
@@ -1487,6 +1501,7 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                               className="w-full border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-900/10 rounded-lg px-2 py-1.5 text-sm text-gray-900 dark:text-white outline-none focus:border-amber-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                             />
                           </div>
+                          )}
                           <div>
                             <label className="text-[10px] text-gray-400 mb-0.5 block">Data</label>
                             <input

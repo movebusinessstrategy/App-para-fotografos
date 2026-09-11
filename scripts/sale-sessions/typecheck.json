@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.json",
+  "include": ["../../server.ts", "../../sale-sessions.ts", "../../src/**/*"],
+  "exclude": ["../../private-backups", "../../workers", "../../node_modules", "../../dist", "../../output"]
+}
