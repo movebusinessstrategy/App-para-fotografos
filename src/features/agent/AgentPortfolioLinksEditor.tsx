@@ -1,5 +1,7 @@
 import { Link2, Plus, Trash2 } from 'lucide-react';
 import {
+  MAX_LABEL_LENGTH,
+  MAX_PORTFOLIO_LINKS,
   PORTFOLIO_NICHES,
   portfolioLinksValidationMessage,
   type PortfolioLink,
@@ -19,6 +21,8 @@ const NICHE_LABELS: Record<PortfolioNiche, string> = {
   marca_pessoal: 'Marca pessoal',
   revelacao: 'Revelação',
   batizado: 'Batizado',
+  cha_revelacao: 'Chá Revelação',
+  anunciacao: 'Anunciação',
 };
 
 type AgentPortfolioLinksEditorProps = {
@@ -83,7 +87,7 @@ export function AgentPortfolioLinksEditor({
                 value={link.label}
                 onChange={(event) => updateLink(index, { label: event.target.value })}
                 disabled={disabled}
-                maxLength={120}
+                maxLength={MAX_LABEL_LENGTH}
                 placeholder="Ex.: Ensaio em estúdio"
                 aria-label={`Nome do link ${index + 1}`}
                 className="min-w-0 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-gold-500/40 disabled:opacity-60 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
@@ -127,7 +131,7 @@ export function AgentPortfolioLinksEditor({
       <button
         type="button"
         onClick={() => onChange([...value, emptyPortfolioLink()])}
-        disabled={disabled || value.length >= 30}
+        disabled={disabled || value.length >= MAX_PORTFOLIO_LINKS}
         className="mt-3 inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 transition-colors hover:border-gold-400 hover:text-gold-700 disabled:opacity-50 dark:border-gray-700 dark:text-gray-200 dark:hover:border-gold-600 dark:hover:text-gold-300"
       >
         <Plus size={16} />

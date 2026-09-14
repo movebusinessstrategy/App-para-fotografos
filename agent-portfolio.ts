@@ -11,6 +11,8 @@ export const PORTFOLIO_NICHES = [
   'marca_pessoal',
   'revelacao',
   'batizado',
+  'cha_revelacao',
+  'anunciacao',
 ] as const;
 
 export type PortfolioNiche = (typeof PORTFOLIO_NICHES)[number];
@@ -30,8 +32,10 @@ export class PortfolioLinksValidationError extends Error {
   }
 }
 
-const MAX_PORTFOLIO_LINKS = 30;
-const MAX_LABEL_LENGTH = 120;
+// Espelham a validação da migration 075. Quando um dos dois lados muda, o
+// outro precisa mudar junto: foi essa defasagem que derrubou as sugestões.
+export const MAX_PORTFOLIO_LINKS = 60;
+export const MAX_LABEL_LENGTH = 200;
 const MAX_URL_LENGTH = 2048;
 const NICHE_SET = new Set<string>(PORTFOLIO_NICHES);
 
@@ -115,18 +119,34 @@ export function normalizePortfolioLinks(value: unknown): PortfolioLink[] {
   return uniquePortfolioLinks(value.map(normalizedPortfolioLink));
 }
 
+// Leitura do que já está salvo. Um link inválido no banco descarta só ele —
+// antes derrubava a lista inteira e, com ela, toda a resposta da Lia. Quem
+// GRAVA continua passando por normalizePortfolioLinks, que recusa a lista toda.
+function storedPortfolioLinks(value: unknown): PortfolioLink[] {
+  if (!Array.isArray(value)) return [];
+  const links: PortfolioLink[] = [];
+  value.forEach((item, index) => {
+    try {
+      links.push(normalizedPortfolioLink(item, index));
+    } catch {
+      // Link salvo fora do formato não vira material aprovado, e pronto.
+    }
+  });
+  return uniquePortfolioLinks(links);
+}
+
 export function portfolioLinksForNiche(
   value: unknown,
   niche?: string | null,
 ): PortfolioLink[] {
-  const links = normalizePortfolioLinks(value);
+  const links = storedPortfolioLinks(value);
   const normalized = niche?.trim().toLowerCase();
   if (!normalized || normalized === 'geral') return links.filter((link) => link.niche === 'geral');
   return links.filter((link) => link.niche === 'geral' || link.niche === normalized);
 }
 
 export function buildPortfolioPrompt(value: unknown): string {
-  const links = normalizePortfolioLinks(value);
+  const links = storedPortfolioLinks(value);
   if (!links.length) return '';
   const structuredData = JSON.stringify(links);
   return [
