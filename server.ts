@@ -5158,13 +5158,30 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (jobIds.length > 0) {
       try {
         const adminClient = supabaseAdmin || supabase;
-        const { data: pmts } = await adminClient
-          .from('job_payments')
-          .select('job_id, amount')
-          .in('job_id', jobIds);
+        const [{ data: pmts }, { data: allocations }] = await Promise.all([
+          adminClient.from('job_payments').select('id, job_id, amount').in('job_id', jobIds),
+          adminClient.from('sale_payment_allocations').select('job_id, job_payment_id, amount').in('job_id', jobIds),
+        ]);
+        const allocatedPaymentIds = new Set((allocations || []).map((row: any) => String(row.job_payment_id)));
         (pmts || []).forEach((p: any) => {
+          if (allocatedPaymentIds.has(String(p.id))) return;
           amountPaidByJob.set(p.job_id, (amountPaidByJob.get(p.job_id) || 0) + (p.amount || 0));
         });
+        (allocations || []).forEach((row: any) => {
+          amountPaidByJob.set(row.job_id, (amountPaidByJob.get(row.job_id) || 0) + (Number(row.amount) || 0));
+        });
+      } catch {}
+    }
+
+    const cancellationByDeal = new Map<number, any>();
+    const dealIds = [...new Set((jobs || []).map((job: any) => Number(job.deal_id)).filter(Boolean))];
+    if (dealIds.length > 0) {
+      try {
+        const adminClient = supabaseAdmin || supabase;
+        const { data: cancellations } = await adminClient.from('sale_cancellations')
+          .select('deal_id,refund_status,refund_expected,refund_paid,refund_due_date,cancelled_at')
+          .eq('user_id', userId).in('deal_id', dealIds);
+        (cancellations || []).forEach((row: any) => cancellationByDeal.set(Number(row.deal_id), row));
       } catch {}
     }
 
@@ -5176,6 +5193,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       // pra produção. Trabalhos com null não aparecem no kanban.
       production_stage: j.production_stage || null,
       amount_paid: amountPaidByJob.get(j.id) || 0,
+      cancellation: j.deal_id ? cancellationByDeal.get(Number(j.deal_id)) || null : null,
     }));
 
     const safe = isProductionOnly(req) ? jobsFormatted.map(stripJobMoney) : jobsFormatted;
@@ -6179,11 +6197,31 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       jobItems = data || [];
     } catch { jobItems = []; }
 
-    // Busca pagamentos do job
+    // Busca pagamentos do job. Depois de separar uma venda, o dinheiro continua
+    // sendo uma única transação e cada card recebe apenas uma atribuição interna.
     let payments: any[] = [];
     try {
-      const { data } = await adminClient.from('job_payments').select('*').eq('job_id', jobId).order('payment_date').order('created_at');
-      payments = data || [];
+      const { data: allocations } = await adminClient.from('sale_payment_allocations')
+        .select('id,amount,job_payment_id').eq('user_id', userId).eq('job_id', jobId);
+      if ((allocations || []).length > 0) {
+        const paymentIds = allocations!.map((row: any) => row.job_payment_id);
+        const { data: sourcePayments } = await adminClient.from('job_payments').select('*').in('id', paymentIds);
+        const sourceById = new Map((sourcePayments || []).map((row: any) => [String(row.id), row]));
+        payments = allocations!.map((allocation: any) => {
+          const source: any = sourceById.get(String(allocation.job_payment_id)) || {};
+          return {
+            ...source,
+            id: `allocation:${allocation.id}`,
+            amount: Number(allocation.amount) || 0,
+            description: source.description ? `${source.description} · atribuído a este ensaio` : 'Valor atribuído a este ensaio',
+            allocated: true,
+            source_payment_id: allocation.job_payment_id,
+          };
+        });
+      } else {
+        const { data } = await adminClient.from('job_payments').select('*').eq('job_id', jobId).order('payment_date').order('created_at');
+        payments = data || [];
+      }
     } catch { payments = []; }
 
     // Compatibilidade somente-leitura: versões antigas guardavam o sinal nas
@@ -22130,10 +22168,98 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ sales, days });
   });
 
-  // Cancela uma venda (geralmente duplicata): move o deal pra etapa
-  // "perdido", limpa as flags de conversão e apaga o job vinculado (se
-  // houver). O deal continua salvo no histórico — só sai do "ganho".
-  app.post('/api/deals/:id/cancel-sale', requireAuth, async (req, res) => {
+  // Contexto comercial do card usado pelas ações de separação e cancelamento.
+  app.get('/api/jobs/:id/sale-context', requireAuth, denyProductionOnly, async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+    const jobId = Number(req.params.id);
+    const { data: job } = await supabase.from('jobs').select('*')
+      .eq('id', jobId).eq('user_id', userId).maybeSingle();
+    if (!job) return res.status(404).json({ error: 'Ensaio não encontrado.' });
+
+    let deal: any = null;
+    if (job.deal_id) {
+      const result = await supabase.from('deals').select('*').eq('id', job.deal_id).eq('user_id', userId).maybeSingle();
+      deal = result.data;
+    } else {
+      const result = await supabase.from('deals').select('*').eq('converted_job_id', jobId).eq('user_id', userId).maybeSingle();
+      deal = result.data;
+    }
+    if (!deal) return res.status(404).json({ error: 'Este card não está vinculado a uma venda.' });
+
+    const { data: saleJobs } = await supabase.from('jobs')
+      .select('id,job_type,job_name,job_date,amount,sale_gross_amount,sale_discount_amount,status,production_stage,sale_session_index,google_event_id')
+      .eq('user_id', userId).or(`deal_id.eq.${deal.id},id.eq.${deal.converted_job_id || 0}`)
+      .order('sale_session_index').order('id');
+    const saleJobIds = (saleJobs || []).map((row: any) => row.id);
+    let received = 0;
+    if (saleJobIds.length > 0) {
+      const { data: sourcePayments } = await adminClient.from('job_payments').select('id,amount').in('job_id', saleJobIds);
+      received = (sourcePayments || []).reduce((sum: number, row: any) => sum + (Number(row.amount) || 0), 0);
+    }
+    let cancellation: any = null;
+    let refunds: any[] = [];
+    try {
+      const result = await adminClient.from('sale_cancellations').select('*')
+        .eq('user_id', userId).eq('deal_id', deal.id).maybeSingle();
+      cancellation = result.data;
+      if (cancellation) {
+        const refundResult = await adminClient.from('sale_refunds').select('*')
+          .eq('user_id', userId).eq('cancellation_id', cancellation.id).order('refund_date');
+        refunds = refundResult.data || [];
+      }
+    } catch {}
+    return res.json({
+      deal: { id: deal.id, title: deal.title, value: Number(deal.value) || 0,
+        gross: dealGross(deal), discount: Number(deal.discount) || 0 },
+      jobs: saleJobs || [], received, cancellation, refunds,
+    });
+  });
+
+  app.post('/api/jobs/:id/split-sale', requireAuth, denyProductionOnly, requirePermission('finance'), async (req, res) => {
+    const userId = (req as any).userId;
+    const supabase = (req as any).supabase as SupabaseClient;
+    const adminClient = supabaseAdmin || supabase;
+    const sessions = Array.isArray(req.body?.sessions) ? req.body.sessions : [];
+    if (sessions.length < 2) return res.status(400).json({ error: 'Informe pelo menos dois ensaios.' });
+    const { data, error } = await adminClient.rpc('split_production_job', {
+      p_user_id: userId, p_job_id: Number(req.params.id), p_sessions: sessions,
+    });
+    if (error) {
+      const migrationMissing = /split_production_job|schema cache|does not exist/i.test(error.message || '');
+      return res.status(migrationMissing ? 422 : 400).json({
+        error: migrationMissing ? 'A atualização para separar cards ainda não foi aplicada no banco.' : error.message,
+      });
+    }
+    await logActivity(req, {
+      action: 'split_sale_jobs', entityType: 'job', entityId: req.params.id,
+      summary: `Venda separada em ${sessions.length} ensaios`, details: data,
+    });
+    return res.json(data);
+  });
+
+  app.post('/api/sale-cancellations/:id/refunds', requireAuth, denyProductionOnly, requirePermission('finance'), async (req, res) => {
+    const userId = (req as any).userId;
+    const adminClient = supabaseAdmin || (req as any).supabase as SupabaseClient;
+    const { data, error } = await adminClient.rpc('record_sale_refund', {
+      p_user_id: userId, p_cancellation_id: req.params.id, p_payload: req.body || {},
+    });
+    if (error) {
+      const migrationMissing = /record_sale_refund|schema cache|does not exist/i.test(error.message || '');
+      return res.status(migrationMissing ? 422 : 400).json({
+        error: migrationMissing ? 'A atualização de devoluções ainda não foi aplicada no banco.' : error.message,
+      });
+    }
+    await logActivity(req, {
+      action: 'record_sale_refund', entityType: 'sale_cancellation', entityId: req.params.id,
+      summary: 'Devolução da venda registrada', details: data,
+    });
+    return res.json(data);
+  });
+
+  // Cancela a venda sem apagar pagamentos, contratos, itens ou o card histórico.
+  app.post('/api/deals/:id/cancel-sale', requireAuth, denyProductionOnly, requirePermission('finance'), async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -22161,139 +22287,67 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
 
     const { data: groupedJobs, error: groupedError } = await supabase.from('jobs').select('id,google_event_id')
-      .eq('user_id', userId).eq('deal_id', deal.id);
+      .eq('user_id', userId).or(`deal_id.eq.${deal.id},id.eq.${deal.converted_job_id || 0}`);
     if (groupedError) return res.status(500).json({ error: 'Não foi possível conferir os ensaios da venda.' });
-    if ((groupedJobs || []).length > 1) {
-      for (const session of groupedJobs!) {
-        if (!session.google_event_id) continue;
-        const deletion = await deleteGoogleCalendarEvent(supabase, session.google_event_id, userId);
-        if (!deletion.deleted) return res.status(502).json(calendarDeleteRetryPayload(deletion));
-      }
-      const { error } = await adminClient.rpc('cancel_deal_sessions', { p_user_id: userId, p_deal_id: Number(deal.id),
-        p_updates: { stage: lostStage.id, reason: req.body?.reason || 'Venda cancelada',
-          stage_history: appendStageHistory(deal.stage_history, lostStage.id, lostStage.name, new Date().toISOString()) } });
-      if (error) return res.status(500).json({ error: error.message });
-      await logActivity(req, { action: 'cancel_sale', entityType: 'deal', entityId: deal.id,
-        summary: 'Venda e todos os ensaios cancelados; contratos e pagamentos preservados', details: { job_ids: groupedJobs!.map(j => j.id) } });
-      return res.json({ success: true, jobs_cancelled: groupedJobs!.length });
-    }
-
-    let jobDeleted = false;
-    // Apaga o job vinculado primeiro (se houver) — usa admin pra bypassar
-    // qualquer RLS quirky e garantir que sumiu mesmo. Limpa dependências
-    // conhecidas antes para não ficar preso em FK/registro auxiliar.
-    if (deal.converted_job_id) {
-      const { data: job } = await adminClient
-        .from('jobs')
-        .select('id, google_event_id')
-        .eq('id', deal.converted_job_id)
-        .eq('user_id', userId)
-        .maybeSingle();
-
-      if (job?.google_event_id) {
-        const deletion = await deleteGoogleCalendarEvent(supabase, job.google_event_id, userId);
-        if (!deletion.deleted) {
-          console.warn('[cancel-sale] remoção do Calendar pendente:', deletion.status);
-          return res.status(502).json(calendarDeleteRetryPayload(deletion));
-        }
-      }
-
-      if (job?.id) {
-        try {
-          const { data: jobItems } = await adminClient
-            .from('job_items')
-            .select('id')
-            .eq('job_id', job.id);
-          const jobItemIds = (jobItems || []).map((it: any) => String(it.id));
-          if (jobItemIds.length > 0) {
-            await adminClient.from('compras').delete().in('job_item_id', jobItemIds);
-          }
-        } catch {
-          // compras/job_items podem não existir em todos os ambientes.
-        }
-
-        await Promise.allSettled([
-          adminClient.from('job_payments').delete().eq('job_id', job.id),
-          adminClient.from('job_items').delete().eq('job_id', job.id),
-          adminClient.from('job_stage_history').delete().eq('job_id', job.id),
-          adminClient.from('job_checklist').delete().eq('job_id', job.id),
-          adminClient.from('job_testimonials').delete().eq('job_id', job.id),
-          adminClient.from('opportunities').delete().eq('trigger_job_id', job.id).eq('user_id', userId),
-          adminClient.from('fin_receitas').update({ job_id: null }).eq('job_id', job.id).eq('user_id', userId),
-          adminClient.from('contracts').update({ job_id: null }).eq('job_id', job.id).eq('user_id', userId),
-        ]);
-      }
-
-      const { error: jobErr } = await adminClient
-        .from('jobs')
-        .delete()
-        .eq('id', deal.converted_job_id)
-        .eq('user_id', userId);
-      if (jobErr) {
-        console.error('[cancel-sale] falha apagando job:', jobErr.message);
-        return res.status(500).json({ error: `Falha ao excluir trabalho vinculado: ${jobErr.message}` });
-      }
-      jobDeleted = !!job?.id;
-    }
-
+    const reason = String(req.body?.reason || 'Venda cancelada').trim();
+    if (!reason) return res.status(400).json({ error: 'Informe o motivo do cancelamento.' });
     const nowIso = new Date().toISOString();
-    const updates: any = {
+    const payload = {
+      ...req.body,
+      reason,
       stage: lostStage.id,
-      stage_entered_at: nowIso,
-      current_stage_entered_at: nowIso,
       stage_history: appendStageHistory(deal.stage_history, lostStage.id, lostStage.name, nowIso),
-      converted: false,
-      converted_at: null,
-      converted_job_id: null,
-      temperature: 'cold',
-      temperature_locked: true,
-      lost_reason: req.body?.reason || 'Cancelado (venda duplicada/erro)',
     };
-
-    const { error } = await supabase
-      .from('deals')
-      .update(updates)
-      .eq('id', req.params.id)
-      .eq('user_id', userId);
+    const { data, error } = await adminClient.rpc('cancel_sale_with_refund', {
+      p_user_id: userId, p_deal_id: Number(deal.id), p_payload: payload,
+    });
     if (error) {
-      console.error('[cancel-sale] update do deal falhou:', error.message);
-      return res.status(500).json({ error: `Falha ao mover pra perdido: ${error.message}` });
-    }
-
-    // Registra quem cancelou. Foi por aqui que uma venda real (em produção, com
-    // contrato) sumiu de Convertidas sem ninguém saber quem tinha feito.
-    if (deal.converted_job_id) {
-      await logActivity(req, {
-        action: 'cancel_sale',
-        entityType: 'job',
-        entityId: deal.converted_job_id,
-        summary: `Venda cancelada — ensaio excluído da produção${jobDeleted ? '' : ' (ensaio já não existia)'}`,
-        details: { deal_id: Number(req.params.id), reason: updates.lost_reason },
+      const migrationMissing = /cancel_sale_with_refund|schema cache|does not exist/i.test(error.message || '');
+      return res.status(migrationMissing ? 422 : 400).json({
+        error: migrationMissing ? 'A atualização de cancelamento e devolução ainda não foi aplicada no banco.' : error.message,
       });
     }
-    await logActivity(req, {
-      action: 'cancel_sale',
-      entityType: 'deal',
-      entityId: req.params.id,
-      summary: `Venda cancelada: ${updates.lost_reason}`,
-      details: { job_id: deal.converted_job_id, job_deleted: jobDeleted },
-    });
-
-    try {
-      await recordStageEvent(
-        supabase,
-        userId,
-        Number(req.params.id),
-        deal.stage,
-        lostStage.id,
-        deal.current_stage_entered_at || deal.stage_entered_at
-      );
-    } catch (e: any) {
-      // recordStageEvent é "best effort" — não bloqueia o cancel
-      console.warn('[cancel-sale] recordStageEvent falhou (não-bloqueante):', e?.message);
+    if (!data?.already_cancelled) {
+      await logActivity(req, {
+        action: 'cancel_sale', entityType: 'deal', entityId: deal.id,
+        summary: 'Venda cancelada; ensaios, contratos e pagamentos preservados',
+        details: { ...data, job_ids: (groupedJobs || []).map((job: any) => job.id), reason },
+      });
     }
 
-    res.json({ success: true, moved_to: lostStage.id, job_deleted: jobDeleted });
+    const calendarPending: number[] = [];
+    for (const session of groupedJobs || []) {
+      if (!session.google_event_id) continue;
+      const deletion = await deleteGoogleCalendarEvent(supabase, session.google_event_id, userId);
+      if (deletion.deleted) {
+        await supabase.from('jobs').update({ google_event_id: null }).eq('id', session.id).eq('user_id', userId);
+      } else {
+        calendarPending.push(session.id);
+        console.warn('[cancel-sale] remoção do Calendar pendente:', deletion.status);
+      }
+    }
+
+    if (!data?.already_cancelled) {
+      try {
+        await recordStageEvent(
+          supabase,
+          userId,
+          Number(req.params.id),
+          deal.stage,
+          lostStage.id,
+          deal.current_stage_entered_at || deal.stage_entered_at
+        );
+      } catch (e: any) {
+        // recordStageEvent é "best effort" — não bloqueia o cancel
+        console.warn('[cancel-sale] recordStageEvent falhou (não-bloqueante):', e?.message);
+      }
+    }
+
+    res.json({
+      ...data,
+      calendar_sync: calendarPending.length > 0 ? 'pending' : 'synced',
+      calendar_pending_job_ids: calendarPending,
+    });
   });
 
   app.get('/api/extension/agenda', requireAuth, async (req, res) => {

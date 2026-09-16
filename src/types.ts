@@ -65,6 +65,13 @@ export interface Job {
   assignee_id?: string | null;
   position?: number;
   cover_image_url?: string | null;
+  cancellation?: {
+    refund_status: 'none' | 'pending' | 'partial' | 'refunded';
+    refund_expected: number;
+    refund_paid: number;
+    refund_due_date?: string | null;
+    cancelled_at: string;
+  } | null;
 }
 
 export interface ProductionProcess {

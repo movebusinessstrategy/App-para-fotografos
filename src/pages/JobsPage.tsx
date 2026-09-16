@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { BarChart2, Workflow, Edit2, Inbox, LayoutGrid, List, ListChecks, Plus, Receipt, Search, Settings, Tag, Trash2, X } from "lucide-react";
+import { BarChart2, Workflow, Edit2, Inbox, LayoutGrid, List, ListChecks, Plus, Receipt, Search, Settings, Tag, Trash2, X, XCircle } from "lucide-react";
 import GerenciaPage from "./GerenciaPage";
 import TasksPage from "./TasksPage";
 import { SearchableSelect } from "../components/ui/SearchableSelect";
@@ -66,7 +66,7 @@ export default function JobsPage() {
   // Mostra spinner só no primeiro load (sem dado em cache ainda)
   const loading = jobsLoading && !jobsData;
 
-  const [activeTab, setActiveTab] = useState<"funil" | "lista" | "vendas" | "gerencia" | "tarefas">("funil");
+  const [activeTab, setActiveTab] = useState<"funil" | "lista" | "cancelados" | "vendas" | "gerencia" | "tarefas">("funil");
   const [customizerOpen, setCustomizerOpen] = useState(false);
   const navigate = useNavigate();
   const [showModal, setShowModal] = useState(false);
@@ -131,6 +131,11 @@ export default function JobsPage() {
     () => filteredJobs.filter(j => !!j.production_stage && productionStageIds.has(j.production_stage)),
     [filteredJobs, productionStageIds]
   );
+  const cancelledJobs = useMemo(
+    () => filteredJobs.filter(job => job.status === 'cancelled'),
+    [filteredJobs]
+  );
+  const listedJobs = activeTab === 'cancelados' ? cancelledJobs : productionJobs;
 
   // Atalhos de período (mês atual / mês passado) pro filtro de data do ensaio.
   const setMonthRange = (offset: number) => {
@@ -283,6 +288,18 @@ export default function JobsPage() {
               >
                 <List size={15} />
                 Lista
+              </button>
+              <button
+                onClick={() => setActiveTab("cancelados")}
+                className={cn(
+                  'flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
+                  activeTab === "cancelados"
+                    ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
+                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                )}
+              >
+                <XCircle size={15} />
+                Cancelados
               </button>
               {canSeeFinance && (
               <button
@@ -484,7 +501,7 @@ export default function JobsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                {productionJobs.map(job => {
+                {listedJobs.map(job => {
                   const jobDate = parseDate(job.job_date);
                   const stageInfo = getStageLabel(job);
                   return (
@@ -550,9 +567,22 @@ export default function JobsPage() {
                         )}>
                           {job.status === "scheduled" ? "Agendado" : job.status === "completed" ? "Concluído" : "Cancelado"}
                         </span>
+                        {job.status === 'cancelled' && job.cancellation && (
+                          <p className={cn(
+                            'mt-1 text-[11px] font-semibold',
+                            Number(job.cancellation.refund_expected) - Number(job.cancellation.refund_paid) > 0
+                              ? 'text-amber-600 dark:text-amber-400'
+                              : 'text-emerald-600 dark:text-emerald-400'
+                          )}>
+                            {Number(job.cancellation.refund_expected) - Number(job.cancellation.refund_paid) > 0
+                              ? `R$ ${(Number(job.cancellation.refund_expected) - Number(job.cancellation.refund_paid)).toLocaleString('pt-BR')} a devolver`
+                              : Number(job.cancellation.refund_expected) > 0 ? 'Devolução concluída' : 'Sem devolução'}
+                          </p>
+                        )}
                       </td>
                       <td data-label="Ações" className="px-6 py-4 text-right">
                         <div className="flex items-center gap-2 justify-end opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100">
+                          {job.status !== 'cancelled' && <>
                           <button
                             onClick={() => { setEditingJob(job); setShowModal(true); }}
                             className="p-2 text-gray-500 dark:text-gray-400 hover:text-gold-600 dark:hover:text-gold-400 hover:bg-gold-50 dark:hover:bg-gold-500/10 rounded-lg transition-colors"
@@ -567,16 +597,19 @@ export default function JobsPage() {
                           >
                             <Trash2 size={15} />
                           </button>
+                          </>}
                         </div>
                       </td>
                     </tr>
                   );
                 })}
 
-                {productionJobs.length === 0 && (
+                {listedJobs.length === 0 && (
                   <tr>
                     <td colSpan={8} className="px-6 py-12 text-center text-sm text-gray-400 dark:text-gray-500">
-                      Nenhum ensaio em produção. A lista mostra só quem está dentro de uma etapa (igual ao quadro).
+                      {activeTab === 'cancelados'
+                        ? 'Nenhuma venda cancelada encontrada.'
+                        : 'Nenhum ensaio em produção. A lista mostra só quem está dentro de uma etapa (igual ao quadro).'}
                     </td>
                   </tr>
                 )}
@@ -621,6 +654,11 @@ export default function JobsPage() {
             { revalidate: false }
           );
           setSelectedJob(prev => prev && prev.id === jobId ? { ...prev, ...patch } : prev);
+        }}
+        onSaleChanged={() => {
+          setSelectedJob(null);
+          mutateJobs();
+          refreshApi('/api/fin/despesas');
         }}
       />
 

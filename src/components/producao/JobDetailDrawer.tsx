@@ -21,6 +21,7 @@ import { JobWithProduction } from "./ProductionBoard";
 import { DossierSection } from "./DossierSection";
 import { JobReminderSection } from "./JobReminderSection";
 import { JobScheduleSection } from "./JobScheduleSection";
+import { JobSaleActions } from "./JobSaleActions";
 
 function ContractStatusPill({ status, signers }: { status: 'draft' | 'pending_signature' | 'signed' | 'cancelled'; signers?: Array<{ status: string }> }) {
   const map = {
@@ -90,6 +91,8 @@ interface JobPayment {
   description: string | null;
   payment_date: string;
   payment_method: string;
+  allocated?: boolean;
+  source_payment_id?: string;
 }
 
 interface CatalogItem {
@@ -116,6 +119,7 @@ interface JobDetailDrawerProps {
   onLabelsChange?: (jobId: number, labels: string[]) => void;
   onRemoveFromProduction?: (jobId: number) => void;
   onJobUpdate?: (jobId: number, patch: Partial<JobWithProduction>) => void;
+  onSaleChanged?: () => void;
 }
 
 const formatCurrency = (v: number) =>
@@ -134,7 +138,7 @@ const formatDuration = (ms: number | null | undefined) => {
   return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
 };
 
-export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsChange, onRemoveFromProduction, onJobUpdate }: JobDetailDrawerProps) {
+export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsChange, onRemoveFromProduction, onJobUpdate, onSaleChanged }: JobDetailDrawerProps) {
   const { isProductionOnly } = useAuth();
   const [tab, setTab] = useState<"details" | "financeiro" | "testimonials" | "historico">("details");
   // Histórico: o que foi feito nesse ensaio e quando (e por quem, nas ações
@@ -856,6 +860,14 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                 )}
               </section>
 
+              {!isProductionOnly && (
+                <JobSaleActions
+                  job={job}
+                  stages={stages}
+                  onChanged={() => onSaleChanged?.()}
+                />
+              )}
+
               <JobReminderSection job={job} />
 
               {/* Observações - editável inline */}
@@ -1467,10 +1479,10 @@ export function JobDetailDrawer({ job, stages, onClose, onStageChange, onLabelsC
                                   {p.description && ` · ${p.description}`}
                                 </p>
                               </div>
-                              <button onClick={() => handleDeletePayment(p.id)}
+                              {!p.allocated && <button onClick={() => handleDeletePayment(p.id)}
                                 className="text-gray-300 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400 flex-shrink-0">
                                 <X size={13} />
-                              </button>
+                              </button>}
                             </div>
                           ))}
                         </div>
