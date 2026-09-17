@@ -656,8 +656,12 @@ export default function JobsPage() {
           setSelectedJob(prev => prev && prev.id === jobId ? { ...prev, ...patch } : prev);
         }}
         onSaleChanged={() => {
+          const clientId = selectedJob?.client_id;
           setSelectedJob(null);
           mutateJobs();
+          refreshApi('/api/clients');
+          if (clientId) refreshApi(`/api/clients/${clientId}`);
+          refreshApi('/api/stats');
           refreshApi('/api/fin/despesas');
         }}
       />

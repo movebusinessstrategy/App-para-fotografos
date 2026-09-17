@@ -37,6 +37,8 @@ function safeFormat(value: string | null | undefined, pattern: string): string |
 
 // ─── Tier badge ───────────────────────────────────────────────────────────────
 const TIER_CONFIG: Record<string, { label: string; cls: string }> = {
+  Diamond: { label: "Diamond", cls: "bg-cyan-100 dark:bg-cyan-500/20 text-cyan-800 dark:text-cyan-200 border border-cyan-300 dark:border-cyan-500/40" },
+  Platinum:{ label: "Platinum",cls: "bg-slate-100 dark:bg-slate-600/30 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-500/50" },
   Gold:    { label: "Gold",    cls: "bg-yellow-100 dark:bg-yellow-500/20 text-yellow-700 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-500/40" },
   Silver:  { label: "Silver",  cls: "bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600" },
   Bronze:  { label: "Bronze",  cls: "bg-orange-100 dark:bg-orange-500/20 text-orange-700 dark:text-orange-300 border border-orange-300 dark:border-orange-500/40" },

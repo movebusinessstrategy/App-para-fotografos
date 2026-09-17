@@ -18,6 +18,8 @@ try {
     '-f', 'scripts/sale-sessions/schema-cancellation-fixture.sql',
     '-f', 'migrations/079_sale_cancellations_and_job_split.sql',
     '-f', 'migrations/080_split_sale_items_between_jobs.sql',
+    '-f', 'migrations/081_split_legacy_converted_job.sql',
+    '-f', 'migrations/082_legacy_cancellation_and_refund_idempotency.sql',
     '-f', 'scripts/sale-sessions/verify-cancellation-and-split.sql',
   ]);
   console.log(output);

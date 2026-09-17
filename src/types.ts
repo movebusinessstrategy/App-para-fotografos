@@ -37,6 +37,7 @@ export interface Client {
   opportunities?: Opportunity[];
   tier?: string;
   total_invested?: number;
+  purchase_count?: number;
 }
 
 export interface Job {

@@ -53,6 +53,101 @@ const itemValue = (item: SaleItem) => Math.max(
   0,
   (Number(item.catalog_value) || 0) * (Number(item.quantidade) || 1) - (Number(item.discount_value) || 0),
 );
+const roundMoney = (value: number) => Math.round(value * 100) / 100;
+
+function itemTotalsByTarget(
+  items: SaleItem[],
+  assignments: Record<string, number>,
+  rowCount: number,
+) {
+  const totals = Array.from({ length: rowCount }, () => 0);
+  items.forEach(item => {
+    const target = assignments[itemKey(item)];
+    if (Number.isInteger(target) && target >= 0 && target < rowCount) {
+      totals[target] = roundMoney(totals[target] + itemValue(item));
+    }
+  });
+  return totals;
+}
+
+function SplitCardAmounts({ sale, discount, extras }: { sale: number; discount: number; extras: number }) {
+  const total = roundMoney(sale - discount + extras);
+  return (
+    <div className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-xl bg-gray-50 px-3 py-2.5 text-xs dark:bg-gray-800/70">
+      <span className="text-gray-500 dark:text-gray-400">Valor da venda</span>
+      <span className="text-right font-medium text-gray-800 dark:text-gray-100">{money(sale)}</span>
+      <span className="text-gray-500 dark:text-gray-400">Desconto</span>
+      <span className="text-right font-medium text-gray-800 dark:text-gray-100">− {money(discount)}</span>
+      <span className="text-gray-500 dark:text-gray-400">Adicionais</span>
+      <span className="text-right font-medium text-gray-800 dark:text-gray-100">{money(extras)}</span>
+      <span className="mt-1 border-t border-gray-200 pt-2 font-semibold text-gray-700 dark:border-gray-700 dark:text-gray-200">Total final</span>
+      <strong className="mt-1 border-t border-gray-200 pt-2 text-right text-gray-900 dark:border-gray-700 dark:text-white">{money(total)}</strong>
+    </div>
+  );
+}
+
+function PaymentDifferenceNotice({ difference }: { difference: number }) {
+  if (difference > 0.009) {
+    return (
+      <div className="mt-3 rounded-lg bg-blue-50 px-3 py-2.5 text-blue-800 dark:bg-blue-900/20 dark:text-blue-200">
+        <div className="flex items-center justify-between gap-3 text-sm font-semibold">
+          <span>Crédito preservado</span>
+          <strong>{money(difference)}</strong>
+        </div>
+        <p className="mt-1 text-xs opacity-80">Este valor recebido a mais continuará preservado e não será atribuído a nenhum card.</p>
+      </div>
+    );
+  }
+  if (difference < -0.009) {
+    return (
+      <div className="mt-3 rounded-lg bg-amber-50 px-3 py-2.5 text-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
+        <div className="flex items-center justify-between gap-3 text-sm font-semibold">
+          <span>Saldo a receber</span>
+          <strong>{money(Math.abs(difference))}</strong>
+        </div>
+        <p className="mt-1 text-xs opacity-80">A separação pode continuar. O saldo seguirá pendente nos cards.</p>
+      </div>
+    );
+  }
+  return (
+    <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">
+      Recebimentos conciliados com o total dos cards.
+    </p>
+  );
+}
+
+function SplitSaleTotals({ sale, extras, cards, received }: {
+  sale: number;
+  extras: number;
+  cards: number;
+  received: number;
+}) {
+  const paymentDifference = roundMoney(received - cards);
+  const differenceLabel = paymentDifference > 0.009
+    ? `+ ${money(paymentDifference)}`
+    : paymentDifference < -0.009 ? `− ${money(Math.abs(paymentDifference))}` : money(0);
+  const differenceColor = paymentDifference > 0.009
+    ? 'text-blue-700 dark:text-blue-300'
+    : paymentDifference < -0.009 ? 'text-amber-700 dark:text-amber-300' : 'text-emerald-700 dark:text-emerald-300';
+  return (
+    <div className="rounded-xl border border-gray-200 p-3 text-sm dark:border-gray-700">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-2">
+        <span className="text-gray-500 dark:text-gray-400">Venda original</span>
+        <strong className="text-right text-gray-900 dark:text-white">{money(sale)}</strong>
+        <span className="text-gray-500 dark:text-gray-400">Adicionais</span>
+        <strong className="text-right text-gray-900 dark:text-white">{money(extras)}</strong>
+        <span className="border-t border-gray-200 pt-2 font-semibold text-gray-700 dark:border-gray-700 dark:text-gray-200">Total dos cards</span>
+        <strong className="border-t border-gray-200 pt-2 text-right text-gray-900 dark:border-gray-700 dark:text-white">{money(cards)}</strong>
+        <span className="text-gray-500 dark:text-gray-400">Recebido</span>
+        <strong className="text-right text-gray-900 dark:text-white">{money(received)}</strong>
+        <span className="text-gray-500 dark:text-gray-400">Diferença</span>
+        <strong className={`text-right ${differenceColor}`}>{differenceLabel}</strong>
+      </div>
+      <PaymentDifferenceNotice difference={paymentDifference} />
+      <p className="mt-3 text-xs text-gray-500">Os produtos seguem o destino escolhido e os arquivos permanecem no card atual.</p>
+    </div>
+  );
+}
 
 function suggestedItemTarget(item: SaleItem, index: number, rowCount: number) {
   const normalized = item.catalog_name.toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -117,6 +212,7 @@ function SplitSaleModal({ job, context, stages, onClose, onSaved }: {
   const [rows, setRows] = useState<SplitDraft[]>(() => initialSplit(job, context));
   const saleItems = context.items || [];
   const dealItems = saleItems.filter(item => item.source === 'deal');
+  const additionalItems = saleItems.filter(item => item.source === 'job');
   const [itemAssignments, setItemAssignments] = useState<Record<string, number>>(
     () => initialItemAssignments(saleItems, initialSplit(job, context), context.jobs),
   );
@@ -135,13 +231,22 @@ function SplitSaleModal({ job, context, stages, onClose, onSaved }: {
     [context.deal.discount, grossValues.join('|')],
   );
   const difference = Math.round((context.deal.gross - grossTotal) * 100) / 100;
+  const additionalValues = itemTotalsByTarget(additionalItems, itemAssignments, rows.length);
+  const additionalTotal = roundMoney(additionalValues.reduce((sum, value) => sum + value, 0));
+  const cardTotals = grossValues.map((gross, index) => (
+    roundMoney(gross - (discounts[index] || 0) + (additionalValues[index] || 0))
+  ));
+  const cardsTotal = roundMoney(cardTotals.reduce((sum, value) => sum + value, 0));
+  const originalSaleTotal = roundMoney(context.deal.gross - context.deal.discount);
   const itemsHaveDestination = saleItems.every(item => {
     const target = itemAssignments[itemKey(item)];
     return Number.isInteger(target) && target >= 0 && target < rows.length;
   });
-  const valid = Math.abs(difference) < 0.01
+  const valuesMatch = Math.abs(difference) < 0.01;
+  const cardsHaveNames = rows.every(row => row.job_type.trim() && row.job_name.trim());
+  const valid = valuesMatch
     && itemsHaveDestination
-    && rows.every(row => row.job_type.trim() && row.job_name.trim());
+    && cardsHaveNames;
 
   const patchRow = (index: number, patch: Partial<SplitDraft>) => {
     setRows(current => current.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row));
@@ -193,7 +298,7 @@ function SplitSaleModal({ job, context, stages, onClose, onSaved }: {
     <ModalShell title="Separar ensaios da venda" onClose={onClose}>
       <div className="space-y-4 overflow-y-auto p-5">
         <div className="rounded-xl bg-blue-50 p-3 text-sm text-blue-800 dark:bg-blue-900/20 dark:text-blue-200">
-          A venda continua única. O card atual será preservado e apenas o segundo ensaio será criado.
+          A venda continua única. O card atual será preservado e os novos cards receberão os itens que você escolher.
         </div>
         {rows.map((row, index) => (
           <section key={index} className="space-y-3 rounded-2xl border border-gray-200 p-4 dark:border-gray-700">
@@ -228,7 +333,11 @@ function SplitSaleModal({ job, context, stages, onClose, onSaved }: {
                 </select>
               </label>
             </div>
-            <p className="text-xs text-gray-500">Desconto atribuído: {money(discounts[index] || 0)} · Líquido: {money(grossValues[index] - (discounts[index] || 0))}</p>
+            <SplitCardAmounts
+              sale={grossValues[index] || 0}
+              discount={discounts[index] || 0}
+              extras={additionalValues[index] || 0}
+            />
           </section>
         ))}
         <button type="button" onClick={() => setRows(current => [...current, { job_type: 'Novo ensaio', job_name: 'Novo ensaio', job_date: '', gross_amount: '0.00', production_stage: job.production_stage || stages[0]?.id || '' }])} className="text-sm font-semibold text-gold-600 dark:text-gold-400">+ Adicionar outro ensaio</button>
@@ -265,17 +374,26 @@ function SplitSaleModal({ job, context, stages, onClose, onSaved }: {
             </div>
           </section>
         )}
-        <div className="rounded-xl border border-gray-200 p-3 text-sm dark:border-gray-700">
-          <div className="flex justify-between"><span>Total da venda</span><strong>{money(context.deal.gross)}</strong></div>
-          <div className="mt-1 flex justify-between"><span>Total distribuído</span><strong className={valid ? 'text-emerald-600' : 'text-red-600'}>{money(grossTotal)}</strong></div>
-          {!valid && <p className="mt-2 text-xs text-red-600">Ajuste {money(Math.abs(difference))} para os valores fecharem exatamente.</p>}
-          <p className="mt-2 text-xs text-gray-500">Recebimentos preservados: {money(context.received)}. Os produtos seguem o destino escolhido; os arquivos permanecem no card atual.</p>
-        </div>
-        {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+        {!valuesMatch && <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 dark:bg-red-900/20 dark:text-red-300">Ajuste {money(Math.abs(difference))} na distribuição da venda para os valores fecharem exatamente.</p>}
+        {!cardsHaveNames && <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 dark:bg-red-900/20 dark:text-red-300">Preencha o tipo e o nome de todos os cards.</p>}
+        <SplitSaleTotals
+          sale={originalSaleTotal}
+          extras={additionalTotal}
+          cards={cardsTotal}
+          received={Number(context.received) || 0}
+        />
       </div>
-      <div className="flex gap-3 border-t border-gray-200 p-4 dark:border-gray-700">
-        <button type="button" onClick={onClose} className="flex-1 rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-semibold dark:border-gray-700">Voltar</button>
-        <button type="button" onClick={submit} disabled={!valid || saving} className="flex-1 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40 dark:bg-white dark:text-gray-900">{saving ? 'Separando…' : 'Confirmar separação'}</button>
+      <div className="border-t border-gray-200 p-4 dark:border-gray-700">
+        {error && (
+          <div role="alert" aria-live="assertive" className="mb-3 flex items-start gap-2 rounded-xl bg-red-50 px-3 py-2.5 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:gap-3">
+          <button type="button" onClick={onClose} className="flex-1 rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-semibold dark:border-gray-700">Voltar</button>
+          <button type="button" onClick={submit} disabled={!valid || saving} className="flex-1 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40 dark:bg-white dark:text-gray-900">{saving ? 'Separando…' : 'Confirmar separação'}</button>
+        </div>
       </div>
     </ModalShell>
   );
@@ -367,6 +485,7 @@ function CancelSaleModal({ context, onClose, onSaved }: { context: SaleContext; 
 function RefundModal({ context, onClose, onSaved }: { context: SaleContext; onClose: () => void; onSaved: () => void }) {
   const cancellation = context.cancellation!;
   const remaining = Math.max(0, Number(cancellation.refund_expected) - Number(cancellation.refund_paid));
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [amount, setAmount] = useState(String(remaining));
   const [refundDate, setRefundDate] = useState(today());
   const [paymentMethod, setPaymentMethod] = useState('Pix');
@@ -382,7 +501,12 @@ function RefundModal({ context, onClose, onSaved }: { context: SaleContext; onCl
     try {
       const response = await authFetch(`/api/sale-cancellations/${cancellation.id}/refunds`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount: numericAmount, refund_date: refundDate, payment_method: paymentMethod }),
+        body: JSON.stringify({
+          amount: numericAmount,
+          refund_date: refundDate,
+          payment_method: paymentMethod,
+          idempotency_key: idempotencyKey,
+        }),
       });
       const result: any = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || 'Não foi possível registrar a devolução.');

@@ -38,6 +38,7 @@ import { useApi } from "../utils/useApi";
 import { cn } from "../utils/cn";
 import { parseDate, toLocalISO } from "../utils/date";
 import { cleanPhone, parseCSV, parseDateBR, parseValueBR } from "../utils/csvParser";
+import { isClientValueEligibleStatus } from "../utils/client-value";
 import {
   buildMetaCustomerListCSV,
   buildMetaOfflineEventsCSV,
@@ -308,7 +309,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
 
     const selectedClients = clients.filter((client) => selectedClientIds.includes(client.id));
 
-    const headers = ['id', 'name', 'phone', 'email', 'instagram', 'status', 'tier', 'total_invested'];
+    const headers = ['id', 'name', 'phone', 'email', 'instagram', 'status', 'tier', 'total_invested', 'purchase_count'];
 
     const csvRows = [
       headers.join(','),
@@ -321,7 +322,8 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
           `"${client.instagram || ''}"`,
           `"${client.status || ''}"`,
           `"${client.tier || ''}"`,
-          client.total_invested ?? 0
+          client.total_invested ?? 0,
+          client.purchase_count ?? 0,
         ].join(',')
       )
     ];
@@ -373,6 +375,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
     
     if (client.jobs) {
       client.jobs.forEach(j => {
+        if (!isClientValueEligibleStatus(j.status)) return;
         const jobDate = parseDate(j.job_date);
         if (jobDate) dates.push(jobDate);
       });
@@ -425,7 +428,9 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
     }
 
     if (jobTypeFilter !== 'all') {
-      const hasMatchingJobType = client.jobs?.some(job => job.job_type === jobTypeFilter);
+      const hasMatchingJobType = client.jobs?.some(job => (
+        isClientValueEligibleStatus(job.status) && job.job_type === jobTypeFilter
+      ));
       if (!hasMatchingJobType) return false;
     }
 
@@ -433,6 +438,7 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
 
     // Filtra apenas por datas de ensaio (job_date)
     const jobDates = (client.jobs || [])
+      .filter(j => isClientValueEligibleStatus(j.status))
       .map(j => parseDate(j.job_date))
       .filter((d): d is Date => d !== null);
 
@@ -1215,7 +1221,9 @@ function Clients({ clients, onUpdate, onContactOpp }: { clients: Client[], onUpd
 
                   <td data-label="Investimento" className="px-6 py-4">
                     <div className="font-semibold text-gray-900 dark:text-white">R$ {(client.total_invested ?? 0).toLocaleString('pt-BR')}</div>
-                    <div className="text-xs text-gray-500 dark:text-gray-400">{client.jobs?.length || 0} trabalhos realizados</div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                      {client.purchase_count ?? 0} {(client.purchase_count ?? 0) === 1 ? 'compra válida' : 'compras válidas'}
+                    </div>
                   </td>
 
                   <td data-label="Status" className="px-6 py-4">

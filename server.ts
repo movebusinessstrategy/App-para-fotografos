@@ -1,6 +1,7 @@
 import express from 'express';
 import { convertSaleSessions, normalizeSaleItems } from './sale-sessions.js';
 import { dealGross, jobSaleBase, moneyCents, salePricing } from './src/utils/salePricing.js';
+import { isClientValueEligibleStatus, summarizeClientValue } from './src/utils/client-value.js';
 import { nonOverlappingTask } from './lib/non-overlapping-task.js';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
@@ -867,14 +868,6 @@ const getLiveMessagesByPhone = (userId: string, phone: string, limit = 50) => {
 };
 
 // ============ HELPER FUNCTIONS ============
-const calculateTier = (jobCount: number, totalInvested: number) => {
-  if (jobCount >= 10 || totalInvested >= 15000) return 'Diamond';
-  if (jobCount >= 7 || totalInvested >= 5000) return 'Platinum';
-  if (jobCount >= 4 || totalInvested >= 1500) return 'Gold';
-  if (jobCount >= 2 || totalInvested >= 500) return 'Silver';
-  return 'Bronze';
-};
-
 const getPriority = (suggestedDate: string) => {
   const today = new Date();
   const target = new Date(suggestedDate);
@@ -4904,7 +4897,75 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return payload;
   };
 
-  app.get('/api/clients', requireAuth, async (req, res) => {
+  const CLIENT_JOB_COLUMNS = [
+    'id', 'client_id', 'deal_id', 'job_name', 'job_type', 'job_date', 'amount',
+    'status', 'payment_method', 'payment_status', 'production_stage', 'created_at',
+  ].join(', ');
+
+  const loadClientJobs = async (
+    db: SupabaseClient,
+    userId: string,
+    clientId?: number,
+    columns = CLIENT_JOB_COLUMNS,
+  ): Promise<any[]> => {
+    const pageSize = 1000;
+    const rows: any[] = [];
+    let from = 0;
+
+    while (true) {
+      let query: any = db.from('jobs').select(columns).eq('user_id', userId);
+      if (clientId !== undefined) query = query.eq('client_id', clientId);
+      const { data, error } = await query
+        .order('id', { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+
+      const page = data || [];
+      rows.push(...page);
+      if (page.length < pageSize) break;
+      from += pageSize;
+    }
+
+    return rows.sort((left, right) => String(right.job_date || '').localeCompare(String(left.job_date || '')));
+  };
+
+  const loadRowsByIds = async (
+    db: SupabaseClient,
+    table: string,
+    columns: string,
+    idColumn: string,
+    ids: Array<string | number>,
+  ): Promise<any[]> => {
+    const uniqueIds = [...new Set(ids)];
+    const rows: any[] = [];
+    const batchSize = 200;
+    const pageSize = 1000;
+
+    for (let start = 0; start < uniqueIds.length; start += batchSize) {
+      const batch = uniqueIds.slice(start, start + batchSize);
+      let from = 0;
+      while (true) {
+        const { data, error } = await db.from(table).select(columns)
+          .in(idColumn, batch).order('id', { ascending: true })
+          .range(from, from + pageSize - 1);
+        if (error) throw error;
+
+        const page = data || [];
+        rows.push(...page);
+        if (page.length < pageSize) break;
+        from += pageSize;
+      }
+    }
+    return rows;
+  };
+
+  const asyncRoute = (
+    handler: (req: express.Request, res: express.Response) => Promise<unknown>,
+  ): express.RequestHandler => (req, res, next) => {
+    void handler(req, res).catch(next);
+  };
+
+  app.get('/api/clients', requireAuth, asyncRoute(async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
 
@@ -4914,16 +4975,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const [clientsRes, jobsRes, oppsRes] = await Promise.all([
       supabase.from('clients').select('*').eq('user_id', userId).order('name'),
-      supabase
-        .from('jobs')
-        // PERF: só as colunas que o front lê de client.jobs[] (ClientsPage:
-        // histórico/getActivityDates/filtro por tipo; ContractsPage: .length).
-        // total_invested continua somando amount; tenant isolation por user_id
-        // intacto. Antes era select('*') trazendo TODO o histórico (~2700 linhas
-        // x todas as colunas) por conta. NÃO fatiar (mudaria total_invested).
-        .select('id, client_id, job_name, job_type, job_date, amount, status, payment_method, payment_status')
-        .eq('user_id', userId)
-        .order('job_date', { ascending: false }),
+      // Pagina todos os cards: o limite padrão do PostgREST não pode truncar
+      // investimento, quantidade de compras ou nível do cliente.
+      loadClientJobs(supabase, userId),
       supabase
         .from('opportunities')
         .select('*')
@@ -4934,7 +4988,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     ]);
 
     const clients = clientsRes.data || [];
-    const jobs = jobsRes.data || [];
+    const jobs = jobsRes;
     const opps = oppsRes.data || [];
 
     const jobsByClient = new Map<number, any[]>();
@@ -4956,21 +5010,20 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const clientsWithStats = clients.map((client) => {
       const clientJobs = jobsByClient.get(client.id) || [];
-      const jobCount = clientJobs.length;
-      const totalInvested =
-        clientJobs.reduce((sum, j) => sum + (j.amount || 0), 0) || 0;
+      const value = summarizeClientValue(clientJobs);
 
       return {
         ...client,
         jobs: clientJobs,
         opportunities: oppsByClient.get(client.id) || [],
-        total_invested: totalInvested,
-        tier: calculateTier(jobCount, totalInvested),
+        total_invested: value.totalInvested,
+        purchase_count: value.purchaseCount,
+        tier: value.tier,
       };
     });
 
     res.json(clientsWithStats);
-  });
+  }));
 
   app.get('/api/clients/export/csv', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
@@ -4982,7 +5035,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.send(csv);
   });
 
-  app.get('/api/clients/:id', requireAuth, async (req, res) => {
+  app.get('/api/clients/:id', requireAuth, asyncRoute(async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
 
@@ -4995,12 +5048,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     if (!client) return res.status(404).json({ error: 'Client not found' });
 
-    const { data: jobs } = await supabase
-      .from('jobs')
-      .select('*')
-      .eq('client_id', client.id)
-      .eq('user_id', userId)
-      .order('job_date', { ascending: false });
+    const jobs = await loadClientJobs(supabase, userId, Number(client.id), '*');
 
     const futureDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const { data: opportunities } = await supabase
@@ -5016,17 +5064,17 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       priority: getPriority(opp.suggested_date)
     }));
 
-    const jobCount = jobs?.length || 0;
-    const totalInvested = jobs?.reduce((sum, j) => sum + (j.amount || 0), 0) || 0;
+    const value = summarizeClientValue(jobs);
 
     res.json({
       ...client,
-      jobs: jobs || [],
+      jobs,
       opportunities: opportunitiesWithPriority,
-      total_invested: totalInvested,
-      tier: calculateTier(jobCount, totalInvested)
+      total_invested: value.totalInvested,
+      purchase_count: value.purchaseCount,
+      tier: value.tier,
     });
-  });
+  }));
 
   app.post('/api/clients', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
@@ -5466,7 +5514,17 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return (data || []).length > 1;
   }
 
-  app.put('/api/jobs/:id', requireAuth, async (req, res) => {
+  async function linkedSaleIdForJob(db: SupabaseClient, userId: string, job: any): Promise<number | null> {
+    const directId = Number(job?.deal_id);
+    if (Number.isFinite(directId) && directId > 0) return directId;
+
+    const { data, error } = await db.from('deals').select('id')
+      .eq('user_id', userId).eq('converted_job_id', job.id).limit(1).maybeSingle();
+    if (error) throw error;
+    return data?.id ? Number(data.id) : null;
+  }
+
+  app.put('/api/jobs/:id', requireAuth, asyncRoute(async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const { client_id, job_type, job_date, job_time, job_end_time, job_name, amount, payment_method, payment_status, status, notes, production_stage, position, cover_image_url, labels } = req.body;
@@ -5480,8 +5538,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     if (!oldJob) return res.status(404).json({ error: 'Job not found' });
 
-    if (status === 'cancelled' && await hasMultipleSaleJobs(supabase, userId, oldJob.deal_id)) {
-      return res.status(409).json({ error: 'Cancele os ensaios juntos pela venda para preservar o financeiro.' });
+    if (status === 'cancelled' && await linkedSaleIdForJob(supabase, userId, oldJob)) {
+      return res.status(409).json({
+        error: 'Use “Cancelar venda” no card para preservar pagamentos, devolução e todos os ensaios vinculados.',
+      });
     }
 
     const scheduleChanged = job_date !== undefined || job_time !== undefined;
@@ -5609,7 +5669,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       ? (cancellationDeletion ? 'synced' : 'skipped')
       : await syncJobToGoogleCalendar(supabase, jobId, userId);
     res.json({ success: true, calendar_sync_status: calendarSyncStatus });
-  });
+  }));
 
   // Reordenar jobs em uma etapa. Body: { stage_id, job_ids: [in order] }
   // Atualiza o campo position de cada job em massa via supabaseAdmin pra
@@ -7131,7 +7191,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // GET /api/relatorios/vendas?from=YYYY-MM-DD&to=YYYY-MM-DD (ou ?mes=YYYY-MM)
   // Relatório de PRODUTOS vendidos: filtra pela data da VENDA (created_at do
   // item), com precisão de dia e "até" inclusivo. Mantém ?mes= por compat.
-  app.get('/api/relatorios/vendas', requireAuth, requirePermission('finance'), async (req, res) => {
+  app.get('/api/relatorios/vendas', requireAuth, requirePermission('finance'), asyncRoute(async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -7157,33 +7217,40 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       labelTo = new Date(Date.UTC(ano, mes, 0)).toISOString().slice(0, 10); // último dia do mês
     }
 
-    // Resumo: trabalhos criados (vendidos) no mês
-    const { data: jobsMes } = await supabase
-      .from('jobs')
-      .select('id, amount')
-      .eq('user_id', userId)
-      .gte('created_at', inicio)
-      .lt('created_at', fim);
-    const numTrabalhos = (jobsMes || []).length;
-    const totalVendido = (jobsMes || []).reduce((s: number, j: any) => s + (Number(j.amount) || 0), 0);
+    // Carrega todas as páginas para o relatório não variar quando a conta
+    // ultrapassar o limite padrão do PostgREST.
+    const reportJobs = await loadClientJobs(
+      supabase, userId, undefined, 'id, amount, status, created_at',
+    );
+    const eligibleJobs = reportJobs.filter((job: any) => isClientValueEligibleStatus(job.status));
+    const inicioMs = Date.parse(inicio);
+    const fimMs = Date.parse(fim);
+    const jobsMes = eligibleJobs.filter((job: any) => {
+      const createdAtMs = Date.parse(String(job.created_at || ''));
+      return Number.isFinite(createdAtMs) && createdAtMs >= inicioMs && createdAtMs < fimMs;
+    });
+    const numTrabalhos = jobsMes.length;
+    const totalVendido = jobsMes.reduce((s: number, j: any) => s + (Number(j.amount) || 0), 0);
     const ticketMedio = numTrabalhos > 0 ? totalVendido / numTrabalhos : 0;
 
     // Trabalhos do usuário — pra restringir job_items ao dono JÁ NA QUERY
     // (job_items não tem user_id; sem o .in abaixo a busca varreria itens de
     // todas as contas e filtraria só em memória — vazamento em logs + lento).
-    const { data: allJobs } = await supabase.from('jobs').select('id').eq('user_id', userId).limit(10000);
-    const jobIdsArr = (allJobs || []).map((j: any) => j.id);
+    const jobIdsArr = eligibleJobs.map((job: any) => job.id);
     const jobIds = new Set(jobIdsArr);
 
     // Produtos vendidos: itens de trabalho criados no período, por nome
-    const { data: items } = jobIdsArr.length
-      ? await adminClient
-          .from('job_items')
-          .select('catalog_name, catalog_type, catalog_value, quantidade, discount_value, job_id')
-          .in('job_id', jobIdsArr)
-          .gte('created_at', inicio)
-          .lt('created_at', fim)
-      : { data: [] as any[] };
+    const allItems = await loadRowsByIds(
+      adminClient,
+      'job_items',
+      'id, catalog_name, catalog_type, catalog_value, quantidade, discount_value, job_id, created_at',
+      'job_id',
+      jobIdsArr,
+    );
+    const items = allItems.filter((item: any) => {
+      const createdAtMs = Date.parse(String(item.created_at || ''));
+      return Number.isFinite(createdAtMs) && createdAtMs >= inicioMs && createdAtMs < fimMs;
+    });
     const prodMap = new Map<string, any>();
     for (const it of items || []) {
       if (!jobIds.has((it as any).job_id)) continue;
@@ -7228,7 +7295,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
 
     res.json({ periodo: { from: labelFrom, to: labelTo }, resumo: { totalVendido, numTrabalhos, ticketMedio }, produtos, compras });
-  });
+  }));
 
   // GET /api/relatorios/vendas-por-tipo?ano=&mes_inicio=&mes_fim=
   // Relatório gerencial: vendas separadas por TIPO DE ENSAIO (categoria), com o
@@ -7236,7 +7303,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // produtos = job_items) e a subdivisão de quais PACOTES (deal_items) foram
   // vendidos em cada categoria. "Vendido" = job criado (created_at) no período.
   // Isolamento por conta: jobs/deals filtrados por user_id; itens via .in(ids).
-  app.get('/api/relatorios/vendas-por-tipo', requireAuth, requirePermission('finance'), async (req, res) => {
+  app.get('/api/relatorios/vendas-por-tipo', requireAuth, requirePermission('finance'), asyncRoute(async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -7262,36 +7329,55 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
 
     // Ensaios (jobs) REALIZADOS no período (por job_date, "até" inclusivo)
-    const { data: jobsData } = await supabase
-      .from('jobs')
-      .select('id, job_type, amount, job_date, client_id, clients(name)')
-      .eq('user_id', userId)
-      .gte('job_date', dInicio)
-      .lte('job_date', dFimIncl);
-    const jobs = jobsData || [];
+    const jobsData = await loadClientJobs(
+      supabase,
+      userId,
+      undefined,
+      'id, deal_id, job_type, amount, job_date, client_id, status, clients(name)',
+    );
+    const jobs = jobsData.filter((job: any) => (
+      isClientValueEligibleStatus(job.status)
+      && String(job.job_date || '') >= dInicio
+      && String(job.job_date || '') <= dFimIncl
+    ));
     const jobIds = jobs.map((j: any) => j.id);
     const tipoByJob = new Map<number, string>(jobs.map((j: any) => [j.id, j.job_type || 'Sem tipo']));
     const clienteByJob = new Map<number, string>(
       jobs.map((j: any) => [j.id, ((j.clients as any)?.name) || 'Cliente']));
 
     // Extras (job_items) desses jobs
-    const itemsRaw = jobIds.length
-      ? (await adminClient.from('job_items')
-          .select('job_id, catalog_name, catalog_type, catalog_value, quantidade, discount_value')
-          .in('job_id', jobIds)).data || []
-      : [];
+    const itemsRaw = await loadRowsByIds(
+      adminClient,
+      'job_items',
+      'id, job_id, catalog_name, catalog_type, catalog_value, quantidade, discount_value',
+      'job_id',
+      jobIds,
+    );
 
-    // Pacotes: deal_items dos deals convertidos nesses jobs
-    const dealsData = jobIds.length
-      ? (await supabase.from('deals').select('id, converted_job_id').eq('user_id', userId).in('converted_job_id', jobIds)).data || []
-      : [];
-    const jobByDeal = new Map<string, number>(dealsData.map((d: any) => [d.id, d.converted_job_id]));
+    // Pacotes: usa o vínculo direto dos cards separados e mantém o fallback
+    // converted_job_id para vendas antigas ainda não normalizadas.
+    const linkedDealIds = [...new Set(jobs
+      .map((job: any) => Number(job.deal_id))
+      .filter((id: number) => Number.isFinite(id) && id > 0))];
+    const [linkedDealsResult, legacyDealsResult] = await Promise.all([
+      loadRowsByIds(supabase, 'deals', 'id, converted_job_id', 'id', linkedDealIds),
+      loadRowsByIds(supabase, 'deals', 'id, converted_job_id', 'converted_job_id', jobIds),
+    ]);
+    const dealsById = new Map<number, any>();
+    [...linkedDealsResult, ...legacyDealsResult]
+      .forEach((deal: any) => dealsById.set(Number(deal.id), deal));
+    const dealsData = [...dealsById.values()];
+    const fallbackJobByDeal = new Map<number, number>(
+      dealsData.map((deal: any) => [Number(deal.id), Number(deal.converted_job_id)]),
+    );
     const dealIds = dealsData.map((d: any) => d.id);
-    const dealItemsRaw = dealIds.length
-      ? (await adminClient.from('deal_items')
-          .select('deal_id, catalog_name, catalog_type, catalog_value, quantidade')
-          .in('deal_id', dealIds)).data || []
-      : [];
+    const dealItemsRaw = await loadRowsByIds(
+      adminClient,
+      'deal_items',
+      'id, deal_id, job_id, catalog_name, catalog_type, catalog_value, quantidade',
+      'deal_id',
+      dealIds,
+    );
 
     // PRODUTO (foto avulsa, álbum, produtos) NÃO entra no faturamento — vira
     // observação por pessoa (o que ela comprou a mais). Combo/serviço continuam
@@ -7323,7 +7409,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     // deal_items: produto → bucket de produtos; resto → pacote (faturamento)
     for (const di of dealItemsRaw as any[]) {
-      const jobId = jobByDeal.get(di.deal_id);
+      const explicitJobId = di.job_id == null ? null : Number(di.job_id);
+      const jobId = explicitJobId ?? fallbackJobByDeal.get(Number(di.deal_id));
       if (jobId == null || !tipoByJob.has(jobId)) continue;
       const qtd = Number(di.quantidade) || 1;
       const valor = (Number(di.catalog_value) || 0) * qtd;
@@ -7430,7 +7517,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }), { numEnsaios: 0, valorEnsaios: 0, valorExtras: 0, valorTotal: 0, valorProdutos: 0 });
 
     res.json({ periodo: { from: dInicio, to: dFimIncl }, totais, categorias });
-  });
+  }));
 
   // GET /api/relatorios/entrada-saida?from=YYYY-MM-DD&to=YYYY-MM-DD
   // ENTRADA = pagamentos reais recebidos no período (job_payments) — mesma base
@@ -22271,10 +22358,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         error: migrationMissing ? 'A atualização de devoluções ainda não foi aplicada no banco.' : error.message,
       });
     }
-    await logActivity(req, {
-      action: 'record_sale_refund', entityType: 'sale_cancellation', entityId: req.params.id,
-      summary: 'Devolução da venda registrada', details: data,
-    });
+    if (!data?.already_recorded) {
+      const { data: refundCancellation } = await adminClient.from('sale_cancellations')
+        .select('deal_id').eq('id', req.params.id).eq('user_id', userId).maybeSingle();
+      await logActivity(req, {
+        action: 'record_sale_refund', entityType: 'deal',
+        entityId: refundCancellation?.deal_id || req.params.id,
+        summary: 'Devolução da venda registrada', details: data,
+      });
+    }
     return res.json(data);
   });
 
@@ -22663,7 +22755,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // ============ STATS ROUTE ============
-  app.get('/api/stats', requireAuth, async (req, res) => {
+  app.get('/api/stats', requireAuth, asyncRoute(async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const now = new Date();
@@ -22671,14 +22763,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     const [clientsRes, jobsRes, leadsRes] = await Promise.all([
       supabase.from('clients').select('id, created_at').eq('user_id', userId),
-      // Pré-reservas são datas SEGURADAS (não vendas): não entram na contagem
-      // de ensaios do mês nem no faturamento. neq tolera contas sem a coluna.
-      supabase.from('jobs').select('job_type, amount, job_date, status').eq('user_id', userId).neq('status', 'pre_reserved'),
+      loadClientJobs(supabase, userId, undefined, 'id, job_type, amount, job_date, status'),
       supabase.from('leads').select('status').eq('user_id', userId),
     ]);
 
     const clients = clientsRes.data || [];
-    const jobs = jobsRes.data || [];
+    const jobs = jobsRes.filter((job: any) => isClientValueEligibleStatus(job.status));
     const leads = leadsRes.data || [];
 
     const totalClientsBase = clients.length;
@@ -22712,7 +22802,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       revenueByType: revenueByTypeArray,
       dailyRevenue
     });
-  });
+  }));
 
   // ============ CSV IMPORT ROUTE ============
   app.post('/api/clients/import/csv', requireAuth, async (req, res) => {
