@@ -22261,7 +22261,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // Contexto comercial do card usado pelas ações de separação e cancelamento.
-  app.get('/api/jobs/:id/sale-context', requireAuth, denyProductionOnly, async (req, res) => {
+  app.get('/api/jobs/:id/sale-context', requireAuth, denyProductionOnly, asyncRoute(async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -22322,9 +22322,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       ],
       received, cancellation, refunds,
     });
-  });
+  }));
 
-  app.post('/api/jobs/:id/split-sale', requireAuth, denyProductionOnly, requirePermission('finance'), async (req, res) => {
+  app.post('/api/jobs/:id/split-sale', requireAuth, denyProductionOnly, requirePermission('finance'), asyncRoute(async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -22344,9 +22344,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       summary: `Venda separada em ${sessions.length} ensaios`, details: data,
     });
     return res.json(data);
-  });
+  }));
 
-  app.post('/api/sale-cancellations/:id/refunds', requireAuth, denyProductionOnly, requirePermission('finance'), async (req, res) => {
+  app.post('/api/sale-cancellations/:id/refunds', requireAuth, denyProductionOnly, requirePermission('finance'), asyncRoute(async (req, res) => {
     const userId = (req as any).userId;
     const adminClient = supabaseAdmin || (req as any).supabase as SupabaseClient;
     const { data, error } = await adminClient.rpc('record_sale_refund', {
@@ -22368,10 +22368,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       });
     }
     return res.json(data);
-  });
+  }));
 
   // Cancela a venda sem apagar pagamentos, contratos, itens ou o card histórico.
-  app.post('/api/deals/:id/cancel-sale', requireAuth, denyProductionOnly, requirePermission('finance'), async (req, res) => {
+  app.post('/api/deals/:id/cancel-sale', requireAuth, denyProductionOnly, requirePermission('finance'), asyncRoute(async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -22460,7 +22460,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       calendar_sync: calendarPending.length > 0 ? 'pending' : 'synced',
       calendar_pending_job_ids: calendarPending,
     });
-  });
+  }));
 
   app.get('/api/extension/agenda', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
