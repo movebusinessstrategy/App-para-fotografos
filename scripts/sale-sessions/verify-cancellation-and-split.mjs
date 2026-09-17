@@ -17,6 +17,7 @@ try {
     '-f', 'migrations/077_sale_sessions.sql',
     '-f', 'scripts/sale-sessions/schema-cancellation-fixture.sql',
     '-f', 'migrations/079_sale_cancellations_and_job_split.sql',
+    '-f', 'migrations/080_split_sale_items_between_jobs.sql',
     '-f', 'scripts/sale-sessions/verify-cancellation-and-split.sql',
   ]);
   console.log(output);
@@ -26,4 +27,3 @@ try {
 } finally {
   if (started) run('pg_ctl', ['-D', data, '-m', 'fast', '-w', 'stop']);
 }
-

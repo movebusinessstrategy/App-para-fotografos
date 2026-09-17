@@ -6183,11 +6183,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('user_id', userId)
       .maybeSingle();
 
-    // Busca deal_items do deal vinculado
+    // Busca os itens vendidos que pertencem a este card. Antes da separação,
+    // os itens ainda não têm job_id e aparecem no único card da venda.
     let dealItems: any[] = [];
-    if (deal?.id && jobSaleBase(job) === null) {
+    if (deal?.id) {
       const { data } = await adminClient.from('deal_items').select('*').eq('deal_id', deal.id).order('created_at');
-      dealItems = data || [];
+      const saleItems = data || [];
+      const hasCardAssignments = saleItems.some((item: any) => item.job_id != null);
+      dealItems = hasCardAssignments
+        ? saleItems.filter((item: any) => Number(item.job_id) === jobId)
+        : saleItems;
     }
 
     // Busca job_items (adicionados diretamente ao job na aba financeiro)
@@ -22193,6 +22198,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       .eq('user_id', userId).or(`deal_id.eq.${deal.id},id.eq.${deal.converted_job_id || 0}`)
       .order('sale_session_index').order('id');
     const saleJobIds = (saleJobs || []).map((row: any) => row.id);
+    const [{ data: dealItems }, { data: jobItems }] = await Promise.all([
+      adminClient.from('deal_items')
+        .select('id,catalog_type,catalog_id,catalog_name,catalog_value,quantidade,job_id')
+        .eq('deal_id', deal.id).order('created_at'),
+      saleJobIds.length > 0
+        ? adminClient.from('job_items')
+          .select('id,catalog_type,catalog_id,catalog_name,catalog_value,quantidade,discount_value,job_id')
+          .in('job_id', saleJobIds).order('created_at')
+        : Promise.resolve({ data: [] }),
+    ]);
     let received = 0;
     if (saleJobIds.length > 0) {
       const { data: sourcePayments } = await adminClient.from('job_payments').select('id,amount').in('job_id', saleJobIds);
@@ -22213,7 +22228,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     return res.json({
       deal: { id: deal.id, title: deal.title, value: Number(deal.value) || 0,
         gross: dealGross(deal), discount: Number(deal.discount) || 0 },
-      jobs: saleJobs || [], received, cancellation, refunds,
+      jobs: saleJobs || [],
+      items: [
+        ...(dealItems || []).map((item: any) => ({ ...item, source: 'deal' })),
+        ...(jobItems || []).map((item: any) => ({ ...item, source: 'job' })),
+      ],
+      received, cancellation, refunds,
     });
   });
 

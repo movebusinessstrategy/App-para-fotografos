@@ -14,6 +14,7 @@ type SaleJob = Pick<JobWithProduction, 'id' | 'job_type' | 'job_name' | 'job_dat
 interface SaleContext {
   deal: { id: number; title?: string; value: number; gross: number; discount: number };
   jobs: SaleJob[];
+  items?: SaleItem[];
   received: number;
   cancellation?: {
     id: string;
@@ -26,6 +27,17 @@ interface SaleContext {
   } | null;
 }
 
+interface SaleItem {
+  id: string;
+  source: 'deal' | 'job';
+  catalog_type: string;
+  catalog_name: string;
+  catalog_value: number;
+  quantidade: number;
+  discount_value?: number | null;
+  job_id?: number | null;
+}
+
 interface SplitDraft {
   job_type: string;
   job_name: string;
@@ -36,6 +48,26 @@ interface SplitDraft {
 
 const money = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const today = () => new Date().toISOString().slice(0, 10);
+const itemKey = (item: SaleItem) => `${item.source}:${item.id}`;
+const itemValue = (item: SaleItem) => Math.max(
+  0,
+  (Number(item.catalog_value) || 0) * (Number(item.quantidade) || 1) - (Number(item.discount_value) || 0),
+);
+
+function suggestedItemTarget(item: SaleItem, index: number, rowCount: number) {
+  const normalized = item.catalog_name.toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if (rowCount > 1 && normalized.includes('newborn')) return 1;
+  if (normalized.includes('gestante')) return 0;
+  return Math.min(index, rowCount - 1);
+}
+
+function initialItemAssignments(items: SaleItem[], rows: SplitDraft[], jobs: SaleJob[]) {
+  const jobIndex = new Map(jobs.map((saleJob, index) => [Number(saleJob.id), index]));
+  return Object.fromEntries(items.map((item, index) => {
+    const existingTarget = item.job_id == null ? undefined : jobIndex.get(Number(item.job_id));
+    return [itemKey(item), existingTarget ?? suggestedItemTarget(item, index, rows.length)];
+  }));
+}
 
 function initialSplit(job: JobWithProduction, context: SaleContext): SplitDraft[] {
   const gross = Number(context.deal.gross) || 0;
@@ -83,16 +115,44 @@ function SplitSaleModal({ job, context, stages, onClose, onSaved }: {
   onSaved: () => void;
 }) {
   const [rows, setRows] = useState<SplitDraft[]>(() => initialSplit(job, context));
+  const saleItems = context.items || [];
+  const dealItems = saleItems.filter(item => item.source === 'deal');
+  const [itemAssignments, setItemAssignments] = useState<Record<string, number>>(
+    () => initialItemAssignments(saleItems, initialSplit(job, context), context.jobs),
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const grossValues = rows.map(row => Math.max(0, Number(row.gross_amount) || 0));
+  const detailedItemsTotal = dealItems.reduce((sum, item) => sum + itemValue(item), 0);
+  const valuesComeFromItems = dealItems.length > 0 && Math.abs(detailedItemsTotal - context.deal.gross) < 0.01;
+  const grossValues = valuesComeFromItems
+    ? rows.map((_, rowIndex) => dealItems.reduce(
+      (sum, item) => sum + (itemAssignments[itemKey(item)] === rowIndex ? itemValue(item) : 0), 0,
+    ))
+    : rows.map(row => Math.max(0, Number(row.gross_amount) || 0));
   const grossTotal = grossValues.reduce((sum, value) => sum + value, 0);
-  const discounts = useMemo(() => allocateMoney(context.deal.discount, grossValues), [context.deal.discount, rows]);
+  const discounts = useMemo(
+    () => allocateMoney(context.deal.discount, grossValues),
+    [context.deal.discount, grossValues.join('|')],
+  );
   const difference = Math.round((context.deal.gross - grossTotal) * 100) / 100;
-  const valid = Math.abs(difference) < 0.01 && rows.every(row => row.job_type.trim() && row.job_name.trim());
+  const itemsHaveDestination = saleItems.every(item => {
+    const target = itemAssignments[itemKey(item)];
+    return Number.isInteger(target) && target >= 0 && target < rows.length;
+  });
+  const valid = Math.abs(difference) < 0.01
+    && itemsHaveDestination
+    && rows.every(row => row.job_type.trim() && row.job_name.trim());
 
   const patchRow = (index: number, patch: Partial<SplitDraft>) => {
     setRows(current => current.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row));
+  };
+
+  const removeRow = (index: number) => {
+    setRows(current => current.filter((_, rowIndex) => rowIndex !== index));
+    setItemAssignments(current => Object.fromEntries(Object.entries(current).map(([key, target]) => [
+      key,
+      target === index ? 0 : target > index ? target - 1 : target,
+    ])));
   };
 
   const submit = async () => {
@@ -108,6 +168,12 @@ function SplitSaleModal({ job, context, stages, onClose, onSaved }: {
       gross_amount: grossValues[index],
       discount_amount: discounts[index],
       amount: Math.round((grossValues[index] - discounts[index]) * 100) / 100,
+      deal_item_ids: saleItems
+        .filter(item => item.source === 'deal' && itemAssignments[itemKey(item)] === index)
+        .map(item => item.id),
+      job_item_ids: saleItems
+        .filter(item => item.source === 'job' && itemAssignments[itemKey(item)] === index)
+        .map(item => item.id),
     }));
     try {
       const response = await authFetch(`/api/jobs/${job.id}/split-sale`, {
@@ -133,7 +199,7 @@ function SplitSaleModal({ job, context, stages, onClose, onSaved }: {
           <section key={index} className="space-y-3 rounded-2xl border border-gray-200 p-4 dark:border-gray-700">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-bold text-gray-900 dark:text-white">{index === 0 ? 'Card atual' : `Novo card ${index}`}</h4>
-              {index > 1 && <button type="button" onClick={() => setRows(current => current.filter((_, i) => i !== index))} className="text-xs font-semibold text-red-500">Remover</button>}
+              {index > 1 && <button type="button" onClick={() => removeRow(index)} className="text-xs font-semibold text-red-500">Remover</button>}
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="text-xs font-semibold text-gray-600 dark:text-gray-300">Tipo do ensaio
@@ -143,7 +209,14 @@ function SplitSaleModal({ job, context, stages, onClose, onSaved }: {
                 <input value={row.job_name} onChange={event => patchRow(index, { job_name: event.target.value })} className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800" />
               </label>
               <label className="text-xs font-semibold text-gray-600 dark:text-gray-300">Valor bruto
-                <input type="number" min="0" step="0.01" value={row.gross_amount} onChange={event => patchRow(index, { gross_amount: event.target.value })} className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800" />
+                {valuesComeFromItems ? (
+                  <span className="mt-1 block rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-semibold text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
+                    {money(grossValues[index])}
+                  </span>
+                ) : (
+                  <input type="number" min="0" step="0.01" value={row.gross_amount} onChange={event => patchRow(index, { gross_amount: event.target.value })} className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800" />
+                )}
+                {valuesComeFromItems && <span className="mt-1 block text-[11px] font-normal text-gray-400">Calculado pelos itens deste card.</span>}
               </label>
               <label className="text-xs font-semibold text-gray-600 dark:text-gray-300">Data do ensaio
                 <input type="date" value={row.job_date} onChange={event => patchRow(index, { job_date: event.target.value })} className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800" />
@@ -159,11 +232,44 @@ function SplitSaleModal({ job, context, stages, onClose, onSaved }: {
           </section>
         ))}
         <button type="button" onClick={() => setRows(current => [...current, { job_type: 'Novo ensaio', job_name: 'Novo ensaio', job_date: '', gross_amount: '0.00', production_stage: job.production_stage || stages[0]?.id || '' }])} className="text-sm font-semibold text-gold-600 dark:text-gold-400">+ Adicionar outro ensaio</button>
+        {saleItems.length > 0 && (
+          <section className="space-y-3 border-t border-gray-200 pt-4 dark:border-gray-700">
+            <div>
+              <h4 className="text-sm font-bold text-gray-900 dark:text-white">Combos e produtos vendidos</h4>
+              <p className="mt-1 text-xs text-gray-500">Escolha em qual card cada item deve aparecer.</p>
+            </div>
+            <div className="space-y-2">
+              {saleItems.map(item => (
+                <div key={itemKey(item)} className="flex flex-col gap-2 rounded-xl border border-gray-200 px-3 py-3 dark:border-gray-700 sm:flex-row sm:items-center">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-gray-900 dark:text-white">{item.catalog_name}</p>
+                    <p className="text-xs text-gray-500">
+                      {item.catalog_type === 'combo' ? 'Combo' : item.catalog_type === 'produto' ? 'Produto' : 'Serviço'}
+                      {' · '}{Number(item.quantidade) || 1}x · {money(itemValue(item))}
+                      {item.source === 'job' ? ' · adicional' : ''}
+                    </p>
+                  </div>
+                  <label className="text-[11px] font-semibold text-gray-500 sm:w-48">Card de destino
+                    <select
+                      value={itemAssignments[itemKey(item)] ?? ''}
+                      onChange={event => setItemAssignments(current => ({ ...current, [itemKey(item)]: Number(event.target.value) }))}
+                      className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-2 py-2 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+                    >
+                      {rows.map((row, rowIndex) => (
+                        <option key={rowIndex} value={rowIndex}>{rowIndex === 0 ? 'Card atual' : row.job_name || `Novo card ${rowIndex}`}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
         <div className="rounded-xl border border-gray-200 p-3 text-sm dark:border-gray-700">
           <div className="flex justify-between"><span>Total da venda</span><strong>{money(context.deal.gross)}</strong></div>
           <div className="mt-1 flex justify-between"><span>Total distribuído</span><strong className={valid ? 'text-emerald-600' : 'text-red-600'}>{money(grossTotal)}</strong></div>
           {!valid && <p className="mt-2 text-xs text-red-600">Ajuste {money(Math.abs(difference))} para os valores fecharem exatamente.</p>}
-          <p className="mt-2 text-xs text-gray-500">Recebimentos preservados: {money(context.received)}. Produtos e arquivos permanecem no card atual.</p>
+          <p className="mt-2 text-xs text-gray-500">Recebimentos preservados: {money(context.received)}. Os produtos seguem o destino escolhido; os arquivos permanecem no card atual.</p>
         </div>
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
       </div>
@@ -386,4 +492,3 @@ export function JobSaleActions({ job, stages, onChanged }: { job: JobWithProduct
     </section>
   );
 }
-
