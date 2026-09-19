@@ -54,7 +54,25 @@ export type MetaWebhookRuntimeDeps = {
   }) => Promise<void>;
   scheduleReply?: (userId: string, phone: string, type: string, waNumber: string) => void;
   markHumanActive?: (userId: string, phone: string, waNumber: string) => Promise<void>;
+  // Efeito colateral que falhou sem derrubar o evento (a mensagem já está salva).
+  reportSideEffectError?: (scope: 'marketing' | 'funnel', error: unknown, context: SideEffectContext) => void;
+  // Mensagem mais velha que isso não agenda resposta (retry com backoff ou reprocessamento).
+  replyFreshnessMs?: number;
 };
+
+export type SideEffectContext = { userId: string; messageId: string; eventKey: string };
+
+const DEFAULT_REPLY_FRESHNESS_MS = 2 * 60 * 60 * 1000;
+
+export function shouldScheduleReply(
+  messageTimestamp: string | null | undefined,
+  nowMs: number,
+  freshnessMs = DEFAULT_REPLY_FRESHNESS_MS,
+): boolean {
+  const sentAt = Date.parse(String(messageTimestamp || ''));
+  if (Number.isNaN(sentAt)) return true;
+  return nowMs - sentAt <= freshnessMs;
+}
 
 export type MetaWebhookIngestResult = {
   accepted: number;
@@ -442,19 +460,30 @@ async function captureInboundMarketingContact(
     || message.fromMe
     || !deps.captureContact
   ) return;
-  await deps.captureContact({
-    userId: bound.account.user_id,
-    phone: message.customerPhone,
-    waNumber: bound.waNumber,
-    messageId: message.id,
-    messageBody: message.body || null,
-    messageTimestamp: message.timestamp,
-    ctwaClid: typeof message.referral?.ctwa_clid === 'string'
-      ? message.referral.ctwa_clid
-      : null,
-    wabaId: bound.account.waba_id,
-    referral: message.referral,
-  });
+  // Atribuição de marketing é enriquecimento: se a RPC falhar (ex.: 074 lançando
+  // MARKETING_FACT_IDEMPOTENCY_CONFLICT a partir da 2ª mensagem do lead), a
+  // mensagem já está salva e o resto do processamento (resposta, funil,
+  // transcrição) tem que seguir. Antes, esse throw matava 95% dos eventos.
+  try {
+    await deps.captureContact({
+      userId: bound.account.user_id,
+      phone: message.customerPhone,
+      waNumber: bound.waNumber,
+      messageId: message.id,
+      messageBody: message.body || null,
+      messageTimestamp: message.timestamp,
+      ctwaClid: typeof message.referral?.ctwa_clid === 'string'
+        ? message.referral.ctwa_clid
+        : null,
+      wabaId: bound.account.waba_id,
+      referral: message.referral,
+    });
+  } catch (error: any) {
+    console.warn('[Webhook Meta] captura de marketing falhou; evento segue', error?.code || error?.message, message.id);
+    deps.reportSideEffectError?.('marketing', error, {
+      userId: bound.account.user_id, messageId: message.id, eventKey: bound.event.eventKey,
+    });
+  }
 }
 
 async function processMessage(
@@ -495,7 +524,9 @@ async function processMessage(
   );
   if (normalizedBound.event.kind === 'message' && !message.fromMe) {
     await captureInboundMarketingContact(deps, normalizedBound);
-    deps.scheduleReply?.(bound.account.user_id, message.customerPhone, message.type, bound.waNumber);
+    if (shouldScheduleReply(message.timestamp, Date.now(), deps.replyFreshnessMs)) {
+      deps.scheduleReply?.(bound.account.user_id, message.customerPhone, message.type, bound.waNumber);
+    }
   }
   if (normalizedBound.event.kind === 'smb_message_echo') {
     try {
