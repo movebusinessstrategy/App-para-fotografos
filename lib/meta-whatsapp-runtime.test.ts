@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createMetaWebhookRuntime, shouldScheduleReply } from './meta-whatsapp-runtime.js';
+import { normalizeMetaWebhookPayload } from './meta-whatsapp-coexistence.js';
+import {
+  buildDeliveryFailure,
+  buildFunnelEvent,
+  buildInvisibleOutboundEvent,
+  createMetaWebhookRuntime,
+  shouldScheduleReply,
+} from './meta-whatsapp-runtime.js';
 
 type Query = { table: string; op: string; value?: unknown };
 
@@ -106,4 +113,195 @@ test('mensagem velha reprocessada não agenda resposta automática', async () =>
   await runtime.ingest(inboundPayload(threeHoursAgo));
 
   assert.deepEqual(replies, []);
+});
+
+// ── Ganchos do funil e da cadência ─────────────────────────────────────────
+type Bound = Parameters<typeof buildFunnelEvent>[0];
+const OWN_NUMBER = '554399990000';
+const CUSTOMER = '5543988887777';
+const STATUS_SECONDS = 1758290000;
+
+function boundsFor(payload: unknown): Bound[] {
+  return normalizeMetaWebhookPayload(payload).map(event => ({ account: ACCOUNT, waNumber: OWN_NUMBER, event }));
+}
+
+function changePayload(field: string, value: Record<string, unknown>) {
+  return {
+    object: 'whatsapp_business_account',
+    entry: [{
+      id: 'waba-1',
+      changes: [{
+        field,
+        value: { metadata: { phone_number_id: 'phone-1', display_phone_number: OWN_NUMBER }, ...value },
+      }],
+    }],
+  };
+}
+
+function echoPayload() {
+  return changePayload('smb_message_echoes', {
+    message_echoes: [{
+      id: 'wamid.eco', from: OWN_NUMBER, to: CUSTOMER, timestamp: String(STATUS_SECONDS),
+      type: 'text', text: { body: 'Oi, tudo bem? Aqui é do estúdio' },
+    }],
+  });
+}
+
+function documentPayload() {
+  return changePayload('messages', {
+    contacts: [{ wa_id: CUSTOMER, profile: { name: 'Cliente' } }],
+    messages: [{
+      id: 'wamid.doc', from: CUSTOMER, timestamp: String(STATUS_SECONDS), type: 'document',
+      document: { id: 'media-1', caption: 'Segue o arquivo', filename: 'Orcamento Gestante.pdf', mime_type: 'application/pdf' },
+    }],
+  });
+}
+
+function statusPayload(status: string, extra: Record<string, unknown> = {}) {
+  return changePayload('messages', {
+    statuses: [{ id: 'wamid.status', status, timestamp: String(STATUS_SECONDS), recipient_id: CUSTOMER, ...extra }],
+  });
+}
+
+function statusHandler(rowsUpdated: number) {
+  return (q: Query) => {
+    if (q.table === 'wa_messages' && q.op === 'update') {
+      return { data: Array.from({ length: rowsUpdated }, () => ({ message_id: 'wamid.status' })) };
+    }
+    return inboxMissingHandler(q);
+  };
+}
+
+const onlyDigits = (value: string) => value.replace(/\D/g, '');
+
+test('buildFunnelEvent: cliente vira in/customer, eco vira out/human_app e status fica de fora', () => {
+  const [inbound] = boundsFor(inboundPayload(STATUS_SECONDS));
+  const event = buildFunnelEvent(inbound);
+  assert.deepEqual(event, {
+    userId: 'tenant-1', waNumber: OWN_NUMBER, slot: 'main', phone: CUSTOMER, messageId: 'wamid.teste',
+    occurredAt: new Date(STATUS_SECONDS * 1000).toISOString(), direction: 'in', origin: 'customer',
+    provider: 'meta', type: 'text', body: 'Oi, quero saber o valor', filename: null, mimeType: null,
+    contactName: 'Cliente', isBot: false,
+  });
+
+  const [echo] = boundsFor(echoPayload());
+  const echoEvent = buildFunnelEvent(echo);
+  assert.equal(echoEvent?.direction, 'out');
+  assert.equal(echoEvent?.origin, 'human_app');
+  assert.equal(echoEvent?.phone, CUSTOMER);
+  assert.equal(echoEvent?.isBot, false);
+
+  const [status] = boundsFor(statusPayload('sent'));
+  assert.equal(buildFunnelEvent(status), null);
+});
+
+test('buildFunnelEvent: nome do arquivo vem do filename mesmo com legenda', () => {
+  const [doc] = boundsFor(documentPayload());
+  const event = buildFunnelEvent(doc);
+  assert.equal(event?.type, 'document');
+  assert.equal(event?.body, 'Segue o arquivo');
+  assert.equal(event?.filename, 'Orcamento Gestante.pdf');
+  assert.equal(event?.mimeType, 'application/pdf');
+});
+
+test('status sent e failed viram eventos só no status certo', () => {
+  const [sent] = boundsFor(statusPayload('sent'));
+  const [failed] = boundsFor(statusPayload('failed', { errors: [{ code: 131049, title: 'Não entregue' }] }));
+  const [read] = boundsFor(statusPayload('read'));
+  assert.equal(buildInvisibleOutboundEvent(failed, onlyDigits), null);
+  assert.equal(buildInvisibleOutboundEvent(read, onlyDigits), null);
+  assert.equal(buildDeliveryFailure(sent), null);
+  assert.equal(buildDeliveryFailure(read), null);
+  const [noRecipient] = boundsFor(statusPayload('sent', { recipient_id: '' }));
+  assert.equal(buildInvisibleOutboundEvent(noRecipient, onlyDigits), null);
+});
+
+test('observeMessage lançando não interrompe o evento e reporta funnel', async () => {
+  const { db, calls } = fakeDb(inboxMissingHandler);
+  const order: string[] = [];
+  const reported: string[] = [];
+  const runtime = createMetaWebhookRuntime({
+    db,
+    decryptToken: () => null,
+    normalizePhone: onlyDigits,
+    observeMessage: async () => { order.push('funnel'); throw new Error('funil fora do ar'); },
+    captureContact: async () => { order.push('marketing'); },
+    scheduleReply: () => { order.push('reply'); },
+    reportSideEffectError: (scope) => { reported.push(scope); },
+  });
+
+  const result = await runtime.ingest(inboundPayload(Math.floor(Date.now() / 1000)));
+
+  assert.equal(result.accepted, 1);
+  assert.ok(calls.some(q => q.table === 'wa_messages' && q.op === 'insert'), 'mensagem gravada');
+  assert.deepEqual(order, ['funnel', 'marketing', 'reply'], 'funil antes do marketing e da resposta');
+  assert.deepEqual(reported, ['funnel']);
+});
+
+test('status sent sem linha em wa_messages vira fala meta_bot; com linha não', async () => {
+  const observed: any[] = [];
+  const failures: unknown[] = [];
+  const deps = (rows: number) => ({
+    db: fakeDb(statusHandler(rows)).db,
+    decryptToken: () => null,
+    normalizePhone: onlyDigits,
+    observeMessage: async (event: any) => { observed.push(event); },
+    onDeliveryFailed: async (input: unknown) => { failures.push(input); },
+  });
+
+  await createMetaWebhookRuntime(deps(1)).ingest(statusPayload('sent'));
+  assert.equal(observed.length, 0, 'mensagem do CRM já gravada não é fala invisível');
+
+  await createMetaWebhookRuntime(deps(0)).ingest(statusPayload('sent'));
+  assert.equal(observed.length, 1);
+  assert.deepEqual(observed[0], {
+    userId: 'tenant-1', waNumber: OWN_NUMBER, slot: 'main', phone: CUSTOMER, messageId: 'wamid.status',
+    occurredAt: new Date(STATUS_SECONDS * 1000).toISOString(), direction: 'out', origin: 'meta_bot',
+    provider: 'meta', type: 'text', body: null, filename: null, mimeType: null, contactName: null, isBot: true,
+  });
+  assert.deepEqual(failures, []);
+});
+
+test('status failed chama onDeliveryFailed com os erros da Meta', async () => {
+  const failures: unknown[] = [];
+  const observed: unknown[] = [];
+  const runtime = createMetaWebhookRuntime({
+    db: fakeDb(statusHandler(0)).db,
+    decryptToken: () => null,
+    normalizePhone: onlyDigits,
+    observeMessage: async (event) => { observed.push(event); },
+    onDeliveryFailed: async (input) => { failures.push(input); },
+  });
+
+  await runtime.ingest(statusPayload('failed', {
+    errors: [{ code: 131049, title: 'Não entregue para manter o engajamento' }, { code: 'x', message: 'Sem título' }],
+  }));
+
+  assert.deepEqual(failures, [{
+    userId: 'tenant-1', waNumber: OWN_NUMBER, messageId: 'wamid.status',
+    timestamp: new Date(STATUS_SECONDS * 1000).toISOString(),
+    errors: [
+      { code: 131049, title: 'Não entregue para manter o engajamento' },
+      { code: null, title: 'Sem título' },
+    ],
+  }]);
+  assert.deepEqual(observed, [], 'falha não conta como fala do estúdio');
+});
+
+test('onDeliveryFailed lançando reporta followup e o status segue processado', async () => {
+  const reported: string[] = [];
+  const { db, calls } = fakeDb(statusHandler(1));
+  const runtime = createMetaWebhookRuntime({
+    db,
+    decryptToken: () => null,
+    normalizePhone: onlyDigits,
+    onDeliveryFailed: async () => { throw new Error('cadência fora do ar'); },
+    reportSideEffectError: (scope) => { reported.push(scope); },
+  });
+
+  const result = await runtime.ingest(statusPayload('failed'));
+
+  assert.equal(result.accepted, 1);
+  assert.ok(calls.some(q => q.table === 'wa_messages' && q.op === 'update'), 'status gravado');
+  assert.deepEqual(reported, ['followup']);
 });

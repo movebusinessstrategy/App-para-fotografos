@@ -6,6 +6,8 @@ import {
   type NormalizedMetaMessage,
   type NormalizedMetaWebhookEvent,
 } from './meta-whatsapp-coexistence.js';
+import type { FunnelMessageEvent } from '../funnel-tracker.js';
+import type { DeliveryFailureInput } from '../src/features/followups/types.js';
 
 type MetaAccount = {
   id: string;
@@ -54,8 +56,10 @@ export type MetaWebhookRuntimeDeps = {
   }) => Promise<void>;
   scheduleReply?: (userId: string, phone: string, type: string, waNumber: string) => void;
   markHumanActive?: (userId: string, phone: string, waNumber: string) => Promise<void>;
+  observeMessage?: (event: FunnelMessageEvent) => Promise<unknown>;
+  onDeliveryFailed?: (input: DeliveryFailureInput) => Promise<void>;
   // Efeito colateral que falhou sem derrubar o evento (a mensagem já está salva).
-  reportSideEffectError?: (scope: 'marketing' | 'funnel', error: unknown, context: SideEffectContext) => void;
+  reportSideEffectError?: (scope: 'marketing' | 'funnel' | 'followup', error: unknown, context: SideEffectContext) => void;
   // Mensagem mais velha que isso não agenda resposta (retry com backoff ou reprocessamento).
   replyFreshnessMs?: number;
 };
@@ -242,16 +246,140 @@ async function ensureChannelAccount(db: SupabaseClient, bound: BoundEvent): Prom
   return retry.data?.id ? String(retry.data.id) : null;
 }
 
+const FUNNEL_ROUTES: Partial<Record<MetaWebhookEventKind, Pick<FunnelMessageEvent, 'direction' | 'origin'>>> = {
+  message: { direction: 'in', origin: 'customer' },
+  smb_message_echo: { direction: 'out', origin: 'human_app' },
+};
+
+function funnelContactName(message: NormalizedMetaMessage): string | null {
+  return String(message.raw._contact_name || '').trim() || null;
+}
+
+// Cliente escrevendo ou eco do app do celular. Histórico e status ficam de fora.
+export function buildFunnelEvent(bound: BoundEvent): FunnelMessageEvent | null {
+  const message = bound.event.message;
+  const route = FUNNEL_ROUTES[bound.event.kind];
+  if (!message || !route) return null;
+  if (bound.event.kind === 'message' && message.fromMe) return null;
+  return {
+    userId: bound.account.user_id,
+    waNumber: bound.waNumber,
+    slot: 'main',
+    phone: message.customerPhone,
+    messageId: message.id,
+    occurredAt: message.timestamp || new Date().toISOString(),
+    ...route,
+    provider: 'meta',
+    type: message.type === 'voice' ? 'audio' : message.type,
+    body: message.body || null,
+    filename: message.filename,
+    mimeType: message.mimeType,
+    contactName: funnelContactName(message),
+    isBot: false,
+  };
+}
+
+function statusTimestampIso(value: unknown): string | null {
+  const seconds = Number(value);
+  const date = new Date(seconds * 1000);
+  return seconds > 0 && !Number.isNaN(date.getTime()) ? date.toISOString() : null;
+}
+
+// A IA oficial da Meta responde sem passar pelo CRM: só o status 'sent' chega,
+// sem linha em wa_messages. Vira fala do estúdio sem conteúdo.
+export function buildInvisibleOutboundEvent(
+  bound: BoundEvent,
+  normalizePhone: (value: string) => string,
+): FunnelMessageEvent | null {
+  const status = bound.event.status;
+  if (bound.event.kind !== 'status' || status?.status !== 'sent') return null;
+  const messageId = String(status.id || '');
+  const recipient = digits(status.recipient_id);
+  if (!messageId || !recipient) return null;
+  return {
+    userId: bound.account.user_id,
+    waNumber: bound.waNumber,
+    slot: 'main',
+    phone: normalizePhone(recipient),
+    messageId,
+    occurredAt: statusTimestampIso(status.timestamp) || new Date().toISOString(),
+    direction: 'out',
+    origin: 'meta_bot',
+    provider: 'meta',
+    type: 'text',
+    body: null,
+    filename: null,
+    mimeType: null,
+    contactName: null,
+    isBot: true,
+  };
+}
+
+type MetaStatusError = { code?: unknown; title?: unknown; message?: unknown };
+
+export function buildDeliveryFailure(bound: BoundEvent): DeliveryFailureInput | null {
+  const status = bound.event.status;
+  if (bound.event.kind !== 'status' || status?.status !== 'failed') return null;
+  const messageId = String(status.id || '');
+  if (!messageId) return null;
+  const errors = (Array.isArray(status.errors) ? status.errors : []) as MetaStatusError[];
+  return {
+    userId: bound.account.user_id,
+    waNumber: bound.waNumber,
+    messageId,
+    timestamp: statusTimestampIso(status.timestamp),
+    errors: errors.map(error => ({
+      code: Number(error?.code) || null,
+      title: String(error?.title || error?.message || '') || null,
+    })),
+  };
+}
+
+// Funil e cadência são efeitos colaterais: falha aqui não derruba o evento.
+async function observeFunnelSafely(
+  deps: MetaWebhookRuntimeDeps,
+  event: FunnelMessageEvent | null,
+  context: SideEffectContext,
+): Promise<void> {
+  if (!event || !deps.observeMessage) return;
+  try {
+    await deps.observeMessage(event);
+  } catch (error: any) {
+    console.warn('[Webhook Meta] rastreador do funil falhou; evento segue', error?.code || error?.message, context.messageId);
+    deps.reportSideEffectError?.('funnel', error, context);
+  }
+}
+
+async function notifyFailureSafely(
+  deps: MetaWebhookRuntimeDeps,
+  input: DeliveryFailureInput | null,
+  context: SideEffectContext,
+): Promise<void> {
+  if (!input || !deps.onDeliveryFailed) return;
+  try {
+    await deps.onDeliveryFailed(input);
+  } catch (error: any) {
+    console.warn('[Webhook Meta] registro de falha de entrega falhou; evento segue', error?.code || error?.message, context.messageId);
+    deps.reportSideEffectError?.('followup', error, context);
+  }
+}
+
 async function updateDeliveryStatus(deps: MetaWebhookRuntimeDeps, bound: BoundEvent): Promise<void> {
   const status = String(bound.event.status?.status || '');
   const messageId = String(bound.event.status?.id || '');
   if (!status || !messageId) return;
   const waNumbers = safePhoneVariants(deps, bound.waNumber);
-  const { error } = await deps.db.from('wa_messages').update({ status })
+  const { data, error } = await deps.db.from('wa_messages').update({ status })
     .eq('user_id', bound.account.user_id)
     .in('wa_number', waNumbers)
-    .eq('message_id', messageId);
+    .eq('message_id', messageId)
+    .select('message_id');
   if (error) throw error;
+  const context = { userId: bound.account.user_id, messageId, eventKey: bound.event.eventKey };
+  if (status === 'sent' && (data?.length ?? 0) === 0) {
+    await observeFunnelSafely(deps, buildInvisibleOutboundEvent(bound, deps.normalizePhone), context);
+  }
+  if (status === 'failed') await notifyFailureSafely(deps, buildDeliveryFailure(bound), context);
 }
 
 async function messagePresence(
@@ -522,6 +650,9 @@ async function processMessage(
     waNumberVariants,
     presence === 'same_event',
   );
+  await observeFunnelSafely(deps, buildFunnelEvent(normalizedBound), {
+    userId: bound.account.user_id, messageId: message.id, eventKey: bound.event.eventKey,
+  });
   if (normalizedBound.event.kind === 'message' && !message.fromMe) {
     await captureInboundMarketingContact(deps, normalizedBound);
     if (shouldScheduleReply(message.timestamp, Date.now(), deps.replyFreshnessMs)) {

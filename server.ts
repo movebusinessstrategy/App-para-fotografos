@@ -122,6 +122,8 @@ import {
 import { appStorageBucket, ensureAppStorageBucket, registerPublicStorageRoutes, resolvePublicStorageUrl } from './app-storage.js';
 import { sumPrefixBytes } from './object-storage.js';
 import { captureMarketingWhatsAppContact } from './lib/marketing-whatsapp-contact.js';
+import { createFunnelTracker, createSupabaseFunnelRepo, isBaileysBotMessage, type FunnelMessageEvent, type FunnelObserveResult } from './funnel-tracker.js';
+import type { FollowUpServices } from './src/features/followups/types.js';
 import {
   MarketingSiteRouteError,
   registerMarketingSiteEvent,
@@ -3227,6 +3229,26 @@ async function startServer() {
     console.log(`[WA Webhook] Evento sub-rota não processado: ${eventParam}`, JSON.stringify(body).slice(0, 200));
   });
 
+  // Funil automático: lead na entrada e etapa andando pelas mensagens (desligado por conta até tracker_enabled).
+  const sideEffectErrors = { marketing: 0, funnel: 0, followup: 0, last: null as string | null };
+  const funnelTracker = supabaseAdmin ? createFunnelTracker(createSupabaseFunnelRepo(supabaseAdmin), {
+    phoneVariants: brazilianPhoneVariants,
+    acquireLock: acquireDealMutationLock,
+    recordStageEvent: (u, d, f, t, e) => recordStageEvent(supabaseAdmin!, u, d, f as any, t as any, e),
+    syncStageLabel: (u, p, f, t, s) => syncWhatsAppStageLabel(u, p, f, t, s),
+    ownNumbers: async u => [await inboxWaNumber(supabaseAdmin!, u, 'main'), await inboxWaNumber(supabaseAdmin!, u, 'posvenda')]
+      .filter(n => /^\d{10,13}$/.test(String(n || ''))),
+    mainWaNumber: u => inboxWaNumber(supabaseAdmin!, u, 'main'),
+  }) : null;
+  const funnelObserveOn = () => process.env.FUNNEL_TRACKER !== 'off';
+  const observeFunnel = async (evt: FunnelMessageEvent): Promise<FunnelObserveResult | null> => (
+    funnelTracker && funnelObserveOn() ? funnelTracker.observe(evt) : null
+  );
+  const trackerOwnsLeads = async (u: string): Promise<boolean> => (
+    !!funnelTracker && funnelObserveOn() && await funnelTracker.isEnabled(u)
+  );
+  let followUpCadenceRef: { services: FollowUpServices } | null = null;
+
   const metaWebhookRuntime = supabaseAdmin ? createMetaWebhookRuntime({
     db: supabaseAdmin,
     decryptToken: decryptIfNeeded,
@@ -3256,6 +3278,12 @@ async function startServer() {
     },
     markHumanActive: async (userId, phone, waNumber) => {
       await markConversationHumanActiveIfNeeded(userId, phone, waNumber);
+    },
+    observeMessage: observeFunnel,
+    onDeliveryFailed: input => (followUpCadenceRef ? followUpCadenceRef.services.recordDeliveryFailure(input) : Promise.resolve()),
+    reportSideEffectError: (scope, error: any) => {
+      sideEffectErrors[scope] += 1;
+      sideEffectErrors.last = `${scope}:${error?.code || error?.message || 'erro'}`;
     },
   }) : null;
 
@@ -4145,6 +4173,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         });
       }
       await markConversationHumanActiveIfNeeded(userId, storedPhone, sourceWaNumber);
+      void observeFunnel({
+        userId, waNumber: sourceWaNumber, slot: slot === 'posvenda' ? 'posvenda' : 'main', phone: storedPhone, messageId: msgId,
+        occurredAt: now, direction: 'out', origin: 'human_crm', provider: 'crm', type: 'text', body: text,
+        filename: null, mimeType: null, contactName: null, isBot: false,
+      });
     };
     if (outboundChannel === 'baileys') {
       try {
@@ -4343,6 +4376,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         .select('id');
       if (!upd || upd.length === 0) { await db.from('wa_conversations').insert(convPayload); }
       await markConversationHumanActiveIfNeeded(userId, storedPhone, sourceWaNumber);
+      void observeFunnel({
+        userId, waNumber: sourceWaNumber, slot: slot === 'posvenda' ? 'posvenda' : 'main', phone: storedPhone, messageId: msgId,
+        occurredAt: now, direction: 'out', origin: 'human_crm', provider: 'crm', type: mediaType, body: caption || null,
+        filename: finalFilename, mimeType: finalMimetype, contactName: null, isBot: false,
+      });
     };
 
     // ── Baileys (primário) ───────────────────────────────────────────────────
@@ -28209,8 +28247,13 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         // Catálogo de produtos é material de apoio: não é o orçamento do ensaio,
         // então não move o funil, não agenda o follow-up nem fecha a etapa.
         const ehOrcamento = nicho !== AGENT_EXTRA_MATERIAL_NICHE;
+        const auroraQuoteObs = ehOrcamento ? await observeFunnel({
+          userId, waNumber, slot: 'main', phone, messageId: `aurora-quote-${Date.now()}`, occurredAt: new Date().toISOString(),
+          direction: 'out', origin: 'agent', provider: channel === 'meta' ? 'meta' : 'baileys', type: 'document',
+          body: null, filename: null, mimeType: 'application/pdf', contactName: null, isBot: false, quoteHint: true,
+        }) : null;
         if (deal && ehOrcamento) {
-          await moveDealToStageNamed(userId, deal.id, /or[çc]amento.*enviad|enviad.*or[çc]amento/i);
+          if (!auroraQuoteObs?.trackerEnabled) await moveDealToStageNamed(userId, deal.id, /or[çc]amento.*enviad|enviad.*or[çc]amento/i);
           // Agenda o follow-up contextual da Lia pra ~24h (dispara só se a pessoa
           // não responder; o worker cancela sozinho se ela responder ou virar humano).
           // A API oficial não recebe este follow-up livre fora da janela de 24h.
@@ -28241,7 +28284,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       } else {
         await sendAgentMessages(userId, phone, waNumber, channel, reply);
         // Primeira resposta nossa → coloca o lead em "Conversa Iniciada".
-        if (isFirstReply && deal) await moveDealToStageNamed(userId, deal.id, /conversa\s*iniciada/i);
+        const auroraTextObs = await observeFunnel({
+          userId, waNumber, slot: 'main', phone, messageId: `aurora-text-${Date.now()}`, occurredAt: new Date().toISOString(),
+          direction: 'out', origin: 'agent', provider: channel === 'meta' ? 'meta' : 'baileys', type: 'text',
+          body: reply.slice(0, 500), filename: null, mimeType: null, contactName: null, isBot: false,
+        });
+        if (isFirstReply && deal && !auroraTextObs?.trackerEnabled) await moveDealToStageNamed(userId, deal.id, /conversa\s*iniciada/i);
         await updateAgentConversationState(userId, phone, waNumber, 'lia_active', {
           last_agent_reply_at: new Date().toISOString(),
         });
@@ -28450,6 +28498,19 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
     }
 
+    if (!isHistory && slot === 'main' && (!msgSaveErr || messageWasDuplicate)) {
+      await observeFunnel({
+        userId, waNumber, slot: 'main', phone, messageId: msgId, occurredAt: ts,
+        direction: msg.key.fromMe ? 'out' : 'in',
+        origin: msg.key.fromMe ? (isBaileysBotMessage(msg) ? 'meta_bot' : 'human_app') : 'customer',
+        provider: 'baileys', type: msgType, body: msgBody || null,
+        filename: (msgContent as any)?.documentMessage?.fileName ?? null,
+        mimeType: (msgContent as any)?.documentMessage?.mimetype ?? null,
+        contactName: msg.key.fromMe ? null : (msg.pushName || null),
+        isBot: isBaileysBotMessage(msg),
+      });
+    }
+
     if (!isHistory && !msg.key.fromMe && (!msgSaveErr || messageWasDuplicate)) {
       try {
         if (marketingMeasurementTenantAllowed(userId)) {
@@ -28584,7 +28645,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
 
     // Auto-cria lead apenas para mensagens novas recebidas
-    if (!isHistory && !msg.key.fromMe) {
+    // Com o rastreador ligado quem cria é ele (casa 12/13 dígitos; aqui só 3 formatos).
+    if (!isHistory && !msg.key.fromMe && !(slot === 'main' && await trackerOwnsLeads(userId))) {
       // Tenta com vários formatos para não criar lead duplicado
       const phoneShort = phone.startsWith('55') ? phone.slice(2) : phone; // sem código do país
       const phoneOld = phone.length === 13 && phone.startsWith('55')     // formato antigo sem o 9
