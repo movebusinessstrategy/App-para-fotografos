@@ -124,6 +124,8 @@ import { sumPrefixBytes } from './object-storage.js';
 import { captureMarketingWhatsAppContact } from './lib/marketing-whatsapp-contact.js';
 import { createFunnelTracker, createSupabaseFunnelRepo, isBaileysBotMessage, type FunnelMessageEvent, type FunnelObserveResult } from './funnel-tracker.js';
 import type { FollowUpServices } from './src/features/followups/types.js';
+import { resolveLegacyMetaAuth, legacyWithin24h, legacyPreSendCheck, applyLegacyGate, extractGraphMessageId } from './legacy-followup-fix.js';
+import { loadOptOutKeys, optOutSetHas } from './lib/optout-store.js';
 import {
   MarketingSiteRouteError,
   registerMarketingSiteEvent,
@@ -8716,12 +8718,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
     let sent = 0, failed = 0;
     const errors: string[] = [];
+    let blastOptOuts: Set<string>;
+    try { blastOptOuts = await loadOptOutKeys(supabaseAdmin || supabase, userId); } catch {
+      return res.status(500).json({ error: 'Não foi possível conferir a lista de não contatar. Nada foi enviado.' });
+    }
 
     for (const deal of targets) {
       const rawPhone = String(deal.contact_phone).replace(/\D/g, '');
       const phone = normalizeBrazilianPhone(rawPhone);
       const name = deal.contact_name || deal.title || '';
+      if (optOutSetHas(blastOptOuts, deal.contact_phone)) { failed++; errors.push(`${name}: marcado como não contatar`); continue; }
       const personalizedMsg = message.replace(/\{nome\}/gi, name);
+      let blastMetaMessageId: string | null = null;
       let ok = false;
       let failReason = '';
       let sourceWaNumber = '';
@@ -8758,6 +8766,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           if (metaRes.ok && !metaData.error) {
             ok = true;
             sourceWaNumber = blastMetaNumber;
+            blastMetaMessageId = extractGraphMessageId(metaData);
           } else {
             const metaMsg = metaData?.error?.message || JSON.stringify(metaData?.error || {});
             failReason = failReason ? `${failReason} | Meta: ${metaMsg}` : `Meta: ${metaMsg}`;
@@ -8768,7 +8777,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         if (ok) {
           sent++;
           const now = new Date().toISOString();
-          const msgId = `blast-${Date.now()}-${phone}`;
+          const msgId = blastMetaMessageId || `blast-${Date.now()}-${phone}`;
           const db = supabaseAdmin || supabase;
           await db.from('wa_messages').insert({
             user_id: userId, phone, body: personalizedMsg, from_me: true,
@@ -17253,6 +17262,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     } catch { /* sem migration 060 não há pré-reserva */ }
 
     await supabase.from('deals').delete().eq('id', req.params.id).eq('user_id', userId);
+    if (supabaseAdmin) await supabaseAdmin.from('scheduled_followups').delete().eq('user_id', userId).eq('deal_id', Number(req.params.id));
     res.json({ success: true });
   });
 
@@ -17304,7 +17314,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // worker efetivamente processa e permite à UI mostrar agendado/enviado/falhou.
   app.get('/api/deals/:id/follow-ups', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
     const dealId = Number(req.params.id);
     if (!Number.isFinite(dealId)) return res.status(400).json({ error: 'ID inválido' });
 
@@ -17322,7 +17332,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
 
   app.delete('/api/deals/:id/follow-ups/pending', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
+    const supabase = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
     const dealId = Number(req.params.id);
     if (!Number.isFinite(dealId)) return res.status(400).json({ error: 'ID inválido' });
 
@@ -29011,6 +29021,8 @@ function startFollowUpWorker() {
           .select('id');
 
         if (!claimed || claimed.length === 0) continue; // outro worker pegou
+        const legacyGate = await legacyPreSendCheck(supabaseAdmin!, task);
+        if (legacyGate.action !== 'send') { await applyLegacyGate(supabaseAdmin!, task, legacyGate); continue; }
 
         const taskWaNumber = String(task.wa_number || '').replace(/\D/g, '');
         // Follow-up CONTEXTUAL da Lia: gera com IA (lê a conversa) e envia via
@@ -29052,6 +29064,7 @@ function startFollowUpWorker() {
 
         let sent = false;
         const instanceName = `user_${task.user_id.replace(/-/g, '_')}`;
+        let legacyMetaMessageId: string | null = null;
 
         try {
           // 1ª: Evolution API
@@ -29068,16 +29081,16 @@ function startFollowUpWorker() {
           if (!sent) {
             const { data: waAccount } = await supabaseAdmin!
               .from('whatsapp_business_accounts')
-              .select('phone_number_id, phone_number, access_token')
+              .select('phone_number_id, phone_number, access_token, token_expires_at')
               .eq('user_id', task.user_id)
               .eq('is_active', true)
               .maybeSingle();
 
             const metaSender = String(waAccount?.phone_number || '').replace(/\D/g, '');
-            if (metaSender === taskWaNumber && waAccount?.phone_number_id && waAccount?.access_token) {
-              const within24h = await isWithin24hWindow(
-                supabaseAdmin!, task.user_id, task.phone, taskWaNumber,
-              );
+            const legacyAuth = resolveLegacyMetaAuth(waAccount, decryptIfNeeded);
+            if (waAccount && !legacyAuth.ok) console.warn('[FollowUp Worker]', legacyAuth.message);
+            if (metaSender === taskWaNumber && waAccount?.phone_number_id && legacyAuth.ok) {
+              const within24h = await legacyWithin24h(supabaseAdmin!, task.user_id, task.phone, taskWaNumber);
               let messageBody: any;
 
               if (within24h) {
@@ -29125,12 +29138,13 @@ function startFollowUpWorker() {
                 `https://graph.facebook.com/v21.0/${waAccount.phone_number_id}/messages`,
                 {
                   method: 'POST',
-                  headers: { 'Authorization': `Bearer ${waAccount.access_token}`, 'Content-Type': 'application/json' },
+                  headers: { 'Authorization': `Bearer ${legacyAuth.bearer}`, 'Content-Type': 'application/json' },
                   body: JSON.stringify(messageBody),
                 }
               );
               const metaData = await metaRes.json();
               sent = metaRes.ok && !metaData.error;
+              if (sent) legacyMetaMessageId = extractGraphMessageId(metaData);
               if (!sent) {
                 console.warn(`[FollowUp Worker] Meta recusou ${task.phone}:`, metaData?.error?.message || JSON.stringify(metaData));
               }
@@ -29144,7 +29158,7 @@ function startFollowUpWorker() {
             .eq('id', task.id);
 
           if (sent) {
-            const msgId = `auto-${Date.now()}-${task.phone}`;
+            const msgId = legacyMetaMessageId || `auto-${Date.now()}-${task.phone}`;
             await supabaseAdmin!.from('wa_messages').insert({
               user_id: task.user_id, phone: task.phone, body: task.message,
               wa_number: taskWaNumber,
