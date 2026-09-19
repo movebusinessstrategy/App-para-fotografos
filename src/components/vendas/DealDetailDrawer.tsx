@@ -22,6 +22,7 @@ import { LostDealModal } from "../pipeline/LostDealModal";
 import { useSellers } from "../../hooks/useSellers";
 import { SellerPicker } from "./SellerPicker";
 import { useAuth } from "../../contexts/AuthContext";
+import { DealFollowUpCard } from "../../features/followups/DealFollowUpCard";
 
 // Wrapper seguro: retorna o texto formatado, ou null se a data não for parseável.
 function safeFormat(value: string | null | undefined, pattern: string): string | null {
@@ -1599,16 +1600,11 @@ export function DealDetailDrawer({
               </div>
             </div>
 
-            <FollowUpAutomationCard
+            <DealFollowUpCard
+              deal={deal}
               stage={currentStage}
-              pendingTask={pendingFollowUp}
-              latestTask={latestFollowUp}
-              loading={loadingFollowUps}
-              error={followUpError}
-              cancelling={cancellingFollowUp}
-              onRefresh={loadFollowUps}
-              onCancel={() => cancelPendingFollowUp().catch(() => {})}
-              onConfigure={() => { onClose(); navigate('/pipeline-settings'); }}
+              onOpenQueue={() => { onClose(); navigate(`/vendas?tab=followups&deal=${deal.id}`); }}
+              onConfigure={() => { onClose(); navigate(`/vendas?tab=followups&config=1&stage=${encodeURIComponent(currentStage?.id ?? '')}`); }}
             />
 
             {/* Atividades */}

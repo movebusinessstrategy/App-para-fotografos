@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { BarChart3, LayoutGrid, MessageCircle, Plus, Settings, History, RefreshCw } from "lucide-react";
+import { BarChart3, LayoutGrid, MessageCircle, Plus, Settings, History, RefreshCw, Sparkles } from "lucide-react";
 import { FunilTab } from "./FunilTab";
 import { NewDealModal } from "./NewDealModal";
 import { StageCustomizer } from "./StageCustomizer";
@@ -13,6 +13,7 @@ import { useAuth } from "../../contexts/AuthContext";
 const AnalisesTab = lazy(() => import("./AnalisesTab").then(m => ({ default: m.AnalisesTab })));
 const HistoricoTab = lazy(() => import("./HistoricoTab").then(m => ({ default: m.HistoricoTab })));
 const InboxView = lazy(() => import("../../features/chat/components/InboxView").then(m => ({ default: m.InboxView })));
+const FollowUpsPanel = lazy(() => import("../../features/followups/FollowUpsPanel").then(m => ({ default: m.FollowUpsPanel })));
 
 function TabFallback() {
   return (
@@ -25,7 +26,7 @@ function TabFallback() {
   );
 }
 
-type Tab = "inbox" | "kanban" | "historico" | "analises";
+type Tab = "inbox" | "kanban" | "historico" | "analises" | "followups";
 type HistoryFilter = "todos" | "ativos" | "convertidos" | "perdidos";
 
 export function VendasDashboard() {
@@ -118,6 +119,7 @@ export function VendasDashboard() {
   const TABS = [
     { id: "kanban" as Tab, label: "Funil", icon: LayoutGrid },
     { id: "inbox" as Tab, label: "Conversas", icon: MessageCircle },
+    { id: "followups" as Tab, label: "Follow-ups", icon: Sparkles },
     { id: "historico" as Tab, label: "Histórico", icon: History },
     // Análises pode ser desmarcada por funcionário (permissão "vendas_analises").
     ...(canSeeAnalises ? [{ id: "analises" as Tab, label: "Análises", icon: BarChart3 }] : []),
@@ -209,6 +211,13 @@ export function VendasDashboard() {
                 stages={stages}
                 clients={clients}
                 initialPhone={initialPhone}
+                onDealUpdated={() => fetchData({ silent: true })}
+              />
+            ) : tab === "followups" ? (
+              <FollowUpsPanel
+                deals={deals}
+                stages={stages}
+                clients={clients}
                 onDealUpdated={() => fetchData({ silent: true })}
               />
             ) : tab === "historico" ? (

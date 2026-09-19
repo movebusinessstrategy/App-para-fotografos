@@ -126,6 +126,8 @@ import { createFunnelTracker, createSupabaseFunnelRepo, isBaileysBotMessage, typ
 import type { FollowUpServices } from './src/features/followups/types.js';
 import { resolveLegacyMetaAuth, legacyWithin24h, legacyPreSendCheck, applyLegacyGate, extractGraphMessageId } from './legacy-followup-fix.js';
 import { loadOptOutKeys, optOutSetHas } from './lib/optout-store.js';
+import { createFollowUpCadence } from './followup-runtime.js';
+import { registerFollowUpRoutes } from './followup-routes.js';
 import {
   MarketingSiteRouteError,
   registerMarketingSiteEvent,
@@ -17347,6 +17349,22 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     res.json({ success: true });
   });
 
+  const followUpCadence = supabaseAdmin && funnelTracker ? createFollowUpCadence({
+    db: supabaseAdmin, funnel: funnelTracker,
+    getReplyDetailed: (c, m, o) => liaOpenAIProvider.getAgentReplyDetailed(c, m as any, o) as any,
+    loadSupervisedMemory: (u, w) => loadSupervisedLearningMemory(u, w),
+    baileys: {
+      status: k => BaileysManager.getStatus(k), registeredPhone: k => BaileysManager.getRegisteredPhone(k),
+      paired: k => BaileysManager.hasSessionCreds(k), sendText: (k, j, t) => BaileysManager.sendText(k, j, t),
+      sendTyping: (k, j, on) => BaileysManager.sendTyping(k, j, on),
+    },
+    decryptToken: decryptIfNeeded,
+    refreshMetaState: u => refreshMetaOperationalState(supabaseAdmin!, u, decryptIfNeeded),
+    mainWaNumber: u => inboxWaNumber(supabaseAdmin!, u, 'main'),
+  }) : null;
+  followUpCadenceRef = followUpCadence;
+  if (supabaseAdmin && followUpCadence) registerFollowUpRoutes(app, { db: supabaseAdmin, requireAuth, requirePermission, requireOwnerOrPlatformAdmin, denyProductionOnly, services: followUpCadence.services });
+
   app.get('/api/deals/:id/activities', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
@@ -27479,6 +27497,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   startFollowUpWorker();
+  if (process.env.FOLLOWUP_CADENCE_WORKERS !== 'off') followUpCadence?.start();
   startMarketingConversionWorker();
   startAgentPendingReplyWorker();
   startMarketingRetentionWorker();
