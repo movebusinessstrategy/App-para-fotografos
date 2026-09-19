@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   activityFromRpcRow,
+  advanceTargetFor,
   CADENCE_MAX_STEPS,
   CLOCK_TOLERANCE_MS,
   customerSpokeAfter,
@@ -14,6 +15,10 @@ import {
   nextErrorState,
   nextStageAfterStep,
   parseCadenceConfig,
+  preQuoteDelayHours,
+  preQuoteSentInEpisode,
+  preQuoteStepCount,
+  preQuoteStepFor,
   resolveExpiredLease,
   selectEligibleDeals,
   shouldCancelBeforeSend,
@@ -22,7 +27,9 @@ import {
   stepForStage,
   studioTurn,
   suggestLadder,
+  suggestPreQuote,
   suggestTrackerStages,
+  trackForStage,
   validateConfigInput,
 } from './followup-cadence.js';
 import type { CadenceTaskLite, DealActivity, SelectInput, SendSnapshot } from './followup-cadence.js';
@@ -730,4 +737,156 @@ test('o módulo só importa tipos e helpers puros permitidos', () => {
   assert.ok(imports.length > 0);
   for (const spec of imports) assert.ok(allowed.has(spec), spec);
   assert.equal(/Date\.now\(|new Date\(\)/.test(source), false);
+});
+
+// Trilha antes do orçamento
+
+const PQ_CONFIG: FollowUpConfig = { ...CONFIG, pre_quote_stage_ids: ['contact'], pre_quote_delays_hours: [24, 72] };
+
+// Conversa Iniciada: o cliente perguntou, o estúdio respondeu com uma pergunta e a conversa parou.
+function pqActivity(over: Partial<DealActivity> = {}): DealActivity {
+  return activity({
+    dealId: 7, stage: 'contact', lastStudioType: 'text', lastStudioBody: 'Qual tipo de ensaio você procura?',
+    lastStudioAt: hoursAgo(26), lastCustomerAt: hoursAgo(27), ...over,
+  });
+}
+
+function pqSent(over: Partial<CadenceTaskLite> = {}): CadenceTaskLite {
+  return lite({ id: 300, deal_id: 7, status: 'sent', step: 1, track: 'pre_quote', stage_id: 'contact',
+    basis_at: hoursAgo(100), sent_at: hoursAgo(80), created_at: hoursAgo(81), ...over });
+}
+
+test('antes do orçamento: trilha por etapa, contagem de toques e atrasos', () => {
+  assert.equal(trackForStage('contact', PQ_CONFIG), 'pre_quote');
+  assert.equal(trackForStage('proposal', PQ_CONFIG), 'ladder');
+  assert.equal(trackForStage('lead', PQ_CONFIG), null);
+  assert.equal(trackForStage('contact', CONFIG), null, 'desligada por padrão');
+  assert.equal(preQuoteStepCount(CONFIG), 0);
+  assert.equal(preQuoteStepCount(PQ_CONFIG), 2);
+  assert.equal(preQuoteStepCount({ ...PQ_CONFIG, pre_quote_delays_hours: [48] }), 1);
+  assert.equal(preQuoteDelayHours(1, PQ_CONFIG), 24);
+  assert.equal(preQuoteDelayHours(2, PQ_CONFIG), 72);
+  assert.equal(preQuoteStepFor(0, PQ_CONFIG), 1);
+  assert.equal(preQuoteStepFor(1, PQ_CONFIG), 2);
+  assert.equal(preQuoteStepFor(2, PQ_CONFIG), null);
+  assert.equal(advanceTargetFor({ track: 'pre_quote', step: 1 }, PQ_CONFIG), null, 'nunca move o card');
+  assert.equal(advanceTargetFor({ track: 'ladder', step: 1 }, PQ_CONFIG), 'negotiation');
+  assert.equal(advanceTargetFor({ step: 4 }, PQ_CONFIG), '04-follow-up', 'sem track = escada');
+});
+
+test('antes do orçamento: episódio conta só toques enviados depois da última fala do cliente, no mesmo telefone', () => {
+  const tasks = [
+    pqSent({ id: 1, sent_at: hoursAgo(50) }),
+    pqSent({ id: 2, sent_at: hoursAgo(200) }),                        // antes da fala do cliente: episódio antigo
+    pqSent({ id: 3, sent_at: hoursAgo(40), status: 'skipped' }),      // não saiu
+    pqSent({ id: 4, sent_at: hoursAgo(30), phone: PHONE_B }),         // outro telefone
+    lite({ id: 5, status: 'sent', step: 1, sent_at: hoursAgo(20) }),  // escada
+    pqSent({ id: 6, sent_at: hoursAgo(10), phone: PHONE_12 }),        // mesmo número com 12 dígitos
+  ];
+  assert.equal(preQuoteSentInEpisode(tasks, canonicalPhoneKey(PHONE), hoursAgo(100)), 2);
+  assert.equal(preQuoteSentInEpisode(tasks, canonicalPhoneKey(PHONE), null), 3);
+  assert.equal(preQuoteSentInEpisode(tasks, canonicalPhoneKey(PHONE), hoursAgo(5)), 0, 'cliente respondeu: episódio novo');
+});
+
+test('antes do orçamento: deal em Conversa Iniciada com o estúdio por último entra no toque 1, sem próxima etapa', () => {
+  const result = select([pqActivity()], { config: PQ_CONFIG });
+  assert.equal(result.eligible.length, 1);
+  const e = result.eligible[0];
+  assert.equal(e.track, 'pre_quote');
+  assert.equal(e.step, 1);
+  assert.equal(e.stageId, 'contact');
+  assert.equal(e.nextStageId, null);
+  assert.equal(e.dueAt, new Date(Date.parse(hoursAgo(26)) + 24 * HOUR).toISOString());
+});
+
+test('antes do orçamento: cliente falou por último, cedo demais, desligada e cliente antigo ficam de fora', () => {
+  assert.equal(reasonOf(select([pqActivity({ lastCustomerAt: hoursAgo(25) })], { config: PQ_CONFIG }), 7), 'customer_spoke_last');
+  assert.equal(reasonOf(select([pqActivity({ lastStudioAt: hoursAgo(23) })], { config: PQ_CONFIG }), 7), 'too_soon');
+  assert.equal(reasonOf(select([pqActivity()]), 7), 'stage_not_in_ladder', 'sem a trilha ligada');
+  assert.equal(reasonOf(select([pqActivity({ alreadyCustomer: true })], { config: PQ_CONFIG }), 7), 'already_customer');
+  assert.equal(reasonOf(select([pqActivity({ needsHuman: true })], { config: PQ_CONFIG }), 7), 'needs_human');
+  assert.equal(reasonOf(select([pqActivity()], { config: PQ_CONFIG, optoutKeys: new Set([canonicalPhoneKey(PHONE)]) }), 7), 'optout');
+  assert.equal(reasonOf(select([pqActivity({ lastStudioAt: hoursAgo(800), lastCustomerAt: hoursAgo(801) })], { config: PQ_CONFIG }), 7), 'too_old');
+  assert.equal(reasonOf(select([pqActivity()], { config: PQ_CONFIG, liveLegacyDealIds: new Set([7]) }), 7), 'live_legacy_task');
+  assert.equal(reasonOf(select([pqActivity()], { config: PQ_CONFIG, cadenceTasks: [lite({ deal_id: 9, phone: PHONE })] }), 7),
+    'live_cadence_task', 'outro deal vivo do mesmo telefone');
+  const onlyPreQuote = { ...PQ_CONFIG, ladder_stage_ids: [], after_last_stage_id: null };
+  assert.equal(select([pqActivity()], { config: onlyPreQuote }).eligible.length, 1, 'trilha sozinha, sem escada');
+});
+
+test('antes do orçamento: toque 2 usa o próprio toque 1 como basis e o atraso de 72h; depois do 2 acabou', () => {
+  const touch1 = pqSent({ basis_at: hoursAgo(120), sent_at: hoursAgo(73) });
+  const a = pqActivity({ lastStudioAt: hoursAgo(73), lastCustomerAt: hoursAgo(130) });
+  const second = select([a], { config: PQ_CONFIG, cadenceTasks: [touch1] });
+  assert.equal(second.eligible[0]?.step, 2);
+  assert.equal(second.eligible[0]?.track, 'pre_quote');
+  assert.equal(reasonOf(select([pqActivity({ lastStudioAt: hoursAgo(71), lastCustomerAt: hoursAgo(130) })],
+    { config: PQ_CONFIG, cadenceTasks: [touch1] }), 7), 'too_soon');
+  const touch2 = pqSent({ id: 301, step: 2, basis_at: hoursAgo(73), sent_at: hoursAgo(1) });
+  const done = select([pqActivity({ lastStudioAt: hoursAgo(1), lastCustomerAt: hoursAgo(130) })],
+    { config: { ...PQ_CONFIG, pre_quote_delays_hours: [1, 1] }, cadenceTasks: [touch1, touch2], now: new Date(NOW.getTime() + 2 * HOUR) });
+  assert.equal(reasonOf(done, 7), 'step_already_sent');
+  const replied = select([pqActivity({ lastStudioAt: hoursAgo(30), lastCustomerAt: hoursAgo(31) })],
+    { config: PQ_CONFIG, cadenceTasks: [touch1, { ...touch2, sent_at: hoursAgo(40) }] });
+  assert.equal(replied.eligible[0]?.step, 1, 'cliente respondeu depois dos toques: conta do zero');
+});
+
+test('antes do orçamento: toque enviado não trava a escada e o episódio é por trilha', () => {
+  const touch1 = pqSent({ basis_at: hoursAgo(26), sent_at: hoursAgo(26), step: 2 });
+  const inLadder = select([activity({ dealId: 7 })], { cadenceTasks: [touch1] });
+  assert.equal(inLadder.eligible[0]?.step, 1, 'passo 1 da escada mesmo com o toque 2 enviado');
+  assert.equal(inLadder.eligible[0]?.track, 'ladder');
+  const cancelledPq = pqSent({ status: 'cancelled', sent_at: null, basis_at: hoursAgo(26), step: 1 });
+  assert.equal(select([activity({ dealId: 7 })], { cadenceTasks: [cancelledPq] }).eligible.length, 1, 'mesmo basis em outra trilha');
+  const sameTrack = pqSent({ status: 'skipped', sent_at: null, basis_at: hoursAgo(26), step: 1 });
+  assert.equal(reasonOf(select([pqActivity()], { config: PQ_CONFIG, cadenceTasks: [sameTrack] }), 7), 'episode_done');
+});
+
+test('antes do orçamento: faxina cancela quando o card saiu da etapa (ex.: foi para proposal)', () => {
+  const draft = pqSent({ status: 'draft', sent_at: null, basis_at: hoursAgo(26) });
+  const plan = housekeepLiveTasks({ tasks: [draft], activities: [activity({ dealId: 7 })], stages: STAGES, optoutKeys: new Set(), truncated: false });
+  assert.deepEqual(plan, [{ id: 300, reason: 'stage_changed' }]);
+});
+
+test('validateConfigInput: etapas e atrasos antes do orçamento', () => {
+  const ok = validateConfigInput(DEFAULT_FOLLOWUP_CONFIG, { ...PITORI_PATCH, pre_quote_stage_ids: ['contact'], pre_quote_delays_hours: [24, 72] }, CTX);
+  assert.equal(ok.ok, true);
+  if (ok.ok) {
+    assert.deepEqual(ok.config.pre_quote_stage_ids, ['contact']);
+    assert.deepEqual(ok.config.pre_quote_delays_hours, [24, 72]);
+  }
+  const base = { ...PITORI_PATCH };
+  assert.match(errorsOf({ ...base, pre_quote_stage_ids: ['lead', 'contact', 'lead'] }).pre_quote_stage_ids, /no máximo 2/);
+  assert.match(errorsOf({ ...base, pre_quote_stage_ids: ['contact', 'contact'] }).pre_quote_stage_ids, /repetir/);
+  assert.match(errorsOf({ ...base, pre_quote_stage_ids: ['won'] }).pre_quote_stage_ids, /abertas/);
+  assert.match(errorsOf({ ...base, pre_quote_stage_ids: ['prod-agendado'] }).pre_quote_stage_ids, /abertas/);
+  assert.match(errorsOf({ ...base, pre_quote_stage_ids: ['proposal'] }).pre_quote_stage_ids, /escada/);
+  assert.match(errorsOf({ ...base, pre_quote_stage_ids: ['aguardando-sinal'] }).pre_quote_stage_ids, /antes da 1ª etapa/);
+  assert.match(errorsOf({ ...base, pre_quote_stage_ids: ['nao-existe'] }).pre_quote_stage_ids, /não encontrada/);
+  assert.match(errorsOf({ ...base, pre_quote_stage_ids: 'contact' }).pre_quote_stage_ids, /lista/);
+  assert.match(errorsOf({ ...base, pre_quote_delays_hours: [] }).pre_quote_delays_hours, /1 ou 2/);
+  assert.match(errorsOf({ ...base, pre_quote_delays_hours: [24, 48, 72] }).pre_quote_delays_hours, /1 ou 2/);
+  assert.match(errorsOf({ ...base, pre_quote_delays_hours: [0] }).pre_quote_delays_hours, /1 a 720/);
+  assert.match(errorsOf({ ...base, pre_quote_delays_hours: [24, 721] }).pre_quote_delays_hours, /1 a 720/);
+  // Sem escada, qualquer etapa aberta serve.
+  const noLadder = validateConfigInput(DEFAULT_FOLLOWUP_CONFIG, { pre_quote_stage_ids: ['aguardando-sinal'] }, CTX);
+  assert.equal(noLadder.ok, true);
+  const messages = Object.values(errorsOf({ ...base, pre_quote_stage_ids: ['won', 'won', 'x'], pre_quote_delays_hours: [] }));
+  for (const message of messages) assert.equal(/[–—]/.test(message), false, message);
+});
+
+test('parseCadenceConfig: antes do orçamento com padrão, corte e clamp', () => {
+  assert.deepEqual(parseCadenceConfig({}).config.pre_quote_stage_ids, []);
+  assert.deepEqual(parseCadenceConfig({}).config.pre_quote_delays_hours, [24, 72]);
+  const parsed = parseCadenceConfig({ pre_quote_stage_ids: ['contact', ' lead ', 'contact', 'x'], pre_quote_delays_hours: '[0, 900, 5]' }).config;
+  assert.deepEqual(parsed.pre_quote_stage_ids, ['contact', 'lead']);
+  assert.deepEqual(parsed.pre_quote_delays_hours, [1, 720]);
+});
+
+test('suggestPreQuote: etapa de contato antes da escada; sem contato, vazio', () => {
+  assert.deepEqual(suggestPreQuote(STAGES), { pre_quote_stage_ids: ['contact'], pre_quote_delays_hours: [24, 72] });
+  const plain = [stage('novo', 'Novo', 0), stage('fechado', 'Fechado', 2, { is_final: true, is_won: true })];
+  assert.deepEqual(suggestPreQuote(plain), { pre_quote_stage_ids: [], pre_quote_delays_hours: [24, 72] });
+  const contactAfter = [stage('proposal', 'Orçamento Enviado', 0), stage('contact', 'Conversa Iniciada', 3)];
+  assert.deepEqual(suggestPreQuote(contactAfter).pre_quote_stage_ids, [], 'contato depois da escada não entra');
 });

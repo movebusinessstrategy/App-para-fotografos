@@ -1,4 +1,4 @@
-import type { FollowUpStep } from './types';
+import type { FollowUpStep, FollowUpTrack } from './types';
 import { WEEKDAY_SHORT } from './labels';
 
 // Formatação pura da tela de follow-ups (testada em format.test.ts).
@@ -132,6 +132,7 @@ export function gapRangeLabel(minSeconds: number, maxSeconds: number): string {
 export interface ApproveAllTextInput {
   count: number;
   step: FollowUpStep | null;
+  track?: FollowUpTrack | null;
   effectiveCap: number;
   remainingToday: number;
   gap: { min: number; max: number } | null;
@@ -139,7 +140,7 @@ export interface ApproveAllTextInput {
 
 export function approveAllConfirmText(i: ApproveAllTextInput): string {
   const what = i.count === 1 ? '1 follow-up' : `${i.count} follow-ups`;
-  const scope = i.step ? ` do passo ${i.step}` : '';
+  const scope = i.step ? ` do passo ${i.step}` : i.track === 'pre_quote' ? ' antes do orçamento' : '';
   const gap = i.gap ? `, com ${gapRangeLabel(i.gap.min, i.gap.max)} entre cada um` : '';
   const days = businessDaysLabel(estimateBusinessDays(i.count, i.effectiveCap, i.remainingToday));
   return `Aprovar ${what}${scope}? Eles saem em horário comercial, no máximo ${i.effectiveCap} por dia${gap} (${days}). Se o cliente responder antes, o envio é cancelado.`;

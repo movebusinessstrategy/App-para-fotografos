@@ -1,5 +1,5 @@
 import type {
-  BlockCode, CancelReason, ChannelKind, DraftWarning, FollowUpStep, OverviewPauseReason, QueueTab,
+  BlockCode, CancelReason, ChannelKind, DraftWarning, FollowUpStep, FollowUpTrack, OverviewPauseReason, QueueTab,
 } from './types';
 
 // Textos da tela de follow-ups. Tudo em pt-BR e sem travessão.
@@ -21,6 +21,20 @@ export const STEP_LABELS: Record<FollowUpStep, string> = {
   3: 'Passo 3 · Agenda',
   4: 'Passo 4 · Despedida',
 };
+
+export const TRACK_LABELS: Record<FollowUpTrack, string> = {
+  ladder: 'Depois do orçamento',
+  pre_quote: 'Antes do orçamento',
+};
+
+export const PRE_QUOTE_HELP_TEXT = 'Para quem parou antes do orçamento (ex.: Conversa Iniciada). A IA retoma a conversa de onde parou, sem preço e sem PDF. Esses toques nunca mudam o card de etapa.';
+
+// Rótulo do passo na fila e no card: a trilha antes do orçamento fala em toque N de M.
+export function stepLabel(i: { step: FollowUpStep; track?: FollowUpTrack | null; track_steps?: number | null }): string {
+  if (i.track !== 'pre_quote') return STEP_LABELS[i.step] ?? `Passo ${i.step}`;
+  const total = Math.max(Number(i.track_steps) || 0, Number(i.step) || 0);
+  return `Antes do orçamento · toque ${i.step} de ${total}`;
+}
 
 export interface StatusLabel { label: string; detail: string; tone: Tone }
 

@@ -7,7 +7,7 @@ import type {
 } from './src/features/followups/types.js';
 import { ADVANCE_CONFIRM_MINUTES } from './src/features/followups/types.js';
 import type { SendDecision, SendSnapshot } from './followup-cadence.js';
-import { nextErrorState, nextStageAfterStep, resolveExpiredLease, shouldCancelBeforeSend } from './followup-cadence.js';
+import { advanceTargetFor, nextErrorState, resolveExpiredLease, shouldCancelBeforeSend } from './followup-cadence.js';
 import { isWithinBusinessHours, localDayStartUtc, nextWindowOpening, pickGapSeconds } from './lib/business-hours.js';
 import { baileysJid, brazilianPhoneVariants, digitsOnly, maskPhone } from './lib/br-phone.js';
 import type { CadenceTemplate, ChannelDecision, ErrorClass, GraphResult, SenderChannelHealth } from './followup-channel.js';
@@ -110,7 +110,7 @@ function taskLog(env: TenantEnv, task: CadenceTaskRow, extra: Record<string, unk
 // Avanço de etapa: só depois de ADVANCE_CONFIRM_MINUTES sem falha de entrega.
 
 async function advanceOne(deps: SenderDeps, entry: TenantEntry, task: CadenceTaskRow): Promise<void> {
-  const next = nextStageAfterStep(task.step, entry.config);
+  const next = advanceTargetFor(task, entry.config);
   try {
     if (!next) {
       await deps.repo.markAdvance(task, 'skipped', null);
@@ -211,7 +211,7 @@ const SENDERS: Record<ChannelKind, (env: TenantEnv, task: CadenceTaskRow, snap: 
   },
   meta_template: (env, task, snap) => {
     const template = env.template as CadenceTemplate;
-    const params = templateParams(task.contact_name, task.message, task.step);
+    const params = templateParams(task.contact_name, task.message, task.step, task.track);
     const to = digitsOnly(snap.conversationPhone);
     return {
       parts: [renderTemplate(template.bodyText, params)],
@@ -363,7 +363,7 @@ function quickNext(env: TenantEnv): Promise<void> {
 
 function sentPatch(env: TenantEnv, task: CadenceTaskRow, o: Extract<Outcome, { kind: 'sent' }>): CadenceTaskPatch {
   const now = env.deps.now();
-  const next = nextStageAfterStep(task.step, env.config);
+  const next = advanceTargetFor(task, env.config);
   const advance: CadenceGenerationMeta['advance'] = next
     ? { state: 'pending', due_at: iso(now.getTime() + ADVANCE_CONFIRM_MINUTES * 60_000) }
     : { state: 'skipped', due_at: now.toISOString(), result: null };

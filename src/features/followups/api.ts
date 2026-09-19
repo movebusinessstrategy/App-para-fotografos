@@ -2,8 +2,8 @@ import { authFetch } from '../../utils/authFetch';
 import type {
   ApproveAllRequest, ApproveAllResult, DealFollowUpState, FollowUpConfigPutRequest, FollowUpConfigPutResponse,
   FollowUpConfigResponse, FollowUpDraftItem, FollowUpErrorCode, FollowUpOptOut, FollowUpOverview,
-  FollowUpQueueResponse, FollowUpStep, PreviewMessage, QueueTab, ReconcileApplyRequest, ReconcileApplyResult,
-  ReconcilePreview, SweepDryRun,
+  FollowUpQueueResponse, FollowUpStep, FollowUpTrack, PreviewMessage, QueueTab, ReconcileApplyRequest,
+  ReconcileApplyResult, ReconcilePreview, SweepDryRun,
 } from './types';
 
 // Wrappers finos sobre authFetch (a impersonação depende dos headers que ele injeta).
@@ -74,6 +74,7 @@ function withQuery(path: string, params: Record<string, string | number | null |
 export interface QueueQuery {
   status: QueueTab;
   step?: FollowUpStep | null;
+  track?: FollowUpTrack | null;
   stage_id?: string | null;
   deal_id?: number | null;
   search?: string;
@@ -84,7 +85,7 @@ export interface QueueQuery {
 
 export function queueUrl(q: QueueQuery): string {
   return withQuery(`${FOLLOWUPS_BASE}/queue`, {
-    status: q.status, step: q.step, stage_id: q.stage_id, deal_id: q.deal_id,
+    status: q.status, step: q.step, track: q.track, stage_id: q.stage_id, deal_id: q.deal_id,
     search: q.search?.trim(), offset: q.offset, limit: q.limit, preview: q.preview,
   });
 }
@@ -100,6 +101,7 @@ export function dealStateUrl(dealId: number | string): string {
 export interface SweepBody {
   dry_run?: boolean;
   step?: FollowUpStep;
+  track?: FollowUpTrack;
   deal_ids?: number[];
   limit?: number;
   consent_to_external_ai?: boolean;

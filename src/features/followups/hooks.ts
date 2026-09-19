@@ -4,7 +4,7 @@ import { useApi } from '../../utils/useApi';
 import { CONFIG_URL, OVERVIEW_URL, dealStateUrl, fetchJson, queueUrl } from './api';
 import type {
   DealFollowUpState, FollowUpConfigResponse, FollowUpDraftItem, FollowUpOverview, FollowUpQueueResponse,
-  FollowUpStep, QueueTab,
+  FollowUpStep, FollowUpTrack, QueueTab,
 } from './types';
 
 // O SWR já pausa o polling com a aba oculta e revalida ao voltar o foco.
@@ -38,6 +38,7 @@ const QUEUE_PREVIEW = 6;
 export interface QueueFilters {
   status: QueueTab;
   step: FollowUpStep | null;
+  track?: FollowUpTrack | null;
   stageId: string | null;
   dealId: number | null;
   search: string;
@@ -63,14 +64,14 @@ function uniqueItems(pages: FollowUpQueueResponse[]): FollowUpDraftItem[] {
 
 // Fila paginada por offset ("Carregar mais"). paused = algum card em edição.
 export function useFollowUpQueue(filters: QueueFilters, paused: boolean) {
-  const { status, step, stageId, dealId, search } = filters;
+  const { status, step, track, stageId, dealId, search } = filters;
   const getKey = useCallback((index: number, prev: FollowUpQueueResponse | null) => {
     if (index > 0 && lastPageDone(prev)) return null;
     return queueUrl({
-      status, step, stage_id: stageId, deal_id: dealId, search,
+      status, step, track, stage_id: stageId, deal_id: dealId, search,
       offset: index * QUEUE_PAGE_SIZE, limit: QUEUE_PAGE_SIZE, preview: QUEUE_PREVIEW,
     });
-  }, [status, step, stageId, dealId, search]);
+  }, [status, step, track, stageId, dealId, search]);
 
   const swr = useSWRInfinite<FollowUpQueueResponse, Error>(getKey, fetchJson, {
     refreshInterval: paused ? 0 : 30000,

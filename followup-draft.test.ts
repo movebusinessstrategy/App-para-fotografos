@@ -9,6 +9,8 @@ import {
   HISTORY_START_NOTE,
   NEUTRAL_HOOKS,
   NO_KNOWLEDGE_MESSAGE,
+  PRE_QUOTE_DIRECTIVES,
+  PRE_QUOTE_NEUTRAL_HOOKS,
   REACTION_NOTE,
   STEP_DIRECTIVES,
   cleanFollowupText,
@@ -546,6 +548,70 @@ test('textos fixos não têm travessão', () => {
     FOLLOWUP_INSTRUCTION, HISTORY_START_NOTE, REACTION_NOTE, NO_KNOWLEDGE_MESSAGE,
     invisibleBasisNote('2026-09-19T14:05:00Z'),
     ...Object.values(STEP_DIRECTIVES), ...Object.values(NEUTRAL_HOOKS),
+    ...Object.values(PRE_QUOTE_DIRECTIVES), ...Object.values(PRE_QUOTE_NEUTRAL_HOOKS),
   ];
   for (const text of texts) assert.ok(!DASH_PATTERN.test(text), text);
+});
+
+// ── Trilha antes do orçamento ───────────────────────────────────────────────
+
+const PRE_QUOTE_ROWS = [
+  row(false, 'Oi! Queria saber como funciona o ensaio', 'text', 0),
+  row(true, 'Oi! Que bom que chamou. Qual tipo de ensaio você está pensando?', 'text', 1),
+];
+
+test('antes do orçamento: toque 1 retoma a pergunta que ficou no ar, sem preço, sem PDF e sem data', async () => {
+  const { deps, calls } = fakeDeps(['Oi, Maria! Me conta que tipo de ensaio você tem em mente?']);
+  const result = asDraft(await generateCadenceDraft(baseInput({ track: 'pre_quote', trackSteps: 2, rows: PRE_QUOTE_ROWS }), deps));
+  const directive = lastTurn(calls[0]).content;
+  assert.ok(directive.startsWith('[NOTA DO SISTEMA - NÃO é mensagem do cliente. Retomada antes do orçamento, toque 1 de 2. Primeiro nome: Maria.'));
+  assert.ok(directive.includes(PRE_QUOTE_DIRECTIVES[1]));
+  assert.ok(!directive.includes(STEP_DIRECTIVES[1]), 'não usa a diretiva da escada (que fala de orçamento enviado)');
+  assert.match(PRE_QUOTE_DIRECTIVES[1], /pergunta/);
+  assert.match(PRE_QUOTE_DIRECTIVES[1], /Uma pergunta só/);
+  for (const text of Object.values(PRE_QUOTE_DIRECTIVES)) {
+    assert.match(text, /não cite preço/);
+    assert.match(text, /não mande PDF/);
+    assert.match(text, /não invente data/);
+    assert.match(text, /###SKIP###/);
+  }
+  assert.equal(result.text, 'Oi, Maria! Me conta que tipo de ensaio você tem em mente?');
+  assert.deepEqual(result.warnings, []);
+});
+
+test('antes do orçamento: toque 2 deixa a porta aberta; com um toque só, o 1º já é a despedida leve', async () => {
+  const { deps, calls } = fakeDeps(['Oi, Maria! Quando fizer sentido, é só me chamar.']);
+  await generateCadenceDraft(baseInput({ track: 'pre_quote', step: 2, trackSteps: 2, rows: PRE_QUOTE_ROWS }), deps);
+  assert.ok(lastTurn(calls[0]).content.includes('toque 2 de 2'));
+  assert.ok(lastTurn(calls[0]).content.includes(PRE_QUOTE_DIRECTIVES[2]));
+  assert.match(PRE_QUOTE_DIRECTIVES[2], /quando fizer sentido, é só me chamar/);
+  assert.match(PRE_QUOTE_DIRECTIVES[2], /Sem cobrança/);
+  const single = fakeDeps(['Oi, Maria! Quando fizer sentido, é só me chamar.']);
+  await generateCadenceDraft(baseInput({ track: 'pre_quote', step: 1, trackSteps: 1, rows: PRE_QUOTE_ROWS }), single.deps);
+  assert.ok(lastTurn(single.calls[0]).content.includes('toque 1 de 1'));
+  assert.ok(lastTurn(single.calls[0]).content.includes(PRE_QUOTE_DIRECTIVES[2]));
+});
+
+test('antes do orçamento: ###SKIP### continua valendo e toque 3 é inválido', async () => {
+  const { deps } = fakeDeps(['###SKIP###']);
+  const skipped = await generateCadenceDraft(baseInput({ track: 'pre_quote', rows: PRE_QUOTE_ROWS }), deps);
+  assert.equal(skipped.kind, 'skip');
+  const invalid = fakeDeps(['Oi']);
+  const result = await generateCadenceDraft(baseInput({ track: 'pre_quote', step: 3, rows: PRE_QUOTE_ROWS }), invalid.deps);
+  assert.equal(result.kind, 'error');
+  assert.equal(invalid.calls.length, 0);
+});
+
+test('antes do orçamento: limite de 280 caracteres no toque 2 e gancho neutro da trilha', async () => {
+  const long = `Oi, Maria! ${'Quando fizer sentido para você, é só me chamar. '.repeat(6)}`.trim();
+  const { deps } = fakeDeps([long]);
+  const draft = asDraft(await generateCadenceDraft(baseInput({ track: 'pre_quote', step: 2, rows: PRE_QUOTE_ROWS }), deps));
+  assert.ok(draft.text.length > 280 && draft.text.length <= 420);
+  assert.ok(draft.warnings.includes('longo'));
+  for (const step of [1, 2] as const) {
+    assert.equal(toTemplateHook('Oi, Maria!', step, undefined, 'pre_quote'), PRE_QUOTE_NEUTRAL_HOOKS[step]);
+    assert.doesNotMatch(PRE_QUOTE_NEUTRAL_HOOKS[step], /pacote|or[cç]amento|valor/i);
+    assert.deepEqual(draftWarnings(PRE_QUOTE_NEUTRAL_HOOKS[step], '', ''), []);
+  }
+  assert.equal(toTemplateHook('Oi, Maria!', 2), NEUTRAL_HOOKS[2], 'sem trilha continua a escada');
 });

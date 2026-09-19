@@ -7,8 +7,11 @@ import { api, errorMessage } from './api';
 import { DraftCard } from './DraftCard';
 import { approveAllConfirmText, businessDaysLabel } from './format';
 import { useFollowUpQueue } from './hooks';
-import { NETWORK_ERROR_TEXT, QUEUE_EMPTY_TEXT, QUEUE_TAB_LABELS, QUEUE_TABS, STEP_LABELS } from './labels';
-import { FOLLOWUP_STEPS, type ApproveAllRequest, type CadenceStatus, type FollowUpDraftItem, type FollowUpOverview, type FollowUpStep, type QueueTab } from './types';
+import { NETWORK_ERROR_TEXT, QUEUE_EMPTY_TEXT, QUEUE_TAB_LABELS, QUEUE_TABS, STEP_LABELS, TRACK_LABELS } from './labels';
+import {
+  FOLLOWUP_STEPS, FOLLOWUP_TRACKS, type ApproveAllRequest, type CadenceStatus, type FollowUpDraftItem, type FollowUpOverview,
+  type FollowUpStep, type FollowUpTrack, type QueueTab,
+} from './types';
 
 // Quais status continuam visíveis em cada aba depois de uma ação.
 const TAB_STATUSES: Record<QueueTab, CadenceStatus[]> = {
@@ -39,6 +42,11 @@ function emptyText(tab: QueueTab, step: FollowUpStep | null, filtered: boolean, 
   if (neverSwept(o)) return 'Nenhum rascunho ainda. Clique em Gerar rascunhos agora para a IA ler as conversas paradas.';
   if (step) return `Nenhum rascunho no passo ${step}.`;
   return QUEUE_EMPTY_TEXT.draft;
+}
+
+// Passo escolhido implica a escada: os chips de passo contam só a escada.
+function queryTrack(step: FollowUpStep | null, track: FollowUpTrack | null): FollowUpTrack | null {
+  return step ? 'ladder' : track;
 }
 
 function useDebounced<T>(value: T, ms: number): T {
@@ -77,6 +85,16 @@ function QueueTabs({ tab, overview, onChange }: { tab: QueueTab; overview: Follo
   );
 }
 
+function TrackSelect({ track, onChange }: { track: FollowUpTrack | null; onChange: (t: FollowUpTrack | null) => void }) {
+  return (
+    <select value={track ?? ''} onChange={(e) => onChange((e.target.value || null) as FollowUpTrack | null)} aria-label="Filtrar por trilha"
+      className="rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-[12px] text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200">
+      <option value="">Todas as trilhas</option>
+      {FOLLOWUP_TRACKS.map((t) => <option key={t} value={t}>{TRACK_LABELS[t]}</option>)}
+    </select>
+  );
+}
+
 function StepChips({ step, overview, onChange }: { step: FollowUpStep | null; overview: FollowUpOverview; onChange: (s: FollowUpStep | null) => void }) {
   const chip = (active: boolean) => cn(
     'whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-semibold',
@@ -97,6 +115,8 @@ function StepChips({ step, overview, onChange }: { step: FollowUpStep | null; ov
 interface ToolbarProps {
   search: string;
   onSearch: (v: string) => void;
+  track: FollowUpTrack | null;
+  onTrack: (t: FollowUpTrack | null) => void;
   dealId: number | null;
   onClearDeal: () => void;
   showApproveAll: boolean;
@@ -113,6 +133,7 @@ function QueueToolbar(p: ToolbarProps) {
         <input value={p.search} onChange={(e) => p.onSearch(e.target.value)} placeholder="Buscar por nome ou telefone"
           className="w-full bg-transparent text-[12px] text-gray-900 outline-none dark:text-white" />
       </label>
+      <TrackSelect track={p.track} onChange={p.onTrack} />
       {p.dealId !== null && (
         <span className="flex items-center gap-1 rounded-full border border-gold-300 bg-gold-50 px-2.5 py-1 text-[11px] font-semibold text-gold-800 dark:border-gold-700 dark:bg-gold-900/30 dark:text-gold-200">
           Só o negócio #{p.dealId}
@@ -199,9 +220,15 @@ export interface QueueListProps {
   onOverviewChanged: () => void;
 }
 
-function bulkCountFor(o: FollowUpOverview, step: FollowUpStep | null): number {
-  if (!step) return o.counts.draft;
-  return o.counts.draft_by_step?.[step] ?? 0;
+function bulkCountFor(o: FollowUpOverview, step: FollowUpStep | null, track: FollowUpTrack | null): number {
+  if (step) return o.counts.draft_by_step?.[step] ?? 0;
+  if (track) return o.counts.draft_by_track?.[track] ?? 0;
+  return o.counts.draft;
+}
+
+function approveAllLabel(step: FollowUpStep | null, track: FollowUpTrack | null): string {
+  if (step) return `Aprovar todos do passo ${step}`;
+  return track === 'pre_quote' ? 'Aprovar todos antes do orçamento' : 'Aprovar todos';
 }
 
 function approveAllBlockReason(o: FollowUpOverview, count: number): string | null {
@@ -217,11 +244,18 @@ export function QueueList(p: QueueListProps) {
   const editing = useIdSet();
   const selection = useIdSet();
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [trackFilter, setTrackFilter] = useState<FollowUpTrack | null>(null);
   const draftStep = tab === 'draft' ? step : null;
-  const queue = useFollowUpQueue({ status: tab, step: draftStep, stageId: null, dealId, search: debounced }, editing.ids.size > 0);
+  const track = queryTrack(draftStep, trackFilter);
+  const queue = useFollowUpQueue({ status: tab, step: draftStep, track, stageId: null, dealId, search: debounced }, editing.ids.size > 0);
+  const { onStepChange } = p;
+  const changeTrack = useCallback((t: FollowUpTrack | null) => {
+    setTrackFilter(t);
+    if (t === 'pre_quote') onStepChange(null);
+  }, [onStepChange]);
 
   const { clear: clearSelection } = selection;
-  useEffect(() => { clearSelection(); }, [tab, draftStep, dealId, debounced, clearSelection]);
+  useEffect(() => { clearSelection(); }, [tab, draftStep, track, dealId, debounced, clearSelection]);
 
   const refreshAll = () => { void queue.refresh(); p.onOverviewChanged(); };
   const bulk = useBulkApprove({ onToast: p.onToast, after: () => { selection.clear(); refreshAll(); } });
@@ -232,22 +266,24 @@ export function QueueList(p: QueueListProps) {
   };
 
   const filtered = !!debounced.trim() || dealId !== null;
-  const bulkCount = bulkCountFor(overview, draftStep);
+  const bulkCount = bulkCountFor(overview, draftStep, track);
   const generatedBefore = queue.serverTime ?? overview.server_time;
   const canBulk = tab === 'draft' && overview.can_approve;
   const selectable = canBulk && overview.enabled;
   const confirmText = useMemo(() => approveAllConfirmText({
-    count: bulkCount, step: draftStep, effectiveCap: overview.sending.effective_cap,
+    count: bulkCount, step: draftStep, track, effectiveCap: overview.sending.effective_cap,
     remainingToday: overview.sending.remaining, gap: p.gap,
-  }), [bulkCount, draftStep, overview.sending.effective_cap, overview.sending.remaining, p.gap]);
+  }), [bulkCount, draftStep, track, overview.sending.effective_cap, overview.sending.remaining, p.gap]);
+  const bulkScope: Partial<ApproveAllRequest> = { ...(draftStep ? { step: draftStep } : {}), ...(track ? { track } : {}) };
 
   return (
     <section className="space-y-3">
       <QueueTabs tab={tab} overview={overview} onChange={p.onTabChange} />
-      {tab === 'draft' && <StepChips step={step} overview={overview} onChange={p.onStepChange} />}
-      <QueueToolbar search={search} onSearch={setSearch} dealId={dealId} onClearDeal={p.onClearDeal}
+      {tab === 'draft' && trackFilter !== 'pre_quote' && <StepChips step={step} overview={overview} onChange={p.onStepChange} />}
+      <QueueToolbar search={search} onSearch={setSearch} track={trackFilter} onTrack={changeTrack}
+        dealId={dealId} onClearDeal={p.onClearDeal}
         showApproveAll={canBulk && !filtered}
-        approveAllLabel={draftStep ? `Aprovar todos do passo ${draftStep}` : 'Aprovar todos'}
+        approveAllLabel={approveAllLabel(draftStep, track)}
         approveAllBlocked={approveAllBlockReason(overview, bulkCount)} onApproveAll={() => setConfirmOpen(true)} />
       <QueueBody p={p} queue={queue} emptyMessage={emptyText(tab, draftStep, filtered, overview)}
         selectable={selectable} selected={selection.ids} onToggleSelect={selection.toggle}
@@ -256,7 +292,7 @@ export function QueueList(p: QueueListProps) {
         onApprove={() => void bulk.run({ generated_before: generatedBefore, ids: [...selection.ids] })} />
       <ConfirmModal open={confirmOpen} title="Aprovar follow-ups" message={confirmText} confirmText="Aprovar"
         onCancel={() => setConfirmOpen(false)}
-        onConfirm={() => { setConfirmOpen(false); void bulk.run({ generated_before: generatedBefore, ...(draftStep ? { step: draftStep } : {}) }); }} />
+        onConfirm={() => { setConfirmOpen(false); void bulk.run({ generated_before: generatedBefore, ...bulkScope }); }} />
     </section>
   );
 }

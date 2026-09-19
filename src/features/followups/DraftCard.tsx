@@ -8,8 +8,8 @@ import { api, errorMessage, isItemChanged, type SkipScope } from './api';
 import { ConversationPreview } from './ConversationPreview';
 import { formatDayTime, hoursSilentLabel } from './format';
 import {
-  CHANNEL_LABELS, CONFLICT_TOAST, NO_APPROVE_PERMISSION, STEP_LABELS, TEMPLATE_WINDOW_TEXT, TONE_CLASSES,
-  lastErrorText, statusLabel, warningLabel, type Tone,
+  CHANNEL_LABELS, CONFLICT_TOAST, NO_APPROVE_PERMISSION, TEMPLATE_WINDOW_TEXT, TONE_CLASSES,
+  lastErrorText, statusLabel, stepLabel, warningLabel, type Tone,
 } from './labels';
 import type { FollowUpDraftItem } from './types';
 
@@ -189,7 +189,7 @@ function DraftHeader({ item, selectable, selected, onToggleSelect, onOpenDeal }:
           <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-bold', TONE_CLASSES[status.tone])}>{status.label}</span>
         </div>
         <p className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400">
-          {item.deal.stage_name} · {STEP_LABELS[item.step]} · {hoursSilentLabel(item.silence.hours)}
+          {item.deal.stage_name} · {stepLabel(item)} · {hoursSilentLabel(item.silence.hours)}
         </p>
       </div>
       <span className="flex-shrink-0 rounded-lg bg-gray-100 px-2 py-1 text-[10px] font-semibold text-gray-600 dark:bg-gray-700/60 dark:text-gray-300">

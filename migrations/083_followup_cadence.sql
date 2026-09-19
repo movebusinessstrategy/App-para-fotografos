@@ -54,10 +54,13 @@ ALTER TABLE public.scheduled_followups
   ADD COLUMN IF NOT EXISTS last_error text,
   ADD COLUMN IF NOT EXISTS generation_meta jsonb NOT NULL DEFAULT '{}'::jsonb,
   ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS track text NOT NULL DEFAULT 'ladder',
   ADD COLUMN IF NOT EXISTS phone_key text GENERATED ALWAYS AS (public.followup_phone_key(phone)) STORED;
 
 COMMENT ON COLUMN public.scheduled_followups.kind IS
   '083: legacy = mensagem fixa por etapa (worker antigo, status pending/processing); cadence = rascunho da IA por estado.';
+COMMENT ON COLUMN public.scheduled_followups.track IS
+  '083: ladder = escada depois do orçamento (move o card); pre_quote = antes do orçamento (toques 1 e 2, nunca move). Legado fica ladder.';
 COMMENT ON COLUMN public.scheduled_followups.basis_at IS
   '083: última fala do estúdio (visível, legado enviado ou IA oficial) que abriu o silêncio deste passo.';
 COMMENT ON COLUMN public.scheduled_followups.message IS
@@ -78,10 +81,13 @@ ALTER TABLE public.scheduled_followups
     AND step IS NOT NULL AND step BETWEEN 1 AND 4
     AND basis_at IS NOT NULL
     AND jsonb_typeof(generation_meta) = 'object'
+    AND (track <> 'pre_quote' OR step BETWEEN 1 AND 2)
     AND (status <> 'approved' OR approved_at IS NOT NULL))),
   DROP CONSTRAINT IF EXISTS scheduled_followups_channel_used_check,
   ADD CONSTRAINT scheduled_followups_channel_used_check
-    CHECK (channel_used IS NULL OR channel_used IN ('meta_text', 'baileys', 'meta_template'));
+    CHECK (channel_used IS NULL OR channel_used IN ('meta_text', 'baileys', 'meta_template')),
+  DROP CONSTRAINT IF EXISTS scheduled_followups_track_check,
+  ADD CONSTRAINT scheduled_followups_track_check CHECK (track IN ('ladder', 'pre_quote') AND (kind = 'cadence' OR track = 'ladder'));
 
 -- Vivas = draft, approved, sending, blocked: no máximo uma por deal e uma por telefone.
 CREATE UNIQUE INDEX IF NOT EXISTS scheduled_followups_cadence_live_deal_uidx
@@ -90,12 +96,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS scheduled_followups_cadence_live_deal_uidx
 CREATE UNIQUE INDEX IF NOT EXISTS scheduled_followups_cadence_live_phone_uidx
   ON public.scheduled_followups (user_id, phone_key)
   WHERE kind = 'cadence' AND status IN ('draft', 'approved', 'sending', 'blocked');
--- Episódio: o mesmo silêncio nunca gera duas tarefas, nem por deal nem por telefone.
+-- Episódio: o mesmo silêncio nunca gera duas tarefas na mesma trilha, nem por deal nem por
+-- telefone. Com track, o toque 1 antes do orçamento não colide com o passo 1 da escada.
 CREATE UNIQUE INDEX IF NOT EXISTS scheduled_followups_cadence_episode_uidx
-  ON public.scheduled_followups (user_id, deal_id, step, basis_at)
+  ON public.scheduled_followups (user_id, deal_id, track, step, basis_at)
   WHERE kind = 'cadence';
 CREATE UNIQUE INDEX IF NOT EXISTS scheduled_followups_cadence_phone_episode_uidx
-  ON public.scheduled_followups (user_id, phone_key, basis_at)
+  ON public.scheduled_followups (user_id, phone_key, track, basis_at)
   WHERE kind = 'cadence';
 CREATE INDEX IF NOT EXISTS scheduled_followups_cadence_queue_idx
   ON public.scheduled_followups (user_id, status, scheduled_at)
@@ -123,6 +130,8 @@ CREATE TABLE IF NOT EXISTS public.followup_cadence_config (
   ladder_stage_ids text[] NOT NULL DEFAULT '{}'::text[],
   step_delays_hours integer[] NOT NULL DEFAULT '{24,48,72,120}'::integer[],
   after_last_stage_id text,
+  pre_quote_stage_ids text[] NOT NULL DEFAULT '{}'::text[],
+  pre_quote_delays_hours integer[] NOT NULL DEFAULT '{24,72}'::integer[],
   business_hours jsonb NOT NULL DEFAULT '{"tz":"America/Sao_Paulo","days":[1,2,3,4,5,6],"start":"09:00","end":"19:00","holidays":[]}'::jsonb,
   daily_cap integer NOT NULL DEFAULT 40,
   min_gap_seconds integer NOT NULL DEFAULT 60,
@@ -176,6 +185,21 @@ CREATE TABLE IF NOT EXISTS public.followup_cadence_config (
   CONSTRAINT followup_cadence_config_paused_check
     CHECK (paused_reason IS NULL OR paused_reason IN ('error_streak', 'manual'))
 );
+-- Trilha antes do orçamento: colunas repetidas aqui para quem já tinha a tabela de uma versão anterior da 083.
+ALTER TABLE public.followup_cadence_config
+  ADD COLUMN IF NOT EXISTS pre_quote_stage_ids text[] NOT NULL DEFAULT '{}'::text[],
+  ADD COLUMN IF NOT EXISTS pre_quote_delays_hours integer[] NOT NULL DEFAULT '{24,72}'::integer[],
+  DROP CONSTRAINT IF EXISTS followup_cadence_config_pre_quote_check,
+  ADD CONSTRAINT followup_cadence_config_pre_quote_check
+    CHECK (cardinality(pre_quote_stage_ids) <= 2 AND array_position(pre_quote_stage_ids, NULL) IS NULL
+      AND NOT (pre_quote_stage_ids && ladder_stage_ids)),
+  DROP CONSTRAINT IF EXISTS followup_cadence_config_pre_quote_delays_check,
+  ADD CONSTRAINT followup_cadence_config_pre_quote_delays_check
+    CHECK (cardinality(pre_quote_delays_hours) BETWEEN 1 AND 2 AND array_position(pre_quote_delays_hours, NULL) IS NULL
+      AND 1 <= ALL (pre_quote_delays_hours) AND 720 >= ALL (pre_quote_delays_hours));
+COMMENT ON COLUMN public.followup_cadence_config.pre_quote_stage_ids IS
+  '083: 0 a 2 etapas abertas antes da escada (ex.: Conversa Iniciada). Vazio = trilha antes do orçamento desligada.';
+
 COMMENT ON TABLE public.followup_cadence_config IS
   '083: config da cadência de follow-up e do rastreador de funil, mais o estado dos workers. Escrita só via service_role.';
 
@@ -416,7 +440,8 @@ COMMIT;
 -- ALTER TABLE public.scheduled_followups
 --   DROP CONSTRAINT IF EXISTS scheduled_followups_kind_check,
 --   DROP CONSTRAINT IF EXISTS scheduled_followups_cadence_shape_check,
---   DROP CONSTRAINT IF EXISTS scheduled_followups_channel_used_check;
+--   DROP CONSTRAINT IF EXISTS scheduled_followups_channel_used_check,
+--   DROP CONSTRAINT IF EXISTS scheduled_followups_track_check;
 -- ALTER TABLE public.scheduled_followups DROP COLUMN IF EXISTS phone_key;   -- a coluna gerada depende da função
 -- DROP FUNCTION IF EXISTS public.followup_phone_variants(text);
 -- DROP FUNCTION IF EXISTS public.followup_phone_key(text);

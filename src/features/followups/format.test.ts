@@ -133,3 +133,16 @@ test('nenhum texto da pasta de follow-ups usa travessão', () => {
     assert.ok(!DASHES.test(src), `travessão em ${f}`);
   }
 });
+
+test('trilha antes do orçamento: rótulo de toque N de M e texto do aprovar todos', async () => {
+  const { stepLabel, TRACK_LABELS } = await import('./labels');
+  assert.equal(stepLabel({ step: 1, track: 'pre_quote', track_steps: 2 }), 'Antes do orçamento · toque 1 de 2');
+  assert.equal(stepLabel({ step: 2, track: 'pre_quote', track_steps: 1 }), 'Antes do orçamento · toque 2 de 2', 'nunca menor que o passo');
+  assert.equal(stepLabel({ step: 3, track: 'ladder', track_steps: 4 }), 'Passo 3 · Agenda');
+  assert.equal(stepLabel({ step: 2 }), 'Passo 2 · Valor');
+  assert.equal(TRACK_LABELS.pre_quote, 'Antes do orçamento');
+  const text = approveAllConfirmText({ count: 3, step: null, track: 'pre_quote', effectiveCap: 10, remainingToday: 10, gap: null });
+  assert.match(text, /^Aprovar 3 follow-ups antes do orçamento\?/);
+  const byStep = approveAllConfirmText({ count: 1, step: 2, track: 'ladder', effectiveCap: 10, remainingToday: 10, gap: null });
+  assert.match(byStep, /^Aprovar 1 follow-up do passo 2\?/);
+});

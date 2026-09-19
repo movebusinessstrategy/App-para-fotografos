@@ -5,7 +5,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type {
   CadenceGenerationMeta, CadenceStatus, CadenceTaskRow, CancelReason, ChannelKind, FollowUpConfig, FollowUpRuntimeState,
-  FollowUpStep, MoveResult,
+  FollowUpStep, FollowUpTrack, MoveResult,
 } from './src/features/followups/types.js';
 import { CUSTOMER_NON_TURN_TYPES, STUDIO_NON_TURN_TYPES } from './src/features/followups/types.js';
 import type { CadenceTaskLite, DealActivity, SendSnapshot } from './followup-cadence.js';
@@ -86,7 +86,7 @@ const GRAPH_URL = 'https://graph.facebook.com/v21.0';
 const GRAPH_TIMEOUT_MS = 20_000;
 const BAILEYS_TIMEOUT_MS = 30_000;
 const TYPING_TIMEOUT_MS = 5_000;
-const TASK_LITE_COLUMNS = 'id, deal_id, status, step, basis_at, sent_at, created_at, phone, phone_key, stage_id';
+const TASK_LITE_COLUMNS = 'id, deal_id, status, step, basis_at, sent_at, created_at, phone, phone_key, stage_id, track';
 const TEMPLATE_COLUMNS = 'id, name, language, body_text, status, category, header_text, buttons';
 const AGENT_COLUMNS = 'persona, objective, knowledge, rules, sales_strategy, attendant_name, learned_playbook, portfolio_links';
 const QUEUE_SELECT = 'received_at, kind:payload->>kind, mtype:payload->message->>type';
@@ -197,7 +197,7 @@ async function paged(build: (from: number, to: number) => PromiseLike<DbResult>,
 
 function toTaskRow(row: Row): CadenceTaskRow {
   return {
-    ...row, id: Number(row.id), deal_id: Number(row.deal_id), step: Number(row.step) as FollowUpStep,
+    ...row, id: Number(row.id), deal_id: Number(row.deal_id), step: Number(row.step) as FollowUpStep, track: trackOf(row.track),
     attempts: Number(row.attempts) || 0, generation_meta: metaObject(row.generation_meta),
   } as CadenceTaskRow;
 }
@@ -207,7 +207,12 @@ function toTaskLite(row: Row): CadenceTaskLite {
     id: Number(row.id), deal_id: Number(row.deal_id), status: String(row.status) as CadenceStatus, step: Number(row.step) as FollowUpStep,
     basis_at: String(row.basis_at ?? ''), sent_at: nullableText(row.sent_at), created_at: String(row.created_at ?? ''),
     phone: String(row.phone ?? ''), phone_key: nullableText(row.phone_key), stage_id: String(row.stage_id ?? ''),
+    track: trackOf(row.track),
   };
+}
+
+function trackOf(value: unknown): FollowUpTrack {
+  return value === 'pre_quote' ? 'pre_quote' : 'ladder';
 }
 
 function toStageRow(row: Row): StageRow {

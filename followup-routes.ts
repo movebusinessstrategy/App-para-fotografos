@@ -7,15 +7,17 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type {
   ApproveAllResult, CadenceGenerationMeta, CadenceStatus, CadenceTaskRow, ChannelHealth, DealFollowUpState,
   FollowUpConfig, FollowUpConfigResponse, FollowUpDraftItem, FollowUpErrorBody, FollowUpErrorCode, FollowUpOptOut,
-  FollowUpOverview, FollowUpRuntimeState, FollowUpServices, FollowUpStep, ForecastInput, ForecastResult,
+  FollowUpOverview, FollowUpRuntimeState, FollowUpServices, FollowUpStep, FollowUpTrack, ForecastInput, ForecastResult,
   OverviewPauseReason, PreviewMessage, QueueTab, ReconcileApplyRequest, RegenerateResult, SweepDryRun, SweepRequest,
   SweepState, SweepSummary,
 } from './src/features/followups/types.js';
 import { CUSTOMER_NON_TURN_TYPES, DEFAULT_FOLLOWUP_CONFIG, LIVE_CADENCE_STATUSES } from './src/features/followups/types.js';
 import {
-  customerSpokeAfter, delayHoursForStep, effectiveDailyCap, parseCadenceConfig, stepForStage, suggestLadder,
-  suggestTrackerStages, validateConfigInput,
+  customerSpokeAfter, delayHoursForStep, effectiveDailyCap, parseCadenceConfig, preQuoteDelayHours, preQuoteSentInEpisode,
+  preQuoteStepCount, preQuoteStepFor, stepForStage, suggestLadder, suggestPreQuote, suggestTrackerStages, trackForStage,
+  trackStepCount, validateConfigInput,
 } from './followup-cadence.js';
+import type { CadenceTaskLite } from './followup-cadence.js';
 import type { StageRow } from './lib/stage-rules.js';
 import { isSalesStage } from './lib/stage-rules.js';
 import { brazilianPhoneVariants, canonicalPhoneKey, digitsOnly, normalizeBrazilianPhone13 } from './lib/br-phone.js';
@@ -30,7 +32,7 @@ export interface FollowUpRouteCtx {
 }
 
 export interface QueueQuery {
-  status: QueueTab; step: FollowUpStep | null; stage_id: string | null; deal_id: number | null; search: string;
+  status: QueueTab; step: FollowUpStep | null; track: FollowUpTrack | null; stage_id: string | null; deal_id: number | null; search: string;
   offset: number; limit: number; preview: number;
 }
 
@@ -188,6 +190,15 @@ function optionalStep(value: unknown): FollowUpStep | null {
   return Number.isInteger(n) && n >= 1 && n <= 4 ? (n as FollowUpStep) : null;
 }
 
+function optionalTrack(value: unknown): FollowUpTrack | null {
+  const text = String(firstOf(value) ?? '');
+  return text === 'ladder' || text === 'pre_quote' ? text : null;
+}
+
+function trackOfRow(row: Row): FollowUpTrack {
+  return row.track === 'pre_quote' ? 'pre_quote' : 'ladder';
+}
+
 function positiveId(value: unknown): number | null {
   const raw = String(firstOf(value) ?? '');
   if (!/^\d{1,15}$/.test(raw)) return null;
@@ -288,6 +299,7 @@ export function parseQueueQuery(q: unknown): QueueQuery {
   return {
     status: QUEUE_TABS.includes(status) ? status : 'draft',
     step: optionalStep(query.step),
+    track: optionalTrack(query.track),
     stage_id: stage ? stage.trim().slice(0, 100) : null,
     deal_id: positiveId(query.deal_id),
     search: String(firstOf(query.search) ?? '').trim().slice(0, 80),
@@ -399,14 +411,22 @@ function aiView(meta: CadenceGenerationMeta): FollowUpDraftItem['ai'] {
   };
 }
 
+// Total de toques da trilha; nunca menor que o passo da própria tarefa (config pode ter mudado).
+function trackStepsFor(track: FollowUpTrack, step: number, config: FollowUpConfig | undefined): number {
+  const total = config ? trackStepCount(track, config) : 0;
+  return Math.max(total, Number.isFinite(step) ? step : 0);
+}
+
 export function toDraftItem(row: Row, dealMap: Map<number, DealLite>, stageMap: Map<string, { name: string }>,
   labels: ApproverLabels, changedSet: Set<number>, forecastMap: Map<number, ForecastResult>,
-  view: { now: Date; preview: number } = { now: new Date(), preview: DEFAULT_PREVIEW }): FollowUpDraftItem {
+  view: { now: Date; preview: number; config?: FollowUpConfig } = { now: new Date(), preview: DEFAULT_PREVIEW }): FollowUpDraftItem {
   const meta = metaOf(row);
   const id = Number(row.id);
   const forecast = forecastMap.get(id);
+  const track = trackOfRow(row);
   return {
     id, deal_id: Number(row.deal_id), step: Number(row.step) as FollowUpStep, status: row.status as CadenceStatus,
+    track, track_steps: trackStepsFor(track, Number(row.step), view.config),
     text: String(row.message ?? ''), original_text: orNull(row.draft_text),
     scheduled_at: row.scheduled_at, created_at: row.created_at, updated_at: orNull(row.updated_at), sent_at: orNull(row.sent_at),
     approved_at: orNull(row.approved_at), approved_by_label: approvedByLabel(row as CadenceTaskRow, labels),
@@ -536,7 +556,7 @@ async function loadOptOutKeysFor(db: Db, userId: string, rows: Row[]): Promise<S
 function forecastInput(row: Row, text: string): ForecastInput {
   return {
     id: Number(row.id), contact_name: orNull(row.contact_name), text, step: Number(row.step) as FollowUpStep,
-    last_customer_at: orNull(metaOf(row).anchor?.last_customer_at), phone: String(row.phone ?? ''),
+    last_customer_at: orNull(metaOf(row).anchor?.last_customer_at), phone: String(row.phone ?? ''), track: trackOfRow(row),
   };
 }
 
@@ -564,7 +584,7 @@ async function buildItems(env: Env, ctx: FollowUpRouteCtx, config: FollowUpConfi
     loadChangedSet(env.db, ctx.userId, rows),
     forecastMapFor(env, ctx.userId, config, rows),
   ]);
-  const view = { now: env.now(), preview };
+  const view = { now: env.now(), preview, config };
   return rows.map((r) => toDraftItem(r, dealMap, stageMap, labels, changed, forecasts, view));
 }
 
@@ -617,7 +637,7 @@ type BaseOverview = Omit<FollowUpOverview, 'can_edit_config' | 'can_approve'>;
 
 function emptyCounts(): Counts {
   return {
-    draft: 0, draft_by_step: { 1: 0, 2: 0, 3: 0, 4: 0 }, approved: 0, sending: 0, blocked: 0, failed_7d: 0,
+    draft: 0, draft_by_step: { 1: 0, 2: 0, 3: 0, 4: 0 }, draft_by_track: { ladder: 0, pre_quote: 0 }, approved: 0, sending: 0, blocked: 0, failed_7d: 0,
     sent_today: 0, skipped_7d: 0, cancelled_7d: 0, optouts: 0,
   };
 }
@@ -626,15 +646,18 @@ function tallyLive(rows: Row[], counts: Counts): void {
   for (const row of rows) {
     const status = row.status as 'draft' | 'approved' | 'sending' | 'blocked';
     if (typeof counts[status] === 'number') counts[status] += 1;
+    if (status !== 'draft') continue;
+    const track = trackOfRow(row);
+    counts.draft_by_track[track] += 1;
     const step = optionalStep(row.step);
-    if (status === 'draft' && step) counts.draft_by_step[step] += 1;
+    if (track === 'ladder' && step) counts.draft_by_step[step] += 1;
   }
 }
 
 async function loadCounts(db: Db, userId: string, dayStart: string, weekAgo: string): Promise<Counts> {
   const head = () => taskSelect(db, userId, 'id', { count: 'exact', head: true });
   const [live, sent, failed, skipped, cancelled, optouts] = await Promise.all([
-    run(taskSelect(db, userId, 'status, step').in('status', LIVE).limit(5000)),
+    run(taskSelect(db, userId, 'status, step, track').in('status', LIVE).limit(5000)),
     run(head().eq('status', 'sent').gte('sent_at', dayStart)),
     run(head().eq('status', 'failed').gte('updated_at', weekAgo)),
     run(head().eq('status', 'skipped').gte('updated_at', weekAgo)),
@@ -833,6 +856,7 @@ function searchFilter(search: string): string | null {
 
 const QUEUE_FILTERS: Array<(query: any, q: QueueQuery) => any> = [
   (query, q) => (q.step ? query.eq('step', q.step) : query),
+  (query, q) => (q.track ? query.eq('track', q.track) : query),
   (query, q) => (q.stage_id ? query.eq('stage_id', q.stage_id) : query),
   (query, q) => (q.deal_id ? query.eq('deal_id', q.deal_id) : query),
   (query, q) => {
@@ -882,7 +906,9 @@ async function conversationHandler(env: Env, req: Request, res: Response): Promi
 // Card do negócio
 
 function stageRole(stageId: string, config: FollowUpConfig): DealFollowUpState['stage_role'] {
-  if (stepForStage(stageId, config) !== null) return 'step';
+  const track = trackForStage(stageId, config);
+  if (track === 'ladder') return 'step';
+  if (track === 'pre_quote') return 'pre_quote';
   return stageId === config.after_last_stage_id ? 'after_last' : 'outside';
 }
 
@@ -894,13 +920,46 @@ function studioTurnAt(messages: Row[]): number | null {
 }
 
 // Só uma dica para o card: última fala do estúdio mais o atraso do passo, sem IA.
-async function nextEligibleAt(db: Db, userId: string, deal: DealLite, step: FollowUpStep | null, config: FollowUpConfig): Promise<string | null> {
+interface DealStep { track: FollowUpTrack | null; step: FollowUpStep | null }
+
+function delayFor(d: DealStep, config: FollowUpConfig): number {
+  return d.track === 'pre_quote' ? preQuoteDelayHours(d.step as FollowUpStep, config) : delayHoursForStep(d.step as FollowUpStep, config);
+}
+
+async function nextEligibleAt(db: Db, userId: string, deal: DealLite, d: DealStep, config: FollowUpConfig): Promise<string | null> {
   const variants = brazilianPhoneVariants(deal.contact_phone);
-  if (step === null || !variants.length) return null;
+  if (d.step === null || !variants.length) return null;
   const { data } = await run(db.from('wa_messages').select('from_me, timestamp, type, status').eq('user_id', userId)
     .in('phone', variants).or(CUSTOMER_TURN_FILTER).order('timestamp', { ascending: false }).limit(1));
   const at = studioTurnAt((data || []) as Row[]);
-  return at === null ? null : new Date(at + delayHoursForStep(step, config) * HOUR_MS).toISOString();
+  return at === null ? null : new Date(at + delayFor(d, config) * HOUR_MS).toISOString();
+}
+
+async function lastCustomerAt(db: Db, userId: string, variants: string[]): Promise<string | null> {
+  const { data } = await run(db.from('wa_messages').select('timestamp').eq('user_id', userId).eq('from_me', false)
+    .in('phone', variants).or(CUSTOMER_TURN_FILTER).order('timestamp', { ascending: false }).limit(1));
+  return orNull(((data || []) as Row[])[0]?.timestamp);
+}
+
+// Próximo toque antes do orçamento: os já enviados para o telefone depois da última fala do cliente.
+async function preQuoteNextStep(db: Db, userId: string, deal: DealLite, config: FollowUpConfig): Promise<FollowUpStep | null> {
+  const variants = brazilianPhoneVariants(deal.contact_phone);
+  const key = canonicalPhoneKey(deal.contact_phone);
+  if (!variants.length || key.length < 8) return preQuoteStepFor(0, config);
+  const [customerAt, sent] = await Promise.all([
+    lastCustomerAt(db, userId, variants),
+    run(taskSelect(db, userId, 'id, deal_id, status, step, basis_at, sent_at, created_at, phone, phone_key, stage_id, track')
+      .eq('track', 'pre_quote').eq('status', 'sent').eq('phone_key', key).order('sent_at', { ascending: false }).limit(10)),
+  ]);
+  const count = preQuoteSentInEpisode((sent.data || []) as CadenceTaskLite[], key, customerAt);
+  return preQuoteStepFor(count, config);
+}
+
+async function dealStep(db: Db, userId: string, deal: DealLite, config: FollowUpConfig): Promise<DealStep> {
+  const stage = String(deal.stage ?? '');
+  const track = trackForStage(stage, config);
+  if (track !== 'pre_quote') return { track, step: stepForStage(stage, config) };
+  return { track, step: await preQuoteNextStep(db, userId, deal, config) };
 }
 
 async function loadLegacyPending(db: Db, userId: string, dealId: number): Promise<DealFollowUpState['legacy_pending']> {
@@ -925,7 +984,7 @@ async function dealStateHandler(env: Env, req: Request, res: Response): Promise<
   const dealId = parseId(req.params.dealId, MSG.dealNotFound);
   const [{ config, exists }, deal] = await Promise.all([loadConfig(env.db, ctx.userId), loadDeal(env.db, ctx.userId, dealId)]);
   if (!deal) throw routeError('NOT_FOUND', MSG.dealNotFound);
-  const step = stepForStage(String(deal.stage ?? ''), config);
+  const current = await dealStep(env.db, ctx.userId, deal, config);
   const [{ active, last }, optedOut, legacy] = await Promise.all([
     loadDealTasks(env.db, ctx.userId, dealId),
     isKeyOptedOut(env.db, ctx.userId, deal.contact_phone),
@@ -934,8 +993,9 @@ async function dealStateHandler(env: Env, req: Request, res: Response): Promise<
   const items = await buildItems(env, ctx, config, [active, last].filter(isObj), DEFAULT_PREVIEW);
   const body: DealFollowUpState = {
     configured: exists, enabled: config.enabled, mode: config.mode,
-    stage_role: stageRole(String(deal.stage ?? ''), config), step,
-    next_eligible_at: active ? null : await nextEligibleAt(env.db, ctx.userId, deal, step, config),
+    stage_role: stageRole(String(deal.stage ?? ''), config), step: current.step,
+    track: current.track, track_steps: current.track ? trackStepCount(current.track, config) : 0,
+    next_eligible_at: active ? null : await nextEligibleAt(env.db, ctx.userId, deal, current, config),
     active: itemFor(items, active), last: itemFor(items, last),
     opted_out: optedOut, can_approve: canApproveFollowUps(ctx), legacy_pending: legacy,
   };
@@ -944,15 +1004,17 @@ async function dealStateHandler(env: Env, req: Request, res: Response): Promise<
 
 // Varredura manual
 
-interface SweepBody { dry_run: boolean; step?: FollowUpStep; deal_ids?: number[]; limit?: number }
+interface SweepBody { dry_run: boolean; step?: FollowUpStep; track?: FollowUpTrack; deal_ids?: number[]; limit?: number }
 
 function parseSweepBody(raw: unknown): SweepBody {
   const b = isObj(raw) ? raw : {};
   const out: SweepBody = { dry_run: b.dry_run === true };
   const step = optionalStep(b.step);
+  const track = optionalTrack(b.track);
   const dealIds = idList(b.deal_ids, 50, 'deal_ids', MSG.tooManyDeals);
   const limit = optionalInt(b.limit, 1, 60);
   if (step) out.step = step;
+  if (track) out.track = track;
   if (dealIds?.length) out.deal_ids = dealIds;
   if (limit) out.limit = limit;
   return out;
@@ -1096,7 +1158,7 @@ async function approveHandler(env: Env, req: Request, res: Response): Promise<vo
 }
 
 interface ApproveAllBody {
-  generated_before: string; step: FollowUpStep | null; stage_id: string | null; ids?: number[]; exclude_ids?: number[];
+  generated_before: string; step: FollowUpStep | null; track: FollowUpTrack | null; stage_id: string | null; ids?: number[]; exclude_ids?: number[];
   include_blocked: boolean;
 }
 
@@ -1109,6 +1171,7 @@ function parseApproveAll(raw: unknown): ApproveAllBody {
   return {
     generated_before: new Date(before).toISOString(),
     step: optionalStep(b.step),
+    track: optionalTrack(b.track),
     stage_id: firstText(b.stage_id),
     ids: idList(b.ids, APPROVE_ALL_MAX, 'ids', MSG.tooManyIds),
     exclude_ids: idList(b.exclude_ids, APPROVE_ALL_MAX, 'exclude_ids', MSG.tooManyIds),
@@ -1122,6 +1185,7 @@ function approveAllStatuses(body: ApproveAllBody): CadenceStatus[] {
 
 const APPROVE_ALL_FILTERS: Array<(query: any, b: ApproveAllBody) => any> = [
   (query, b) => (b.step ? query.eq('step', b.step) : query),
+  (query, b) => (b.track ? query.eq('track', b.track) : query),
   (query, b) => (b.stage_id ? query.eq('stage_id', b.stage_id) : query),
   (query, b) => (b.ids ? query.in('id', b.ids) : query),
   (query, b) => (b.exclude_ids?.length ? query.not('id', 'in', `(${b.exclude_ids.join(',')})`) : query),
@@ -1297,7 +1361,7 @@ async function getConfigHandler(env: Env, req: Request, res: Response): Promise<
     config, defaults: structuredClone(DEFAULT_FOLLOWUP_CONFIG), exists,
     stages: sales.map(stageOption),
     templates,
-    suggested: { ...suggestLadder(sales), ...suggestTrackerStages(sales) },
+    suggested: { ...suggestLadder(sales), ...suggestPreQuote(sales), ...suggestTrackerStages(sales) },
     legacy_automation: legacyAutomation(stages),
     consent: consentView(state),
     dedupe_ready: dedupeReady,
@@ -1357,8 +1421,10 @@ async function demoteAutoApprovals(db: Db, userId: string, nowIso: string): Prom
   return ((data || []) as Row[]).length;
 }
 
+// Inclui as etapas antes do orçamento quando a trilha está ligada: mensagem fixa ali duplicaria a retomada.
 async function disableLegacyOnLadder(db: Db, userId: string, config: FollowUpConfig): Promise<string[]> {
-  const ids = unique([...config.ladder_stage_ids, config.after_last_stage_id].filter((id): id is string => !!id));
+  const preQuote = preQuoteStepCount(config) > 0 ? config.pre_quote_stage_ids : [];
+  const ids = unique([...config.ladder_stage_ids, ...preQuote, config.after_last_stage_id].filter((id): id is string => !!id));
   if (!ids.length) return [];
   const { data } = await run(db.from('deal_stages').update({ auto_follow_up_enabled: false }).eq('user_id', userId)
     .in('id', ids).eq('auto_follow_up_enabled', true).select('id'));

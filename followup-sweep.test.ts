@@ -429,6 +429,51 @@ test('countEligible simula a faxina sem gravar e conta motivos de pulo', async (
   assert.equal(w.inserted.length, 0);
 });
 
+test('antes do orçamento: busca contact junto com a escada, grava track e passa a trilha para a IA', async () => {
+  const { w, sweep } = world({
+    config: { pre_quote_stage_ids: ['contact'], pre_quote_delays_hours: [24, 72] },
+    activities: [activity(1, { stage: 'contact', lastStudioBody: 'Qual tipo de ensaio?' }), activity(2)],
+  });
+  await sweep.runSweep(USER, { manual: true });
+  assert.ok(w.calls.some((c) => c.startsWith('candidates:proposal|negotiation|02-follow-up|03-follow-up|contact:')));
+  const pq = w.inserted.find((r) => r.deal_id === 1) as Record<string, any>;
+  assert.equal(pq.track, 'pre_quote');
+  assert.equal(pq.step, 1);
+  assert.equal(pq.stage_id, 'contact');
+  assert.equal(w.inserted.find((r) => r.deal_id === 2)?.track, 'ladder');
+  const input = w.generated.find((i) => i.contactName === 'Cliente 1') as DraftInput;
+  assert.equal(input.track, 'pre_quote');
+  assert.equal(input.trackSteps, 2);
+});
+
+test('antes do orçamento: trilha desligada não busca contact; filtro por trilha na prévia', async () => {
+  const off = world({ activities: [activity(1, { stage: 'contact' })] });
+  await off.sweep.runSweep(USER, { manual: true });
+  assert.ok(off.w.calls.some((c) => c.startsWith('candidates:proposal|negotiation|02-follow-up|03-follow-up:')));
+  assert.equal(off.w.inserted.length, 0);
+  const on = world({
+    config: { pre_quote_stage_ids: ['contact'] },
+    activities: [activity(1, { stage: 'contact' }), activity(2), activity(3, { stage: 'negotiation', lastStudioAt: ago(60), lastCustomerAt: ago(70) })],
+  });
+  const all = await on.sweep.countEligible(USER, { manual: true, dry_run: true });
+  assert.deepEqual(all.by_track, { ladder: 2, pre_quote: 1 });
+  assert.deepEqual(all.by_step, { 1: 1, 2: 1, 3: 0, 4: 0 }, 'by_step conta só a escada');
+  assert.ok(all.sample.some((x) => x.track === 'pre_quote' && x.deal_id === 1));
+  const onlyPq = await on.sweep.countEligible(USER, { manual: true, dry_run: true, track: 'pre_quote' });
+  assert.equal(onlyPq.eligible_total, 1);
+  await on.sweep.runSweep(USER, { manual: true, track: 'ladder' });
+  assert.deepEqual(on.w.inserted.map((r) => r.deal_id).sort(), [2, 3]);
+});
+
+test('regenerate de toque antes do orçamento mantém a trilha na IA', async () => {
+  const { w, sweep } = world({ config: { pre_quote_stage_ids: ['contact'] },
+    full: [fullTask({ track: 'pre_quote', stage_id: 'contact', step: 2 })], results: () => draft('Oi! Quando fizer sentido, é só me chamar.') });
+  assert.deepEqual(await sweep.regenerate(USER, 900, { actorId: 'owner' }), { status: 'updated' });
+  assert.equal(w.generated[0].track, 'pre_quote');
+  assert.equal(w.generated[0].step, 2);
+  assert.equal(w.generated[0].trackSteps, 2);
+});
+
 // Gerar de novo
 
 test('regenerate: CAS prévio falhando => conflict sem chamar a IA', async () => {

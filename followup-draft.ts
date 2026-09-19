@@ -9,15 +9,16 @@ import {
   enforceSingleQuestion,
   splitColonBeforeQuestion,
 } from './agent-conversation-flow.js';
-import type { DraftWarning, FollowUpStep, PreviewMessage } from './src/features/followups/types.js';
+import type { DraftWarning, FollowUpStep, FollowUpTrack, PreviewMessage } from './src/features/followups/types.js';
 
 export const FOLLOWUP_DIRECTIVE_VERSION = 'v2';
 
 export interface DraftRow { body: string | null; from_me: boolean; type: string | null; transcription: string | null; timestamp: string }
 export interface AiAgentConfigRow { persona: string | null; objective: string | null; knowledge: string | null; rules: string | null;
   sales_strategy: string | null; attendant_name: string | null; learned_playbook: string | null; portfolio_links: unknown }
+// track ausente = 'ladder'; trackSteps = total de toques da trilha (só para o cabeçalho da diretiva).
 export interface DraftInput { userId: string; waNumber: string; step: FollowUpStep; contactName: string | null; rows: DraftRow[];
-  agent: AiAgentConfigRow; extraInstructions: string; userInstruction?: string;
+  agent: AiAgentConfigRow; extraInstructions: string; userInstruction?: string; track?: FollowUpTrack; trackSteps?: number;
   invisible: { basis: boolean; at: string | null; read: boolean }; customerReactedAfterBasis?: boolean; now: Date }
 export interface DraftMeta { version: string; model: string | null; latency_ms: number | null; usage: unknown; cost_usd: number | null;
   niche: string | null; messages_used: number; warnings: DraftWarning[]; generated_at: string }
@@ -57,6 +58,14 @@ export const STEP_DIRECTIVES: Readonly<Record<FollowUpStep, string>> = {
   4: 'Última retomada. Despedida gentil, sem cobrança nem culpa. Entenda que talvez não seja o momento e deixe a porta aberta para ela chamar quando quiser. Sem pergunta que exija resposta, sem combinado e sem dia de retorno. 1 balão.',
 };
 
+// Trilha antes do orçamento: a conversa morreu antes do PDF. Sem preço, sem PDF, sem data.
+const PRE_QUOTE_GUARD = 'Ainda não houve orçamento: não cite preço, valor, parcela nem pacote específico, não mande PDF e não invente data. Se ela disse que ia pensar ou pediu para chamar em outra data que ainda não chegou, responda só ###SKIP###.';
+
+export const PRE_QUOTE_DIRECTIVES: Readonly<Record<1 | 2, string>> = {
+  1: `Retome de onde a conversa parou. Se a última fala do estúdio foi uma pergunta (tipo de ensaio, semanas de gestação, idade do bebê, o que ela imagina), retome essa pergunta de forma leve e natural, com outras palavras, sem repetir a frase. Uma pergunta só. Tom de quem quer ajudar a pessoa a chegar no ensaio certo. 1 balão, curto. ${PRE_QUOTE_GUARD}`,
+  2: `Última retomada, leve. Deixe a porta aberta, algo como "quando fizer sentido, é só me chamar". Sem cobrança, sem culpa e sem comentar o tempo sem resposta. Nenhuma pergunta que exija resposta. 1 balão. ${PRE_QUOTE_GUARD}`,
+};
+
 export const REACTION_NOTE = '[ATENÇÃO: a cliente reagiu com um emoji à última mensagem. Considere isso como sinal de leitura.]';
 
 // {{2}} do template quando o gancho tirado do rascunho fica curto demais.
@@ -67,6 +76,11 @@ export const NEUTRAL_HOOKS: Readonly<Record<FollowUpStep, string>> = {
   4: 'Se agora não for o momento, tudo bem. Fico por aqui para quando quiser conversar sobre o seu ensaio.',
 };
 
+export const PRE_QUOTE_NEUTRAL_HOOKS: Readonly<Record<1 | 2, string>> = {
+  1: 'Fiquei pensando no seu ensaio e quis retomar a nossa conversa.',
+  2: 'Quando fizer sentido para você, é só me chamar para a gente seguir com o seu ensaio.',
+};
+
 export const NO_KNOWLEDGE_MESSAGE = 'Configure o Agente IA (base de conhecimento) antes de gerar follow-ups.';
 const INVALID_STEP_MESSAGE = 'Passo de retomada inválido.';
 const TOO_LONG_MESSAGE = 'A IA escreveu um texto longo demais. Tente gerar de novo.';
@@ -74,6 +88,7 @@ const TOO_LONG_MESSAGE = 'A IA escreveu um texto longo demais. Tente gerar de no
 // ── Limites ─────────────────────────────────────────────────────────────────
 
 export const STEP_CHAR_LIMITS: Readonly<Record<FollowUpStep, number>> = { 1: 280, 2: 420, 3: 420, 4: 320 };
+export const PRE_QUOTE_CHAR_LIMITS: Readonly<Record<1 | 2, number>> = { 1: 280, 2: 280 };
 export const MAX_BALLOONS = 2;
 export const HARD_MAX_CHARS = 700;
 export const CONTEXT_TAIL_MAX = 8;
@@ -83,6 +98,16 @@ const TEMPLATE_HOOK_MIN = 20;
 const MIN_KNOWLEDGE_CHARS = 20;
 const MAX_ATTEMPTS = 2;
 const VALID_STEPS = new Set<number>([1, 2, 3, 4]);
+const VALID_PRE_QUOTE_STEPS = new Set<number>([1, 2]);
+
+function isPreQuote(track: FollowUpTrack | null | undefined): boolean {
+  return track === 'pre_quote';
+}
+
+export function charLimitFor(step: FollowUpStep, track?: FollowUpTrack | null): number {
+  if (isPreQuote(track)) return PRE_QUOTE_CHAR_LIMITS[step as 1 | 2] ?? PRE_QUOTE_CHAR_LIMITS[2];
+  return STEP_CHAR_LIMITS[step];
+}
 
 // ── Máscara de dados pessoais (LGPD) ─────────────────────────────────────────
 
@@ -194,10 +219,23 @@ function directiveExtras(i: DraftInput): string[] {
   return extras;
 }
 
+function preQuoteDirective(i: DraftInput): string {
+  const total = Math.min(2, Math.max(1, Math.floor(Number(i.trackSteps) || 2)));
+  // Com um toque só, o 1º já é a despedida leve.
+  return PRE_QUOTE_DIRECTIVES[(i.step >= total ? 2 : 1) as 1 | 2];
+}
+
+function directiveFor(i: DraftInput): { label: string; text: string } {
+  if (!isPreQuote(i.track)) return { label: `Retomada ${i.step} de 4`, text: STEP_DIRECTIVES[i.step] };
+  const total = Math.min(2, Math.max(1, Math.floor(Number(i.trackSteps) || 2)));
+  return { label: `Retomada antes do orçamento, toque ${i.step} de ${total}`, text: preQuoteDirective(i) };
+}
+
 export function stepDirective(i: DraftInput, niche: string | null): string {
   const name = firstName(i.contactName) ?? 'desconhecido';
-  const header = `[NOTA DO SISTEMA - NÃO é mensagem do cliente. Retomada ${i.step} de 4. Primeiro nome: ${name}. Nicho: ${nicheLabel(niche)}.]`;
-  return [header, STEP_DIRECTIVES[i.step], ...directiveExtras(i)].join('\n');
+  const directive = directiveFor(i);
+  const header = `[NOTA DO SISTEMA - NÃO é mensagem do cliente. ${directive.label}. Primeiro nome: ${name}. Nicho: ${nicheLabel(niche)}.]`;
+  return [header, directive.text, ...directiveExtras(i)].join('\n');
 }
 
 export function followupExtraInstruction(extraInstructions: string | null | undefined): string {
@@ -315,9 +353,9 @@ function balloonCount(text: string): number {
   return text.split(/\n\s*\n/).filter((part) => part.trim()).length;
 }
 
-export function limitWarnings(text: string, step: FollowUpStep): DraftWarning[] {
+export function limitWarnings(text: string, step: FollowUpStep, track?: FollowUpTrack | null): DraftWarning[] {
   const warnings: DraftWarning[] = [];
-  if (text.length > STEP_CHAR_LIMITS[step]) warnings.push('longo');
+  if (text.length > charLimitFor(step, track)) warnings.push('longo');
   if (balloonCount(text) > MAX_BALLOONS) warnings.push('muitos_baloes');
   return warnings;
 }
@@ -349,17 +387,18 @@ function cutHook(text: string, max: number): string {
   return cutAtWord(text, max);
 }
 
-function neutralHook(step: FollowUpStep, max: number): string {
-  const neutral = NEUTRAL_HOOKS[step] ?? NEUTRAL_HOOKS[1];
+function neutralHook(step: FollowUpStep, max: number, track?: FollowUpTrack | null): string {
+  const preQuote = isPreQuote(track) ? PRE_QUOTE_NEUTRAL_HOOKS[step as 1 | 2] ?? PRE_QUOTE_NEUTRAL_HOOKS[2] : null;
+  const neutral = preQuote ?? NEUTRAL_HOOKS[step] ?? NEUTRAL_HOOKS[1];
   return neutral.length <= max ? neutral : cutAtWord(neutral, max);
 }
 
-export function toTemplateHook(text: string, step: FollowUpStep, max = TEMPLATE_HOOK_MAX): string {
+export function toTemplateHook(text: string, step: FollowUpStep, max = TEMPLATE_HOOK_MAX, track?: FollowUpTrack | null): string {
   const balloons = String(text ?? '').trim().replace(GREETING_PATTERN, '').split(/\n\s*\n/);
   const flat = balloons.map((part) => part.trim()).filter(Boolean).join(' ')
     .replace(/[\n\t\r]+/g, ' ').replace(/ {2,}/g, ' ').trim();
   const hook = cutHook(flat, max);
-  if (hook.length < TEMPLATE_HOOK_MIN) return neutralHook(step, max);
+  if (hook.length < TEMPLATE_HOOK_MIN) return neutralHook(step, max, track);
   // Sem a saudação o trecho pode começar em minúscula; o template já abre com "Oi, {{1}}!".
   return hook.charAt(0).toLocaleUpperCase('pt-BR') + hook.slice(1);
 }
@@ -465,7 +504,7 @@ async function prepareContext(i: DraftInput, d: DraftDeps, history: AgentMessage
   };
 }
 
-function evaluateReply(raw: string, step: FollowUpStep, ctx: GenerationContext): DraftOutcome {
+function evaluateReply(raw: string, step: FollowUpStep, ctx: GenerationContext, track?: FollowUpTrack): DraftOutcome {
   const interpreted = interpretFollowupReply(raw, ctx.portfolioLinks, ctx.niche);
   if (interpreted.kind !== 'text') return interpreted;
   const cleaned = cleanFollowupText(interpreted.text, step);
@@ -473,7 +512,7 @@ function evaluateReply(raw: string, step: FollowUpStep, ctx: GenerationContext):
   const warnings = [
     ...cleaned.warnings,
     ...draftWarnings(cleaned.text, ctx.config.knowledge, ctx.conversationText),
-    ...limitWarnings(cleaned.text, step),
+    ...limitWarnings(cleaned.text, step, track),
   ];
   return { kind: 'draft', text: cleaned.text, warnings };
 }
@@ -535,15 +574,15 @@ function aiFailure(error: unknown): DraftResult {
   return { kind: 'error', retryable: true, message: `Não foi possível gerar o rascunho agora${suffix}. Tente de novo em instantes.` };
 }
 
-function attemptDirective(ctx: GenerationContext, step: FollowUpStep, attempt: number): string {
+function attemptDirective(ctx: GenerationContext, i: DraftInput, attempt: number): string {
   if (attempt === 1) return ctx.directive;
-  return `${ctx.directive}\n[ATENÇÃO: a versão anterior ficou longa demais. Escreva no máximo ${STEP_CHAR_LIMITS[step]} caracteres.]`;
+  return `${ctx.directive}\n[ATENÇÃO: a versão anterior ficou longa demais. Escreva no máximo ${charLimitFor(i.step, i.track)} caracteres.]`;
 }
 
 async function runGeneration(i: DraftInput, d: DraftDeps, ctx: GenerationContext): Promise<DraftResult> {
   let tally = EMPTY_TALLY;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    const turns = buildFollowupTurns(ctx.history, attemptDirective(ctx, i.step, attempt));
+    const turns = buildFollowupTurns(ctx.history, attemptDirective(ctx, i, attempt));
     let reply: Awaited<ReturnType<DraftDeps['getReplyDetailed']>>;
     try {
       reply = await d.getReplyDetailed(ctx.config, turns, { extraInstruction: ctx.extraInstruction });
@@ -551,7 +590,7 @@ async function runGeneration(i: DraftInput, d: DraftDeps, ctx: GenerationContext
       return aiFailure(error);
     }
     tally = addReply(tally, reply);
-    const outcome = evaluateReply(String(reply?.text ?? ''), i.step, ctx);
+    const outcome = evaluateReply(String(reply?.text ?? ''), i.step, ctx, i.track);
     if (!exceedsHardLimit(outcome)) {
       return toDraftResult(outcome, draftMeta(i, ctx.niche, ctx.history.length, tally, outcome.warnings));
     }
@@ -563,7 +602,8 @@ function invalidInput(i: DraftInput): DraftResult | null {
   if (trimmed(i?.agent?.knowledge).length < MIN_KNOWLEDGE_CHARS) {
     return { kind: 'error', retryable: false, message: NO_KNOWLEDGE_MESSAGE };
   }
-  if (!VALID_STEPS.has(i.step)) return { kind: 'error', retryable: false, message: INVALID_STEP_MESSAGE };
+  const steps = isPreQuote(i.track) ? VALID_PRE_QUOTE_STEPS : VALID_STEPS;
+  if (!steps.has(i.step)) return { kind: 'error', retryable: false, message: INVALID_STEP_MESSAGE };
   return null;
 }
 

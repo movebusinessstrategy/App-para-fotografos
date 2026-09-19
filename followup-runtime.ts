@@ -184,7 +184,8 @@ export function createFollowUpCadenceFrom(deps: FollowUpCadenceDeps, parts: Foll
     return items.map((item) => {
       const d = chooseChannel({ now: at, lastCustomerAt: item.last_customer_at, conversationWaNumber: main, health, config, template });
       const channel = d.ok ? d.channel : 'blocked';
-      return { id: item.id, channel, approval: approvalFor({ channel, template, contactName: item.contact_name, text: item.text, step: item.step }) };
+      const approval = approvalFor({ channel, template, contactName: item.contact_name, text: item.text, step: item.step, track: item.track });
+      return { id: item.id, channel, approval };
     });
   }
 

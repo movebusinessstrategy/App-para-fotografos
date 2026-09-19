@@ -3,6 +3,7 @@
 // Puro: sem banco, sem rede e sem relógio implícito (quem chama passa o now).
 import type {
   ApprovalChannelClass, BlockCode, CadenceApproval, CadenceTaskRow, ChannelHealth, ChannelKind, FollowUpConfig, FollowUpStep,
+  FollowUpTrack,
 } from './src/features/followups/types.js';
 import { digitsOnly, samePhone } from './lib/br-phone.js';
 import { firstName, MAX_BALLOONS, toTemplateHook } from './followup-draft.js';
@@ -294,22 +295,22 @@ export function channelClass(c: ChannelKind): ApprovalChannelClass {
   return c === 'meta_template' ? 'template' : 'text';
 }
 
-export function templateParams(contactName: string | null, text: string, step: FollowUpStep): string[] {
-  return [firstName(contactName) ?? 'tudo bem', toTemplateHook(text, step)];
+export function templateParams(contactName: string | null, text: string, step: FollowUpStep, track?: FollowUpTrack | null): string[] {
+  return [firstName(contactName) ?? 'tudo bem', toTemplateHook(text, step, undefined, track)];
 }
 
 export function approvalFor(i: { channel: ChannelKind | 'blocked'; template: CadenceTemplate | null; contactName: string | null;
-  text: string; step: FollowUpStep }): CadenceApproval {
+  text: string; step: FollowUpStep; track?: FollowUpTrack | null }): CadenceApproval {
   if (i.channel !== 'meta_template') return { channel_class: 'text', render: null, template_id: null };
   if (!i.template) return { channel_class: 'template', render: null, template_id: null };
-  const render = renderTemplate(i.template.bodyText, templateParams(i.contactName, i.text, i.step));
+  const render = renderTemplate(i.template.bodyText, templateParams(i.contactName, i.text, i.step, i.track));
   return { channel_class: 'template', render, template_id: i.template.id };
 }
 
 function templateChanged(approval: Partial<CadenceApproval>, task: CadenceTaskRow, template: CadenceTemplate | null): boolean {
   if (!template) return true;
   if (approval.template_id != null && Number(approval.template_id) !== Number(template.id)) return true;
-  const current = renderTemplate(template.bodyText, templateParams(task.contact_name, task.message, task.step));
+  const current = renderTemplate(template.bodyText, templateParams(task.contact_name, task.message, task.step, task.track));
   return approval.render !== current;
 }
 

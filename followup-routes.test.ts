@@ -298,7 +298,7 @@ let seq = 100;
 function task(over: Row = {}): Row {
   const phone = over.phone ?? PHONE_A;
   return {
-    id: over.id ?? ++seq, user_id: OWNER, kind: 'cadence', deal_id: 11, phone, phone_key: canonicalPhoneKey(phone),
+    id: over.id ?? ++seq, user_id: OWNER, kind: 'cadence', track: 'ladder', deal_id: 11, phone, phone_key: canonicalPhoneKey(phone),
     wa_number: MAIN_WA, message: 'Oi Ana, conseguiu ver o orçamento?', draft_text: 'Oi Ana, conseguiu ver o orçamento?',
     stage_id: 'proposal', step: 1, status: 'draft', basis_at: '2026-09-14T15:00:00.000Z', basis_message_id: 'wamid.studio',
     scheduled_at: '2026-09-15T15:00:00.000Z', created_at: '2026-09-16T10:00:00.000Z', updated_at: '2026-09-16T10:00:00.000Z',
@@ -476,8 +476,10 @@ test('canApproveFollowUps e requireFollowUpApprover: concessão explícita para 
 
 test('parseQueueQuery aplica padrões e limites', () => {
   assert.deepEqual(parseQueueQuery({}), {
-    status: 'draft', step: null, stage_id: null, deal_id: null, search: '', offset: 0, limit: 20, preview: 6,
+    status: 'draft', step: null, track: null, stage_id: null, deal_id: null, search: '', offset: 0, limit: 20, preview: 6,
   });
+  assert.equal(parseQueueQuery({ track: 'pre_quote' }).track, 'pre_quote');
+  assert.equal(parseQueueQuery({ track: 'outra' }).track, null);
   const q = parseQueueQuery({ status: 'blocked', step: '2', stage_id: ' proposal ', deal_id: '12', search: ` ${'a'.repeat(100)} `, offset: '-5', limit: '500', preview: '20' });
   assert.equal(q.status, 'blocked');
   assert.equal(q.step, 2);
@@ -607,7 +609,7 @@ test('GET /overview conta a fila, aplica a rampa e calcula permissões de quem v
   const o = owner.body;
   assert.equal(o.configured, true);
   assert.deepEqual(o.counts, {
-    draft: 2, draft_by_step: { 1: 1, 2: 1, 3: 0, 4: 0 }, approved: 1, sending: 0, blocked: 1, failed_7d: 1,
+    draft: 2, draft_by_step: { 1: 1, 2: 1, 3: 0, 4: 0 }, draft_by_track: { ladder: 2, pre_quote: 0 }, approved: 1, sending: 0, blocked: 1, failed_7d: 1,
     sent_today: 1, skipped_7d: 1, cancelled_7d: 0, optouts: 1,
   });
   assert.equal(o.sending.effective_cap, 10);
@@ -1230,6 +1232,129 @@ test('GET /deal/:dealId devolve papel da etapa, tarefa viva, histórico, opt-out
   assert.equal(next.body.active, null);
   const foreign = await call('GET', '/api/followups/deal/91');
   assert.equal(foreign.status, 404);
+});
+
+// ─── Trilha antes do orçamento ───
+
+const PHONE_D = '5543999990004';
+const PQ_CONFIG = { pre_quote_stage_ids: ['contact'], pre_quote_delays_hours: [24, 72] };
+
+function contactDeal(): Row {
+  return { user_id: OWNER, temperature: 'warm', assigned_to: null, converted: false, converted_job_id: null,
+    id: 14, title: 'Ensaio Duda', contact_name: 'Duda', contact_phone: PHONE_D, stage: 'contact' };
+}
+
+test('PUT /config valida e grava as etapas e os atrasos antes do orçamento; legado de contact desligado junto', async (t) => {
+  const db = makeDb();
+  const call = await startApp(t, db, fakeServices().services);
+  const overlap = await call('PUT', '/api/followups/config', { pre_quote_stage_ids: ['proposal'] });
+  assert.equal(overlap.status, 400);
+  assert.equal(overlap.body.code, 'CONFIG_INVALID');
+  assert.match(overlap.body.fields.pre_quote_stage_ids, /escada/);
+  const after = await call('PUT', '/api/followups/config', { pre_quote_stage_ids: ['followup-3'] });
+  assert.equal(after.status, 400);
+  assert.match(after.body.fields.pre_quote_stage_ids, /escada/, 'a etapa depois do último passo também não serve');
+  const tooMany = await call('PUT', '/api/followups/config', { pre_quote_stage_ids: ['lead', 'contact'], pre_quote_delays_hours: [24, 72, 96] });
+  assert.equal(tooMany.status, 400);
+  assert.match(tooMany.body.fields.pre_quote_delays_hours, /1 ou 2/);
+  const won = await call('PUT', '/api/followups/config', { pre_quote_stage_ids: ['won'] });
+  assert.match(won.body.fields.pre_quote_stage_ids, /abertas/);
+
+  db.rows('deal_stages').find((st) => st.id === 'contact')!.auto_follow_up_enabled = true;
+  const ok = await call('PUT', '/api/followups/config', { ...PQ_CONFIG, disable_legacy_on_ladder: true });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(ok.body.config.pre_quote_stage_ids, ['contact']);
+  assert.deepEqual(ok.body.config.pre_quote_delays_hours, [24, 72]);
+  assert.ok(ok.body.legacy_disabled.includes('contact'));
+  const saved = db.rows('followup_cadence_config').find((r) => r.user_id === OWNER) as Row;
+  assert.deepEqual(saved.pre_quote_stage_ids, ['contact']);
+  assert.deepEqual(saved.pre_quote_delays_hours, [24, 72]);
+});
+
+test('GET /config sugere Conversa Iniciada para antes do orçamento', async (t) => {
+  const call = await startApp(t, makeDb(), fakeServices().services);
+  const res = await call('GET', '/api/followups/config');
+  assert.deepEqual(res.body.suggested.pre_quote_stage_ids, ['contact']);
+  assert.deepEqual(res.body.suggested.pre_quote_delays_hours, [24, 72]);
+  assert.deepEqual(res.body.defaults.pre_quote_stage_ids, []);
+});
+
+test('GET /queue filtra por trilha e o item traz track e total de toques; overview separa as trilhas', async (t) => {
+  const db = makeDb({
+    followup_cadence_config: [configRow(PQ_CONFIG)],
+    deals: [...deals(), contactDeal()],
+    scheduled_followups: [
+      task({ id: 141, status: 'draft' }),
+      task({ id: 142, status: 'draft', track: 'pre_quote', deal_id: 14, phone: PHONE_D, stage_id: 'contact', step: 1 }),
+    ],
+  });
+  const call = await startApp(t, db, fakeServices().services);
+  const pq = await call('GET', '/api/followups/queue?track=pre_quote');
+  assert.deepEqual(pq.body.items.map((i: any) => i.id), [142]);
+  assert.equal(pq.body.items[0].track, 'pre_quote');
+  assert.equal(pq.body.items[0].track_steps, 2);
+  assert.equal(pq.body.items[0].deal.stage_name, 'Conversa iniciada');
+  const ladder = await call('GET', '/api/followups/queue?track=ladder');
+  assert.deepEqual(ladder.body.items.map((i: any) => i.id), [141]);
+  assert.equal(ladder.body.items[0].track, 'ladder');
+  assert.equal(ladder.body.items[0].track_steps, 2);
+  const all = await call('GET', '/api/followups/queue');
+  assert.equal(all.body.items.length, 2);
+  const o = await call('GET', '/api/followups/overview');
+  assert.deepEqual(o.body.counts.draft_by_track, { ladder: 1, pre_quote: 1 });
+  assert.deepEqual(o.body.counts.draft_by_step, { 1: 1, 2: 0, 3: 0, 4: 0 }, 'draft_by_step é só da escada');
+  assert.equal(o.body.counts.draft, 2);
+});
+
+test('POST /approve-all respeita o filtro por trilha', async (t) => {
+  const db = makeDb({
+    followup_cadence_config: [configRow(PQ_CONFIG)],
+    deals: [...deals(), contactDeal()],
+    scheduled_followups: [
+      task({ id: 151, status: 'draft' }),
+      task({ id: 152, status: 'draft', track: 'pre_quote', deal_id: 14, phone: PHONE_D, stage_id: 'contact', step: 1 }),
+    ],
+  });
+  const call = await startApp(t, db, fakeServices().services);
+  const res = await call('POST', '/api/followups/approve-all', { generated_before: NOW.toISOString(), track: 'pre_quote' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.approved, 1);
+  assert.equal(findTask(db, 152).status, 'approved');
+  assert.equal(findTask(db, 151).status, 'draft');
+});
+
+test('GET /deal/:dealId em Conversa Iniciada: papel pre_quote, próximo toque e atraso da trilha', async (t) => {
+  const db = makeDb({
+    followup_cadence_config: [configRow(PQ_CONFIG)],
+    deals: [...deals(), contactDeal()],
+    wa_messages: [
+      { user_id: OWNER, phone: PHONE_D, wa_number: MAIN_WA, from_me: false, type: 'text', timestamp: '2026-09-10T12:00:00.000Z' },
+      { user_id: OWNER, phone: PHONE_D, wa_number: MAIN_WA, from_me: true, type: 'text', status: 'sent', timestamp: '2026-09-15T12:00:00.000Z' },
+    ],
+  });
+  const call = await startApp(t, db, fakeServices().services);
+  const first = await call('GET', '/api/followups/deal/14');
+  assert.equal(first.status, 200);
+  assert.equal(first.body.stage_role, 'pre_quote');
+  assert.equal(first.body.track, 'pre_quote');
+  assert.equal(first.body.track_steps, 2);
+  assert.equal(first.body.step, 1);
+  assert.equal(first.body.next_eligible_at, '2026-09-16T12:00:00.000Z');
+
+  db.rows('scheduled_followups').push(task({ id: 161, status: 'sent', track: 'pre_quote', deal_id: 14, phone: PHONE_D, stage_id: 'contact',
+    step: 1, sent_at: '2026-09-15T12:00:00.000Z', created_at: '2026-09-15T11:00:00.000Z' }));
+  const second = await call('GET', '/api/followups/deal/14');
+  assert.equal(second.body.step, 2);
+  assert.equal(second.body.next_eligible_at, '2026-09-18T12:00:00.000Z', '72h depois do toque 1');
+  assert.equal(second.body.last.track, 'pre_quote');
+
+  db.rows('scheduled_followups').push(task({ id: 162, status: 'sent', track: 'pre_quote', deal_id: 14, phone: PHONE_D, stage_id: 'contact',
+    step: 2, sent_at: '2026-09-15T13:00:00.000Z', created_at: '2026-09-15T12:30:00.000Z' }));
+  const done = await call('GET', '/api/followups/deal/14');
+  assert.equal(done.body.step, null, 'os dois toques já saíram');
+  assert.equal(done.body.next_eligible_at, null);
+  const outside = await call('GET', '/api/followups/deal/11');
+  assert.equal(outside.body.track, 'ladder');
 });
 
 // ─── Pausa, opt-outs e revisão do funil ───

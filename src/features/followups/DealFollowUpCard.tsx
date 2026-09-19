@@ -6,7 +6,7 @@ import { api, errorMessage, errorStatus } from './api';
 import { formatDayTime } from './format';
 import { useDealFollowUp } from './hooks';
 import {
-  CHANNEL_LABELS, CHANNEL_RULE_TEXT, MIGRATION_REQUIRED_TEXT, STEP_LABELS, TONE_CLASSES, lastErrorText, statusLabel,
+  CHANNEL_LABELS, CHANNEL_RULE_TEXT, MIGRATION_REQUIRED_TEXT, TONE_CLASSES, lastErrorText, statusLabel, stepLabel,
   type Tone,
 } from './labels';
 import type { DealFollowUpState, FollowUpDraftItem } from './types';
@@ -31,11 +31,21 @@ function stateLines(s: DealFollowUpState, stageName: string): Line[] {
   if (!s.enabled) lines.push({ key: 'off', tone: 'slate', text: 'Follow-ups da IA desligados nesta conta. Os rascunhos ficam só como teste.' });
   if (s.stage_role === 'outside') lines.push({ key: 'outside', tone: 'slate', text: `Esta etapa${stageName ? ` (${stageName})` : ''} não faz parte da cadência` });
   if (s.stage_role === 'after_last') lines.push({ key: 'after', tone: 'slate', text: 'Este card já passou por todos os passos da cadência.' });
+  const preQuote = preQuoteLine(s);
+  if (preQuote) lines.push(preQuote);
   return lines;
 }
 
+// Antes do orçamento: diz em qual toque está e lembra que o card não muda de etapa.
+function preQuoteLine(s: DealFollowUpState): Line | null {
+  if (s.stage_role !== 'pre_quote') return null;
+  const total = s.track_steps || 0;
+  if (s.step === null) return { key: 'pq', tone: 'slate', text: `Antes do orçamento: os ${total} toques já saíram. O card não muda de etapa por eles.` };
+  return { key: 'pq', tone: 'blue', text: `${stepLabel({ step: s.step, track: 'pre_quote', track_steps: total })}. O card não muda de etapa por esses toques.` };
+}
+
 const ACTIVE_TEXT: Record<string, (i: FollowUpDraftItem) => string> = {
-  draft: (i) => `Cadência da IA: ${STEP_LABELS[i.step]} · rascunho aguardando aprovação`,
+  draft: (i) => `Cadência da IA: ${stepLabel(i)} · rascunho aguardando aprovação`,
   approved: () => 'Aprovado, sai em horário comercial',
   sending: () => 'Enviando agora',
   blocked: (i) => `Bloqueado: ${lastErrorText(i.last_error) || 'veja o motivo na fila'}`,
@@ -45,7 +55,7 @@ const ACTIVE_TONES: Record<string, Tone> = { draft: 'gold', approved: 'blue', se
 
 function activeText(i: FollowUpDraftItem): string {
   const fn = ACTIVE_TEXT[i.status];
-  return fn ? fn(i) : `${STEP_LABELS[i.step]} · ${statusLabel(i.status).label}`;
+  return fn ? fn(i) : `${stepLabel(i)} · ${statusLabel(i.status).label}`;
 }
 
 function lastText(i: FollowUpDraftItem): string {
@@ -63,7 +73,8 @@ function lastToShow(s: DealFollowUpState): FollowUpDraftItem | null {
 }
 
 function nextEligible(s: DealFollowUpState): string | null {
-  if (s.active || s.opted_out || s.stage_role !== 'step') return null;
+  if (s.active || s.opted_out) return null;
+  if (s.stage_role !== 'step' && s.stage_role !== 'pre_quote') return null;
   return s.next_eligible_at;
 }
 

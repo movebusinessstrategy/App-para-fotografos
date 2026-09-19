@@ -655,4 +655,99 @@ BEGIN
   ASSERT (SELECT enabled FROM public.followup_cadence_config WHERE user_id = u3), 'config da conta 3 intacta';
 END $$;
 
+-- 9. Trilha antes do orçamento (conta 1): config, coluna track, índices por trilha e
+--    candidatos em 'Conversa Iniciada' (um elegível: estúdio falou por último; um não: cliente falou por último).
+INSERT INTO public.deal_stages (id, name, "position", is_final, is_won, user_id) VALUES
+  ('fx-contact', 'Conversa Iniciada', 0, false, false, pg_temp.fx_u(1));
+INSERT INTO public.deals (id, user_id, title, stage, contact_name, contact_phone, converted, converted_job_id) VALUES
+  (9301, pg_temp.fx_u(1), 'Deal PQ elegível', 'fx-contact', 'Cliente PQ1', '5543999900301', false, NULL),
+  (9302, pg_temp.fx_u(1), 'Deal PQ cliente por último', 'fx-contact', 'Cliente PQ2', '5543999900302', false, NULL);
+INSERT INTO public.wa_messages (user_id, phone, wa_number, message_id, body, from_me, type, "timestamp", status) VALUES
+  (pg_temp.fx_u(1), '5543999900301', '551130000001', 'fx.PQ1.in', 'Oi, quanto custa?', false, 'text', now() - interval '40 hours', 'received'),
+  (pg_temp.fx_u(1), '5543999900301', '551130000001', 'fx.PQ1.out', 'Qual tipo de ensaio?', true, 'text', now() - interval '30 hours', 'sent'),
+  (pg_temp.fx_u(1), '5543999900302', '551130000001', 'fx.PQ2.out', 'Qual tipo de ensaio?', true, 'text', now() - interval '30 hours', 'sent'),
+  (pg_temp.fx_u(1), '5543999900302', '551130000001', 'fx.PQ2.in', 'Gestante', false, 'text', now() - interval '20 hours', 'received');
+
+DO $$
+DECLARE cfg public.followup_cadence_config%ROWTYPE; r record; cname text; u1 uuid := pg_temp.fx_u(1);
+BEGIN
+  SELECT * INTO cfg FROM public.followup_cadence_config WHERE user_id = u1;
+  ASSERT cfg.pre_quote_stage_ids = '{}'::text[] AND cfg.pre_quote_delays_hours = '{24,72}'::integer[],
+    'trilha antes do orçamento desligada por padrão, atrasos 24 e 72';
+  UPDATE public.followup_cadence_config SET ladder_stage_ids = '{fx-proposal,fx-negotiation}', pre_quote_stage_ids = '{fx-contact}'
+   WHERE user_id = u1;
+  BEGIN UPDATE public.followup_cadence_config SET pre_quote_stage_ids = '{a,b,c}' WHERE user_id = u1;
+    ASSERT false, 'antes do orçamento com 3 etapas'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE public.followup_cadence_config SET pre_quote_stage_ids = '{fx-contact,fx-proposal}' WHERE user_id = u1;
+    ASSERT false, 'etapa na escada e antes do orçamento'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE public.followup_cadence_config SET pre_quote_stage_ids = ARRAY['fx-contact', NULL] WHERE user_id = u1;
+    ASSERT false, 'antes do orçamento com nulo'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE public.followup_cadence_config SET pre_quote_delays_hours = '{24,48,72}' WHERE user_id = u1;
+    ASSERT false, '3 atrasos antes do orçamento'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE public.followup_cadence_config SET pre_quote_delays_hours = '{}' WHERE user_id = u1;
+    ASSERT false, 'atrasos antes do orçamento vazios'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE public.followup_cadence_config SET pre_quote_delays_hours = '{0}' WHERE user_id = u1;
+    ASSERT false, 'atraso 0 antes do orçamento'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE public.followup_cadence_config SET pre_quote_delays_hours = '{24,721}' WHERE user_id = u1;
+    ASSERT false, 'atraso 721 antes do orçamento'; EXCEPTION WHEN check_violation THEN NULL; END;
+
+  -- Coluna track: legado fica ladder; pre_quote só na cadência e só com toque 1 ou 2.
+  ASSERT (SELECT bool_and(track = 'ladder') FROM public.scheduled_followups WHERE kind = 'legacy'), 'legado fica ladder';
+  BEGIN
+    INSERT INTO public.scheduled_followups (user_id, deal_id, phone, message, stage_id, scheduled_at, track)
+    VALUES (u1, 9301, '5543999900301', 'Oi', 'fx-contact', now(), 'pre_quote');
+    ASSERT false, 'legado com pre_quote deveria violar o CHECK';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+  BEGIN
+    INSERT INTO public.scheduled_followups (user_id, deal_id, phone, message, stage_id, scheduled_at, status, kind, track, step, basis_at)
+    VALUES (u1, 9301, '5543999900301', 'x', 'fx-contact', now(), 'draft', 'cadence', 'outra', 1, now() - interval '30 hours');
+    ASSERT false, 'track desconhecida deveria violar o CHECK';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+  BEGIN
+    INSERT INTO public.scheduled_followups (user_id, deal_id, phone, message, stage_id, scheduled_at, status, kind, track, step, basis_at)
+    VALUES (u1, 9301, '5543999900301', 'x', 'fx-contact', now(), 'draft', 'cadence', 'pre_quote', 3, now() - interval '30 hours');
+    ASSERT false, 'toque 3 antes do orçamento deveria violar o CHECK';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+
+  -- Mesmo silêncio: o toque 1 antes do orçamento e o passo 1 da escada convivem (trilhas diferentes).
+  INSERT INTO public.scheduled_followups (user_id, deal_id, phone, message, stage_id, scheduled_at, status, kind, track, step, basis_at)
+  VALUES (u1, 9301, '5543999900301', 'x', 'fx-contact', now(), 'cancelled', 'cadence', 'pre_quote', 1, now() - interval '30 hours');
+  INSERT INTO public.scheduled_followups (user_id, deal_id, phone, message, stage_id, scheduled_at, status, kind, track, step, basis_at)
+  VALUES (u1, 9301, '5543999900301', 'x', 'fx-proposal', now(), 'draft', 'cadence', 'ladder', 1, now() - interval '30 hours');
+  ASSERT (SELECT track FROM public.scheduled_followups WHERE user_id = u1 AND deal_id = 9301 AND status = 'draft') = 'ladder',
+    'INSERT de cadência grava a trilha pedida';
+  BEGIN
+    INSERT INTO public.scheduled_followups (user_id, deal_id, phone, message, stage_id, scheduled_at, status, kind, track, step, basis_at)
+    VALUES (u1, 9301, '5543999900399', 'x', 'fx-contact', now(), 'skipped', 'cadence', 'pre_quote', 1, now() - interval '30 hours');
+    ASSERT false, 'mesmo episódio na mesma trilha deveria violar o índice';
+  EXCEPTION WHEN unique_violation THEN
+    GET STACKED DIAGNOSTICS cname = CONSTRAINT_NAME;
+    ASSERT cname = 'scheduled_followups_cadence_episode_uidx', cname;
+  END;
+  BEGIN
+    INSERT INTO public.scheduled_followups (user_id, deal_id, phone, message, stage_id, scheduled_at, status, kind, track, step, basis_at)
+    VALUES (u1, 9302, '554399900301', 'x', 'fx-contact', now(), 'skipped', 'cadence', 'pre_quote', 2, now() - interval '30 hours');
+    ASSERT false, 'mesmo (telefone, trilha, basis) em deals diferentes deveria violar o índice';
+  EXCEPTION WHEN unique_violation THEN
+    GET STACKED DIAGNOSTICS cname = CONSTRAINT_NAME;
+    ASSERT cname = 'scheduled_followups_cadence_phone_episode_uidx', cname;
+  END;
+  DELETE FROM public.scheduled_followups WHERE user_id = u1 AND deal_id = 9301;
+
+  -- Candidatos em 'Conversa Iniciada': a seleção (TS) só aceita quem tem estúdio por último.
+  SELECT * INTO r FROM public.followup_cadence_candidates(u1, ARRAY['fx-contact'], ARRAY['551130000001']) WHERE deal_id = 9301;
+  ASSERT FOUND AND r.stage = 'fx-contact', 'deal em contact entra nos candidatos';
+  ASSERT r.last_studio_at > r.last_customer_at AND r.last_studio_body = 'Qual tipo de ensaio?' AND NOT r.already_customer,
+    'PQ1 elegível: o estúdio falou por último, com a pergunta que ficou no ar';
+  SELECT * INTO r FROM public.followup_cadence_candidates(u1, ARRAY['fx-contact'], ARRAY['551130000001']) WHERE deal_id = 9302;
+  ASSERT FOUND AND r.last_customer_at > r.last_studio_at, 'PQ2 não elegível: o cliente falou por último';
+  ASSERT (SELECT count(*) FROM public.followup_cadence_candidates(u1, ARRAY['fx-contact'], ARRAY['551130000001'])) = 2,
+    'só os deals de contact';
+  ASSERT (SELECT count(*) FROM public.followup_cadence_candidates(u1, ARRAY['fx-contact', 'fx-proposal'], ARRAY['551130000001'])
+           WHERE stage = 'fx-contact') = 2, 'escada e antes do orçamento na mesma chamada';
+END $$;
+
 ROLLBACK;

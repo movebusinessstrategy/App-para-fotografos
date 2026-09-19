@@ -3,11 +3,11 @@
 // e sem relógio implícito: quem chama passa o `now`.
 import type {
   BlockCode, CadenceStatus, CadenceTaskRow, CancelReason, DraftWarning, FollowUpConfig, FollowUpMode,
-  FollowUpRuntimeState, FollowUpStep, PauseReason, SweepSummary, TrackerConfig,
+  FollowUpRuntimeState, FollowUpStep, FollowUpTrack, PauseReason, SweepSummary, TrackerConfig,
 } from './src/features/followups/types.js';
 import {
-  DEFAULT_BUSINESS_HOURS, DEFAULT_FOLLOWUP_CONFIG, DEFAULT_STEP_DELAYS_HOURS, DEFAULT_TRACKER_CONFIG,
-  LIVE_CADENCE_STATUSES, WARMUP_DAILY_CAP, WARMUP_DAYS,
+  DEFAULT_BUSINESS_HOURS, DEFAULT_FOLLOWUP_CONFIG, DEFAULT_PRE_QUOTE_DELAYS_HOURS, DEFAULT_STEP_DELAYS_HOURS,
+  DEFAULT_TRACKER_CONFIG, LIVE_CADENCE_STATUSES, PRE_QUOTE_MAX_STEPS, WARMUP_DAILY_CAP, WARMUP_DAYS,
 } from './src/features/followups/types.js';
 import type { StageRow } from './lib/stage-rules.js';
 import { firstOpenSalesStage, isClosedStage, isSalesStage } from './lib/stage-rules.js';
@@ -27,10 +27,11 @@ export interface DealActivity { dealId: number; stage: string; contactName: stri
   lastStudioMessageId: string | null; lastCustomerAt: string | null; lastCustomerReactionAt: string | null;
   lastInvisibleOutAt: string | null; invisibleRead: boolean; needsHuman: boolean; alreadyCustomer: boolean }
 
+// track ausente = 'ladder' (linhas anteriores à trilha antes do orçamento).
 export interface CadenceTaskLite { id: number; deal_id: number; status: CadenceStatus; step: FollowUpStep; basis_at: string;
-  sent_at: string | null; created_at: string; phone: string; phone_key: string | null; stage_id: string }
+  sent_at: string | null; created_at: string; phone: string; phone_key: string | null; stage_id: string; track?: FollowUpTrack }
 
-export interface EligibleDeal { dealId: number; step: FollowUpStep; stageId: string; nextStageId: string | null;
+export interface EligibleDeal { dealId: number; track: FollowUpTrack; step: FollowUpStep; stageId: string; nextStageId: string | null;
   basisAt: string; basisMessageId: string | null; dueAt: string; phoneKey: string; contactPhone: string;
   contactName: string | null; invisibleBasis: boolean; invisibleRead: boolean; silenceHours: number; lastCustomerAt: string | null;
   customerReactedAfterBasis: boolean }
@@ -158,6 +159,20 @@ function parseLadder(value: unknown): string[] {
   return Array.isArray(list) ? uniqueTrimmedStrings(list).slice(0, CADENCE_MAX_STEPS) : [];
 }
 
+function parsePreQuoteStages(value: unknown): string[] {
+  const list = parseJsonish(value);
+  return Array.isArray(list) ? uniqueTrimmedStrings(list).slice(0, PRE_QUOTE_MAX_STEPS) : [];
+}
+
+function parsePreQuoteDelays(value: unknown): number[] {
+  const list = parseJsonish(value);
+  const fallback = [...DEFAULT_PRE_QUOTE_DELAYS_HOURS];
+  if (!Array.isArray(list)) return fallback;
+  const delays = list.map(toInteger).filter((n): n is number => n !== null)
+    .map((n) => Math.min(720, Math.max(1, n))).slice(0, PRE_QUOTE_MAX_STEPS);
+  return delays.length ? delays : fallback;
+}
+
 function parseWaNumber(value: unknown): string | null {
   const digits = digitsOnly(value);
   return digits.length >= 10 && digits.length <= 13 ? digits : null;
@@ -178,6 +193,8 @@ const CONFIG_PARSERS: Record<keyof FollowUpConfig, Parser> = {
   ladder_stage_ids: parseLadder,
   step_delays_hours: parseDelays,
   after_last_stage_id: idOrNull,
+  pre_quote_stage_ids: parsePreQuoteStages,
+  pre_quote_delays_hours: parsePreQuoteDelays,
   business_hours: (v) => normalizeBusinessHours(parseJsonish(v)) ?? structuredClone(DEFAULT_BUSINESS_HOURS),
   daily_cap: (v) => clampInt(v, 1, 200, D.daily_cap),
   min_gap_seconds: (v) => clampInt(v, 30, 900, D.min_gap_seconds),
@@ -318,6 +335,13 @@ const MSG = {
   delaysCount: 'Informe de 1 a 4 atrasos.',
   delaysRange: 'Cada atraso precisa ser um número inteiro de 1 a 720 horas.',
   afterLast: 'A etapa depois do último passo precisa ser uma etapa de venda aberta, fora da escada e depois dela no funil.',
+  preQuoteList: 'Informe a lista de etapas antes do orçamento.',
+  preQuoteMax: 'Antes do orçamento cabem no máximo 2 etapas.',
+  preQuoteRepeat: 'As etapas antes do orçamento não podem se repetir.',
+  preQuoteOpen: 'Antes do orçamento só entram etapas de venda abertas (nem ganho nem perdido).',
+  preQuoteLadder: 'Uma etapa não pode estar ao mesmo tempo antes do orçamento e na escada.',
+  preQuoteOrder: 'As etapas antes do orçamento precisam vir antes da 1ª etapa da escada no funil.',
+  preQuoteDelaysCount: 'Informe 1 ou 2 atrasos para antes do orçamento.',
   hours: 'Horário comercial inválido. Confira fuso, dias, início, fim e feriados.',
   maxGap: 'O intervalo máximo precisa ser maior ou igual ao mínimo e de no máximo 1800 segundos.',
   dedupe: 'Aplique a migration 085 antes de enviar pelo QR.',
@@ -410,6 +434,44 @@ function afterLastCheck(value: unknown, draft: Record<string, unknown>, env: Val
   const ladder = Array.isArray(draft.ladder_stage_ids) ? draft.ladder_stage_ids.map((s) => String(s).trim()) : [];
   if (!isOpenSalesStage(stage) || ladder.includes(id)) return fail(MSG.afterLast);
   return positionOf(stage) > lastLadderPosition(ladder, env.stagesById) ? pass(id) : fail(MSG.afterLast);
+}
+
+function draftIds(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((id) => String(id).trim()) : [];
+}
+
+function firstLadderPosition(ladder: string[], stagesById: Map<string, StageRow>): number {
+  const positions = ladder.map((id) => stagesById.get(id)).filter(isOpenSalesStage).map(positionOf);
+  return positions.length ? Math.min(...positions) : Infinity;
+}
+
+function preQuoteStageError(id: string, draft: Record<string, unknown>, env: ValidationEnv, limit: number): string | null {
+  const stage = env.stagesById.get(id);
+  if (!stage) return `Etapa não encontrada: ${id}.`;
+  if (!isOpenSalesStage(stage)) return MSG.preQuoteOpen;
+  const ladder = draftIds(draft.ladder_stage_ids);
+  if (ladder.includes(id) || draft.after_last_stage_id === id) return MSG.preQuoteLadder;
+  return positionOf(stage) < limit ? null : MSG.preQuoteOrder;
+}
+
+function preQuoteStagesCheck(value: unknown, draft: Record<string, unknown>, env: ValidationEnv): Check {
+  if (!Array.isArray(value) || !value.every((id) => typeof id === 'string' && id.trim())) return fail(MSG.preQuoteList);
+  const ids = value.map((id: string) => id.trim());
+  if (ids.length > PRE_QUOTE_MAX_STEPS) return fail(MSG.preQuoteMax);
+  if (new Set(ids).size !== ids.length) return fail(MSG.preQuoteRepeat);
+  const limit = firstLadderPosition(draftIds(draft.ladder_stage_ids), env.stagesById);
+  for (const id of ids) {
+    const error = preQuoteStageError(id, draft, env, limit);
+    if (error) return fail(error);
+  }
+  return pass(ids);
+}
+
+function preQuoteDelaysCheck(value: unknown): Check {
+  if (!Array.isArray(value) || value.length < 1 || value.length > PRE_QUOTE_MAX_STEPS) return fail(MSG.preQuoteDelaysCount);
+  const delays = value.map(toStrictInteger);
+  const valid = delays.every((n) => n !== null && n >= 1 && n <= 720);
+  return valid ? pass(delays) : fail(MSG.delaysRange);
 }
 
 function hoursCheck(value: unknown): Check {
@@ -510,6 +572,8 @@ const FIELD_VALIDATORS: Array<[keyof FollowUpConfig, FieldValidator]> = [
   ['ladder_stage_ids', ladderCheck],
   ['step_delays_hours', delaysCheck],
   ['after_last_stage_id', afterLastCheck],
+  ['pre_quote_stage_ids', preQuoteStagesCheck],
+  ['pre_quote_delays_hours', preQuoteDelaysCheck],
   ['business_hours', hoursCheck],
   ['daily_cap', intCheck(1, 200)],
   ['min_gap_seconds', intCheck(30, 900)],
@@ -594,6 +658,18 @@ export function suggestLadder(stages: StageRow[]): { ladder_stage_ids: string[];
   };
 }
 
+// Antes do orçamento: a etapa de contato do rastreador, quando existe e vem antes da escada sugerida.
+export function suggestPreQuote(stages: StageRow[]): { pre_quote_stage_ids: string[]; pre_quote_delays_hours: number[] } {
+  const delays = [...DEFAULT_PRE_QUOTE_DELAYS_HOURS];
+  const contactId = suggestTrackerStages(stages).contact_stage_id;
+  const contact = contactId ? indexStages(stages).get(contactId) : undefined;
+  if (!contact) return { pre_quote_stage_ids: [], pre_quote_delays_hours: delays };
+  const ladder = suggestLadder(stages).ladder_stage_ids;
+  const limit = firstLadderPosition(ladder, indexStages(stages));
+  const fits = !ladder.includes(contact.id) && positionOf(contact) < limit;
+  return { pre_quote_stage_ids: fits ? [contact.id] : [], pre_quote_delays_hours: delays };
+}
+
 export function suggestTrackerStages(stages: StageRow[]): { entry_stage_id: string | null; contact_stage_id: string | null; proposal_stage_id: string | null } {
   const open = openSalesStagesSorted(stages);
   const contact = open.find((s) => CONTACT_NAME.test(s.name || '') || idHasBase(s.id, 'contact'));
@@ -622,6 +698,47 @@ export function nextStageAfterStep(step: FollowUpStep, c: FollowUpConfig): strin
 
 export function delayHoursForStep(step: FollowUpStep, c: FollowUpConfig): number {
   return Number(c.step_delays_hours[step - 1]) || DEFAULT_STEP_DELAYS_HOURS[step - 1] || DEFAULT_STEP_DELAYS_HOURS[DEFAULT_STEP_DELAYS_HOURS.length - 1];
+}
+
+// Trilha antes do orçamento: 0 quando não há etapa escolhida.
+export function preQuoteStepCount(c: FollowUpConfig): number {
+  const stages = Array.isArray(c.pre_quote_stage_ids) ? c.pre_quote_stage_ids.length : 0;
+  const delays = Array.isArray(c.pre_quote_delays_hours) ? c.pre_quote_delays_hours.length : 0;
+  return stages ? Math.min(delays, PRE_QUOTE_MAX_STEPS) : 0;
+}
+
+export function preQuoteDelayHours(step: FollowUpStep, c: FollowUpConfig): number {
+  const list = Array.isArray(c.pre_quote_delays_hours) ? c.pre_quote_delays_hours : [];
+  const fallback = DEFAULT_PRE_QUOTE_DELAYS_HOURS;
+  return Number(list[step - 1]) || fallback[step - 1] || fallback[fallback.length - 1];
+}
+
+export function trackForStage(stageId: string, c: FollowUpConfig): FollowUpTrack | null {
+  if (stepForStage(stageId, c) !== null) return 'ladder';
+  const preQuote = preQuoteStepCount(c) > 0 && c.pre_quote_stage_ids.includes(stageId);
+  return preQuote ? 'pre_quote' : null;
+}
+
+export function trackStepCount(track: FollowUpTrack, c: FollowUpConfig): number {
+  return track === 'pre_quote' ? preQuoteStepCount(c) : stepCount(c);
+}
+
+// Próximo toque antes do orçamento: toques já enviados no episódio + 1; null quando acabaram.
+export function preQuoteStepFor(sentInEpisode: number, c: FollowUpConfig): FollowUpStep | null {
+  const next = Math.max(0, Math.floor(Number(sentInEpisode) || 0)) + 1;
+  return next <= preQuoteStepCount(c) ? (next as FollowUpStep) : null;
+}
+
+// Toques antes do orçamento enviados para o telefone depois da última fala do cliente.
+export function preQuoteSentInEpisode(tasks: CadenceTaskLite[], phoneKey: string, lastCustomerAt: string | null): number {
+  const customerMs = toMs(lastCustomerAt) ?? -Infinity;
+  return tasks.filter((t) => t.track === 'pre_quote' && t.status === 'sent' && taskPhoneKey(t) === phoneKey
+    && sentAtMs(t) > customerMs).length;
+}
+
+// A trilha antes do orçamento nunca move o card.
+export function advanceTargetFor(task: { track?: FollowUpTrack | null; step: FollowUpStep }, c: FollowUpConfig): string | null {
+  return task.track === 'pre_quote' ? null : nextStageAfterStep(task.step, c);
 }
 
 export function effectiveDailyCap(config: FollowUpConfig, state: FollowUpRuntimeState, now: Date): { cap: number; warmupUntil: string | null } {
@@ -668,22 +785,27 @@ export function activityFromRpcRow(row: Record<string, unknown>): DealActivity {
 }
 
 interface SelectContext {
-  config: FollowUpConfig; stagesById: Map<string, StageRow>; nowMs: number;
+  config: FollowUpConfig; stagesById: Map<string, StageRow>; nowMs: number; tasks: CadenceTaskLite[];
   liveDeals: Set<number>; livePhones: Set<string>; episodeKeys: Set<string>; lastSentByPhone: Map<string, CadenceTaskLite>;
   liveLegacyDealIds: Set<number>; optoutKeys: Set<string>;
 }
 
 interface DealEval {
-  a: DealActivity; phoneKey: string; step: FollowUpStep | null; turn: { at: Date; invisible: boolean } | null;
-  turnMs: number; customerMs: number | null; silenceHours: number; delayHours: number;
+  a: DealActivity; phoneKey: string; track: FollowUpTrack | null; step: FollowUpStep | null; exhausted: boolean;
+  turn: { at: Date; invisible: boolean } | null; turnMs: number; customerMs: number | null; silenceHours: number; delayHours: number;
 }
 
 function taskPhoneKey(task: Pick<CadenceTaskLite, 'phone' | 'phone_key'>): string {
   return phoneKeyOf(task.phone_key, task.phone);
 }
 
-function episodeKey(phoneKey: string, basisMs: number): string {
-  return `${phoneKey}:${new Date(basisMs).toISOString()}`;
+function trackOf(task: Pick<CadenceTaskLite, 'track'>): FollowUpTrack {
+  return task.track === 'pre_quote' ? 'pre_quote' : 'ladder';
+}
+
+// O episódio é por trilha: um silêncio que começou antes do orçamento não impede a escada.
+function episodeKey(track: FollowUpTrack, phoneKey: string, basisMs: number): string {
+  return `${track}:${phoneKey}:${new Date(basisMs).toISOString()}`;
 }
 
 function sentAtMs(task: CadenceTaskLite): number {
@@ -693,18 +815,19 @@ function sentAtMs(task: CadenceTaskLite): number {
 function indexTask(ctx: SelectContext, task: CadenceTaskLite): void {
   const key = taskPhoneKey(task);
   const basisMs = toMs(task.basis_at);
-  if (basisMs !== null) ctx.episodeKeys.add(episodeKey(key, basisMs));
+  if (basisMs !== null) ctx.episodeKeys.add(episodeKey(trackOf(task), key, basisMs));
   if (LIVE_CADENCE_STATUSES.includes(task.status)) {
     ctx.liveDeals.add(Number(task.deal_id));
     if (key) ctx.livePhones.add(key);
   }
+  if (trackOf(task) !== 'ladder') return;
   const previous = ctx.lastSentByPhone.get(key);
   if (task.status === 'sent' && (!previous || sentAtMs(task) > sentAtMs(previous))) ctx.lastSentByPhone.set(key, task);
 }
 
 function buildSelectContext(i: SelectInput): SelectContext {
   const ctx: SelectContext = {
-    config: i.config, stagesById: indexStages(i.stages), nowMs: i.now.getTime(),
+    config: i.config, stagesById: indexStages(i.stages), nowMs: i.now.getTime(), tasks: i.cadenceTasks,
     liveDeals: new Set(), livePhones: new Set(), episodeKeys: new Set(), lastSentByPhone: new Map(),
     liveLegacyDealIds: i.liveLegacyDealIds, optoutKeys: i.optoutKeys,
   };
@@ -712,20 +835,36 @@ function buildSelectContext(i: SelectInput): SelectContext {
   return ctx;
 }
 
+interface TrackStep { step: FollowUpStep | null; exhausted: boolean; delayHours: number }
+
+// Toques acabados ficam no último passo com exhausted, para cair em step_already_sent.
+function preQuoteTrackStep(a: DealActivity, phoneKey: string, ctx: SelectContext): TrackStep {
+  const sent = preQuoteSentInEpisode(ctx.tasks, phoneKey, a.lastCustomerAt);
+  const next = preQuoteStepFor(sent, ctx.config);
+  const step = next ?? (preQuoteStepCount(ctx.config) as FollowUpStep);
+  return { step, exhausted: next === null, delayHours: preQuoteDelayHours(step, ctx.config) };
+}
+
+function trackStepFor(track: FollowUpTrack | null, a: DealActivity, phoneKey: string, ctx: SelectContext): TrackStep {
+  if (track === 'pre_quote') return preQuoteTrackStep(a, phoneKey, ctx);
+  const step = track === 'ladder' ? stepForStage(a.stage, ctx.config) : null;
+  return { step, exhausted: false, delayHours: step === null ? Infinity : delayHoursForStep(step, ctx.config) };
+}
+
 function evaluateActivity(a: DealActivity, ctx: SelectContext): DealEval {
-  const step = stepForStage(a.stage, ctx.config);
+  const track = trackForStage(a.stage, ctx.config);
+  const phoneKey = phoneKeyOf(a.phoneKey, a.contactPhone);
   const turn = studioTurn(a);
   const turnMs = turn ? turn.at.getTime() : NaN;
   return {
-    a, step, turn, turnMs,
-    phoneKey: phoneKeyOf(a.phoneKey, a.contactPhone),
+    a, track, ...trackStepFor(track, a, phoneKey, ctx), turn, turnMs, phoneKey,
     customerMs: toMs(a.lastCustomerAt),
     silenceHours: (ctx.nowMs - turnMs) / HOUR_MS,
-    delayHours: step === null ? Infinity : delayHoursForStep(step, ctx.config),
   };
 }
 
 function stepAlreadySent(d: DealEval, ctx: SelectContext): boolean {
+  if (d.track === 'pre_quote') return d.exhausted;
   const last = ctx.lastSentByPhone.get(d.phoneKey);
   if (!last || d.step === null) return false;
   return sentAtMs(last) > (d.customerMs ?? -Infinity) && Number(last.step) >= d.step;
@@ -734,7 +873,7 @@ function stepAlreadySent(d: DealEval, ctx: SelectContext): boolean {
 // Ordem importa: o primeiro motivo que casar é o registrado.
 const CHECKS: Array<[SkipReason, (d: DealEval, ctx: SelectContext) => boolean]> = [
   ['closed_stage', (d, ctx) => isClosedStage(ctx.stagesById.get(d.a.stage))],
-  ['stage_not_in_ladder', (d) => d.step === null],
+  ['stage_not_in_ladder', (d) => d.track === null || d.step === null],
   ['already_customer', (d) => d.a.alreadyCustomer],
   ['optout', (d, ctx) => ctx.optoutKeys.has(d.phoneKey)],
   ['needs_human', (d) => d.a.needsHuman],
@@ -744,7 +883,7 @@ const CHECKS: Array<[SkipReason, (d: DealEval, ctx: SelectContext) => boolean]> 
   ['customer_spoke_last', (d) => d.customerMs !== null && d.customerMs >= d.turnMs],
   ['too_old', (d, ctx) => d.silenceHours > ctx.config.max_silence_hours],
   ['too_soon', (d) => d.silenceHours < d.delayHours],
-  ['episode_done', (d, ctx) => ctx.episodeKeys.has(episodeKey(d.phoneKey, d.turnMs))],
+  ['episode_done', (d, ctx) => ctx.episodeKeys.has(episodeKey(d.track ?? 'ladder', d.phoneKey, d.turnMs))],
   ['step_already_sent', stepAlreadySent],
 ];
 
@@ -755,10 +894,11 @@ function evaluateDeal(d: DealEval, ctx: SelectContext): SkipReason | null {
 
 function buildEligible(d: DealEval, ctx: SelectContext): EligibleDeal {
   const step = d.step as FollowUpStep;
+  const track = d.track ?? 'ladder';
   const invisible = !!d.turn?.invisible;
   const reactionMs = toMs(d.a.lastCustomerReactionAt);
   return {
-    dealId: d.a.dealId, step, stageId: d.a.stage, nextStageId: nextStageAfterStep(step, ctx.config),
+    dealId: d.a.dealId, track, step, stageId: d.a.stage, nextStageId: advanceTargetFor({ track, step }, ctx.config),
     basisAt: new Date(d.turnMs).toISOString(),
     basisMessageId: invisible ? null : d.a.lastStudioMessageId,
     dueAt: new Date(d.turnMs + d.delayHours * HOUR_MS).toISOString(),
@@ -783,7 +923,7 @@ function byDueAtAsc(a: EligibleDeal, b: EligibleDeal): number {
 }
 
 export function selectEligibleDeals(i: SelectInput): { eligible: EligibleDeal[]; skipped: Array<{ dealId: number; reason: SkipReason }> } {
-  if (!i.config.enabled || stepCount(i.config) === 0) {
+  if (!i.config.enabled || stepCount(i.config) + preQuoteStepCount(i.config) === 0) {
     return { eligible: [], skipped: i.activities.map((a) => ({ dealId: a.dealId, reason: 'disabled' as SkipReason })) };
   }
   const ctx = buildSelectContext(i);

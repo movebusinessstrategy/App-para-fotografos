@@ -11,7 +11,8 @@ import type { AiAgentConfigRow, DraftDeps, DraftInput, DraftMeta, DraftResult, D
 import { contextTail } from './followup-draft.js';
 import type { CadenceTaskLite, DealActivity, EligibleDeal, SkipReason } from './followup-cadence.js';
 import {
-  customerSpokeAfter, housekeepLiveTasks, initialStatusFor, LIVE_TASK_LOOKBACK_DAYS, selectEligibleDeals,
+  customerSpokeAfter, housekeepLiveTasks, initialStatusFor, LIVE_TASK_LOOKBACK_DAYS, preQuoteStepCount, selectEligibleDeals,
+  trackStepCount,
 } from './followup-cadence.js';
 import type { StageRow } from './lib/stage-rules.js';
 import { brazilianPhoneVariants, maskPhone, normalizeBrazilianPhone13 } from './lib/br-phone.js';
@@ -110,7 +111,7 @@ function emptySummary(): SweepSummary {
 }
 
 function emptyDryRun(): SweepDryRun {
-  return { eligible_total: 0, by_step: { 1: 0, 2: 0, 3: 0, 4: 0 }, skipped_by_reason: {}, sample: [] };
+  return { eligible_total: 0, by_step: { 1: 0, 2: 0, 3: 0, 4: 0 }, by_track: { ladder: 0, pre_quote: 0 }, skipped_by_reason: {}, sample: [] };
 }
 
 function errorText(error: unknown): string {
@@ -137,17 +138,23 @@ async function mapLimit<T>(items: T[], limit: number, stop: () => boolean, fn: (
 
 // Escopo da varredura: tudo o que a seleção precisa, lido uma vez.
 
+// Escada mais as etapas antes do orçamento (quando a trilha está ligada), sem repetir.
+export function sweepStageIds(config: FollowUpConfig): string[] {
+  const preQuote = preQuoteStepCount(config) > 0 ? config.pre_quote_stage_ids : [];
+  return Array.from(new Set([...config.ladder_stage_ids, ...preQuote]));
+}
+
 async function loadScope(deps: CadenceSweepDeps, userId: string, loaded: LoadedConfig, req: SweepRequest, now: Date): Promise<SweepScope | null> {
   const { config } = loaded;
   const main = await deps.repo.mainWaNumber(userId, config);
   if (!main) return null;
   const waNumbers = brazilianPhoneVariants(main);
-  const ladder = config.ladder_stage_ids;
+  const stageIds = sweepStageIds(config);
   const lookback = config.max_silence_hours + LOOKBACK_EXTRA_HOURS;
   const sinceIso = new Date(now.getTime() - LIVE_TASK_LOOKBACK_DAYS * DAY_MS).toISOString();
   const [stages, activities, tasks, liveLegacy, optoutKeys] = await Promise.all([
     deps.repo.loadStages(userId),
-    ladder.length ? deps.repo.candidates(userId, ladder, waNumbers, lookback, CANDIDATE_LIMIT) : Promise.resolve([]),
+    stageIds.length ? deps.repo.candidates(userId, stageIds, waNumbers, lookback, CANDIDATE_LIMIT) : Promise.resolve([]),
     deps.repo.sweepTasks(userId, sinceIso),
     deps.repo.liveLegacyDealIds(userId),
     deps.repo.optoutKeys(userId),
@@ -173,7 +180,7 @@ function markCancelled(tasks: CadenceTaskLite[], ids: Set<number>): CadenceTaskL
 
 function matchesRequest(req: SweepRequest): (e: EligibleDeal) => boolean {
   const dealIds = req.deal_ids?.length ? new Set(req.deal_ids.map(Number)) : null;
-  return (e) => (!req.step || e.step === req.step) && (!dealIds || dealIds.has(Number(e.dealId)));
+  return (e) => (!req.step || e.step === req.step) && (!req.track || e.track === req.track) && (!dealIds || dealIds.has(Number(e.dealId)));
 }
 
 function selectFor(scope: SweepScope, req: SweepRequest): { eligible: EligibleDeal[]; skipped: Array<{ dealId: number; reason: SkipReason }> } {
@@ -195,10 +202,13 @@ function takeCount(config: FollowUpConfig, req: SweepRequest): number {
 function dryRunOf(eligible: EligibleDeal[], skipped: Array<{ dealId: number; reason: SkipReason }>): SweepDryRun {
   const out = emptyDryRun();
   out.eligible_total = eligible.length;
-  for (const e of eligible) out.by_step[e.step] += 1;
+  for (const e of eligible) {
+    out.by_track[e.track] += 1;
+    if (e.track === 'ladder') out.by_step[e.step] += 1;
+  }
   for (const s of skipped) out.skipped_by_reason[s.reason] = (out.skipped_by_reason[s.reason] ?? 0) + 1;
   out.sample = eligible.slice(0, SAMPLE_SIZE).map((e) => ({
-    deal_id: e.dealId, title: e.contactName || `Negócio ${e.dealId}`, step: e.step, hours_silent: Math.max(0, Math.floor(e.silenceHours)),
+    deal_id: e.dealId, title: e.contactName || `Negócio ${e.dealId}`, step: e.step, track: e.track, hours_silent: Math.max(0, Math.floor(e.silenceHours)),
   }));
   return out;
 }
@@ -219,7 +229,7 @@ function scheduledAt(run: SweepRun, e: EligibleDeal): string {
 function commonRow(run: SweepRun, e: EligibleDeal): Record<string, unknown> {
   return {
     user_id: run.userId, deal_id: e.dealId, phone: normalizeBrazilianPhone13(e.contactPhone), wa_number: run.main,
-    contact_name: e.contactName, stage_id: e.stageId, kind: 'cadence', step: e.step, basis_at: e.basisAt,
+    contact_name: e.contactName, stage_id: e.stageId, kind: 'cadence', track: e.track, step: e.step, basis_at: e.basisAt,
     basis_message_id: e.basisMessageId, scheduled_at: scheduledAt(run, e), updated_at: run.nowIso,
   };
 }
@@ -242,6 +252,7 @@ const SKIPPED_OUTCOMES: Record<'skip' | 'handoff', (reason: string) => Partial<C
 async function autoApproval(deps: CadenceSweepDeps, run: SweepRun, e: EligibleDeal, text: string): Promise<CadenceGenerationMeta['approval'] | null> {
   const item: ForecastInput = {
     id: 0, contact_name: e.contactName, text, step: e.step, last_customer_at: e.lastCustomerAt, phone: normalizeBrazilianPhone13(e.contactPhone),
+    track: e.track,
   };
   try {
     const [forecast] = await deps.forecastFor(run.userId, run.config, [item]);
@@ -300,7 +311,7 @@ async function optOutFromHistory(deps: CadenceSweepDeps, run: SweepRun, e: Eligi
 function sweepDraftInput(run: SweepRun, e: EligibleDeal, rows: ConversationRow[]): DraftInput {
   return {
     userId: run.userId, waNumber: run.main, step: e.step, contactName: e.contactName, rows, agent: run.agent,
-    extraInstructions: run.config.extra_instructions,
+    extraInstructions: run.config.extra_instructions, track: e.track, trackSteps: trackStepCount(e.track, run.config),
     invisible: { basis: e.invisibleBasis, at: e.invisibleBasis ? e.basisAt : null, read: e.invisibleRead },
     customerReactedAfterBasis: e.customerReactedAfterBasis, now: run.now,
   };
@@ -427,9 +438,11 @@ async function regenDraftInput(deps: CadenceSweepDeps, ctx: RegenContext): Promi
     deps.repo.loadConversationRows(ctx.userId, task.phone, brazilianPhoneVariants(main), CONVERSATION_ROWS),
   ]);
   const meta = task.generation_meta ?? {};
+  const track = task.track === 'pre_quote' ? 'pre_quote' : 'ladder';
   return {
     userId: ctx.userId, waNumber: main, step: Number(task.step) as FollowUpStep, contactName: task.contact_name, rows,
     agent: agent ?? EMPTY_AGENT, extraInstructions: config.extra_instructions, userInstruction: regenInstruction(ctx.opts),
+    track, trackSteps: trackStepCount(track, config),
     invisible: { basis: !!meta.invisible_basis, at: meta.invisible_basis ? task.basis_at : null, read: !!meta.invisible_read },
     customerReactedAfterBasis: reactedAfter(rows, task.basis_at), now: ctx.now,
   };

@@ -7,6 +7,7 @@ import {
   CADENCE_STATUSES,
   CUSTOMER_NON_TURN_TYPES,
   DEFAULT_FOLLOWUP_CONFIG,
+  DEFAULT_PRE_QUOTE_DELAYS_HOURS,
   LIVE_CADENCE_STATUSES,
   RETENTION_DAYS,
   STUDIO_NON_TURN_TYPES,
@@ -130,6 +131,7 @@ test('scheduled_followups ganha colunas de cadência e phone_key gerada', () => 
     'last_error text',
     "generation_meta jsonb NOT NULL DEFAULT '{}'::jsonb",
     'updated_at timestamptz NOT NULL DEFAULT now()',
+    "track text NOT NULL DEFAULT 'ladder'",
   ].forEach((column) => assert.match(sql, new RegExp(`ADD COLUMN IF NOT EXISTS ${escapeRe(column)},`)));
   assert.match(sql, /ADD COLUMN IF NOT EXISTS phone_key text GENERATED ALWAYS AS \(public\.followup_phone_key\(phone\)\) STORED;/);
   assert.match(sql, /COMMENT ON COLUMN public\.scheduled_followups\.phone_key IS\s+'[^']*nunca gravar/);
@@ -158,8 +160,8 @@ test('índices únicos parciais: episódio por deal e por telefone, vivas inclue
   const unique: Array<[string, string, string]> = [
     ['scheduled_followups_cadence_live_deal_uidx', '(user_id, deal_id)', live],
     ['scheduled_followups_cadence_live_phone_uidx', '(user_id, phone_key)', live],
-    ['scheduled_followups_cadence_episode_uidx', '(user_id, deal_id, step, basis_at)', "WHERE kind = 'cadence';"],
-    ['scheduled_followups_cadence_phone_episode_uidx', '(user_id, phone_key, basis_at)', "WHERE kind = 'cadence';"],
+    ['scheduled_followups_cadence_episode_uidx', '(user_id, deal_id, track, step, basis_at)', "WHERE kind = 'cadence';"],
+    ['scheduled_followups_cadence_phone_episode_uidx', '(user_id, phone_key, track, basis_at)', "WHERE kind = 'cadence';"],
   ];
   for (const [name, columns, where] of unique) {
     assert.match(sql, new RegExp(
@@ -281,4 +283,18 @@ test('gate: stubs e fixtures só rodam no banco de ensaio; a 083 é aplicada dua
   assert.match(stubs, /ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;/);
   assert.match(fixtures, /RAISE EXCEPTION 'fixtures do gate 083/);
   assert.match(fixtures, /ROLLBACK;\s*$/);
+});
+
+test('trilha antes do orçamento: track com CHECK, toque 1 ou 2 e config com etapas fora da escada', () => {
+  assert.match(sql, /ADD CONSTRAINT scheduled_followups_track_check CHECK \(track IN \('ladder', 'pre_quote'\) AND \(kind = 'cadence' OR track = 'ladder'\)\);/);
+  const shape = between(sql, 'ADD CONSTRAINT scheduled_followups_cadence_shape_check', 'DROP CONSTRAINT IF EXISTS scheduled_followups_channel_used_check');
+  assert.match(shape, /\(track <> 'pre_quote' OR step BETWEEN 1 AND 2\)/);
+  const columns = configColumns();
+  assert.equal(columns.get('pre_quote_stage_ids')?.literal, "'{}'::text[]", 'desligada por padrão');
+  assert.deepEqual(DECODERS['integer[]'](columns.get('pre_quote_delays_hours')?.literal ?? ''), [...DEFAULT_PRE_QUOTE_DELAYS_HOURS]);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS pre_quote_stage_ids text\[\] NOT NULL DEFAULT '\{\}'::text\[\],/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS pre_quote_delays_hours integer\[\] NOT NULL DEFAULT '\{24,72\}'::integer\[\],/);
+  assert.match(sql, /cardinality\(pre_quote_stage_ids\) <= 2 AND array_position\(pre_quote_stage_ids, NULL\) IS NULL\s+AND NOT \(pre_quote_stage_ids && ladder_stage_ids\)/);
+  assert.match(sql, /cardinality\(pre_quote_delays_hours\) BETWEEN 1 AND 2/);
+  assert.match(fixtures, /-- 9\. Trilha antes do orçamento/);
 });

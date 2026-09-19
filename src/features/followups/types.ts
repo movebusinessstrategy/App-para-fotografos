@@ -1,6 +1,10 @@
 export type FollowUpMode = 'approval' | 'auto';
 export type FollowUpStep = 1 | 2 | 3 | 4;
 export const FOLLOWUP_STEPS: readonly FollowUpStep[] = [1, 2, 3, 4];
+// ladder = escada depois do orçamento (move o card); pre_quote = antes do orçamento (nunca move).
+export type FollowUpTrack = 'ladder' | 'pre_quote';
+export const FOLLOWUP_TRACKS: readonly FollowUpTrack[] = ['ladder', 'pre_quote'];
+export const PRE_QUOTE_MAX_STEPS = 2;
 
 export const WARMUP_DAILY_CAP = 10;
 export const WARMUP_DAYS = 14;
@@ -29,6 +33,7 @@ export type DraftWarning = 'preco' | 'percentual' | 'desconto' | 'data' | 'horar
 export interface BusinessHours { tz: string; days: number[]; start: string; end: string; holidays: string[] }
 export const DEFAULT_BUSINESS_HOURS: BusinessHours = { tz: 'America/Sao_Paulo', days: [1, 2, 3, 4, 5, 6], start: '09:00', end: '19:00', holidays: [] };
 export const DEFAULT_STEP_DELAYS_HOURS: readonly number[] = [24, 48, 72, 120];
+export const DEFAULT_PRE_QUOTE_DELAYS_HOURS: readonly number[] = [24, 72];
 
 export interface TrackerConfig {
   create_deal_on_inbound: boolean;
@@ -61,6 +66,8 @@ export interface FollowUpConfig {
   ladder_stage_ids: string[];        // 0..4; índice+1 = passo
   step_delays_hours: number[];       // 1..4 itens, cada 1..720 (horas desde a última fala do estúdio)
   after_last_stage_id: string | null;
+  pre_quote_stage_ids: string[];     // 0..2 etapas abertas ANTES da escada; nunca move o card
+  pre_quote_delays_hours: number[];  // 1..2 itens, cada 1..720; índice+1 = toque
   business_hours: BusinessHours;
   daily_cap: number;                 // 1..200 (nos 14 dias depois de first_enabled_at vale min(daily_cap, WARMUP_DAILY_CAP))
   min_gap_seconds: number;           // 30..900
@@ -80,6 +87,7 @@ export interface FollowUpConfig {
 }
 export const DEFAULT_FOLLOWUP_CONFIG: FollowUpConfig = {
   enabled: false, mode: 'approval', ladder_stage_ids: [], step_delays_hours: [24, 48, 72, 120], after_last_stage_id: null,
+  pre_quote_stage_ids: [], pre_quote_delays_hours: [24, 72],
   business_hours: DEFAULT_BUSINESS_HOURS, daily_cap: 40, min_gap_seconds: 60, max_gap_seconds: 150, max_consecutive_errors: 3,
   allow_meta_text: true, allow_baileys: false, template_id: null, max_silence_hours: 720,
   sweep_interval_minutes: 60, max_drafts_per_sweep: 20, extra_instructions: '', optout_detection: true,
@@ -132,7 +140,7 @@ export interface CadenceGenerationMeta {
 export interface CadenceTaskRow {
   id: number; user_id: string; deal_id: number; phone: string; phone_key: string | null; wa_number: string | null; message: string;
   stage_id: string; scheduled_at: string; sent_at: string | null; status: CadenceStatus; created_at: string;
-  contact_name: string | null; attempts: number; kind: 'cadence'; step: FollowUpStep; basis_at: string;
+  contact_name: string | null; attempts: number; kind: 'cadence'; track: FollowUpTrack; step: FollowUpStep; basis_at: string;
   basis_message_id: string | null; draft_text: string | null; approved_at: string | null; approved_by: string | null;
   claimed_at: string | null; claimed_by: string | null; lease_expires_at: string | null; channel_used: ChannelKind | null;
   sent_message_id: string | null; last_error: string | null; generation_meta: CadenceGenerationMeta; updated_at: string;
@@ -149,10 +157,11 @@ export interface ChannelHealth {
   notes: string[];                         // frases prontas pt-BR, sem travessão
 }
 
-export interface SweepRequest { manual: boolean; dry_run?: boolean; step?: FollowUpStep; deal_ids?: number[]; limit?: number }
+export interface SweepRequest { manual: boolean; dry_run?: boolean; step?: FollowUpStep; track?: FollowUpTrack; deal_ids?: number[]; limit?: number }
 export interface SweepDryRun {
-  eligible_total: number; by_step: Record<FollowUpStep, number>; skipped_by_reason: Record<string, number>;
-  sample: Array<{ deal_id: number; title: string; step: FollowUpStep; hours_silent: number }>;
+  eligible_total: number; by_step: Record<FollowUpStep, number>; by_track: Record<FollowUpTrack, number>;
+  skipped_by_reason: Record<string, number>;
+  sample: Array<{ deal_id: number; title: string; step: FollowUpStep; track: FollowUpTrack; hours_silent: number }>;
 }
 export interface SweepState {
   running: boolean; started_at: string | null; finished_at: string | null;
@@ -166,7 +175,8 @@ export interface FollowUpOverview {
   can_edit_config: boolean; can_approve: boolean;
   consent: { external_ai: boolean; at: string | null };
   channels: ChannelHealth;
-  counts: { draft: number; draft_by_step: Record<FollowUpStep, number>; approved: number; sending: number; blocked: number;
+  // draft_by_step conta só a escada; a trilha antes do orçamento fica em draft_by_track.pre_quote
+  counts: { draft: number; draft_by_step: Record<FollowUpStep, number>; draft_by_track: Record<FollowUpTrack, number>; approved: number; sending: number; blocked: number;
             failed_7d: number; sent_today: number; skipped_7d: number; cancelled_7d: number; optouts: number };
   sending: { sent_today: number; daily_cap: number; effective_cap: number; warmup_until: string | null; remaining: number;
              paused: boolean; paused_reason: OverviewPauseReason; last_error: string | null; last_block_message: string | null;
@@ -180,6 +190,7 @@ export interface FollowUpOverview {
 export type QueueTab = 'draft' | 'approved' | 'blocked' | 'sent_today' | 'skipped' | 'cancelled';
 export interface FollowUpDraftItem {
   id: number; deal_id: number; step: FollowUpStep; status: CadenceStatus;
+  track: FollowUpTrack; track_steps: number;   // track_steps = total de toques da trilha na config atual
   text: string;                          // scheduled_followups.message
   original_text: string | null;          // scheduled_followups.draft_text
   scheduled_at: string; created_at: string; updated_at: string | null; sent_at: string | null;
@@ -201,8 +212,9 @@ export interface FollowUpQueueResponse { items: FollowUpDraftItem[]; total: numb
 
 export interface DealFollowUpState {
   configured: boolean; enabled: boolean; mode: FollowUpMode;
-  stage_role: 'step' | 'after_last' | 'outside';
-  step: FollowUpStep | null;
+  stage_role: 'step' | 'pre_quote' | 'after_last' | 'outside';
+  step: FollowUpStep | null;                 // na trilha antes do orçamento: o próximo toque (null quando acabaram)
+  track: FollowUpTrack | null; track_steps: number;
   next_eligible_at: string | null;
   active: FollowUpDraftItem | null; last: FollowUpDraftItem | null;
   opted_out: boolean; can_approve: boolean;
@@ -216,7 +228,7 @@ export interface FollowUpOptOut {
 }
 
 export interface ApproveAllRequest {
-  generated_before: string; step?: FollowUpStep; stage_id?: string; ids?: number[]; exclude_ids?: number[]; include_blocked?: boolean;
+  generated_before: string; step?: FollowUpStep; track?: FollowUpTrack; stage_id?: string; ids?: number[]; exclude_ids?: number[]; include_blocked?: boolean;
 }
 export interface ApproveAllResult {
   approved: number; excluded: { conversation_changed: number; opted_out: number; stage_changed: number };
@@ -232,7 +244,8 @@ export type RegenerateResult =
   | { status: 'consent_required' }
   | { status: 'error'; message: string; retryable: boolean };
 
-export interface ForecastInput { id: number; contact_name: string | null; text: string; step: FollowUpStep; last_customer_at: string | null; phone: string }
+export interface ForecastInput { id: number; contact_name: string | null; text: string; step: FollowUpStep; last_customer_at: string | null; phone: string;
+  track?: FollowUpTrack }
 export interface ForecastResult { id: number; channel: ChannelKind | 'blocked'; approval: CadenceApproval }
 
 export interface FollowUpTemplateOption {
@@ -271,6 +284,7 @@ export interface FollowUpConfigResponse {
   stages: Array<{ id: string; name: string; position: number; is_final: boolean; is_won: boolean }>;
   templates: FollowUpTemplateOption[];
   suggested: { ladder_stage_ids: string[]; step_delays_hours: number[]; after_last_stage_id: string | null;
+               pre_quote_stage_ids: string[]; pre_quote_delays_hours: number[];
                entry_stage_id: string | null; contact_stage_id: string | null; proposal_stage_id: string | null };
   legacy_automation: Array<{ stage_id: string; stage_name: string }>;
   consent: { external_ai: boolean; at: string | null };

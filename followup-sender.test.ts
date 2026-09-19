@@ -383,6 +383,35 @@ test('passo 4 sem etapa depois do último: avanço fica skipped', async () => {
   assert.deepEqual(w2.advances, [{ id: 7, state: 'skipped', result: null }]);
 });
 
+test('antes do orçamento: envia sem nunca mover o card, nem com avanço pendente antigo', async () => {
+  const config = { pre_quote_stage_ids: ['contact'], pre_quote_delays_hours: [24, 72] };
+  const w = world({ config, tasks: [task({ id: 1, track: 'pre_quote', step: 1, stage_id: 'contact',
+    message: 'Oi, Ana! Me conta que tipo de ensaio você tem em mente?' })] });
+  await w.sender.tick();
+  assert.equal(w.task(1).status, 'sent');
+  assert.equal(w.task(1).generation_meta.advance.state, 'skipped');
+  w.state.next_send_after = null;
+  w.now = new Date(T0.getTime() + 20 * MINUTE);
+  await w.sender.tick();
+  assert.equal(w.moves.length, 0);
+  assert.equal(w.count('moveDealStage'), 0);
+  // Mesmo que uma linha antiga tenha ficado com avanço pendente, a trilha não move.
+  const w2 = world({ config, tasks: [task({ id: 8, track: 'pre_quote', step: 2, stage_id: 'contact', status: 'sent',
+    generation_meta: { advance: { state: 'pending', due_at: new Date(T0.getTime() - MINUTE).toISOString() } } })] });
+  await w2.sender.tick();
+  assert.equal(w2.moves.length, 0);
+  assert.deepEqual(w2.advances, [{ id: 8, state: 'skipped', result: null }]);
+});
+
+test('antes do orçamento: card saiu da etapa (foi para proposal) cancela com stage_changed', async () => {
+  const w = world({ config: { pre_quote_stage_ids: ['contact'] }, tasks: [task({ id: 1, track: 'pre_quote', stage_id: 'contact' })],
+    snapshot: (t) => ({ deal: { id: t.deal_id, stage: 'proposal', converted: false, converted_job_id: null, contact_name: t.contact_name } }) });
+  assert.equal(await w.sender.runTenant(USER), 'cancelled');
+  assert.equal(w.task(1).status, 'cancelled');
+  assert.equal(w.task(1).last_error, 'cancel:stage_changed');
+  assert.equal(w.count('graphSend') + w.count('baileysSendText') + w.count('moveDealStage'), 0);
+});
+
 test('aprovado como texto e agora só sai como template: volta para rascunho', async () => {
   const w = world({
     tasks: [task({ id: 1 })], template: TEMPLATE, config: { template_id: 40 },

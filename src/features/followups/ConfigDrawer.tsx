@@ -7,11 +7,11 @@ import type { ToastState } from '../galeria/Toast';
 import { api, CONFIG_URL, errorMessage, FollowUpApiError } from './api';
 import { formatFullDate, parseListInput } from './format';
 import {
-  CONSENT_CHECKBOX_TEXT, DEDUPE_REQUIRED_TEXT, FIRST_STEP_WINDOW_TEXT, SUPPORT_MODE_TEXT, TEMPLATE_HINT_TEXT,
-  TONE_CLASSES, WEEKDAY_SHORT,
+  CONSENT_CHECKBOX_TEXT, DEDUPE_REQUIRED_TEXT, FIRST_STEP_WINDOW_TEXT, PRE_QUOTE_HELP_TEXT, SUPPORT_MODE_TEXT,
+  TEMPLATE_HINT_TEXT, TONE_CLASSES, WEEKDAY_SHORT,
 } from './labels';
 import {
-  DEFAULT_STEP_DELAYS_HOURS, type FollowUpConfig, type FollowUpConfigPutRequest, type FollowUpConfigPutResponse,
+  DEFAULT_PRE_QUOTE_DELAYS_HOURS, DEFAULT_STEP_DELAYS_HOURS, PRE_QUOTE_MAX_STEPS, type FollowUpConfig, type FollowUpConfigPutRequest, type FollowUpConfigPutResponse,
   type FollowUpConfigResponse, type TrackerConfig,
 } from './types';
 
@@ -254,6 +254,95 @@ function LadderSection({ form, set, errors, data, focusStageId }: SectionProps &
   );
 }
 
+// ─── Antes do orçamento ──────────────────────────────────────────────────────
+
+// Só etapas abertas que vêm antes da 1ª etapa da escada (e fora dela).
+function preQuoteCandidates(form: FollowUpConfig, stages: Stage[]): Stage[] {
+  const open = openStages(stages);
+  const ladder = new Set([...form.ladder_stage_ids, form.after_last_stage_id ?? '']);
+  const ladderPositions = open.filter((s) => ladder.has(s.id)).map((s) => s.position);
+  const limit = ladderPositions.length ? Math.min(...ladderPositions) : Infinity;
+  return open.filter((s) => !ladder.has(s.id) && s.position < limit);
+}
+
+function preQuoteDelay(delays: number[], i: number): number {
+  return delays[i] ?? DEFAULT_PRE_QUOTE_DELAYS_HOURS[i] ?? 72;
+}
+
+function PreQuoteStages({ form, set, stages }: { form: FollowUpConfig; set: SetConfig; stages: Stage[] }) {
+  const ids = form.pre_quote_stage_ids ?? [];
+  const setIds = (next: string[]) => set({ pre_quote_stage_ids: next.slice(0, PRE_QUOTE_MAX_STEPS) });
+  const free = stages.find((s) => !ids.includes(s.id));
+  return (
+    <div className="space-y-1.5">
+      <span className="text-[11px] font-semibold text-gray-600 dark:text-gray-300">Etapas</span>
+      {ids.map((id, i) => (
+        <div key={`${i}-${id}`} className="grid grid-cols-[1fr_auto] items-center gap-2">
+          <StageSelect value={id} stages={stages} emptyLabel="Escolha a etapa" onChange={(v) => setIds(ids.map((x, j) => (j === i ? v ?? x : x)))} />
+          <button type="button" onClick={() => setIds(ids.filter((_, j) => j !== i))} className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600" aria-label="Remover etapa">
+            <Trash2 size={13} />
+          </button>
+        </div>
+      ))}
+      {ids.length < PRE_QUOTE_MAX_STEPS && free && (
+        <button type="button" onClick={() => setIds([...ids, free.id])} className="flex items-center gap-1 text-[12px] font-semibold text-gold-700 dark:text-gold-400">
+          <Plus size={13} /> Adicionar etapa
+        </button>
+      )}
+    </div>
+  );
+}
+
+function PreQuoteDelays({ form, set }: { form: FollowUpConfig; set: SetConfig }) {
+  const delays = form.pre_quote_delays_hours?.length ? form.pre_quote_delays_hours : [...DEFAULT_PRE_QUOTE_DELAYS_HOURS];
+  const setDelay = (i: number, h: number) => set({ pre_quote_delays_hours: delays.map((d, j) => (j === i ? h : d)) });
+  return (
+    <div className="space-y-1.5">
+      <span className="text-[11px] font-semibold text-gray-600 dark:text-gray-300">Toques (horas desde a última mensagem do estúdio)</span>
+      {delays.map((d, i) => (
+        <div key={i} className="grid grid-cols-[auto_96px_auto] items-center gap-2">
+          <span className="text-[11px] font-bold text-gray-500">Toque {i + 1}</span>
+          <label className="flex items-center gap-1">
+            <input type="number" min={1} max={720} value={d} onChange={(e) => setDelay(i, Number(e.target.value))} className={INPUT} />
+            <span className="text-[10px] text-gray-400">h</span>
+          </label>
+          {delays.length > 1 && i === delays.length - 1 && (
+            <button type="button" onClick={() => set({ pre_quote_delays_hours: delays.slice(0, -1) })} className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600" aria-label="Remover toque">
+              <Trash2 size={13} />
+            </button>
+          )}
+        </div>
+      ))}
+      {delays.length < PRE_QUOTE_MAX_STEPS && (
+        <button type="button" onClick={() => set({ pre_quote_delays_hours: [...delays, preQuoteDelay(delays, delays.length)] })}
+          className="flex items-center gap-1 text-[12px] font-semibold text-gold-700 dark:text-gold-400">
+          <Plus size={13} /> Adicionar toque
+        </button>
+      )}
+    </div>
+  );
+}
+
+function PreQuoteSection({ form, set, errors, data }: SectionProps) {
+  const stages = preQuoteCandidates(form, data.stages);
+  const suggested = data.suggested.pre_quote_stage_ids ?? [];
+  const useSuggested = () => set({ pre_quote_stage_ids: suggested, pre_quote_delays_hours: data.suggested.pre_quote_delays_hours ?? [...DEFAULT_PRE_QUOTE_DELAYS_HOURS] });
+  return (
+    <Section title="Antes do orçamento" hint={PRE_QUOTE_HELP_TEXT}>
+      <PreQuoteStages form={form} set={set} stages={stages} />
+      <FieldError msg={errors.pre_quote_stage_ids} />
+      <PreQuoteDelays form={form} set={set} />
+      <FieldError msg={errors.pre_quote_delays_hours} />
+      {suggested.length > 0 && (form.pre_quote_stage_ids ?? []).length === 0 && (
+        <button type="button" onClick={useSuggested} className="flex items-center gap-1 text-[12px] font-semibold text-gray-600 dark:text-gray-300">
+          <Wand2 size={13} /> Usar sugestão
+        </button>
+      )}
+      {stages.length === 0 && <Note tone="slate">Nenhuma etapa aberta antes da escada. Ajuste a escada para liberar esta trilha.</Note>}
+    </Section>
+  );
+}
+
 function HolidayList({ holidays, onChange }: { holidays: string[]; onChange: (v: string[]) => void }) {
   const [day, setDay] = useState('');
   const add = () => { if (day && !holidays.includes(day)) onChange([...holidays, day].sort()); setDay(''); };
@@ -441,7 +530,9 @@ function TrackerSection({ form, set, errors, data }: SectionProps) {
 
 // A rota só desliga a mensagem fixa nas etapas da escada e no destino final.
 function legacySplit(form: FollowUpConfig, data: FollowUpConfigResponse) {
-  const onLadder = new Set([...form.ladder_stage_ids, form.after_last_stage_id ?? '']);
+  // Espelha o servidor: as etapas antes do orçamento também desligam a mensagem fixa.
+  const preQuote = form.pre_quote_delays_hours?.length ? form.pre_quote_stage_ids ?? [] : [];
+  const onLadder = new Set([...form.ladder_stage_ids, ...preQuote, form.after_last_stage_id ?? '']);
   return {
     inside: data.legacy_automation.filter((s) => onLadder.has(s.stage_id)),
     outside: data.legacy_automation.filter((s) => !onLadder.has(s.stage_id)),
@@ -625,6 +716,7 @@ function DrawerBody({ s, saver, focusStageId, impersonating, onAskAuto, onClose 
         <ActivateSection {...common} saved={s.data.config} impersonating={impersonating} />
         <ModeSection {...common} saved={s.data.config} impersonating={impersonating} onAskAuto={onAskAuto} />
         <LadderSection {...common} focusStageId={focusStageId} />
+        <PreQuoteSection {...common} />
         <HoursSection {...common} />
         <PaceSection {...common} />
         <ChannelsSection {...common} />
