@@ -573,8 +573,11 @@ function pickConversation(rows: Row[], seen: string[]): Row | null {
   return sorted.find((row) => seen.includes(digitsOnly(row.phone))) ?? sorted[0] ?? null;
 }
 
-function needsHuman(rows: Row[]): boolean {
-  return rows.some((row) => row.needs_human === true || row.agent_status === 'needs_human');
+// 'human_active' = alguém assumiu a conversa: a cadência respeita como a Lia, até "Devolver pra Lia".
+const HUMAN_STATUSES = new Set(['needs_human', 'human_active']);
+
+export function needsHuman(rows: Row[]): boolean {
+  return rows.some((row) => row.needs_human === true || HUMAN_STATUSES.has(String(row.agent_status)));
 }
 
 async function loadSendSnapshot(ctx: RepoCtx, task: CadenceTaskRow, waNumbers: string[]): Promise<SendSnapshot> {

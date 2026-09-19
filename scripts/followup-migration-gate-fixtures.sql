@@ -285,6 +285,21 @@ BEGIN
     'outro tenant só vê o que é dele';
 END $$;
 
+-- Conversa assumida por uma pessoa (human_active, needs_human false) segura a cadência.
+DO $$
+BEGIN
+  UPDATE public.wa_conversations SET agent_status = 'human_active', needs_human = false
+   WHERE user_id = pg_temp.fx_u(1) AND phone = '554399900010';
+  ASSERT (SELECT c.needs_human FROM public.followup_cadence_candidates(pg_temp.fx_u(1), ARRAY['fx-proposal'], ARRAY['551130000001']) c
+           WHERE c.deal_id = 9110), 'J: human_active conta como needs_human';
+  UPDATE public.wa_conversations SET agent_status = 'lia_active'
+   WHERE user_id = pg_temp.fx_u(1) AND phone = '554399900010';
+  ASSERT NOT (SELECT c.needs_human FROM public.followup_cadence_candidates(pg_temp.fx_u(1), ARRAY['fx-proposal'], ARRAY['551130000001']) c
+           WHERE c.deal_id = 9110), 'J: lia_active não segura';
+  UPDATE public.wa_conversations SET agent_status = 'needs_human'
+   WHERE user_id = pg_temp.fx_u(1) AND phone = '554399900010';
+END $$;
+
 -- 4. CHECKs e índices únicos de scheduled_followups.
 DO $$
 DECLARE cname text;

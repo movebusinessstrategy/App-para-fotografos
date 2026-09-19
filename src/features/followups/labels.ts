@@ -115,6 +115,25 @@ export const CANCEL_REASON_TEXT: Record<CancelReason, string> = {
   needs_human: 'Conversa aguardando uma pessoa',
 };
 
+// Códigos de SKIP e de passar para uma pessoa (###HUMANO:motivo###) vindos da IA.
+export const AI_REASON_TEXT: Record<string, string> = {
+  ai_skip: 'não faz sentido retomar esta conversa',
+  empty: 'o texto gerado ficou vazio',
+  no_history: 'não há conversa suficiente para retomar',
+  fechamento: 'o cliente quer fechar',
+  disponibilidade: 'o cliente perguntou sobre data ou agenda',
+  pagamento: 'o cliente perguntou sobre pagamento',
+  duvida: 'ficou uma dúvida do cliente sem resposta',
+  reclamacao: 'o cliente fez uma reclamação',
+  pessoa: 'o cliente pediu para falar com uma pessoa',
+  material_ausente: 'falta um material para enviar',
+  erro_tecnico: 'houve um erro técnico',
+};
+
+export function aiReasonText(code: string | null | undefined): string {
+  return AI_REASON_TEXT[String(code ?? '').trim()] ?? 'motivo não informado';
+}
+
 export const QUEUE_TAB_LABELS: Record<QueueTab, string> = {
   draft: 'Para aprovar',
   approved: 'Na fila de envio',

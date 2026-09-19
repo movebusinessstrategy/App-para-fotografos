@@ -45,6 +45,11 @@ function fakeDb(opts: FakeOpts = {}) {
   const updates: Array<{ table: string; patch: Row; filters: Row }> = [];
   const orFilters: string[] = [];
   const db = {
+    async rpc(name: string, args: Row) {
+      const error = opts.errors?.[name];
+      if (error) return { data: null, error };
+      return { data: (opts.tables?.[name] || []).filter((r) => r.user_id === undefined || r.user_id === args.p_user_id), error: null };
+    },
     from(table: string) {
       if (opts.throwOn?.includes(table)) throw new Error(`boom ${table}`);
       const preds: Array<(r: Row) => boolean> = [];
@@ -104,7 +109,7 @@ const STAGES: StageRow[] = [
 const TASK = { stage_id: '02-follow-up', created_at: hoursBefore(MONDAY_2PM, 2) };
 const baseFacts = (extra: Partial<LegacyFacts> = {}): LegacyFacts => ({
   deal: { id: 10, stage: '02-follow-up', converted: false, converted_job_id: null },
-  stages: STAGES, optedOut: false, cadenceEnabled: false, lastCustomerAt: hoursBefore(MONDAY_2PM, 30), ...extra,
+  stages: STAGES, optedOut: false, cadenceEnabled: false, lastCustomerAt: hoursBefore(MONDAY_2PM, 30), alreadyCustomer: false, ...extra,
 });
 const withDeal = (extra: Partial<NonNullable<LegacyFacts['deal']>>) => baseFacts({ deal: { ...baseFacts().deal!, ...extra } });
 
@@ -267,13 +272,14 @@ test('precedência: a tabela para na primeira regra que casar, na ordem', () => 
   const sunday = new Date('2026-09-20T15:00:00Z');
   const task = { stage_id: 'proposal', created_at: hoursBefore(sunday, 5) };
   const facts: LegacyFacts = {
-    deal: null, stages: STAGES, optedOut: true, cadenceEnabled: true, lastCustomerAt: hoursBefore(sunday, 1),
+    deal: null, stages: STAGES, optedOut: true, cadenceEnabled: true, lastCustomerAt: hoursBefore(sunday, 1), alreadyCustomer: true,
   };
   const deal = { id: 10, stage: 'won', converted: true, converted_job_id: 5 };
   const steps: Array<[() => void, string]> = [
     [() => { facts.deal = { ...deal }; }, 'deal_closed'],
     [() => { facts.deal = { ...deal, stage: '02-follow-up', converted: false, converted_job_id: null }; }, 'stage_changed'],
-    [() => { task.stage_id = '02-follow-up'; }, 'optout'],
+    [() => { task.stage_id = '02-follow-up'; }, 'deal_closed'],
+    [() => { facts.alreadyCustomer = false; }, 'optout'],
     [() => { facts.optedOut = false; }, 'cadence_active'],
     [() => { facts.cadenceEnabled = false; }, 'customer_replied'],
   ];
@@ -426,4 +432,22 @@ test('extractGraphMessageId pega o wamid real e recusa o resto', () => {
     { error: { message: 'x' } }, 'wamid.solto']) {
     assert.equal(extractGraphMessageId(body), null, JSON.stringify(body));
   }
+});
+
+test('loadLegacyFacts: telefone já cliente por outro deal cancela a mensagem fixa como deal_closed', async () => {
+  const keys = [{ user_id: USER, phone_key: canonicalPhoneKey(CLIENT_12) }, { user_id: 'outra', phone_key: '5543900000000' }];
+  const facts = await loadLegacyFacts(fakeDb({ tables: tenantTables({ followup_customer_phone_keys: keys }) }).db, DB_TASK);
+  assert.equal(facts.alreadyCustomer, true);
+  assert.deepEqual(decideLegacyGate(TASK, facts, MONDAY_2PM), { action: 'cancel', reason: 'deal_closed' });
+  const other = await loadLegacyFacts(fakeDb({ tables: tenantTables({ followup_customer_phone_keys: keys.slice(1) }) }).db, DB_TASK);
+  assert.equal(other.alreadyCustomer, false);
+});
+
+test('loadLegacyFacts: sem a função da 083 segue como antes; outro erro vira defer', async () => {
+  for (const code of ['42883', 'PGRST202']) {
+    const { db } = fakeDb({ tables: tenantTables(), errors: { followup_customer_phone_keys: { code, message: 'no function' } } });
+    assert.equal((await loadLegacyFacts(db, DB_TASK)).alreadyCustomer, false, code);
+  }
+  const { db } = fakeDb({ tables: tenantTables(), errors: { followup_customer_phone_keys: { code: '57014', message: 'timeout' } } });
+  assert.equal((await legacyPreSendCheck(db, DB_TASK, MONDAY_2PM)).action, 'defer');
 });

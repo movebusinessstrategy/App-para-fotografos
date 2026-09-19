@@ -125,7 +125,7 @@ import { captureMarketingWhatsAppContact } from './lib/marketing-whatsapp-contac
 import { createFunnelTracker, createSupabaseFunnelRepo, isBaileysBotMessage, type FunnelMessageEvent, type FunnelObserveResult } from './funnel-tracker.js';
 import type { FollowUpServices } from './src/features/followups/types.js';
 import { resolveLegacyMetaAuth, legacyWithin24h, legacyPreSendCheck, applyLegacyGate, extractGraphMessageId } from './legacy-followup-fix.js';
-import { loadOptOutKeys, optOutSetHas } from './lib/optout-store.js';
+import { isOptedOut, loadOptOutKeys, optOutSetHas } from './lib/optout-store.js';
 import { createFollowUpCadence } from './followup-runtime.js';
 import { registerFollowUpRoutes } from './followup-routes.js';
 import {
@@ -28184,6 +28184,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
       if (convError) throw convError;
       if (conv?.needs_human || conv?.agent_status === 'needs_human' || conv?.agent_status === 'human_active') return;
+      // Pediu para não receber mais mensagens: nada de resposta automática, uma pessoa decide.
+      if (await isOptedOut(supabaseAdmin, userId, phone)) {
+        await markConversationForHuman(userId, phone, waNumber, 'pessoa');
+        return;
+      }
       if (!await claimAgentMessage(userId, phone, waNumber, claimedMessageId)) return;
 
       const messages = await loadAgentConversation(userId, phone, waNumber);
@@ -28527,7 +28532,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
     }
 
-    if (!isHistory && slot === 'main' && (!msgSaveErr || messageWasDuplicate)) {
+    // Roda mesmo se o insert falhou: com o rastreador ligado o legado não cria o lead,
+    // e a entrada só precisa do telefone e do corpo, não da linha salva.
+    if (!isHistory && slot === 'main') {
       await observeFunnel({
         userId, waNumber, slot: 'main', phone, messageId: msgId, occurredAt: ts,
         direction: msg.key.fromMe ? 'out' : 'in',

@@ -192,6 +192,16 @@ test('número próprio ou ignorado não vira lead', () => {
   assert.equal(ignoreReason(decide(outEvt(), ctx({ isOwnOrIgnored: true, deal: deal() }))), 'own_number');
 });
 
+test('só perdidos: mensagem anterior à perda (reentregue ou duplicada) não recria o lead', () => {
+  const lostAfter = deal({ stage: 'lost', current_stage_entered_at: '2026-09-19T12:30:00.000Z' });
+  assert.deepEqual(decide(evt(), ctx({ deal: lostAfter, allDealsLost: true })), [{ kind: 'cancel_cadence', reason: 'customer_replied' }]);
+  const within = deal({ stage: 'lost', current_stage_entered_at: '2026-09-19T11:59:57.000Z' });
+  assert.deepEqual(decide(evt(), ctx({ deal: within, allDealsLost: true })), [{ kind: 'cancel_cadence', reason: 'customer_replied' }]);
+  const lostBefore = deal({ stage: 'lost', current_stage_entered_at: '2026-09-19T11:59:00.000Z' });
+  assert.equal(decide(evt(), ctx({ deal: lostBefore, allDealsLost: true }))[0].kind, 'create_deal');
+  assert.equal(decide(evt(), ctx({ deal: deal({ stage: 'lost', current_stage_entered_at: null as unknown as string }), allDealsLost: true }))[0].kind, 'create_deal');
+});
+
 test('cliente existente, só perdidos e só ganho', () => {
   assert.equal(ignoreReason(decide(evt(), ctx({ isExistingCustomer: true }))), 'existing_customer');
   const lost = deal({ stage: 'lost' });
@@ -468,6 +478,13 @@ test('cliente existente sem deal não vira lead; só perdidos com recreate vira'
   assert.equal(recreated.created, true);
   assert.equal(lostOnly.opsOf('insertDeal').length, 1);
 
+  const lostLater = setup({ deals: [deal({ id: 5, stage: 'lost', current_stage_entered_at: '2026-09-19T12:30:00.000Z' })] });
+  const old = await lostLater.tracker.observe(evt());
+  assert.deepEqual(old.actions, ['cancel_cadence']);
+  assert.equal(old.created, false);
+  assert.equal(old.dealId, 5);
+  assert.equal(lostLater.opsOf('insertDeal').length, 0);
+
   const wonOnly = setup({ deals: [deal({ id: 4, stage: 'won' })] });
   const kept = await wonOnly.tracker.observe(evt());
   assert.equal(kept.created, false);
@@ -551,6 +568,13 @@ test('observe: IA oficial com eco sintético não move', async () => {
   assert.equal(result.moved, null);
   assert.equal(t.calls.hasOutboundNear, 1);
   assert.equal(t.opsOf('casUpdateStage').length, 0);
+});
+
+test('observe: resposta da IA oficial pelo QR (botMetadata) promove, sem teste de eco', async () => {
+  const t = setup({ deals: [deal()], echoNear: true });
+  const result = await t.tracker.observe(outEvt({ origin: 'meta_bot', provider: 'baileys', isBot: true, messageId: 'ABCD1234' }));
+  assert.deepEqual(result.moved, { from: 'lead', to: 'contact' });
+  assert.equal(t.calls.hasOutboundNear, undefined);
 });
 
 test('cancelamento usa a chave canônica do telefone e o instante da fala', async () => {
@@ -654,7 +678,7 @@ function reconcileState(): Partial<MemState> {
       deal({ id: 1, stage: 'lead', contact_phone: P1, current_stage_entered_at: '2026-09-19T10:00:00.000Z', title: 'D1' }),
       deal({ id: 2, stage: 'contact', contact_phone: P2, current_stage_entered_at: '2026-09-19T09:00:00.000Z', title: 'D2' }),
       deal({ id: 3, stage: 'lead', contact_phone: P3, current_stage_entered_at: '2026-09-19T11:00:00.000Z', title: 'D3' }),
-      deal({ id: 4, stage: 'lost', contact_phone: LOST_L, title: 'Perdido' }),
+      deal({ id: 4, stage: 'lost', contact_phone: LOST_L, current_stage_entered_at: '2026-09-19T07:00:00.000Z', title: 'Perdido' }),
     ],
     outbound: [
       { phone: P1, wa_number: MAIN, message_id: 'o1', type: 'text', body: 'Oi!', timestamp: '2026-09-19T10:30:00.000Z' },
@@ -689,6 +713,18 @@ test('reconcilePreview não escreve e lista mover e criar', async () => {
     { phone: LOST_L, contact_name: null, first_inbound_at: '2026-09-19T08:00:00.000Z', last_inbound_at: '2026-09-19T08:00:00.000Z', inbound_count: 1 },
   ]);
   assert.equal(preview.scanned, 3);
+});
+
+test('reconcilePreview não oferece recriar perdido que não escreveu depois da perda', async () => {
+  const state = reconcileState();
+  state.deals = state.deals!.map((d) => (d.id === 4 ? { ...d, current_stage_entered_at: '2026-09-19T09:00:00.000Z' } : d));
+  const t = setup(state);
+  const preview = await t.tracker.reconcilePreview(USER, {});
+  assert.deepEqual(preview.to_create.map((i) => i.phone), [NEW_A]);
+  const applied = await setup(state).tracker.reconcileApply(USER, { create_phones: [LOST_L] }, ACTOR);
+  assert.equal(applied.created, 0);
+  const control = await setup(reconcileState()).tracker.reconcileApply(USER, { create_phones: [LOST_L] }, ACTOR);
+  assert.equal(control.created, 1);
 });
 
 test('reconcileApply pula quem dispara evento de anúncio sem include_marketing', async () => {

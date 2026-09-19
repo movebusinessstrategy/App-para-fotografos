@@ -430,6 +430,22 @@ test('shouldCancelBeforeSend: cancelamento vence espera, e a primeira regra venc
   assert.deepEqual(decide({}, { lastCustomerAt: within, lastStudioAt: within }), { action: 'send' });
 });
 
+test('shouldCancelBeforeSend: aprovada no automático não sai depois que o modo volta para aprovação', () => {
+  assert.deepEqual(decide({ approved_by: 'auto' }, {}, { mode: 'approval' }), { action: 'review', reason: 'auto_mode_off' });
+  assert.deepEqual(decide({ approved_by: 'auto' }, {}, { mode: 'auto' }), { action: 'send' });
+  assert.deepEqual(decide({ approved_by: 'owner' }, {}, { mode: 'approval' }), { action: 'send' });
+  assert.deepEqual(decide({ approved_by: 'auto' }, {}, { mode: 'approval', enabled: false }), { action: 'hold', reason: 'disabled' });
+});
+
+test('shouldCancelBeforeSend: etapa que saiu da escada ou trilha desligada cancela a aprovada', () => {
+  const noProposal = LADDER.filter((id) => id !== 'proposal');
+  assert.deepEqual(decide({}, {}, { ladder_stage_ids: noProposal }), { action: 'cancel', reason: 'stage_changed' });
+  const pq = { track: 'pre_quote' as const, stage_id: 'contact' };
+  const pqSnap = { deal: { ...deal, stage: 'contact' } };
+  assert.deepEqual(decide(pq, pqSnap, { pre_quote_stage_ids: ['contact'], pre_quote_delays_hours: [24] }), { action: 'send' });
+  assert.deepEqual(decide(pq, pqSnap, { pre_quote_stage_ids: [], pre_quote_delays_hours: [24] }), { action: 'cancel', reason: 'stage_changed' });
+});
+
 test('resolveExpiredLease só marca enviado com prova', () => {
   const proof = { message_ids: ['wamid.1'], delivered_text: 'Oi!', channel: 'meta_text' as const };
   assert.equal(resolveExpiredLease(taskRow({ generation_meta: { delivery: proof } })), 'mark_sent');

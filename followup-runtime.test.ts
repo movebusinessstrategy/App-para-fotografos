@@ -4,7 +4,7 @@ import { createFollowUpCadenceFrom, SENDER_TICK_MS, SWEEP_SCHEDULER_MS } from '.
 import type { CadenceFunnelPort, FollowUpCadenceDeps } from './followup-runtime.js';
 import {
   CadenceMigrationMissing, createFollowUpRepo, createSenderTransport, graphResultFrom, invisibleCandidates, isCadenceMigrationMissing,
-  worstQuality,
+  needsHuman, worstQuality,
 } from './followup-repo.js';
 import type { FollowUpRepo, FollowUpRepoDeps } from './followup-repo.js';
 import type { CadenceTemplate, SenderChannelHealth } from './followup-channel.js';
@@ -729,4 +729,12 @@ test('baileysSendText com timeout => BAILEYS_TIMEOUT; typing engole erro', async
   await transport.baileysTyping(USER, '554311112222', true);
   const ok = createSenderTransport({ baileys: { sendText: async () => 'ABC123', sendTyping: async () => {} } });
   assert.equal(await ok.baileysSendText(USER, '554311112222', 'Oi'), 'ABC123');
+});
+
+test('repo: conversa assumida por uma pessoa (human_active) segura a cadência como needs_human', () => {
+  assert.equal(needsHuman([{ needs_human: false, agent_status: 'human_active' }]), true);
+  assert.equal(needsHuman([{ needs_human: false, agent_status: 'needs_human' }]), true);
+  assert.equal(needsHuman([{ needs_human: true, agent_status: 'idle' }]), true);
+  assert.equal(needsHuman([{ needs_human: false, agent_status: 'lia_active' }, { needs_human: null, agent_status: null }]), false);
+  assert.equal(needsHuman([]), false);
 });

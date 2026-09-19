@@ -52,7 +52,8 @@ export interface SendSnapshot {
 }
 
 export type SendDecision = { action: 'send' } | { action: 'cancel'; reason: CancelReason }
-  | { action: 'hold'; reason: 'disabled' | 'paused' | 'outside_hours' } | { action: 'stale'; reason: 'stale_approval' };
+  | { action: 'hold'; reason: 'disabled' | 'paused' | 'outside_hours' } | { action: 'stale'; reason: 'stale_approval' }
+  | { action: 'review'; reason: 'auto_mode_off' };
 
 // Utilitários de valor
 
@@ -1024,12 +1025,16 @@ const SEND_RULES: SendRule[] = [
   (_t, s) => (s.alreadyCustomer ? cancel('already_customer') : null),
   (_t, s) => (s.optedOut ? cancel('optout') : null),
   (t, s) => (s.deal?.stage !== t.stage_id ? cancel('stage_changed') : null),
+  // Etapa tirada da escada (ou trilha desligada) depois da aprovação: vale a config salva agora.
+  (t, _s, env) => (trackForStage(t.stage_id, env.config) === null ? cancel('stage_changed') : null),
   (t, s) => (customerSpokeAfter(t.basis_at, s.lastCustomerAt) ? cancel('customer_replied') : null),
   (t, s) => (studioSpokeAfter(t.basis_at, s) ? cancel('studio_spoke') : null),
   (_t, s) => (s.needsHuman ? cancel('needs_human') : null),
   (_t, _s, env) => (env.config.enabled ? null : { action: 'hold', reason: 'disabled' }),
   (_t, _s, env) => (env.state.paused_at ? { action: 'hold', reason: 'paused' } : null),
   (_t, _s, env) => (isWithinBusinessHours(env.now, env.config.business_hours) ? null : { action: 'hold', reason: 'outside_hours' }),
+  // Aprovada pela varredura no modo automático, mas o dono voltou para aprovação: ninguém aprovou esta.
+  (t, _s, env) => (t.approved_by === 'auto' && env.config.mode !== 'auto' ? { action: 'review', reason: 'auto_mode_off' } : null),
   (t, _s, env) => (approvalIsStale(t, env.now) ? { action: 'stale', reason: 'stale_approval' } : null),
 ];
 

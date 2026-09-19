@@ -227,8 +227,22 @@ function eventGuardReason(evt: FunnelMessageEvent, cfg: FunnelConfig): string | 
   return null;
 }
 
-const effectiveDeal = (ctx: FunnelContext, cfg: FunnelConfig): FunnelDealState | null => (
-  ctx.allDealsLost && cfg.recreateAfterLost ? null : ctx.deal
+// Só perdidos: recria apenas se o cliente falou DEPOIS da perda. Mensagem velha,
+// reentregue ou duplicada pelo outro canal não ressuscita o card. Sem horário: como antes.
+export function spokeAfterLoss(occurredAt: string | null | undefined, lostDeal: FunnelDealState | null): boolean {
+  const at = Date.parse(String(occurredAt ?? ''));
+  const lostAt = Date.parse(String(lostDeal?.current_stage_entered_at ?? ''));
+  if (!Number.isFinite(at) || !Number.isFinite(lostAt)) return true;
+  return at > lostAt + STALE_TOLERANCE_MS;
+}
+
+// pickDeal devolve em deal o perdido mais recente, logo o da última perda.
+function recreatesLost(pick: { deal: FunnelDealState | null; allDealsLost: boolean }, cfg: FunnelConfig, occurredAt: string | null): boolean {
+  return pick.allDealsLost && cfg.recreateAfterLost && spokeAfterLoss(occurredAt, pick.deal);
+}
+
+const effectiveDeal = (evt: FunnelMessageEvent, ctx: FunnelContext, cfg: FunnelConfig): FunnelDealState | null => (
+  recreatesLost(ctx, cfg, evt.occurredAt) ? null : ctx.deal
 );
 
 const cleanName = (name: string | null | undefined): string | null => String(name ?? '').trim() || null;
@@ -245,7 +259,7 @@ function decideInbound(evt: FunnelMessageEvent, ctx: FunnelContext, cfg: FunnelC
   const optOut = cfg.optOutDetection ? detectOptOut(evt.body) : null;
   // Quem pede para parar não vira lead novo; só registra e cancela as vivas.
   if (optOut) return [{ kind: 'opt_out', optKind: optOut.kind, pattern: optOut.pattern }, { kind: 'cancel_cadence', reason: 'optout' }];
-  if (effectiveDeal(ctx, cfg)) return [{ kind: 'cancel_cadence', reason: 'customer_replied' }];
+  if (effectiveDeal(evt, ctx, cfg)) return [{ kind: 'cancel_cadence', reason: 'customer_replied' }];
   return [createOrIgnore(evt, ctx, cfg)];
 }
 
@@ -457,14 +471,16 @@ async function isOwnOrIgnored(core: TrackerCore, evt: FunnelMessageEvent, cfg: F
 }
 
 async function existingCustomer(core: TrackerCore, evt: FunnelMessageEvent, cfg: FunnelConfig, ctx: FunnelContext): Promise<boolean> {
-  const needed = evt.direction === 'in' && cfg.skipExistingCustomers && cfg.trackerEnabled && !effectiveDeal(ctx, cfg);
+  const needed = evt.direction === 'in' && cfg.skipExistingCustomers && cfg.trackerEnabled && !effectiveDeal(evt, ctx, cfg);
   if (!needed) return false;
   const keys = await customerKeysFor(core, evt.userId);
   return keys.has(canonicalPhoneKey(evt.phone));
 }
 
+// Só o status 'sent' da Meta (sem corpo) pode ser eco de mensagem já gravada. No QR a
+// própria mensagem do bot já está em wa_messages e sempre casaria consigo mesma.
 async function syntheticEcho(core: TrackerCore, evt: FunnelMessageEvent, ctx: FunnelContext): Promise<boolean> {
-  if (evt.direction !== 'out' || evt.origin !== 'meta_bot' || !ctx.deal) return false;
+  if (evt.direction !== 'out' || evt.origin !== 'meta_bot' || evt.provider !== 'meta' || !ctx.deal) return false;
   return core.repo.hasOutboundNear(evt.userId, core.deps.phoneVariants(evt.phone), evt.occurredAt, ECHO_WINDOW_SECONDS);
 }
 
@@ -498,7 +514,7 @@ async function observeInto(core: TrackerCore, rawEvt: FunnelMessageEvent, result
   const ctx = await buildContext(core, evt, cfg, stages);
   const actions = decideFunnelActions(evt, ctx, stages, cfg, await materialsForEvent(core, evt));
   result.actions = actions.map((action) => action.kind);
-  result.dealId = effectiveDeal(ctx, cfg)?.id ?? null;
+  result.dealId = effectiveDeal(evt, ctx, cfg)?.id ?? null;
   for (const action of actions) await applySafely(core, action, { evt, cfg, stages, ctx }, result);
 }
 
@@ -602,8 +618,7 @@ async function blockingDeal(core: TrackerCore, req: CreateRequest, cfg: FunnelCo
   const deals = await dealsForCreate(core, req, stages);
   if (!deals.length) return null;
   const pick = pickDeal(deals, stages);
-  if (pick.allDealsLost && cfg.recreateAfterLost) return null;
-  return pick.deal;
+  return recreatesLost(pick, cfg, req.occurredAt) ? null : pick.deal;
 }
 
 const isPlaceholderTitle = (title: string | null): boolean => !String(title ?? '').trim() || /^[\d\s()+-]+$/.test(String(title));
@@ -926,14 +941,14 @@ async function groupsWithoutDeal(core: TrackerCore, setup: ReconcileSetup, group
   const kept = await mapLimit(chunks, PREVIEW_CONCURRENCY, async (chunk) => {
     const variants = [...new Set(chunk.flatMap((group) => core.deps.phoneVariants(group.phone)))];
     const index = indexDealsByKey(await core.repo.findDealsByPhone(setup.userId, variants, 1000));
-    return chunk.filter((group) => canCreateFor(index.get(group.key) || [], setup));
+    return chunk.filter((group) => canCreateFor(index.get(group.key) || [], group, setup));
   });
   return kept.flat();
 }
 
-function canCreateFor(deals: FunnelDealState[], setup: ReconcileSetup): boolean {
+function canCreateFor(deals: FunnelDealState[], group: InboundGroup, setup: ReconcileSetup): boolean {
   if (!deals.length) return true;
-  return setup.cfg.recreateAfterLost && pickDeal(deals, setup.stages).allDealsLost;
+  return recreatesLost(pickDeal(deals, setup.stages), setup.cfg, group.last);
 }
 
 async function conversationNames(core: TrackerCore, userId: string, phones: string[]): Promise<Map<string, string>> {

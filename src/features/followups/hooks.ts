@@ -8,12 +8,14 @@ import type {
 } from './types';
 
 // O SWR já pausa o polling com a aba oculta e revalida ao voltar o foco.
+// revalidateOnMount: o SWRConfig global (revalidateIfStale false) devolveria o cache velho ao reabrir.
 
 export function useFollowUpOverview() {
   return useApi<FollowUpOverview>(OVERVIEW_URL, {
     refreshInterval: (d?: FollowUpOverview) => (d?.sweep?.running ? 4000 : 20000),
     dedupingInterval: 3000,
     revalidateOnFocus: true,
+    revalidateOnMount: true,
   });
 }
 
@@ -27,6 +29,7 @@ export function useFollowUpConfig(active: boolean) {
 export function useDealFollowUp(dealId: number | string | null | undefined) {
   return useApi<DealFollowUpState>(dealId ? dealStateUrl(dealId) : null, {
     revalidateOnFocus: false,
+    revalidateOnMount: true,
     dedupingInterval: 5000,
     shouldRetryOnError: false,
   });
@@ -76,6 +79,7 @@ export function useFollowUpQueue(filters: QueueFilters, paused: boolean) {
   const swr = useSWRInfinite<FollowUpQueueResponse, Error>(getKey, fetchJson, {
     refreshInterval: paused ? 0 : 30000,
     revalidateOnFocus: !paused,
+    revalidateOnMount: true,
     dedupingInterval: 4000,
     keepPreviousData: true,
     revalidateFirstPage: true,

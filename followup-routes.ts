@@ -962,9 +962,11 @@ async function dealStep(db: Db, userId: string, deal: DealLite, config: FollowUp
   return { track, step: await preQuoteNextStep(db, userId, deal, config) };
 }
 
-async function loadLegacyPending(db: Db, userId: string, dealId: number): Promise<DealFollowUpState['legacy_pending']> {
-  const { data } = await run(db.from('scheduled_followups').select('id, status, scheduled_at').eq('user_id', userId)
-    .eq('deal_id', dealId).eq('kind', 'legacy').eq('status', 'pending').order('scheduled_at', { ascending: true }).limit(1));
+// Sem a 083 a coluna kind não existe, e toda linha da tabela ainda é do legado.
+async function loadLegacyPending(db: Db, userId: string, dealId: number, byKind = true): Promise<DealFollowUpState['legacy_pending']> {
+  let query = db.from('scheduled_followups').select('id, status, scheduled_at').eq('user_id', userId).eq('deal_id', dealId);
+  if (byKind) query = query.eq('kind', 'legacy');
+  const { data } = await run(query.eq('status', 'pending').order('scheduled_at', { ascending: true }).limit(1));
   const row = ((data || []) as Row[])[0];
   return row ? { id: Number(row.id), status: String(row.status), scheduled_at: String(row.scheduled_at) } : null;
 }
@@ -979,11 +981,35 @@ function itemFor(items: FollowUpDraftItem[], row: Row | null): FollowUpDraftItem
   return row ? items.find((i) => i.id === Number(row.id)) ?? null : null;
 }
 
+async function loadConfigOrNull(db: Db, userId: string): Promise<ReturnType<typeof parseCadenceConfig> | null> {
+  try {
+    return await loadConfig(db, userId);
+  } catch (err) {
+    if (isMigrationMissing(err)) return null;
+    throw err;
+  }
+}
+
+// Publicado antes da 083: o card continua mostrando (e cancelando) a mensagem fixa antiga.
+async function preMigrationDealState(env: Env, ctx: FollowUpRouteCtx, deal: DealLite, dealId: number): Promise<DealFollowUpState> {
+  const config = DEFAULT_FOLLOWUP_CONFIG;
+  return {
+    configured: false, enabled: false, mode: config.mode, stage_role: stageRole(String(deal.stage ?? ''), config),
+    step: null, track: null, track_steps: 0, next_eligible_at: null, active: null, last: null, opted_out: false,
+    can_approve: canApproveFollowUps(ctx), legacy_pending: await loadLegacyPending(env.db, ctx.userId, dealId, false),
+  };
+}
+
 async function dealStateHandler(env: Env, req: Request, res: Response): Promise<void> {
   const ctx = ctxFrom(req);
   const dealId = parseId(req.params.dealId, MSG.dealNotFound);
-  const [{ config, exists }, deal] = await Promise.all([loadConfig(env.db, ctx.userId), loadDeal(env.db, ctx.userId, dealId)]);
+  const [loaded, deal] = await Promise.all([loadConfigOrNull(env.db, ctx.userId), loadDeal(env.db, ctx.userId, dealId)]);
   if (!deal) throw routeError('NOT_FOUND', MSG.dealNotFound);
+  if (!loaded) {
+    res.json(await preMigrationDealState(env, ctx, deal, dealId));
+    return;
+  }
+  const { config, exists } = loaded;
   const current = await dealStep(env.db, ctx.userId, deal, config);
   const [{ active, last }, optedOut, legacy] = await Promise.all([
     loadDealTasks(env.db, ctx.userId, dealId),

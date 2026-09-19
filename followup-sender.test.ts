@@ -531,6 +531,14 @@ test('aprovação velha volta para rascunho; fora do horário devolve e agenda a
   assert.equal(late.state.next_send_after, '2026-09-19T12:00:00.000Z');   // sábado, 09:00 em São Paulo
 });
 
+test('aprovada no automático com a conta já em modo aprovação: volta para rascunho e não envia', async () => {
+  const w = world({ tasks: [task({ id: 1, approved_by: 'auto' })], config: { mode: 'approval' } });
+  assert.equal(await w.sender.runTenant(USER), 'review');
+  assert.equal(w.task(1).status, 'draft');
+  assert.equal(w.task(1).approved_by, null);
+  assert.equal(w.task(1).last_error, 'O modo automático foi desligado. Revise antes de enviar.');
+});
+
 test('portão: pausado, fora do horário e ritmo não chegam ao claim', async () => {
   const pacing = world({ tasks: [task({ id: 1 })], state: { next_send_after: new Date(T0.getTime() + MINUTE).toISOString() } });
   assert.equal(await pacing.sender.runTenant(USER), 'pacing');

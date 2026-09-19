@@ -1234,6 +1234,27 @@ test('GET /deal/:dealId devolve papel da etapa, tarefa viva, histórico, opt-out
   assert.equal(foreign.status, 404);
 });
 
+test('GET /deal/:dealId sem a 083: 200 com a mensagem fixa antiga (sem filtrar kind) para dono e membro', async (t) => {
+  const db = makeDb({
+    scheduled_followups: [
+      { id: 141, user_id: OWNER, deal_id: 11, status: 'pending', scheduled_at: '2026-09-17T12:00:00.000Z', phone: PHONE_A },
+      { id: 142, user_id: 'outra-conta', deal_id: 11, status: 'pending', scheduled_at: '2026-09-16T12:00:00.000Z', phone: PHONE_A },
+    ],
+  });
+  db.failures.push({ table: 'followup_cadence_config', error: { code: '42P01', message: 'relation does not exist' } });
+  const call = await startApp(t, db, fakeServices().services);
+  for (const who of ['owner', 'member'] as const) {
+    const res = await call('GET', '/api/followups/deal/11', undefined, who);
+    assert.equal(res.status, 200, who);
+    assert.equal(res.body.configured, false);
+    assert.equal(res.body.enabled, false);
+    assert.equal(res.body.active, null);
+    assert.equal(res.body.last, null);
+    assert.deepEqual(res.body.legacy_pending, { id: 141, status: 'pending', scheduled_at: '2026-09-17T12:00:00.000Z' });
+  }
+  assert.equal((await call('GET', '/api/followups/deal/91')).status, 404);
+});
+
 // ─── Trilha antes do orçamento ───
 
 const PHONE_D = '5543999990004';

@@ -67,6 +67,7 @@ const MESSAGES = {
   ambiguous: 'Envio interrompido. Confira a conversa antes de reenviar.',
   windowClosed: 'A janela de 24h fechou. Revise a versão em template.',
   emptyText: 'O texto do follow-up está vazio. Revise antes de enviar.',
+  autoModeOff: 'O modo automático foi desligado. Revise antes de enviar.',
 } as const;
 
 type TenantEntry = { userId: string; config: FollowUpConfig; state: FollowUpRuntimeState };
@@ -230,6 +231,7 @@ const SENDERS: Record<ChannelKind, (env: TenantEnv, task: CadenceTaskRow, snap: 
 function fromSendDecision(d: Exclude<SendDecision, { action: 'send' }>): Outcome {
   if (d.action === 'cancel') return { kind: 'cancel', reason: d.reason };
   if (d.action === 'hold') return { kind: 'hold', reason: d.reason };
+  if (d.action === 'review') return { kind: 'review', message: MESSAGES.autoModeOff };
   return { kind: 'stale' };
 }
 

@@ -2,7 +2,7 @@
 // envio pela API oficial. O worker antigo do server.ts chama estas funções logo
 // depois de pegar a tarefa; aqui fica só o que dá para testar sem o servidor.
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { brazilianPhoneVariants } from './lib/br-phone.js';
+import { brazilianPhoneVariants, canonicalPhoneKey } from './lib/br-phone.js';
 import { isWithinBusinessHours, localDateKey, nextWindowOpening } from './lib/business-hours.js';
 import { isMissingSchemaError, isOptedOut } from './lib/optout-store.js';
 import { isClosedStage } from './lib/stage-rules.js';
@@ -15,6 +15,8 @@ export type LegacyGate = { action: 'send' } | { action: 'cancel'; reason: Legacy
 export interface LegacyFacts {
   deal: { id: number; stage: string; converted: boolean; converted_job_id: number | null } | null;
   stages: StageRow[]; optedOut: boolean; cadenceEnabled: boolean; lastCustomerAt: string | null;
+  // Telefone com ensaio ou venda fechada em QUALQUER deal da conta (não só no desta tarefa).
+  alreadyCustomer: boolean;
 }
 
 type GateTask = { stage_id: string | null; created_at: string };
@@ -22,6 +24,8 @@ type GateRule = (task: GateTask, facts: LegacyFacts, now: Date) => LegacyGate | 
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFER_ON_ERROR_MS = 30 * 60 * 1000;
+// Função ausente (migration 083 não aplicada): Postgres e cache do PostgREST.
+const MISSING_FUNCTION_CODES = new Set(['42883', 'PGRST202']);
 const STUDIO_TZ = 'America/Sao_Paulo';
 // Mesmo valor de AGENT_FOLLOWUP_SENTINEL no server.ts (follow-up contextual da Lia).
 const AGENT_FOLLOWUP_SENTINEL = '###AGENT_FOLLOWUP###';
@@ -124,6 +128,7 @@ const GATE_RULES: GateRule[] = [
   (_t, f) => (f.deal ? null : cancel('deal_missing')),
   (_t, f) => (dealIsClosed(f.deal!, f.stages) ? cancel('deal_closed') : null),
   (t, f) => (t.stage_id && f.deal!.stage !== t.stage_id ? cancel('stage_changed') : null),
+  (_t, f) => (f.alreadyCustomer ? cancel('deal_closed') : null),
   (_t, f) => (f.optedOut ? cancel('optout') : null),
   // A cadência substitui a mensagem fixa e o follow-up da Lia.
   (_t, f) => (f.cadenceEnabled ? cancel('cadence_active') : null),
@@ -179,6 +184,19 @@ async function loadCadenceEnabled(db: SupabaseClient, userId: string): Promise<b
   return (data as { enabled?: unknown } | null)?.enabled === true;
 }
 
+// Mesma fonte da cadência (followup_customer_phone_keys). Sem a 083, fica como antes.
+async function loadAlreadyCustomer(db: SupabaseClient, userId: string, phone: string): Promise<boolean> {
+  const key = canonicalPhoneKey(phone);
+  if (!key) return false;
+  const { data, error } = await db.rpc('followup_customer_phone_keys', { p_user_id: userId });
+  if (error) {
+    const code = String((error as { code?: unknown }).code ?? '');
+    if (isMissingSchemaError(error) || MISSING_FUNCTION_CODES.has(code)) return false;
+    throw new Error(`followup_customer_phone_keys: ${error.message}`);
+  }
+  return ((data || []) as Array<{ phone_key?: unknown }>).some((row) => String(row.phone_key ?? '') === key);
+}
+
 // Última fala do cliente em QUALQUER número da conta (inclusive pós-venda).
 async function loadLastCustomerAt(db: SupabaseClient, userId: string, phone: string): Promise<string | null> {
   const phones = brazilianPhoneVariants(phone);
@@ -201,14 +219,15 @@ export async function loadLegacyFacts(
   db: SupabaseClient,
   task: { user_id: string; deal_id: number; phone: string },
 ): Promise<LegacyFacts> {
-  const [deal, stages, optedOut, cadenceEnabled, lastCustomerAt] = await Promise.all([
+  const [deal, stages, optedOut, cadenceEnabled, lastCustomerAt, alreadyCustomer] = await Promise.all([
     loadDeal(db, task.user_id, task.deal_id),
     loadStages(db, task.user_id),
     isOptedOut(db, task.user_id, task.phone),
     loadCadenceEnabled(db, task.user_id),
     loadLastCustomerAt(db, task.user_id, task.phone),
+    loadAlreadyCustomer(db, task.user_id, task.phone),
   ]);
-  return { deal, stages, optedOut, cadenceEnabled, lastCustomerAt };
+  return { deal, stages, optedOut, cadenceEnabled, lastCustomerAt, alreadyCustomer };
 }
 
 // A sentinela da Lia grava a etapa de ANTES de mover o deal para "Orçamento

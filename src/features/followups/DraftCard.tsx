@@ -9,7 +9,7 @@ import { ConversationPreview } from './ConversationPreview';
 import { formatDayTime, hoursSilentLabel } from './format';
 import {
   CHANNEL_LABELS, CONFLICT_TOAST, NO_APPROVE_PERMISSION, TEMPLATE_WINDOW_TEXT, TONE_CLASSES,
-  lastErrorText, statusLabel, stepLabel, warningLabel, type Tone,
+  aiReasonText, lastErrorText, statusLabel, stepLabel, warningLabel, type Tone,
 } from './labels';
 import type { FollowUpDraftItem } from './types';
 
@@ -77,7 +77,7 @@ const NOTICE_RULES: Array<(item: FollowUpDraftItem) => Notice | null> = [
     ? { key: 'invisible', tone: 'slate', text: 'A IA oficial do WhatsApp respondeu por último; o texto dela não está disponível.' }
     : null),
   (item) => (item.ai.handoff_reason
-    ? { key: 'handoff', tone: 'blue', text: `A IA acha melhor uma pessoa responder: ${item.ai.handoff_reason}` }
+    ? { key: 'handoff', tone: 'blue', text: `A IA acha melhor uma pessoa responder: ${aiReasonText(item.ai.handoff_reason)}` }
     : null),
   (item) => errorNotice(item),
 ];
@@ -230,7 +230,7 @@ function SkipSuggestion({ reason, canForce, busy, onForce }: { reason: string | 
   if (!reason) return null;
   return (
     <div className={cn('flex flex-wrap items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-[11px]', TONE_CLASSES.slate)}>
-      <span>A IA sugere não enviar: {reason}</span>
+      <span>A IA sugere não enviar: {aiReasonText(reason)}</span>
       {canForce && (
         <button type="button" onClick={onForce} disabled={busy} className="font-semibold text-gold-700 hover:text-gold-600 disabled:opacity-60 dark:text-gold-400">
           Gerar mesmo assim

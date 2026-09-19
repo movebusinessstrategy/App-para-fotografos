@@ -337,7 +337,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
      ORDER BY m."timestamp" DESC NULLS LAST LIMIT 1) lc ON true
   LEFT JOIN LATERAL (SELECT max(m."timestamp") AS ts FROM public.wa_messages m WHERE m.user_id = p_user_id AND m.phone = ANY (od.variants)
        AND m.from_me IS NOT TRUE AND m.type = 'reaction') lr ON true
-  LEFT JOIN LATERAL (SELECT bool_or(coalesce(c.needs_human, false) OR c.agent_status = 'needs_human') AS needs_human
+  LEFT JOIN LATERAL (SELECT bool_or(coalesce(c.needs_human, false) OR c.agent_status IN ('needs_human', 'human_active')) AS needs_human
       FROM public.wa_conversations c
      WHERE c.user_id = p_user_id AND c.phone = ANY (od.variants) AND (p_wa_numbers IS NULL OR c.wa_number = ANY (p_wa_numbers))) wc ON true
   LEFT JOIN invisible inv ON inv.phone_key = od.phone_key

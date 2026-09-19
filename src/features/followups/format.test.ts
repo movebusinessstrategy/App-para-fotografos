@@ -146,3 +146,25 @@ test('trilha antes do orçamento: rótulo de toque N de M e texto do aprovar tod
   const byStep = approveAllConfirmText({ count: 1, step: 2, track: 'ladder', effectiveCap: 10, remainingToday: 10, gap: null });
   assert.match(byStep, /^Aprovar 1 follow-up do passo 2\?/);
 });
+
+test('aiReasonText traduz os códigos da IA e nunca mostra o código cru', () => {
+  const codes = ['ai_skip', 'empty', 'no_history', 'fechamento', 'disponibilidade', 'pagamento', 'duvida', 'reclamacao', 'pessoa'];
+  for (const code of codes) {
+    const text = labels.aiReasonText(code);
+    assert.notEqual(text, code);
+    assert.equal(text, labels.AI_REASON_TEXT[code]);
+    assert.doesNotMatch(text, /[\u2013\u2014]/);
+  }
+  assert.equal(labels.aiReasonText('codigo_novo'), 'motivo não informado');
+  assert.equal(labels.aiReasonText(null), 'motivo não informado');
+});
+
+test('hooks: estado do negócio, visão geral e fila revalidam ao montar (o SWRConfig global não revalida cache)', () => {
+  const source = readFileSync(new URL('./hooks.ts', import.meta.url), 'utf8');
+  for (const hook of ['useFollowUpOverview', 'useDealFollowUp', 'useFollowUpQueue']) {
+    const start = source.indexOf(`export function ${hook}(`);
+    assert.ok(start >= 0, hook);
+    const next = source.indexOf('export function', start + 10);
+    assert.match(source.slice(start, next < 0 ? undefined : next), /revalidateOnMount: true/, hook);
+  }
+});
