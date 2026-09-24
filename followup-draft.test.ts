@@ -8,6 +8,8 @@ import {
   FOLLOWUP_INSTRUCTION,
   HISTORY_START_NOTE,
   NEUTRAL_HOOKS,
+  SCHEDULING_ASK_FALLBACK,
+  asksAboutScheduling,
   NO_KNOWLEDGE_MESSAGE,
   PRE_QUOTE_DIRECTIVES,
   PRE_QUOTE_NEUTRAL_HOOKS,
@@ -155,7 +157,7 @@ test('toAgentMessages põe em ordem cronológica quando os horários são válid
 });
 
 test('histórico que começa pelo estúdio ganha o prefixo e a diretiva é o último turno', async () => {
-  const { deps, calls } = fakeDeps(['Oi, Maria! Conseguiu dar uma olhada nos pacotes?']);
+  const { deps, calls } = fakeDeps(['Oi, Maria! Vamos ver uma data para as suas fotos?']);
   await generateCadenceDraft(baseInput(), deps);
   assert.equal(calls.length, 1);
   const turns = calls[0].messages;
@@ -172,7 +174,7 @@ test('histórico que começa pelo estúdio ganha o prefixo e a diretiva é o úl
 });
 
 test('histórico que começa pelo cliente não ganha prefixo', async () => {
-  const { deps, calls } = fakeDeps(['Oi, Maria! Conseguiu ver os pacotes?']);
+  const { deps, calls } = fakeDeps(['Oi, Maria! Vamos ver uma data para as suas fotos?']);
   await generateCadenceDraft(baseInput({ rows: [row(false, 'Oi, quero orçamento', 'text', 0), row(true, 'Claro! Te mando já', 'text', 1)] }), deps);
   assert.deepEqual(calls[0].messages.map((m) => m.role), ['user', 'assistant', 'user']);
   assert.notEqual(calls[0].messages[0].content, HISTORY_START_NOTE);
@@ -194,7 +196,7 @@ test('as 4 diretivas são distintas', () => {
 // ── LGPD: nada pessoal chega à IA ───────────────────────────────────────────
 
 test('getReplyDetailed recebe mensagens e configuração já mascaradas', async () => {
-  const { deps, calls } = fakeDeps(['Oi, Maria! Conseguiu ver os pacotes?'], 'Exemplo aprovado: cliente 11 98765-4321');
+  const { deps, calls } = fakeDeps(['Oi, Maria! Vamos ver uma data para as suas fotos?'], 'Exemplo aprovado: cliente 11 98765-4321');
   const input = baseInput({
     rows: [
       row(false, 'Meu zap novo é 5511987654321 e o e-mail cliente.teste@exemplo.com.br', 'text', 0),
@@ -224,7 +226,7 @@ test('AgentConfig vem do ai_agent_config com memória supervisionada e portfóli
     { label: 'Gestante', url: 'https://exemplo.com/gestante', niche: 'gestante' },
     { label: 'Casal', url: 'https://exemplo.com/casal', niche: 'casal' },
   ];
-  const { deps, calls, memoryCalls } = fakeDeps(['Oi, Maria! Conseguiu ver os pacotes?']);
+  const { deps, calls, memoryCalls } = fakeDeps(['Oi, Maria! Vamos ver uma data para as suas fotos?']);
   await generateCadenceDraft(baseInput({ agent: { ...baseInput().agent, portfolio_links: links } }), deps);
   const config = calls[0].config;
   assert.equal(config.enabled, true);
@@ -237,7 +239,7 @@ test('AgentConfig vem do ai_agent_config com memória supervisionada e portfóli
 });
 
 test('extraInstruction é a instrução de retomada, com as do estúdio e sem o hand-off autônomo', async () => {
-  const { deps, calls } = fakeDeps(['Oi, Maria! Conseguiu ver os pacotes?', 'Oi, Maria! Conseguiu ver os pacotes?']);
+  const { deps, calls } = fakeDeps(['Oi, Maria! Vamos ver uma data para as suas fotos?', 'Oi, Maria! Vamos ver uma data para as suas fotos?']);
   await generateCadenceDraft(baseInput({ extraInstructions: '  Fale sempre no feminino  ' }), deps);
   await generateCadenceDraft(baseInput(), deps);
   assert.equal(calls[0].opts.extraInstruction, `${FOLLOWUP_INSTRUCTION}\nInstruções do estúdio: Fale sempre no feminino`);
@@ -268,7 +270,7 @@ test('###HUMANO:motivo### vira handoff com o motivo', async () => {
 test('###PDF### nunca sobrevive e gera o aviso', async () => {
   const { deps } = fakeDeps(['Oi, Maria! Conseguiu dar uma olhada nos pacotes?\n\n###PDF:gestante###']);
   const draft = asDraft(await generateCadenceDraft(baseInput(), deps));
-  assert.equal(draft.text, 'Oi, Maria! Conseguiu dar uma olhada nos pacotes?');
+  assert.equal(draft.text, `Oi, Maria! Conseguiu dar uma olhada nos pacotes?\n\n${SCHEDULING_ASK_FALLBACK}`);
   assert.ok(!draft.text.includes('#'));
   assert.ok(draft.warnings.includes('pdf_removido'));
 });
@@ -364,18 +366,18 @@ test('limites geram aviso sem cortar o texto', async () => {
   assert.deepEqual(limitWarnings('um\n\ndois\n\ntrês', 4), ['muitos_baloes']);
   const long = `Oi, Maria! ${'Fiquei pensando no seu ensaio e no quanto essa fase é especial. '.repeat(5).trim()}`;
   const draft = asDraft(await generateCadenceDraft(baseInput(), fakeDeps([long]).deps));
-  assert.equal(draft.text, long);
+  assert.equal(draft.text, `${long}\n\n${SCHEDULING_ASK_FALLBACK}`);
   assert.ok(draft.warnings.includes('longo'));
 });
 
 test('acima de 700 caracteres gera de novo uma vez', async () => {
   const huge = `Oi, Maria! ${'Fiquei pensando no seu ensaio. '.repeat(30)}`;
-  const { deps, calls } = fakeDeps([huge, 'Oi, Maria! Conseguiu ver os pacotes?']);
+  const { deps, calls } = fakeDeps([huge, 'Oi, Maria! Vamos ver uma data para as suas fotos?']);
   const draft = asDraft(await generateCadenceDraft(baseInput(), deps));
   assert.equal(calls.length, 2);
   assert.match(lastTurn(calls[1]).content, /longa demais/);
   assert.equal(lastTurn(calls[1]).role, 'user');
-  assert.equal(draft.text, 'Oi, Maria! Conseguiu ver os pacotes?');
+  assert.equal(draft.text, 'Oi, Maria! Vamos ver uma data para as suas fotos?');
   assert.equal(draft.meta.latency_ms, 240);
   assert.ok(Math.abs((draft.meta.cost_usd ?? 0) - 0.004) < 1e-9);
 });
@@ -423,7 +425,7 @@ test('sem reação e sem basis invisível a diretiva não traz avisos extras', a
 // ── meta e erros ────────────────────────────────────────────────────────────
 
 test('meta vem preenchida', async () => {
-  const { deps } = fakeDeps(['Oi, Maria! Conseguiu dar uma olhada nos pacotes?']);
+  const { deps } = fakeDeps(['Oi, Maria! Vamos ver uma data para as suas fotos?']);
   const draft = asDraft(await generateCadenceDraft(baseInput(), deps));
   assert.deepEqual(draft.meta, {
     version: FOLLOWUP_DIRECTIVE_VERSION,
@@ -575,7 +577,7 @@ test('antes do orçamento: toque 1 retoma a pergunta que ficou no ar, sem preço
     assert.match(text, /não invente data/);
     assert.match(text, /###SKIP###/);
   }
-  assert.equal(result.text, 'Oi, Maria! Me conta que tipo de ensaio você tem em mente?');
+  assert.equal(result.text, `Oi, Maria! Me conta que tipo de ensaio você tem em mente?\n\n${SCHEDULING_ASK_FALLBACK}`);
   assert.deepEqual(result.warnings, []);
 });
 
@@ -629,4 +631,21 @@ test('antes do orçamento: limite de 280 caracteres no toque 2 e gancho neutro d
     assert.deepEqual(draftWarnings(PRE_QUOTE_NEUTRAL_HOOKS[step], '', ''), []);
   }
   assert.equal(toTemplateHook('Oi, Maria!', 2), NEUTRAL_HOOKS[2], 'sem trilha continua a escada');
+});
+
+test('rascunho sem convite de data e refeito uma vez e, se faltar de novo, ganha a pergunta', async () => {
+  const semData = 'Oi, Maria! Conseguiu ver as opções?';
+  const { deps, calls } = fakeDeps([semData, semData]);
+  const draft = asDraft(await generateCadenceDraft(baseInput(), deps));
+  assert.equal(calls.length, 2, 'refaz uma vez quando falta o convite');
+  assert.match(lastTurn(calls[1]).content, /ÚLTIMA frase precisa ser uma pergunta sobre a data/);
+  assert.equal(draft.text, `${semData}\n\n${SCHEDULING_ASK_FALLBACK}`);
+  assert.ok(asksAboutScheduling(draft.text));
+
+  // Com o convite já na 1a versão, nada é refeito nem acrescentado.
+  const comData = 'Oi, Maria! Qual período combina melhor para o seu ensaio?';
+  const ok = fakeDeps([comData]);
+  const direto = asDraft(await generateCadenceDraft(baseInput(), ok.deps));
+  assert.equal(ok.calls.length, 1);
+  assert.equal(direto.text, comData);
 });

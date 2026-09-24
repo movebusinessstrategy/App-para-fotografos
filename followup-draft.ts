@@ -64,6 +64,25 @@ export const PRE_QUOTE_DIRECTIVES: Readonly<Record<1 | 2, string>> = {
   1: `Retome de onde a conversa parou. Se a última fala do estúdio foi uma pergunta (tipo de ensaio, semanas de gestação, idade do bebê, o que ela imagina), retome essa pergunta de forma leve e natural, com outras palavras, sem repetir a frase. Se essa pergunta já foi respondida, convide a avançar perguntando quando ela pensa em fazer as fotos (mês ou período), para vocês verem a data juntas. Uma pergunta só, sempre um convite a seguir, nunca um "me chama quando quiser". 1 balão, curto. ${PRE_QUOTE_GUARD}`,
   2: `Última retomada, leve. Sem cobrança, sem culpa e sem comentar o tempo sem resposta. Faça UMA pergunta simples e fácil de responder sobre quando faria sentido para ela fazer as fotos (por exemplo, se pensa em algum mês). Não se despeça de forma passiva do tipo "quando fizer sentido, é só me chamar": convide, com gentileza, a escolher um momento. 1 balão. ${PRE_QUOTE_GUARD}`,
 };
+// O dono recusou retomada que não puxa a data: "a pessoa responde 'Ta' e eu
+// perco a janela de marcar". Toda retomada precisa terminar convidando a ver a
+// data. Quando a IA não faz isso sozinha, refazemos uma vez e, se ainda faltar,
+// acrescentamos a pergunta em um segundo balão.
+export const SCHEDULING_ASK_PATTERN =
+  /\b(data|datas|agenda|agendar|marcar|marcarmos|hor[áa]rio|m[eê]s|meses|semana|semanas|per[ií]odo|quando)\b/i;
+
+export const SCHEDULING_ASK_FALLBACK = 'Vamos ver uma data para as suas fotos?';
+
+export function asksAboutScheduling(text: string): boolean {
+  return SCHEDULING_ASK_PATTERN.test(String(text ?? ''));
+}
+
+export function withSchedulingAsk(text: string): string {
+  const clean = String(text ?? '').trim();
+  if (!clean || asksAboutScheduling(clean)) return clean;
+  return `${clean}\n\n${SCHEDULING_ASK_FALLBACK}`;
+}
+
 export const REACTION_NOTE = '[ATENÇÃO: a cliente reagiu com um emoji à última mensagem. Considere isso como sinal de leitura.]';
 
 // {{2}} do template quando o gancho tirado do rascunho fica curto demais.
@@ -572,15 +591,27 @@ function aiFailure(error: unknown): DraftResult {
   return { kind: 'error', retryable: true, message: `Não foi possível gerar o rascunho agora${suffix}. Tente de novo em instantes.` };
 }
 
-function attemptDirective(ctx: GenerationContext, i: DraftInput, attempt: number): string {
+function attemptDirective(ctx: GenerationContext, i: DraftInput, attempt: number, reason: RetryReason): string {
   if (attempt === 1) return ctx.directive;
-  return `${ctx.directive}\n[ATENÇÃO: a versão anterior ficou longa demais. Escreva no máximo ${charLimitFor(i.step, i.track)} caracteres.]`;
+  const note = reason === 'no_scheduling_ask'
+    ? 'a versão anterior não convidou a ver a data. A ÚLTIMA frase precisa ser uma pergunta sobre a data das fotos: se já podem ver uma data, ou qual mês, semana ou período combina melhor.'
+    : `a versão anterior ficou longa demais. Escreva no máximo ${charLimitFor(i.step, i.track)} caracteres.`;
+  return `${ctx.directive}\n[ATENÇÃO: ${note}]`;
+}
+
+type RetryReason = 'too_long' | 'no_scheduling_ask';
+
+// Só rascunho de verdade precisa puxar a data: skip e hand-off não viram mensagem.
+function missingSchedulingAsk(outcome: DraftOutcome): boolean {
+  return outcome.kind === 'draft' && !asksAboutScheduling(outcome.text);
 }
 
 async function runGeneration(i: DraftInput, d: DraftDeps, ctx: GenerationContext): Promise<DraftResult> {
   let tally = EMPTY_TALLY;
+  let reason: RetryReason = 'too_long';
+  let last: DraftOutcome | null = null;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    const turns = buildFollowupTurns(ctx.history, attemptDirective(ctx, i, attempt));
+    const turns = buildFollowupTurns(ctx.history, attemptDirective(ctx, i, attempt, reason));
     let reply: Awaited<ReturnType<DraftDeps['getReplyDetailed']>>;
     try {
       reply = await d.getReplyDetailed(ctx.config, turns, { extraInstruction: ctx.extraInstruction });
@@ -589,9 +620,18 @@ async function runGeneration(i: DraftInput, d: DraftDeps, ctx: GenerationContext
     }
     tally = addReply(tally, reply);
     const outcome = evaluateReply(String(reply?.text ?? ''), i.step, ctx, i.track);
-    if (!exceedsHardLimit(outcome)) {
+    if (exceedsHardLimit(outcome)) { reason = 'too_long'; continue; }
+    last = outcome;
+    if (!missingSchedulingAsk(outcome)) {
       return toDraftResult(outcome, draftMeta(i, ctx.niche, ctx.history.length, tally, outcome.warnings));
     }
+    reason = 'no_scheduling_ask';
+  }
+  // Duas tentativas sem convite: acrescenta a pergunta em vez de mandar uma
+  // retomada que deixa a decisão com o cliente.
+  if (last && last.kind === 'draft') {
+    const fixed: DraftOutcome = { ...last, text: withSchedulingAsk(last.text) };
+    return toDraftResult(fixed, draftMeta(i, ctx.niche, ctx.history.length, tally, fixed.warnings));
   }
   return { kind: 'error', retryable: true, message: TOO_LONG_MESSAGE };
 }
