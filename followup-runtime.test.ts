@@ -8,6 +8,7 @@ import {
 } from './followup-repo.js';
 import type { FollowUpRepo, FollowUpRepoDeps } from './followup-repo.js';
 import type { CadenceTemplate, SenderChannelHealth } from './followup-channel.js';
+import { NEUTRAL_HOOKS } from './followup-draft.js';
 import type { SenderTransport } from './followup-sender.js';
 import { DEFAULT_FOLLOWUP_CONFIG } from './src/features/followups/types.js';
 import type { CadenceTaskRow, FollowUpConfig, FollowUpRuntimeState } from './src/features/followups/types.js';
@@ -278,7 +279,9 @@ test('channelHealth e listTemplates usam as funções puras do canal', async () 
   assert.equal(h.can_send.outside_24h, true);
   const options = await cadence.services.listTemplates(USER);
   assert.equal(options[0].eligible, true);
-  assert.equal(options[0].preview, 'Oi, Maria! Fiquei pensando no seu ensaio e quis saber se ficou alguma dúvida.');
+  // A prévia usa o gancho neutro do passo 1; comparar com a constante evita
+  // travar o teste toda vez que o tom das retomadas for ajustado.
+  assert.equal(options[0].preview, `Oi, Maria! ${NEUTRAL_HOOKS[1]}`);
   assert.equal(options[1].eligible, false);
   assert.match(String(options[1].reason), /variáveis com nome/);
 });

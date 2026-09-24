@@ -52,35 +52,31 @@ export const FOLLOWUP_INSTRUCTION = [
 export const HISTORY_START_NOTE = '[NOTA DO SISTEMA - início do histórico disponível; as mensagens do estúdio abaixo vieram antes de qualquer resposta registrada do cliente]';
 
 export const STEP_DIRECTIVES: Readonly<Record<FollowUpStep, string>> = {
-  1: 'Retome com carinho o último assunto concreto (o orçamento ou pacote que foi enviado, ou a última pergunta que ficou no ar), usando as palavras dela. Pergunte se conseguiu dar uma olhada ou se ficou alguma dúvida. 1 balão, curto.',
-  2: 'Traga UM ponto de valor da experiência ligado ao que ela contou (como é o dia do ensaio, a direção de poses, o resultado que ela vai guardar), usando SÓ o que está na base de conhecimento ou na conversa. Termine com uma pergunta leve, por exemplo qual pacote chamou mais atenção. Sem pressão.',
+  1: 'Retome com carinho o último assunto concreto (o orçamento ou pacote que foi enviado, ou a última pergunta que ficou no ar), usando as palavras dela. Depois CONVIDE a marcar: pergunte se vocês já podem ver uma data para o ensaio, ou qual período combina melhor para ela. A pergunta final é sobre a DATA, nunca um "qualquer coisa me chama". 1 balão, curto.',
+  2: 'Traga UM ponto de valor da experiência ligado ao que ela contou (como é o dia do ensaio, a direção de poses, o resultado que ela vai guardar), usando SÓ o que está na base de conhecimento ou na conversa. Termine perguntando qual semana ou período ela prefere para o ensaio, para vocês já olharem a data. Sem pressão e sem cobrança.',
   3: 'Convide a pensar na data a partir do momento DELA (semanas de gestação, idade do bebê, data que ela citou) e, só se estiver escrito na base, da política real de agenda. Proibido dizer que uma data está livre ou ocupada ou que restam poucas vagas. Proponha ver a data junto, com uma pergunta.',
-  4: 'Última retomada. Despedida gentil, sem cobrança nem culpa. Entenda que talvez não seja o momento e deixe a porta aberta para ela chamar quando quiser. Sem pergunta que exija resposta, sem combinado e sem dia de retorno. 1 balão.',
+  4: 'Última retomada. Tom leve, sem cobrança nem culpa. Entenda que talvez não seja o momento, mas antes de se despedir faça UMA pergunta simples sobre quando faria sentido para ela: por exemplo se prefere deixar para um próximo mês. Sem combinado e sem inventar dia de retorno. 1 balão.',
 };
-
 // Trilha antes do orçamento: a conversa morreu antes do PDF. Sem preço, sem PDF, sem data.
 const PRE_QUOTE_GUARD = 'Ainda não houve orçamento: não cite preço, valor, parcela nem pacote específico, não mande PDF e não invente data. Se ela disse que ia pensar ou pediu para chamar em outra data que ainda não chegou, responda só ###SKIP###.';
 
 export const PRE_QUOTE_DIRECTIVES: Readonly<Record<1 | 2, string>> = {
-  1: `Retome de onde a conversa parou. Se a última fala do estúdio foi uma pergunta (tipo de ensaio, semanas de gestação, idade do bebê, o que ela imagina), retome essa pergunta de forma leve e natural, com outras palavras, sem repetir a frase. Uma pergunta só. Tom de quem quer ajudar a pessoa a chegar no ensaio certo. 1 balão, curto. ${PRE_QUOTE_GUARD}`,
-  2: `Última retomada, leve. Deixe a porta aberta, algo como "quando fizer sentido, é só me chamar". Sem cobrança, sem culpa e sem comentar o tempo sem resposta. Nenhuma pergunta que exija resposta. 1 balão. ${PRE_QUOTE_GUARD}`,
+  1: `Retome de onde a conversa parou. Se a última fala do estúdio foi uma pergunta (tipo de ensaio, semanas de gestação, idade do bebê, o que ela imagina), retome essa pergunta de forma leve e natural, com outras palavras, sem repetir a frase. Se essa pergunta já foi respondida, convide a avançar perguntando quando ela pensa em fazer as fotos (mês ou período), para vocês verem a data juntas. Uma pergunta só, sempre um convite a seguir, nunca um "me chama quando quiser". 1 balão, curto. ${PRE_QUOTE_GUARD}`,
+  2: `Última retomada, leve. Sem cobrança, sem culpa e sem comentar o tempo sem resposta. Faça UMA pergunta simples e fácil de responder sobre quando faria sentido para ela fazer as fotos (por exemplo, se pensa em algum mês). Não se despeça de forma passiva do tipo "quando fizer sentido, é só me chamar": convide, com gentileza, a escolher um momento. 1 balão. ${PRE_QUOTE_GUARD}`,
 };
-
 export const REACTION_NOTE = '[ATENÇÃO: a cliente reagiu com um emoji à última mensagem. Considere isso como sinal de leitura.]';
 
 // {{2}} do template quando o gancho tirado do rascunho fica curto demais.
 export const NEUTRAL_HOOKS: Readonly<Record<FollowUpStep, string>> = {
-  1: 'Fiquei pensando no seu ensaio e quis saber se ficou alguma dúvida.',
-  2: 'Lembrei de você e do seu ensaio. Qual pacote chamou mais a sua atenção?',
+  1: 'Fiquei pensando no seu ensaio. Vamos ver uma data para as suas fotos?',
+  2: 'Lembrei de você e do seu ensaio. Qual período combina melhor para as suas fotos?',
   3: 'Quando quiser, a gente pensa junto no melhor momento para o seu ensaio.',
-  4: 'Se agora não for o momento, tudo bem. Fico por aqui para quando quiser conversar sobre o seu ensaio.',
+  4: 'Se agora não for o momento, tudo bem. Você pensa em fazer as fotos mais para a frente?',
 };
-
 export const PRE_QUOTE_NEUTRAL_HOOKS: Readonly<Record<1 | 2, string>> = {
-  1: 'Fiquei pensando no seu ensaio e quis retomar a nossa conversa.',
-  2: 'Quando fizer sentido para você, é só me chamar para a gente seguir com o seu ensaio.',
+  1: 'Fiquei pensando no seu ensaio e quis retomar a nossa conversa. Vamos ver uma data para as suas fotos?',
+  2: 'Você pensa em fazer as suas fotos em algum mês? A gente vê a data junto.',
 };
-
 export const NO_KNOWLEDGE_MESSAGE = 'Configure o Agente IA (base de conhecimento) antes de gerar follow-ups.';
 const INVALID_STEP_MESSAGE = 'Passo de retomada inválido.';
 const TOO_LONG_MESSAGE = 'A IA escreveu um texto longo demais. Tente gerar de novo.';
@@ -221,8 +217,10 @@ function directiveExtras(i: DraftInput): string[] {
 
 function preQuoteDirective(i: DraftInput): string {
   const total = Math.min(2, Math.max(1, Math.floor(Number(i.trackSteps) || 2)));
-  // Com um toque só, o 1º já é a despedida leve.
-  return PRE_QUOTE_DIRECTIVES[(i.step >= total ? 2 : 1) as 1 | 2];
+  // Com um toque só, ele é o PRIMEIRO contato depois do silêncio, não uma
+  // despedida: usar o texto 2 aqui fazia a única retomada sair passiva
+  // ("quando fizer sentido, me chama") e perder a chance de marcar a data.
+  return PRE_QUOTE_DIRECTIVES[(total >= 2 && i.step >= total ? 2 : 1) as 1 | 2];
 }
 
 function directiveFor(i: DraftInput): { label: string; text: string } {

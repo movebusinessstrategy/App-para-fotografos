@@ -579,17 +579,32 @@ test('antes do orçamento: toque 1 retoma a pergunta que ficou no ar, sem preço
   assert.deepEqual(result.warnings, []);
 });
 
-test('antes do orçamento: toque 2 deixa a porta aberta; com um toque só, o 1º já é a despedida leve', async () => {
-  const { deps, calls } = fakeDeps(['Oi, Maria! Quando fizer sentido, é só me chamar.']);
+test('antes do orçamento: toque 2 convida a escolher o momento; com um toque só, o 1º NÃO é despedida', async () => {
+  const { deps, calls } = fakeDeps(['Oi, Maria! Você pensa em fazer as fotos em algum mês?']);
   await generateCadenceDraft(baseInput({ track: 'pre_quote', step: 2, trackSteps: 2, rows: PRE_QUOTE_ROWS }), deps);
   assert.ok(lastTurn(calls[0]).content.includes('toque 2 de 2'));
   assert.ok(lastTurn(calls[0]).content.includes(PRE_QUOTE_DIRECTIVES[2]));
-  assert.match(PRE_QUOTE_DIRECTIVES[2], /quando fizer sentido, é só me chamar/);
   assert.match(PRE_QUOTE_DIRECTIVES[2], /Sem cobrança/);
-  const single = fakeDeps(['Oi, Maria! Quando fizer sentido, é só me chamar.']);
+  // O dono recusou a despedida passiva: nem o último toque termina com
+  // "me chama quando quiser": ele pergunta quando faria sentido fazer as fotos.
+  assert.match(PRE_QUOTE_DIRECTIVES[2], /Não se despeça de forma passiva/);
+  // Com UM toque só configurado, esse toque é a primeira retomada, não a última.
+  const single = fakeDeps(['Oi, Maria! Vamos ver uma data para as suas fotos?']);
   await generateCadenceDraft(baseInput({ track: 'pre_quote', step: 1, trackSteps: 1, rows: PRE_QUOTE_ROWS }), single.deps);
   assert.ok(lastTurn(single.calls[0]).content.includes('toque 1 de 1'));
-  assert.ok(lastTurn(single.calls[0]).content.includes(PRE_QUOTE_DIRECTIVES[2]));
+  assert.ok(lastTurn(single.calls[0]).content.includes(PRE_QUOTE_DIRECTIVES[1]));
+  assert.ok(!lastTurn(single.calls[0]).content.includes(PRE_QUOTE_DIRECTIVES[2]));
+});
+
+test('toda retomada puxa a data: nenhuma diretiva manda esperar o cliente chamar', () => {
+  const todas = [STEP_DIRECTIVES[1], STEP_DIRECTIVES[2], STEP_DIRECTIVES[3], STEP_DIRECTIVES[4],
+    PRE_QUOTE_DIRECTIVES[1], PRE_QUOTE_DIRECTIVES[2]];
+  for (const texto of todas) {
+    assert.match(texto, /data|período|mês|semana|momento/i);
+  }
+  // O gancho do template (usado quando o rascunho é curto) segue a mesma regra.
+  assert.match(NEUTRAL_HOOKS[1], /data/i);
+  assert.match(PRE_QUOTE_NEUTRAL_HOOKS[1], /data/i);
 });
 
 test('antes do orçamento: ###SKIP### continua valendo e toque 3 é inválido', async () => {
