@@ -249,13 +249,14 @@ async function ensureChannelAccount(db: SupabaseClient, bound: BoundEvent): Prom
 const FUNNEL_ROUTES: Partial<Record<MetaWebhookEventKind, Pick<FunnelMessageEvent, 'direction' | 'origin'>>> = {
   message: { direction: 'in', origin: 'customer' },
   smb_message_echo: { direction: 'out', origin: 'human_app' },
+  standby_message_echo: { direction: 'out', origin: 'unknown' },
 };
 
 function funnelContactName(message: NormalizedMetaMessage): string | null {
   return String(message.raw._contact_name || '').trim() || null;
 }
 
-// Cliente escrevendo ou eco do app do celular. Histórico e status ficam de fora.
+// Standby pode vir da Business Agent ou de outro app: não presume autoria humana.
 export function buildFunnelEvent(bound: BoundEvent): FunnelMessageEvent | null {
   const message = bound.event.message;
   const route = FUNNEL_ROUTES[bound.event.kind];
@@ -477,6 +478,11 @@ async function insertMessage(
     webhook_inbox_id: inboxId || null,
   };
   let result = await db.from('wa_messages').insert(withProvenance);
+  // Sem proveniência, o worker de resgate confundiria standby com uma entrada ativa.
+  if (result.error && bound.event.field === 'standby') {
+    if (isDuplicateError(result.error)) return false;
+    throw result.error;
+  }
   if (result.error && isCoexistenceSchemaMissing(result.error)) result = await db.from('wa_messages').insert(base);
   if (!result.error) return true;
   if (isDuplicateError(result.error)) return false;
@@ -655,7 +661,8 @@ async function processMessage(
   });
   if (normalizedBound.event.kind === 'message' && !message.fromMe) {
     await captureInboundMarketingContact(deps, normalizedBound);
-    if (shouldScheduleReply(message.timestamp, Date.now(), deps.replyFreshnessMs)) {
+    if (normalizedBound.event.field !== 'standby'
+      && shouldScheduleReply(message.timestamp, Date.now(), deps.replyFreshnessMs)) {
       deps.scheduleReply?.(bound.account.user_id, message.customerPhone, message.type, bound.waNumber);
     }
   }

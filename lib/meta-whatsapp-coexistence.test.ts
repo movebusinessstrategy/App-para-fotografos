@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildSmbAppDataPayload,
+  isMetaStandbyEventKey,
   normalizeMetaWebhookPayload,
   normalizeSyncTypes,
   parseChannelPreference,
@@ -9,6 +10,43 @@ import {
 } from './meta-whatsapp-coexistence.js';
 import { isMetaPhoneOperational } from './meta-whatsapp-channel.js';
 import { singleActiveMetaAccount } from './meta-whatsapp-runtime.js';
+
+test('standby normaliza entrada, eco aninhado e status com identidade da conta', () => {
+  const echo = {
+    id: 'wamid.agent', timestamp: '1787220001',
+    message: { to: '5511888880001', type: 'text', text: { body: 'Resposta da Business Agent' } },
+  };
+  const payload = { entry: [{ id: 'waba-1', changes: [{ field: 'standby', value: {
+    metadata: { phone_number_id: 'phone-1', display_phone_number: '5511999990000' },
+    standby: {
+      contacts: [{ wa_id: '5511888880001', profile: { name: 'Cliente' } }],
+      messages: [{ id: 'wamid.in', from: '5511888880001', timestamp: '1787220000', type: 'text', text: { body: 'Oi' } }],
+      message_echoes: [echo, { id: 'broken' }, { message: echo.message }],
+      statuses: [{ id: echo.id, status: 'delivered', timestamp: '1787220002' }],
+    },
+  } }] }] };
+  const events = normalizeMetaWebhookPayload(payload);
+  assert.deepEqual(events.map(e => e.kind), ['message', 'standby_message_echo', 'status']);
+  assert.equal(events[0].message?.raw._contact_name, 'Cliente');
+  assert.equal(events[0].message?.fromMe, false);
+  assert.equal(events[1].message?.fromMe, true);
+  assert.equal(events[1].message?.customerPhone, '5511888880001');
+  assert.equal(events[1].message?.body, 'Resposta da Business Agent');
+  assert.equal(events[1].message?.timestamp, new Date(1787220001000).toISOString());
+  assert.deepEqual(events[1].message?.raw._standby_echo, echo);
+  assert.equal(events[1].eventKey, 'waba-1:phone-1:standby:standby_message_echo:wamid.agent');
+  assert.deepEqual(normalizeMetaWebhookPayload(payload), events);
+  assert.equal(events[2].status?.status, 'delivered');
+  payload.entry[0].id = 'waba-2';
+  assert.notEqual(normalizeMetaWebhookPayload(payload)[1].eventKey, events[1].eventKey);
+});
+
+test('proteção de resposta identifica somente proveniência standby', () => {
+  assert.equal(isMetaStandbyEventKey('waba:phone:standby:message:wamid.in'), true);
+  for (const key of [null, undefined, '', 'standby', 'waba:phone:messages:message:standby']) {
+    assert.equal(isMetaStandbyEventKey(key), false);
+  }
+});
 
 test('normaliza todos entries, changes, messages e statuses do mesmo webhook', () => {
   const events = normalizeMetaWebhookPayload({

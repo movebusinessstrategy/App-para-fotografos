@@ -10,6 +10,7 @@ export type MetaWebhookEventKind =
   | 'history'
   | 'smb_app_state_sync'
   | 'smb_message_echo'
+  | 'standby_message_echo'
   | 'account_update'
   | 'unknown';
 
@@ -98,6 +99,9 @@ function messageContent(message: UnknownRecord): {
   const content = asRecord(message[type]);
   if (type === 'text') {
     return { body: cleanText(content.body) || '', mediaId: null, mimeType: null, filename: null };
+  }
+  if (type === 'interactive') {
+    return { body: cleanText(asRecord(content.body).text) || '', mediaId: null, mimeType: null, filename: null };
   }
   return {
     body: cleanText(content.caption) || cleanText(content.filename) || '',
@@ -188,7 +192,7 @@ function makeEvent(
 }
 
 function messageEvents(
-  kind: 'message' | 'history' | 'smb_message_echo',
+  kind: 'message' | 'history' | 'smb_message_echo' | 'standby_message_echo',
   field: string,
   context: { wabaId: string | null; phoneNumberId: string | null; displayPhoneNumber: string | null },
   values: UnknownRecord[],
@@ -280,10 +284,34 @@ function changeContext(entry: UnknownRecord, value: UnknownRecord) {
   };
 }
 
+// Standby is passive visibility into another responder's conversation.
+// Echoes wrap the original send request; the ID/timestamp belong to the wrapper.
+function standbyEvents(
+  context: ReturnType<typeof changeContext>,
+  value: UnknownRecord,
+): NormalizedMetaWebhookEvent[] {
+  const standby = asRecord(value.standby);
+  const echoes = asRecords(standby.message_echoes).flatMap(echo => {
+    const message = asRecord(echo.message);
+    if (!cleanText(echo.id) || !Object.keys(message).length) return [];
+    return [{ ...message, id: echo.id, timestamp: echo.timestamp, from_me: true, _standby_echo: echo }];
+  });
+  return [
+    ...messageEvents('message', 'standby', context, messagesWithContactNames(standby)),
+    ...messageEvents('standby_message_echo', 'standby', context, echoes),
+    ...asRecords(standby.statuses).map(status => makeEvent('status', 'standby', context, status)),
+  ];
+}
+
+export function isMetaStandbyEventKey(eventKey: unknown): boolean {
+  return typeof eventKey === 'string' && eventKey.split(':')[2] === 'standby';
+}
+
 function eventsForChange(entry: UnknownRecord, change: UnknownRecord): NormalizedMetaWebhookEvent[] {
   const field = cleanText(change.field) || 'unknown';
   const value = asRecord(change.value);
   const context = changeContext(entry, value);
+  if (field === 'standby') return standbyEvents(context, value);
   if (field === 'messages') {
     return [
       ...asRecords(value.statuses).map(status => makeEvent('status', field, context, status)),

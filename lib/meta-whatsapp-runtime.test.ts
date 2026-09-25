@@ -23,6 +23,7 @@ function fakeDb(handler: (q: Query) => { data?: unknown; error?: unknown }) {
         update: (value: unknown) => { q.op = 'update'; q.value = value; return chain; },
         upsert: (value: unknown) => { q.op = 'upsert'; q.value = value; return chain; },
         eq: () => chain, in: () => chain, limit: () => chain, order: () => chain,
+        lt: () => chain, lte: () => chain,
         maybeSingle: () => chain, single: () => chain,
         then: (resolve: any, reject: any) => {
           calls.push({ ...q });
@@ -173,6 +174,93 @@ function statusHandler(rowsUpdated: number) {
 }
 
 const onlyDigits = (value: string) => value.replace(/\D/g, '');
+
+function standbyPayload() {
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  return changePayload('standby', { standby: {
+    contacts: [{ wa_id: CUSTOMER, profile: { name: 'Cliente' } }],
+    messages: [{ id: 'wamid.passive-in', from: CUSTOMER, timestamp, type: 'text', text: { body: 'Qual o valor?' } }],
+    message_echoes: [{ id: 'wamid.passive-out', timestamp, message: {
+      to: CUSTOMER, type: 'text', text: { body: 'Vou te explicar nossos pacotes.' },
+    } }],
+  } });
+}
+
+test('standby salva texto e conversa sem responder nem sinalizar atendimento humano', async () => {
+  const { db, calls } = fakeDb(inboxMissingHandler);
+  const effects: string[] = [];
+  const observed: any[] = [];
+  const runtime = createMetaWebhookRuntime({
+    db, decryptToken: () => null, normalizePhone: onlyDigits,
+    scheduleReply: () => { effects.push('reply'); },
+    markHumanActive: async () => { effects.push('human'); },
+    observeMessage: async event => { observed.push(event); },
+  });
+  const result = await runtime.ingest(standbyPayload());
+  assert.equal(result.accepted, 2);
+  const saved = calls.filter(q => q.table === 'wa_messages' && q.op === 'insert').map(q => q.value as any);
+  assert.equal(saved.length, 2);
+  assert.deepEqual(saved.map(m => [m.from_me, m.body]), [
+    [false, 'Qual o valor?'], [true, 'Vou te explicar nossos pacotes.'],
+  ]);
+  assert.ok(saved.every(m => m.user_id === ACCOUNT.user_id && m.wa_number === OWN_NUMBER && m.phone === CUSTOMER));
+  assert.ok(saved.every(m => m.source_event_key.includes(':standby:')));
+  assert.ok(calls.some(q => q.table === 'wa_conversations' && q.op === 'insert'));
+  assert.deepEqual(effects, []);
+  assert.deepEqual(observed.map(e => [e.direction, e.origin]), [['in', 'customer'], ['out', 'unknown']]);
+});
+
+test('standby duplicado não reinsere mensagem nem produz efeitos', async () => {
+  const { db, calls } = fakeDb(q => {
+    if (q.table === 'wa_messages' && q.op === 'select') return { data: [{ message_id: 'already-saved', source_event_key: 'another-source' }] };
+    return inboxMissingHandler(q);
+  });
+  const runtime = createMetaWebhookRuntime({
+    db, decryptToken: () => null, normalizePhone: onlyDigits,
+    scheduleReply: () => assert.fail('standby não responde'),
+    markHumanActive: async () => assert.fail('standby não assume como humano'),
+    observeMessage: async () => assert.fail('duplicata não conta de novo'),
+  });
+  await runtime.ingest(standbyPayload());
+  assert.equal(calls.filter(q => q.table === 'wa_messages' && q.op === 'insert').length, 0);
+});
+
+test('standby passa pela fila durável e mantém proveniência até a conversa', async () => {
+  let staged: any[] = [];
+  let inboxReads = 0;
+  const { db, calls } = fakeDb(q => {
+    if (q.table !== 'whatsapp_webhook_inbox') return inboxMissingHandler(q);
+    if (q.op === 'upsert') {
+      staged = (q.value as any[]).map((row, i) => ({ ...row, id: `inbox-${i}` }));
+      return { data: staged.map(row => ({ event_key: row.event_key })) };
+    }
+    if (q.op === 'select') return { data: ++inboxReads === 2 ? staged : [] };
+    if (q.op === 'update') return { data: [{ id: 'claimed' }] };
+    return {};
+  });
+  const runtime = createMetaWebhookRuntime({
+    db, decryptToken: () => null, normalizePhone: onlyDigits,
+    scheduleReply: () => assert.fail('standby não responde ao drenar'),
+    markHumanActive: async () => assert.fail('standby não é eco humano'),
+  });
+  assert.deepEqual(await runtime.ingest(standbyPayload()), { accepted: 2, duplicates: 0, durable: true });
+  assert.equal(calls.filter(q => q.table === 'wa_messages' && q.op === 'insert').length, 0);
+  assert.equal(await runtime.drain(), 2);
+  const saved = calls.filter(q => q.table === 'wa_messages' && q.op === 'insert').map(q => q.value as any);
+  assert.deepEqual(saved.map(row => row.webhook_inbox_id), ['inbox-0', 'inbox-1']);
+  assert.deepEqual(saved.map(row => row.source_event_key), staged.map(row => row.event_key));
+  assert.equal(calls.filter(q => q.table === 'whatsapp_webhook_inbox' && (q.value as any)?.status === 'processed').length, 2);
+});
+
+test('standby não perde proteção passiva no fallback de schema antigo', async () => {
+  const { db, calls } = fakeDb(q => {
+    if (q.table === 'wa_messages' && q.op === 'insert') return { error: { code: '42703', message: 'source_event_key does not exist' } };
+    return inboxMissingHandler(q);
+  });
+  const runtime = createMetaWebhookRuntime({ db, decryptToken: () => null, normalizePhone: onlyDigits });
+  await assert.rejects(runtime.ingest(standbyPayload()), { code: '42703' });
+  assert.equal(calls.filter(q => q.table === 'wa_messages' && q.op === 'insert').length, 1);
+});
 
 test('buildFunnelEvent: cliente vira in/customer, eco vira out/human_app e status fica de fora', () => {
   const [inbound] = boundsFor(inboundPayload(STATUS_SECONDS));

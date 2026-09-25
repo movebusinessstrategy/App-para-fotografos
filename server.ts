@@ -175,6 +175,7 @@ import {
 } from './financial-reconciliation.js';
 import { createMetaWebhookRuntime } from './lib/meta-whatsapp-runtime.js';
 import {
+  isMetaStandbyEventKey,
   parseChannelPreference,
 } from './lib/meta-whatsapp-coexistence.js';
 import {
@@ -28140,12 +28141,15 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const { data: cfg } = await supabaseAdmin.from('ai_agent_config').select('*').eq('user_id', userId).maybeSingle();
       if (!cfg?.enabled || !cfg?.auto_send) return; // só se ligado E autônomo on
       // Se a última mensagem já é nossa (respondemos / humano entrou), não age.
-      const { data: lastMsgs } = await supabaseAdmin.from('wa_messages')
-        .select('message_id, from_me, type, transcription, timestamp')
+      const { data: lastMsgs, error: lastMsgsError } = await supabaseAdmin.from('wa_messages')
+        .select('message_id, from_me, type, transcription, timestamp, source_event_key')
         .eq('user_id', userId).eq('wa_number', waNumber).in('phone', agentPhoneVariants(phone))
         .order('timestamp', { ascending: false }).limit(1);
       const latest = lastMsgs?.[0] as any;
+      if (lastMsgsError) throw lastMsgsError;
       if (!latest || latest.from_me) return;
+      // A visibilidade standby não transfere o atendimento para a Lia.
+      if (isMetaStandbyEventKey(latest.source_event_key)) return;
       claimedMessageId = String(latest.message_id || '');
 
       // Áudio/imagem ainda sem entendimento: espera até 2 min. Depois disso,
