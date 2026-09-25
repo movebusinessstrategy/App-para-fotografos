@@ -54,6 +54,12 @@ export interface FollowUpRepo extends CadenceSenderRepo, CadenceSweepRepo {
   listTemplateRows(userId: string): Promise<CadenceTemplate[]>;
   dedupeReady(): Promise<boolean>;
   invalidate(userId: string): void;
+  // Mensagens fixas: templates por nome, conta da Meta (token decifrado) e o cache local.
+  templatesByName(userId: string, names: string[]): Promise<CadenceTemplate[]>;
+  metaTemplateAccount(userId: string): Promise<{ wabaId: string; token: string } | null>;
+  saveTemplateRow(row: Record<string, unknown>): Promise<void>;
+  updateTemplateRow(userId: string, name: string, patch: Record<string, unknown>): Promise<void>;
+  requeueFixedBlocked(userId: string, names: string[]): Promise<number>;
 }
 
 type Row = Record<string, any>;
@@ -64,6 +70,7 @@ const TASKS = 'scheduled_followups';
 const CONFIG = 'followup_cadence_config';
 const OPTOUTS = 'followup_optouts';
 const INBOX = 'whatsapp_webhook_inbox';
+const TEMPLATES = 'whatsapp_message_templates';
 const LIVE_STATUSES: readonly CadenceStatus[] = ['draft', 'approved', 'sending', 'blocked'];
 const CANCELLABLE: readonly CadenceStatus[] = ['draft', 'approved', 'blocked'];
 const LEGACY_LIVE = ['pending', 'processing'];
@@ -87,7 +94,7 @@ const GRAPH_TIMEOUT_MS = 20_000;
 const BAILEYS_TIMEOUT_MS = 30_000;
 const TYPING_TIMEOUT_MS = 5_000;
 const TASK_LITE_COLUMNS = 'id, deal_id, status, step, basis_at, sent_at, created_at, phone, phone_key, stage_id, track';
-const TEMPLATE_COLUMNS = 'id, name, language, body_text, status, category, header_text, buttons';
+const TEMPLATE_COLUMNS = 'id, name, language, body_text, status, category, header_text, buttons, rejection_reason, meta_template_id';
 const AGENT_COLUMNS = 'persona, objective, knowledge, rules, sales_strategy, attendant_name, learned_playbook, portfolio_links';
 const QUEUE_SELECT = 'received_at, kind:payload->>kind, mtype:payload->message->>type';
 const STATUS_SELECT = 'received_at, sid:payload->status->>id, sstatus:payload->status->>status, sts:payload->status->>timestamp';
@@ -227,6 +234,7 @@ function toTemplate(row: Row): CadenceTemplate {
   return {
     id: Number(row.id), name: String(row.name ?? ''), language: String(row.language || 'pt_BR'), bodyText: String(row.body_text ?? ''),
     status: String(row.status ?? ''), category: nullableText(row.category), headerText: nullableText(row.header_text), buttons: row.buttons ?? null,
+    rejectionReason: nullableText(row.rejection_reason), metaTemplateId: nullableText(row.meta_template_id),
   };
 }
 
@@ -751,6 +759,64 @@ async function listTemplateRows(db: SupabaseClient, userId: string): Promise<Cad
   return rowsOf(data).map(toTemplate);
 }
 
+// Mensagens fixas: o template de cada passo mora no mesmo cache (user_id é TEXT, nome único por conta).
+
+async function templatesByName(db: SupabaseClient, userId: string, names: string[]): Promise<CadenceTemplate[]> {
+  if (!names.length) return [];
+  const { data, error } = await db.from(TEMPLATES).select(TEMPLATE_COLUMNS).eq('user_id', String(userId)).in('name', names);
+  check(error);
+  return rowsOf(data).map(toTemplate);
+}
+
+async function loadTemplateByName(db: SupabaseClient, userId: string, name: string): Promise<CadenceTemplate | null> {
+  const [template] = await templatesByName(db, userId, [name]);
+  return template ?? null;
+}
+
+async function metaTemplateAccount(ctx: RepoCtx, userId: string): Promise<{ wabaId: string; token: string } | null> {
+  const { data, error } = await ctx.db.from('whatsapp_business_accounts').select('waba_id, access_token')
+    .eq('user_id', userId).eq('is_active', true).limit(1).maybeSingle();
+  check(error);
+  const row = (data as Row | null) ?? null;
+  const wabaId = String(row?.waba_id ?? '').trim();
+  const token = row ? safeDecrypt(ctx.deps, row.access_token) : null;
+  return wabaId && token ? { wabaId, token } : null;
+}
+
+async function updateTemplateRow(db: SupabaseClient, userId: string, name: string, patch: Record<string, unknown>): Promise<void> {
+  const { error } = await db.from(TEMPLATES).update(patch).eq('user_id', String(userId)).eq('name', name);
+  check(error);
+}
+
+// 23505: outra rodada gravou o mesmo nome antes; vale o status mais novo.
+async function saveTemplateRow(db: SupabaseClient, row: Record<string, unknown>): Promise<void> {
+  const { error } = await db.from(TEMPLATES).insert(row);
+  if (!error) return;
+  if (codeOf(error) !== '23505') throw dbError(error);
+  const { status, rejection_reason, meta_template_id, updated_at } = row;
+  await updateTemplateRow(db, String(row.user_id), String(row.name), { status, rejection_reason, meta_template_id, updated_at });
+}
+
+// Template do passo aprovado: as tarefas que esperavam por ele voltam para a fila de envio.
+async function requeueFixedBlocked(ctx: RepoCtx, userId: string, names: string[]): Promise<number> {
+  if (!names.length) return 0;
+  const { data, error } = await ctx.db.from(TASKS).update({ status: 'approved', last_error: null, updated_at: ctx.now().toISOString() })
+    .eq('user_id', userId).eq('kind', 'cadence').eq('status', 'blocked').not('approved_at', 'is', null)
+    .eq('generation_meta->>block_code', 'fixed_template_pending').in('generation_meta->fixed->>template_name', names)
+    .select('id');
+  check(error);
+  return rowsOf(data).length;
+}
+
+// Mesmo nome que a varredura usa: contact_name, senão o título do card.
+async function dealContactName(db: SupabaseClient, userId: string, dealId: number): Promise<string | null> {
+  const { data, error } = await db.from('deals').select('contact_name, title').eq('user_id', userId).eq('id', dealId).maybeSingle();
+  check(error);
+  const row = (data as Row | null) ?? null;
+  const name = String(row?.contact_name ?? '').trim() || String(row?.title ?? '').trim();
+  return name || null;
+}
+
 // Sender: claim, prova, desfecho
 
 async function claim(db: SupabaseClient, userId: string, workerId: string, leaseSeconds: number, gapSeconds: number, dayStartIso: string): Promise<CadenceTaskRow | null> {
@@ -892,11 +958,13 @@ export function createFollowUpRepo(db: SupabaseClient, deps: FollowUpRepoDeps): 
     loadTask: (userId, id) => loadTask(db, userId, id),
     updateTaskCas: (id, userId, patch, opts) => updateTaskCas(db, id, userId, patch, opts),
     lastCustomerTurnAt: (userId, phone) => lastCustomerTurnAt(db, userId, phone),
+    dealContactName: (userId, dealId) => dealContactName(db, userId, dealId),
     // Sender
     claim: (userId, workerId, leaseSeconds, gapSeconds, dayStartIso) => claim(db, userId, workerId, leaseSeconds, gapSeconds, dayStartIso),
     loadSendSnapshot: (task, waNumbers) => loadSendSnapshot(ctx, task, waNumbers),
     loadHealth: (userId, config) => loadHealth(ctx, userId, config),
     loadTemplate: (userId, templateId) => loadTemplate(db, userId, templateId),
+    loadTemplateByName: (userId, name) => loadTemplateByName(db, userId, name),
     recordDeliveryProof: (task, proof) => recordDeliveryProof(ctx, task, proof),
     persistOutbound: (r) => persistOutbound(db, r),
     finish: (task, patch) => finish(ctx, task, patch),
@@ -906,6 +974,11 @@ export function createFollowUpRepo(db: SupabaseClient, deps: FollowUpRepoDeps): 
     // Serviços
     findTaskByMessageId: (userId, messageId) => findTaskByMessageId(db, userId, messageId),
     listTemplateRows: (userId) => listTemplateRows(db, userId),
+    templatesByName: (userId, names) => templatesByName(db, userId, names),
+    metaTemplateAccount: (userId) => metaTemplateAccount(ctx, userId),
+    saveTemplateRow: (row) => saveTemplateRow(db, row),
+    updateTemplateRow: (userId, name, patch) => updateTemplateRow(db, userId, name, patch),
+    requeueFixedBlocked: (userId, names) => requeueFixedBlocked(ctx, userId, names),
     dedupeReady: () => dedupeReadyCached(ctx),
     invalidate: (userId) => {
       ctx.health.delete(userId);

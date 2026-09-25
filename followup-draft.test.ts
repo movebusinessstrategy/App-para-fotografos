@@ -609,14 +609,26 @@ test('toda retomada puxa a data: nenhuma diretiva manda esperar o cliente chamar
   assert.match(PRE_QUOTE_NEUTRAL_HOOKS[1], /data/i);
 });
 
-test('antes do orçamento: ###SKIP### continua valendo e toque 3 é inválido', async () => {
+test('antes do orçamento: ###SKIP### continua valendo e toque 4 é inválido', async () => {
   const { deps } = fakeDeps(['###SKIP###']);
   const skipped = await generateCadenceDraft(baseInput({ track: 'pre_quote', rows: PRE_QUOTE_ROWS }), deps);
   assert.equal(skipped.kind, 'skip');
   const invalid = fakeDeps(['Oi']);
-  const result = await generateCadenceDraft(baseInput({ track: 'pre_quote', step: 3, rows: PRE_QUOTE_ROWS }), invalid.deps);
+  const result = await generateCadenceDraft(baseInput({ track: 'pre_quote', step: 4, rows: PRE_QUOTE_ROWS }), invalid.deps);
   assert.equal(result.kind, 'error');
+  assert.equal((result as { retryable: boolean }).retryable, false);
   assert.equal(invalid.calls.length, 0);
+});
+
+test('antes do orçamento com 3 toques (087): o do meio retoma como o 1º e só o 3º usa o texto do último toque', async () => {
+  for (const [step, directive] of [[1, 1], [2, 1], [3, 2]] as const) {
+    const { deps, calls } = fakeDeps(['Oi, Maria! Você pensa em fazer as fotos em algum mês?']);
+    const result = await generateCadenceDraft(baseInput({ track: 'pre_quote', step, trackSteps: 3, rows: PRE_QUOTE_ROWS }), deps);
+    assert.equal(result.kind, 'draft', `toque ${step}`);
+    const content = lastTurn(calls[0]).content;
+    assert.ok(content.includes(`toque ${step} de 3`), `toque ${step}`);
+    assert.ok(content.includes(PRE_QUOTE_DIRECTIVES[directive]), `toque ${step}`);
+  }
 });
 
 test('antes do orçamento: limite de 280 caracteres no toque 2 e gancho neutro da trilha', async () => {

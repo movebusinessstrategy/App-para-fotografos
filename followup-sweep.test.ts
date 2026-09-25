@@ -10,6 +10,7 @@ import type {
   CadenceApproval, CadenceTaskRow, DraftWarning, FollowUpConfig, FollowUpRuntimeState, ForecastInput, ForecastResult, SweepSummary,
 } from './src/features/followups/types.js';
 import { brazilianPhoneVariants, canonicalPhoneKey } from './lib/br-phone.js';
+import { fixedTemplateName, renderFixedMessage } from './followup-fixed.js';
 import { isWithinBusinessHours } from './lib/business-hours.js';
 import type { StageRow } from './lib/stage-rules.js';
 
@@ -87,7 +88,7 @@ interface WorldOpts {
   activities?: DealActivity[]; tasks?: CadenceTaskLite[]; legacy?: number[]; optouts?: string[];
   rows?: (phone: string) => ConversationRow[]; results?: (i: DraftInput) => DraftResult; duplicateDeals?: number[];
   full?: CadenceTaskRow[]; lastCustomer?: string | null; forecast?: (items: ForecastInput[]) => ForecastResult[];
-  agent?: AiAgentConfigRow | null;
+  agent?: AiAgentConfigRow | null; dealName?: string | null;
 }
 
 function world(opts: WorldOpts = {}) {
@@ -136,6 +137,7 @@ function world(opts: WorldOpts = {}) {
       return structuredClone(t);
     },
     async lastCustomerTurnAt() { call('lastCustomerTurnAt'); return opts.lastCustomer ?? null; },
+    async dealContactName() { call('dealContactName'); return opts.dealName ?? null; },
   };
   const sweep = createCadenceSweep({
     repo,
@@ -610,4 +612,112 @@ test('regenerate: reação do cliente depois da base vai para a IA', async () =>
   });
   await sweep.regenerate(USER, 900, { actorId: 'owner' });
   assert.equal(w.generated[0].customerReactedAfterBasis, true);
+});
+
+// Mensagens fixas (087)
+
+const FIXED_TEXTS = ['Oiiii [nome], tudo bem 🥰?\n\nVamos ver uma data para as suas fotos?', 'Oiiii [nome], tudo bem? 🥰',
+  'Oi, [nome]! 🥰\nVocê ainda tem interesse em seguir com suas fotos?'];
+const FIXED: Partial<FollowUpConfig> = { message_mode: 'fixed', fixed_messages: FIXED_TEXTS };
+const refOf = (step: number) => ({ source: FIXED_TEXTS[step - 1], template_name: fixedTemplateName(step, FIXED_TEXTS[step - 1]) });
+
+test('modo fixo: o rascunho é a mensagem do passo com o primeiro nome, sem IA e sem consentimento', async () => {
+  const { w, sweep } = world({ config: FIXED, state: { external_ai_consent_at: null }, activities: [activity(1, { contactName: 'maria clara' })] });
+  const summary = await sweep.runSweep(USER, { manual: true });
+  assert.equal(w.generated.length, 0, 'a IA nunca é chamada');
+  assert.ok(!w.calls.includes('loadAgentConfig'));
+  const r = w.inserted[0];
+  assert.equal(r.message, 'Oiiii Maria, tudo bem 🥰?\n\nVamos ver uma data para as suas fotos?');
+  assert.equal(r.draft_text, r.message);
+  assert.equal(r.status, 'draft');
+  assert.deepEqual(r.generation_meta.fixed, refOf(1));
+  assert.deepEqual(r.generation_meta.warnings, []);
+  assert.equal(r.generation_meta.version, 'fixed');
+  assert.equal(r.generation_meta.model, null);
+  assert.equal(r.generation_meta.outcome, 'draft');
+  assert.equal(r.generation_meta.context_tail.length, 2, 'a prévia da conversa continua na tela');
+  assert.equal(summary.generated, 1);
+});
+
+test('modo fixo + automático: aprova sozinho (até com base invisível) e a previsão recebe a mensagem fixa', async () => {
+  const { w, sweep } = world({
+    config: { ...FIXED, mode: 'auto' }, state: { external_ai_consent_at: null },
+    activities: [activity(1, { lastStudioAt: ago(35), lastInvisibleOutAt: ago(30) }), activity(2, { contactName: null })],
+  });
+  const summary = await sweep.runSweep(USER, { manual: false });
+  const byDeal = new Map(w.inserted.map((r) => [r.deal_id, r]));
+  assert.equal(byDeal.get(1)?.status, 'approved');
+  assert.equal(byDeal.get(1)?.approved_by, 'auto');
+  assert.equal(byDeal.get(2)?.message, 'Oiiii, tudo bem 🥰?\n\nVamos ver uma data para as suas fotos?', 'sem nome no card');
+  assert.deepEqual(w.forecasts.flat().map((f) => f.fixed), [refOf(1), refOf(1)]);
+  assert.equal(summary.auto_approved, 2);
+  assert.deepEqual(w.kicks, [USER]);
+});
+
+test('modo fixo no modo aprovação: rascunho para aprovar', async () => {
+  const { w, sweep } = world({ config: { ...FIXED, mode: 'approval' }, activities: [activity(1)] });
+  await sweep.runSweep(USER, { manual: false });
+  assert.equal(w.inserted[0].status, 'draft');
+  assert.equal(w.forecasts.length, 0);
+});
+
+test('modo fixo: passo sem texto não vira tarefa, opt-out do histórico continua valendo e a IA nunca entra', async () => {
+  const acts = [activity(1, { stage: 'negotiation', lastStudioAt: ago(60), lastCustomerAt: ago(70) }), activity(2), activity(3)];
+  const { w, sweep } = world({
+    config: { ...FIXED, fixed_messages: [FIXED_TEXTS[0]] }, activities: acts,
+    rows: (phone) => (phone === acts[2].contactPhone
+      ? [row(false, 'Por favor não me mande mais mensagens', 40, { message_id: 'wamid.stop' }), row(true, 'Ok', 30)]
+      : structuredClone(DEFAULT_ROWS)),
+  });
+  const summary = await sweep.runSweep(USER, { manual: true });
+  assert.deepEqual(w.inserted.map((r) => r.deal_id), [2]);
+  assert.equal(w.generated.length, 0);
+  assert.equal(summary.optouts_detected, 1);
+  const dry = await sweep.countEligible(USER, { manual: true, dry_run: true });
+  assert.equal(dry.skipped_by_reason.no_fixed_text, 1);
+});
+
+test('modo fixo antes do orçamento: toque 1 usa o 1º texto, grava a trilha e não move o card', async () => {
+  const { w, sweep } = world({
+    config: { ...FIXED, pre_quote_stage_ids: ['contact'], pre_quote_delays_hours: [24, 72, 120] },
+    activities: [activity(1, { stage: 'contact', contactName: 'Duda' })],
+  });
+  await sweep.runSweep(USER, { manual: true });
+  const r = w.inserted[0];
+  assert.equal(r.track, 'pre_quote');
+  assert.equal(r.step, 1);
+  assert.equal(r.message, 'Oiiii Duda, tudo bem 🥰?\n\nVamos ver uma data para as suas fotos?');
+});
+
+test('regenerate no modo fixo: renderiza de novo com o nome atual do card, sem IA e sem consentimento', async () => {
+  const blocked = fullTask({
+    status: 'blocked', contact_name: null, message: renderFixedMessage(FIXED_TEXTS[0], null), approved_at: ago(2), approved_by: 'auto',
+    generation_meta: { regenerations: 0, outcome: 'draft', warnings: [], fixed: refOf(1), block_code: 'contact_name_missing' },
+  });
+  const { w, sweep } = world({ config: FIXED, state: { external_ai_consent_at: null }, full: [blocked], dealName: 'Ana Paula' });
+  assert.deepEqual(await sweep.regenerate(USER, 900, { actorId: 'owner-uuid', instruction: 'ignorada no modo fixo' }), { status: 'updated' });
+  assert.equal(w.generated.length, 0);
+  const saved = w.full.get(900) as CadenceTaskRow;
+  assert.equal(saved.status, 'draft');
+  assert.equal(saved.message, 'Oiiii Ana, tudo bem 🥰?\n\nVamos ver uma data para as suas fotos?');
+  assert.equal(saved.draft_text, saved.message);
+  assert.equal(saved.contact_name, 'Ana Paula');
+  assert.deepEqual(saved.generation_meta.fixed, refOf(1));
+  assert.equal(saved.generation_meta.block_code, undefined);
+  assert.equal(saved.generation_meta.regenerations, 1);
+  assert.equal(saved.generation_meta.edited_by, 'owner-uuid');
+  // Sem nome no card: fica o que a tarefa tinha.
+  const keep = world({ config: FIXED, full: [fullTask({ contact_name: 'Bia' })], dealName: null });
+  await keep.sweep.regenerate(USER, 900, { actorId: 'owner' });
+  assert.equal((keep.w.full.get(900) as CadenceTaskRow).message, renderFixedMessage(FIXED_TEXTS[0], 'Bia'));
+});
+
+test('regenerate no modo fixo: passo sem texto volta para a IA e pede consentimento', async () => {
+  const task = fullTask({ step: 4, stage_id: '03-follow-up' });
+  const noConsent = world({ config: FIXED, state: { external_ai_consent_at: null }, full: [task] });
+  assert.deepEqual(await noConsent.sweep.regenerate(USER, 900, { actorId: 'owner' }), { status: 'consent_required' });
+  assert.equal(noConsent.w.cas.length, 0);
+  const withConsent = world({ config: FIXED, full: [task], results: () => draft('Oi! Você pensa em fazer as fotos mais para a frente?') });
+  assert.deepEqual(await withConsent.sweep.regenerate(USER, 900, { actorId: 'owner' }), { status: 'updated' });
+  assert.equal(withConsent.w.generated.length, 1);
 });

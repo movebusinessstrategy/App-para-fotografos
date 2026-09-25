@@ -80,6 +80,18 @@ const DECODERS: Record<string, (literal: string) => unknown> = {
   'text[]': (literal) => braces(literal.replace(/::text\[\]$/, '')),
 };
 
+// Colunas acrescentadas depois da 083 (087: mensagens fixas) entram com ADD COLUMN.
+const LATER_MIGRATIONS = ['./migrations/087_followup_fixed_messages.sql'];
+
+const addedColumns = (columns: Map<string, { type: string; literal: string | null }>): void => {
+  for (const path of LATER_MIGRATIONS) {
+    const later = read(path).replace(/--[^\n]*/g, '');
+    for (const match of later.matchAll(/ADD COLUMN IF NOT EXISTS (\w+) ([\w[\]]+) NOT NULL DEFAULT ([^,\n]+),?/g)) {
+      columns.set(match[1], { type: match[2], literal: match[3].trim() });
+    }
+  }
+};
+
 const configColumns = (): Map<string, { type: string; literal: string | null }> => {
   const body = between(sql, 'CREATE TABLE IF NOT EXISTS public.followup_cadence_config (', '\n);');
   const columns = new Map<string, { type: string; literal: string | null }>();
@@ -87,6 +99,7 @@ const configColumns = (): Map<string, { type: string; literal: string | null }> 
     const match = line.match(/^ {2}(\w+) ([\w[\]]+)(?: NOT NULL)?(?: DEFAULT (.+?))?,?$/);
     if (match && match[1] !== 'CONSTRAINT') columns.set(match[1], { type: match[2], literal: match[3] ?? null });
   }
+  addedColumns(columns);
   return columns;
 };
 

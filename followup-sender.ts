@@ -10,11 +10,13 @@ import type { SendDecision, SendSnapshot } from './followup-cadence.js';
 import { advanceTargetFor, nextErrorState, resolveExpiredLease, shouldCancelBeforeSend } from './followup-cadence.js';
 import { isWithinBusinessHours, localDayStartUtc, nextWindowOpening, pickGapSeconds } from './lib/business-hours.js';
 import { baileysJid, brazilianPhoneVariants, digitsOnly, maskPhone } from './lib/br-phone.js';
-import type { CadenceTemplate, ChannelDecision, ErrorClass, GraphResult, SenderChannelHealth } from './followup-channel.js';
+import type { CadenceTemplate, ChannelDecision, ErrorClass, FixedSend, GraphResult, SenderChannelHealth, TemplateVia } from './followup-channel.js';
 import {
-  approvalMatches, chooseChannel, classifyBaileysError, classifyGraphError, renderTemplate, splitBalloons, templateParams,
-  templatePayload, tenantBlock,
+  approvalMatches, chooseChannel, classifyBaileysError, classifyGraphError, renderTemplate, splitBalloons, templatePayload,
+  templatePlan, tenantBlock,
 } from './followup-channel.js';
+import { firstName } from './followup-draft.js';
+import { fixedRefOf } from './followup-fixed.js';
 
 export interface SenderTransport {
   baileysSendText(sessionKey: string, jidDigits: string, text: string): Promise<string>;
@@ -34,6 +36,7 @@ export interface CadenceSenderRepo {
   loadSendSnapshot(task: CadenceTaskRow, waNumbers: string[]): Promise<SendSnapshot>;
   loadHealth(userId: string, config: FollowUpConfig): Promise<SenderChannelHealth>;
   loadTemplate(userId: string, templateId: number): Promise<CadenceTemplate | null>;
+  loadTemplateByName?(userId: string, name: string): Promise<CadenceTemplate | null>;   // template da mensagem fixa
   recordDeliveryProof(task: CadenceTaskRow, proof: { message_ids: string[]; channel: ChannelKind; delivered_text: string }): Promise<boolean>;
   persistOutbound(r: OutboundRecord): Promise<void>;
   finish(task: CadenceTaskRow, patch: CadenceTaskPatch): Promise<boolean>;
@@ -74,7 +77,7 @@ type TenantEntry = { userId: string; config: FollowUpConfig; state: FollowUpRunt
 interface TenantEnv extends TenantEntry { deps: SenderDeps; health: SenderChannelHealth; template: CadenceTemplate | null }
 
 type Outcome =
-  | { kind: 'sent'; ids: string[]; deliveredText: string; channel: ChannelKind; recovered: boolean; proofAt: string | null }
+  | { kind: 'sent'; ids: string[]; deliveredText: string; channel: ChannelKind; recovered: boolean; proofAt: string | null; via?: TemplateVia }
   | { kind: 'cancel'; reason: CancelReason }
   | { kind: 'hold'; reason: 'disabled' | 'paused' | 'outside_hours' | 'deadline' }
   | { kind: 'stale' }
@@ -85,7 +88,9 @@ type Outcome =
 
 type PartResult = { ok: true; messageId: string } | { ok: false; cls: ErrorClass; code: number | null; detail: string };
 interface ChannelPlan { parts: string[]; send(part: string): Promise<PartResult>; pause(): Promise<void> }
-interface Ready { snap: SendSnapshot; decision: Extract<ChannelDecision, { ok: true }>; plan: ChannelPlan }
+// fixed: mensagem fixa intacta (texto igual ao renderizado do passo), com o template dela.
+interface SendRoute { decision: Extract<ChannelDecision, { ok: true }>; fixed: FixedSend | null }
+interface Ready extends SendRoute { snap: SendSnapshot; plan: ChannelPlan }
 interface SentSoFar { ids: string[]; parts: string[]; proofAt: string | null }
 
 // Utilitários
@@ -201,18 +206,28 @@ function balloonPause(deps: SenderDeps): Promise<void> {
   return deps.sleep(BALLOON_PAUSE_MIN_MS + Math.min(span - 1, Math.floor(deps.random() * span)));
 }
 
-const SENDERS: Record<ChannelKind, (env: TenantEnv, task: CadenceTaskRow, snap: SendSnapshot) => ChannelPlan> = {
-  meta_text: (env, task, snap) => {
+// Mensagem fixa sai num balão só, exatamente como o dono escreveu; o texto da IA pode virar 2.
+function textParts(task: CadenceTaskRow, route: SendRoute): string[] {
+  if (!route.fixed) return splitBalloons(task.message);
+  const text = String(task.message ?? '').trim();
+  return text ? [text] : [];
+}
+
+const SENDERS: Record<ChannelKind, (env: TenantEnv, task: CadenceTaskRow, snap: SendSnapshot, route: SendRoute) => ChannelPlan> = {
+  meta_text: (env, task, snap, route) => {
     const to = digitsOnly(snap.conversationPhone);
     return {
-      parts: splitBalloons(task.message),
+      parts: textParts(task, route),
       send: (body) => graphPart(env, { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'text', text: { body, preview_url: false } }),
       pause: () => balloonPause(env.deps),
     };
   },
-  meta_template: (env, task, snap) => {
-    const template = env.template as CadenceTemplate;
-    const params = templateParams(task.contact_name, task.message, task.step, task.track);
+  meta_template: (env, task, snap, route) => {
+    // O canal só escolhe template com um aprovado em mãos: o do passo (via fixed) ou o geral.
+    const { template, params } = templatePlan({
+      template: env.template, contactName: task.contact_name, text: task.message, step: task.step, track: task.track,
+      fixed: route.fixed, via: route.decision.via,
+    }) as { template: CadenceTemplate; params: string[] };
     const to = digitsOnly(snap.conversationPhone);
     return {
       parts: [renderTemplate(template.bodyText, params)],
@@ -220,9 +235,9 @@ const SENDERS: Record<ChannelKind, (env: TenantEnv, task: CadenceTaskRow, snap: 
       pause: () => balloonPause(env.deps),
     };
   },
-  baileys: (env, task, snap) => {
+  baileys: (env, task, snap, route) => {
     const jid = baileysJid(snap.conversationPhone, snap.seenBaileysPhones);
-    return { parts: splitBalloons(task.message), send: (part) => baileysPart(env, jid, part), pause: () => balloonPause(env.deps) };
+    return { parts: textParts(task, route), send: (part) => baileysPart(env, jid, part), pause: () => balloonPause(env.deps) };
   },
 };
 
@@ -235,22 +250,35 @@ function fromSendDecision(d: Exclude<SendDecision, { action: 'send' }>): Outcome
   return { kind: 'stale' };
 }
 
+// Mensagem fixa intacta (o texto é o renderizado do passo): o template dela vem pelo nome.
+// Texto editado deixa de ser a mensagem fixa e segue o fluxo normal (template geral).
+async function fixedSendFor(env: TenantEnv, task: CadenceTaskRow): Promise<FixedSend | null> {
+  const first = firstName(task.contact_name);
+  const ref = fixedRefOf(task.generation_meta, task.message, first);
+  if (!ref) return null;
+  const { repo } = env.deps;
+  const template = repo.loadTemplateByName ? await repo.loadTemplateByName(env.userId, ref.template_name) : null;
+  return { step: task.step, template, firstName: first };
+}
+
 async function prepare(env: TenantEnv, task: CadenceTaskRow): Promise<Ready | Outcome> {
   const waNumbers = brazilianPhoneVariants(env.health.mainWaNumber || task.wa_number);
   const snap = await env.deps.repo.loadSendSnapshot(task, waNumbers);
   const now = env.deps.now();
   const verdict = shouldCancelBeforeSend(task, snap, env.config, env.state, now);
   if (verdict.action !== 'send') return fromSendDecision(verdict);
+  const fixed = await fixedSendFor(env, task);
   const decision = chooseChannel({
     now, lastCustomerAt: snap.lastCustomerAt, conversationWaNumber: snap.conversationWaNumber,
-    health: env.health, config: env.config, template: env.template,
+    health: env.health, config: env.config, template: env.template, fixed,
   });
   if (!decision.ok) return { kind: 'blocked', scope: decision.scope, code: decision.code, message: decision.message };
-  const match = approvalMatches(task, decision.channel, env.template);
+  const match = approvalMatches(task, decision.channel, env.template, fixed ? { send: fixed, via: decision.via } : null);
   if (!match.ok) return { kind: 'review', message: match.message };
-  const plan = SENDERS[decision.channel](env, task, snap);
+  const route: SendRoute = { decision, fixed };
+  const plan = SENDERS[decision.channel](env, task, snap, route);
   if (plan.parts.length === 0) return { kind: 'review', message: MESSAGES.emptyText };
-  return { snap, decision, plan };
+  return { ...route, snap, plan };
 }
 
 function isOutcome(value: Ready | Outcome): value is Outcome {
@@ -275,7 +303,7 @@ function recoverLease(task: CadenceTaskRow): Outcome {
 function sentOutcome(ready: Ready, sent: SentSoFar): Outcome {
   return {
     kind: 'sent', recovered: false, ids: [...sent.ids], deliveredText: sent.parts.join('\n\n'),
-    channel: ready.decision.channel, proofAt: sent.proofAt,
+    channel: ready.decision.channel, proofAt: sent.proofAt, via: ready.fixed ? ready.decision.via : undefined,
   };
 }
 
@@ -373,9 +401,12 @@ function sentPatch(env: TenantEnv, task: CadenceTaskRow, o: Extract<Outcome, { k
     message_ids: o.ids, delivered_text: o.deliveredText, channel: o.channel, recovered: o.recovered,
     ...(o.proofAt ? { proof_at: o.proofAt } : {}),
   };
+  const merge: Partial<CadenceGenerationMeta> = { delivery, advance };
+  // Mensagem fixa por template: marca se saiu pela reserva (template geral) e não pelo do passo.
+  if (o.via) merge.fixed_fallback = o.via === 'fallback';
   return {
     status: 'sent', sent_at: now.toISOString(), channel_used: o.channel, sent_message_id: o.ids[0] ?? null,
-    last_error: null, release_claim: true, generation_meta_merge: { delivery, advance },
+    last_error: null, release_claim: true, generation_meta_merge: merge,
   };
 }
 

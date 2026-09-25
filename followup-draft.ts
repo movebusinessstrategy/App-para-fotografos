@@ -10,6 +10,7 @@ import {
   splitColonBeforeQuestion,
 } from './agent-conversation-flow.js';
 import type { DraftWarning, FollowUpStep, FollowUpTrack, PreviewMessage } from './src/features/followups/types.js';
+import { PRE_QUOTE_MAX_STEPS } from './src/features/followups/types.js';
 
 export const FOLLOWUP_DIRECTIVE_VERSION = 'v2';
 
@@ -113,7 +114,7 @@ const TEMPLATE_HOOK_MIN = 20;
 const MIN_KNOWLEDGE_CHARS = 20;
 const MAX_ATTEMPTS = 2;
 const VALID_STEPS = new Set<number>([1, 2, 3, 4]);
-const VALID_PRE_QUOTE_STEPS = new Set<number>([1, 2]);
+const VALID_PRE_QUOTE_STEPS = new Set<number>(Array.from({ length: PRE_QUOTE_MAX_STEPS }, (_, index) => index + 1));
 
 function isPreQuote(track: FollowUpTrack | null | undefined): boolean {
   return track === 'pre_quote';
@@ -234,8 +235,13 @@ function directiveExtras(i: DraftInput): string[] {
   return extras;
 }
 
+function preQuoteTotal(i: DraftInput): number {
+  return Math.min(PRE_QUOTE_MAX_STEPS, Math.max(1, Math.floor(Number(i.trackSteps) || 2)));
+}
+
+// Só o último toque usa o texto 2; os do meio (com 3 toques) retomam como o 1º.
 function preQuoteDirective(i: DraftInput): string {
-  const total = Math.min(2, Math.max(1, Math.floor(Number(i.trackSteps) || 2)));
+  const total = preQuoteTotal(i);
   // Com um toque só, ele é o PRIMEIRO contato depois do silêncio, não uma
   // despedida: usar o texto 2 aqui fazia a única retomada sair passiva
   // ("quando fizer sentido, me chama") e perder a chance de marcar a data.
@@ -244,8 +250,7 @@ function preQuoteDirective(i: DraftInput): string {
 
 function directiveFor(i: DraftInput): { label: string; text: string } {
   if (!isPreQuote(i.track)) return { label: `Retomada ${i.step} de 4`, text: STEP_DIRECTIVES[i.step] };
-  const total = Math.min(2, Math.max(1, Math.floor(Number(i.trackSteps) || 2)));
-  return { label: `Retomada antes do orçamento, toque ${i.step} de ${total}`, text: preQuoteDirective(i) };
+  return { label: `Retomada antes do orçamento, toque ${i.step} de ${preQuoteTotal(i)}`, text: preQuoteDirective(i) };
 }
 
 export function stepDirective(i: DraftInput, niche: string | null): string {

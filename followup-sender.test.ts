@@ -9,6 +9,7 @@ import type { SendSnapshot } from './followup-cadence.js';
 import { DEFAULT_FOLLOWUP_CONFIG } from './src/features/followups/types.js';
 import type { CadenceTaskRow, FollowUpConfig, FollowUpRuntimeState, MoveInput, MoveResult } from './src/features/followups/types.js';
 import { canonicalPhoneKey } from './lib/br-phone.js';
+import { fixedTemplateBody, fixedTemplateName, renderFixedMessage } from './followup-fixed.js';
 import type { StageRow } from './lib/stage-rules.js';
 
 const HOUR = 3_600_000;
@@ -75,7 +76,7 @@ interface Call { name: string; args: unknown[] }
 
 function world(opts: {
   tasks?: CadenceTaskRow[]; config?: Partial<FollowUpConfig>; state?: Partial<FollowUpRuntimeState>; health?: SenderChannelHealth;
-  template?: CadenceTemplate | null; snapshot?: (t: CadenceTaskRow, w: any) => Partial<SendSnapshot>;
+  template?: CadenceTemplate | null; snapshot?: (t: CadenceTaskRow, w: any) => Partial<SendSnapshot>; fixedTemplates?: CadenceTemplate[];
   graph?: GraphResult[]; baileysSend?: (text: string, w: any) => Promise<string>; graphSend?: () => Promise<GraphResult>;
   finishFails?: boolean; proofFails?: boolean;
 } = {}) {
@@ -125,6 +126,7 @@ function world(opts: {
     },
     async loadHealth() { call('loadHealth'); return w.health; },
     async loadTemplate(_u, id) { call('loadTemplate', id); return w.template; },
+    async loadTemplateByName(_u, name) { call('loadTemplateByName', name); return (opts.fixedTemplates ?? []).find((t) => t.name === name) ?? null; },
     async recordDeliveryProof(t, proof) {
       call('recordDeliveryProof', t.id, proof);
       if (opts.proofFails) return false;
@@ -589,6 +591,106 @@ test('uma conta com erro não derruba o tick das outras', async () => {
   w.health = null;   // loadHealth devolve lixo: tenantBlock lança dentro de runEntry
   await w.sender.tick();
   assert.ok(w.logs.some((l: any) => l.event === 'cadence_sender_tenant_failed'));
+});
+
+// Mensagens fixas (087)
+
+const FIXED_TEXT = 'Oiiii [nome], tudo bem 🥰?\n\nVamos ver uma data para as suas fotos?';
+const FIXED_REF = { source: FIXED_TEXT, template_name: fixedTemplateName(1, FIXED_TEXT) };
+const FIXED_TEMPLATE: CadenceTemplate = {
+  id: 77, name: FIXED_REF.template_name, language: 'pt_BR', bodyText: fixedTemplateBody(FIXED_TEXT), status: 'APPROVED',
+  category: 'MARKETING', headerText: null, buttons: [],
+};
+const OUTSIDE = () => ({ lastCustomerAt: new Date(T0.getTime() - 40 * HOUR).toISOString() });
+const TEXT_APPROVAL = { channel_class: 'text' as const, render: null, template_id: null };
+// Aprovadas pelo automático: a conta precisa estar no automático para saírem.
+const AUTO: Partial<FollowUpConfig> = { mode: 'auto' };
+
+function fixedTask(over: Partial<CadenceTaskRow> = {}): CadenceTaskRow {
+  const name = over.contact_name === undefined ? 'Ana Souza' : over.contact_name;
+  const first = name ? name.split(' ')[0] : null;
+  return task({
+    contact_name: name, message: renderFixedMessage(FIXED_TEXT, first), approved_by: 'auto',
+    generation_meta: { approval: TEXT_APPROVAL, fixed: FIXED_REF }, ...over,
+  });
+}
+
+test('mensagem fixa dentro da janela: um balão só, exatamente o texto aprovado', async () => {
+  const w = world({ config: { mode: 'auto', message_mode: 'fixed', fixed_messages: [FIXED_TEXT] }, tasks: [fixedTask({ id: 1 })] });
+  assert.equal(await w.sender.runTenant(USER), 'sent');
+  assert.equal(w.graph.length, 1);
+  assert.deepEqual(w.graph[0].text, { body: 'Oiiii Ana, tudo bem 🥰?\n\nVamos ver uma data para as suas fotos?', preview_url: false });
+  assert.equal(w.outbound[0].body, 'Oiiii Ana, tudo bem 🥰?\n\nVamos ver uma data para as suas fotos?');
+  assert.equal(w.task(1).generation_meta.delivery.delivered_text, w.task(1).message);
+  assert.equal(w.task(1).generation_meta.fixed_fallback, undefined, 'texto livre não é template');
+  assert.equal(w.sleeps.length, 0, 'sem pausa entre balões');
+});
+
+test('mensagem fixa fora da janela: sai pelo template do passo com o primeiro nome e o texto final é o aprovado', async () => {
+  const w = world({ config: AUTO, tasks: [fixedTask({ id: 1 })], fixedTemplates: [FIXED_TEMPLATE], snapshot: OUTSIDE });
+  assert.equal(await w.sender.runTenant(USER), 'sent');
+  assert.equal(w.graph[0].type, 'template');
+  assert.deepEqual(w.graph[0].template, {
+    name: FIXED_REF.template_name, language: { code: 'pt_BR' }, components: [{ type: 'body', parameters: [{ type: 'text', text: 'Ana' }] }],
+  });
+  assert.equal(w.outbound[0].body, w.task(1).message);
+  assert.equal(w.task(1).generation_meta.delivery.delivered_text, w.task(1).message);
+  assert.equal(w.task(1).generation_meta.fixed_fallback, false);
+  assert.equal(w.task(1).channel_used, 'meta_template');
+});
+
+test('mensagem fixa fora da janela com o template do passo em análise: vai pelo template geral e marca a reserva', async () => {
+  const w = world({
+    tasks: [fixedTask({ id: 1 })], fixedTemplates: [{ ...FIXED_TEMPLATE, status: 'PENDING' }], template: TEMPLATE,
+    config: { ...AUTO, template_id: 40 }, snapshot: OUTSIDE,
+  });
+  assert.equal(await w.sender.runTenant(USER), 'sent');
+  assert.equal((w.graph[0].template as any).name, 'retomada_ensaio');
+  assert.equal((w.graph[0].template as any).components[0].parameters[0].text, 'Ana');
+  assert.equal(w.task(1).generation_meta.fixed_fallback, true);
+  // Aprovado por uma pessoa como texto: a reserva muda o texto, então volta para revisão.
+  const human = world({
+    tasks: [fixedTask({ id: 2, approved_by: 'owner' })], fixedTemplates: [{ ...FIXED_TEMPLATE, status: 'PENDING' }], template: TEMPLATE,
+    config: { template_id: 40 }, snapshot: OUTSIDE,
+  });
+  assert.equal(await human.sender.runTenant(USER), 'review');
+  assert.equal(human.task(2).status, 'draft');
+  assert.equal(human.count('graphSend'), 0);
+});
+
+test('mensagem fixa fora da janela sem template aprovado nem geral: só a tarefa espera, com o motivo', async () => {
+  const w = world({ config: AUTO, tasks: [fixedTask({ id: 1 })], fixedTemplates: [{ ...FIXED_TEMPLATE, status: 'PENDING' }], snapshot: OUTSIDE });
+  assert.equal(await w.sender.runTenant(USER), 'blocked_task');
+  assert.equal(w.task(1).status, 'blocked');
+  assert.equal(w.task(1).last_error, 'Template do Follow 01 aguardando aprovação da Meta.');
+  assert.equal(w.task(1).generation_meta.block_code, 'fixed_template_pending');
+  assert.equal(w.count('graphSend'), 0);
+});
+
+test('mensagem fixa sem o primeiro nome e template com {{1}}: bloqueia pedindo o nome no card', async () => {
+  const w = world({ config: AUTO, tasks: [fixedTask({ id: 1, contact_name: null })], fixedTemplates: [FIXED_TEMPLATE], snapshot: OUTSIDE });
+  assert.equal(await w.sender.runTenant(USER), 'blocked_task');
+  assert.equal(w.task(1).last_error, 'Sem o nome do cliente para o template: complete o nome no card.');
+  assert.equal(w.task(1).generation_meta.block_code, 'contact_name_missing');
+  // Dentro da janela o texto sem nome sai normalmente.
+  const inside = world({ config: AUTO, tasks: [fixedTask({ id: 2, contact_name: null })], fixedTemplates: [FIXED_TEMPLATE] });
+  assert.equal(await inside.sender.runTenant(USER), 'sent');
+  assert.equal(inside.outbound[0].body, 'Oiiii, tudo bem 🥰?\n\nVamos ver uma data para as suas fotos?');
+});
+
+test('mensagem fixa editada deixa de ser fixa: segue o fluxo normal do template geral', async () => {
+  const edited = fixedTask({ id: 1, message: 'Oi, Ana! Texto que alguém editou.', approved_by: 'owner' });
+  const w = world({ tasks: [edited], fixedTemplates: [FIXED_TEMPLATE], template: TEMPLATE, config: { template_id: 40 }, snapshot: OUTSIDE });
+  assert.equal(await w.sender.runTenant(USER), 'review');
+  assert.equal(w.task(1).last_error, 'Vai sair como template (fora da janela de 24h). Revise o texto final.');
+});
+
+test('mensagem fixa pelo QR: um balão só com o texto exato', async () => {
+  const w = world({
+    tasks: [fixedTask({ id: 1 })], config: { ...AUTO, allow_baileys: true }, health: health({ baileys: { status: 'open' } }), snapshot: OUTSIDE,
+  });
+  assert.equal(await w.sender.runTenant(USER), 'sent');
+  assert.deepEqual(w.baileys, [{ jid: CUSTOMER_JID, text: 'Oiiii Ana, tudo bem 🥰?\n\nVamos ver uma data para as suas fotos?' }]);
 });
 
 test('código sem travessão e sem banco, rede, server.ts ou Baileys direto', () => {

@@ -9,6 +9,8 @@ import {
   classifyBaileysError,
   classifyGraphError,
   countTemplateVars,
+  FIXED_BLOCK_MESSAGES,
+  fixedTemplateUsable,
   metaUsable,
   renderTemplate,
   sanitizeTemplateParam,
@@ -20,7 +22,8 @@ import {
   validateCadenceTemplate,
   windowOpen,
 } from './followup-channel.js';
-import type { CadenceTemplate, SenderChannelHealth } from './followup-channel.js';
+import type { CadenceTemplate, FixedSend, SenderChannelHealth } from './followup-channel.js';
+import { fixedTemplateBody, fixedTemplateName, renderFixedMessage } from './followup-fixed.js';
 import { toTemplateHook } from './followup-draft.js';
 import { DEFAULT_FOLLOWUP_CONFIG } from './src/features/followups/types.js';
 import type { CadenceTaskRow, FollowUpConfig } from './src/features/followups/types.js';
@@ -365,6 +368,100 @@ test('splitBalloons: até 2 balões, o resto junta no segundo', () => {
   assert.deepEqual(splitBalloons('um\n\ndois\n \ntrês'), ['um', 'dois\n\ntrês']);
   assert.deepEqual(splitBalloons('linha 1\nlinha 2'), ['linha 1\nlinha 2']);
   assert.deepEqual(splitBalloons('   '), []);
+});
+
+// Mensagens fixas (087)
+
+const FIXED_TEXT = 'Oiiii [nome], tudo bem 🥰?\n\nVamos ver uma data para as suas fotos?';
+const FIXED_TEMPLATE: CadenceTemplate = {
+  id: 77, name: fixedTemplateName(1, FIXED_TEXT), language: 'pt_BR', bodyText: fixedTemplateBody(FIXED_TEXT), status: 'APPROVED',
+  category: 'MARKETING', headerText: null, buttons: [],
+};
+const fixedSend = (over: Partial<FixedSend> = {}): FixedSend => ({ step: 1, template: FIXED_TEMPLATE, firstName: 'Ana', ...over });
+
+test('fixedTemplateUsable: aprovado, só {{1}} ou nenhuma variável; categoria não importa', () => {
+  assert.equal(fixedTemplateUsable(FIXED_TEMPLATE), true);
+  assert.equal(fixedTemplateUsable({ ...FIXED_TEMPLATE, category: 'UTILITY' }), true);
+  assert.equal(fixedTemplateUsable({ ...FIXED_TEMPLATE, bodyText: 'Oi! Sem nome.' }), true);
+  assert.equal(fixedTemplateUsable({ ...FIXED_TEMPLATE, status: 'PENDING' }), false);
+  assert.equal(fixedTemplateUsable({ ...FIXED_TEMPLATE, status: 'REJECTED' }), false);
+  assert.equal(fixedTemplateUsable({ ...FIXED_TEMPLATE, bodyText: 'Oi {{1}}, {{2}}' }), false);
+  assert.equal(fixedTemplateUsable({ ...FIXED_TEMPLATE, bodyText: 'Oi {{nome}}' }), false);
+  assert.equal(fixedTemplateUsable({ ...FIXED_TEMPLATE, headerText: 'Oi {{1}}' }), false);
+  assert.equal(fixedTemplateUsable(null), false);
+});
+
+test('chooseChannel com mensagem fixa: dentro da janela texto livre; fora dela o template do passo', () => {
+  assert.deepEqual(choose({}), { ok: true, channel: 'meta_text', waNumber: MAIN });
+  const inside = chooseChannel({ now: NOW, lastCustomerAt: hoursAgo(2), conversationWaNumber: MAIN, health: health(), config: CONFIG, template: null, fixed: fixedSend() });
+  assert.deepEqual(inside, { ok: true, channel: 'meta_text', waNumber: MAIN });
+  const outside = chooseChannel({ now: NOW, lastCustomerAt: hoursAgo(30), conversationWaNumber: MAIN, health: health(), config: CONFIG, template: null, fixed: fixedSend() });
+  assert.deepEqual(outside, { ok: true, channel: 'meta_template', waNumber: MAIN, via: 'fixed' });
+  const qr = chooseChannel({ now: NOW, lastCustomerAt: hoursAgo(30), conversationWaNumber: MAIN, health: health({ baileys: { status: 'open' } }),
+    config: config({ allow_baileys: true }), template: null, fixed: fixedSend() });
+  assert.equal(qr.ok && qr.channel, 'baileys', 'o QR leva o texto exato');
+});
+
+test('chooseChannel com mensagem fixa: template do passo em análise usa o geral como reserva; sem nenhum, só a tarefa espera', () => {
+  const base = { now: NOW, lastCustomerAt: hoursAgo(30), conversationWaNumber: MAIN, health: health() };
+  const pending = fixedSend({ template: { ...FIXED_TEMPLATE, status: 'PENDING' } });
+  assert.deepEqual(chooseChannel({ ...base, config: config({ template_id: 40 }), template: TEMPLATE, fixed: pending }),
+    { ok: true, channel: 'meta_template', waNumber: MAIN, via: 'fallback' });
+  assert.deepEqual(chooseChannel({ ...base, config: CONFIG, template: null, fixed: pending }),
+    { ok: false, scope: 'task', code: 'fixed_template_pending', message: 'Template do Follow 01 aguardando aprovação da Meta.' });
+  const notCreated = chooseChannel({ ...base, config: CONFIG, template: null, fixed: fixedSend({ step: 3, template: null }) });
+  assert.equal((notCreated as any).message, FIXED_BLOCK_MESSAGES.pending(3));
+  assert.equal((notCreated as any).message, 'Template do Follow 03 aguardando aprovação da Meta.');
+});
+
+test('chooseChannel com mensagem fixa: sem primeiro nome e template com {{1}} bloqueia a tarefa; sem variável sai', () => {
+  const base = { now: NOW, lastCustomerAt: hoursAgo(30), conversationWaNumber: MAIN, health: health(), config: CONFIG, template: null };
+  assert.deepEqual(chooseChannel({ ...base, fixed: fixedSend({ firstName: null }) }),
+    { ok: false, scope: 'task', code: 'contact_name_missing', message: 'Sem o nome do cliente para o template: complete o nome no card.' });
+  const noVar = fixedSend({ firstName: null, template: { ...FIXED_TEMPLATE, bodyText: 'Oi! Vamos ver uma data?' } });
+  assert.deepEqual(chooseChannel({ ...base, fixed: noVar }), { ok: true, channel: 'meta_template', waNumber: MAIN, via: 'fixed' });
+  // Sem nome, mas dentro da janela: o texto sem nome sai como texto livre.
+  assert.equal(chooseChannel({ ...base, lastCustomerAt: hoursAgo(2), fixed: fixedSend({ firstName: null }) }).ok, true);
+  // Conta sem API oficial continua caindo no bloqueio da conta.
+  const expired = chooseChannel({ ...base, health: health({ meta: { tokenExpiresAt: hoursAgo(1) } }), fixed: fixedSend() });
+  assert.equal((expired as any).code, 'meta_token_expired');
+  for (const m of [FIXED_BLOCK_MESSAGES.noName, FIXED_BLOCK_MESSAGES.pending(2)]) assert.ok(!DASH_PATTERN.test(m));
+});
+
+test('approvalFor e approvalMatches com mensagem fixa: o que sai é exatamente o texto aprovado', () => {
+  const message = renderFixedMessage(FIXED_TEXT, 'Ana');
+  const viaFixed = approvalFor({ channel: 'meta_template', template: TEMPLATE, contactName: 'Ana', text: message, step: 1, fixed: fixedSend(), via: 'fixed' });
+  assert.deepEqual(viaFixed, { channel_class: 'template', render: message, template_id: 77 });
+  const viaFallback = approvalFor({ channel: 'meta_template', template: TEMPLATE, contactName: 'Ana', text: message, step: 1, fixed: fixedSend(), via: 'fallback' });
+  assert.equal(viaFallback.template_id, 40);
+  assert.equal(viaFallback.render, `Oi, Ana! ${toTemplateHook(message, 1)}`);
+
+  const textApproved = task({ message, contact_name: 'Ana', generation_meta: { approval: { channel_class: 'text', render: null, template_id: null } } });
+  assert.deepEqual(approvalMatches(textApproved, 'meta_template', TEMPLATE, { send: fixedSend(), via: 'fixed' }), { ok: true },
+    'aprovado como texto e sai pelo template do passo: mesmo texto');
+  const fixedApproved = task({ message, contact_name: 'Ana', generation_meta: { approval: viaFixed } });
+  assert.deepEqual(approvalMatches(fixedApproved, 'meta_text', null, { send: fixedSend() }), { ok: true }, 'e o contrário também');
+  const fallbackApproved = task({ message, contact_name: 'Ana', approved_by: 'owner', generation_meta: { approval: viaFallback } });
+  assert.deepEqual(approvalMatches(fallbackApproved, 'meta_template', TEMPLATE, { send: fixedSend(), via: 'fallback' }), { ok: true });
+  assert.deepEqual(approvalMatches(textApproved, 'meta_template', TEMPLATE, { send: fixedSend(), via: 'fallback' }),
+    { ok: false, message: 'Vai sair como template (fora da janela de 24h). Revise o texto final.' }, 'reserva muda o texto: revisão');
+  const autoText = task({ message, contact_name: 'Ana', approved_by: 'auto', generation_meta: { approval: { channel_class: 'text', render: null, template_id: null } } });
+  assert.deepEqual(approvalMatches(autoText, 'meta_template', TEMPLATE, { send: fixedSend(), via: 'fallback' }), { ok: true },
+    'aprovação do automático: o sistema aprova a reserva de novo');
+  const changedBody = { send: fixedSend({ template: { ...FIXED_TEMPLATE, bodyText: 'Oi {{1}}! Outro texto.' } }), via: 'fixed' as const };
+  assert.equal(approvalMatches(textApproved, 'meta_template', TEMPLATE, changedBody).ok, false, 'template do passo com outro corpo: revisão');
+});
+
+test('toChannelHealthDTO: modo fixo com todos os templates aprovados também cobre fora da janela', () => {
+  const none = toChannelHealthDTO(health(), CONFIG, null, NOW);
+  assert.equal(none.can_send.outside_24h, false);
+  assert.equal(none.fixed, null);
+  const all = toChannelHealthDTO(health(), CONFIG, null, NOW, { total: 3, approved: 3 });
+  assert.equal(all.can_send.outside_24h, true);
+  assert.deepEqual(all.fixed, { total: 3, approved: 3 });
+  assert.equal(toChannelHealthDTO(health(), CONFIG, null, NOW, { total: 3, approved: 2 }).can_send.outside_24h, false);
+  const noMeta = toChannelHealthDTO(health({ meta: { operational: false } }), CONFIG, null, NOW, { total: 3, approved: 3 });
+  assert.equal(noMeta.can_send.outside_24h, false, 'sem API oficial o template não sai');
 });
 
 test('código sem travessão e sem acesso a banco, rede ou server.ts', () => {

@@ -1,10 +1,17 @@
 export type FollowUpMode = 'approval' | 'auto';
+// ai = a IA escreve cada retomada; fixed = sai o texto que o dono aprovou para o passo ([nome] = primeiro nome).
+export type FollowUpMessageMode = 'ai' | 'fixed';
 export type FollowUpStep = 1 | 2 | 3 | 4;
 export const FOLLOWUP_STEPS: readonly FollowUpStep[] = [1, 2, 3, 4];
 // ladder = escada depois do orçamento (move o card); pre_quote = antes do orçamento (nunca move).
 export type FollowUpTrack = 'ladder' | 'pre_quote';
 export const FOLLOWUP_TRACKS: readonly FollowUpTrack[] = ['ladder', 'pre_quote'];
-export const PRE_QUOTE_MAX_STEPS = 2;
+// Toques antes do orçamento (087 liberou o 3º). As etapas antes do orçamento continuam no máximo 2 (CHECK da 083).
+export const PRE_QUOTE_MAX_STEPS = 3;
+export const PRE_QUOTE_MAX_STAGES = 2;
+// Mensagens fixas: até 4 textos (índice+1 = passo da escada e toque antes do orçamento), cada um com até 1024 caracteres.
+export const FIXED_MESSAGES_MAX = 4;
+export const FIXED_MESSAGE_MAX_CHARS = 1024;
 
 export const WARMUP_DAILY_CAP = 10;
 export const WARMUP_DAYS = 14;
@@ -20,7 +27,8 @@ export const CUSTOMER_NON_TURN_TYPES: readonly string[] = ['reaction', 'edit', '
 export type ChannelKind = 'meta_text' | 'meta_template' | 'baileys';
 export type ApprovalChannelClass = 'text' | 'template';
 export type BlockCode = 'no_channel' | 'meta_token_expired' | 'meta_not_operational' | 'window_closed_no_template'
-  | 'baileys_disabled' | 'baileys_offline' | 'number_mismatch' | 'template_invalid' | 'template_not_eligible' | 'quality_not_green';
+  | 'baileys_disabled' | 'baileys_offline' | 'number_mismatch' | 'template_invalid' | 'template_not_eligible' | 'quality_not_green'
+  | 'fixed_template_pending' | 'contact_name_missing';
 export type PauseReason = 'error_streak' | 'manual';
 export type CancelReason = 'deal_missing' | 'deal_closed' | 'optout' | 'stage_changed' | 'customer_replied'
   | 'studio_spoke' | 'user_skip' | 'undeliverable' | 'already_customer' | 'needs_human';
@@ -63,11 +71,13 @@ export const DEFAULT_TRACKER_CONFIG: TrackerConfig = {
 export interface FollowUpConfig {
   enabled: boolean;
   mode: FollowUpMode;
+  message_mode: FollowUpMessageMode; // 'fixed' => sai o texto de fixed_messages, sem IA (migration 087)
+  fixed_messages: string[];          // 0..4 textos sem buraco; índice+1 = passo da escada e toque antes do orçamento
   ladder_stage_ids: string[];        // 0..4; índice+1 = passo
   step_delays_hours: number[];       // 1..4 itens, cada 1..720 (horas desde a última fala do estúdio)
   after_last_stage_id: string | null;
   pre_quote_stage_ids: string[];     // 0..2 etapas abertas ANTES da escada; nunca move o card
-  pre_quote_delays_hours: number[];  // 1..2 itens, cada 1..720; índice+1 = toque
+  pre_quote_delays_hours: number[];  // 1..3 itens, cada 1..720; índice+1 = toque
   business_hours: BusinessHours;
   daily_cap: number;                 // 1..200 (nos 14 dias depois de first_enabled_at vale min(daily_cap, WARMUP_DAILY_CAP))
   min_gap_seconds: number;           // 30..900
@@ -86,7 +96,8 @@ export interface FollowUpConfig {
   wa_number: string | null;          // null => número principal resolvido no servidor
 }
 export const DEFAULT_FOLLOWUP_CONFIG: FollowUpConfig = {
-  enabled: false, mode: 'approval', ladder_stage_ids: [], step_delays_hours: [24, 48, 72, 120], after_last_stage_id: null,
+  enabled: false, mode: 'approval', message_mode: 'ai', fixed_messages: [],
+  ladder_stage_ids: [], step_delays_hours: [24, 48, 72, 120], after_last_stage_id: null,
   pre_quote_stage_ids: [], pre_quote_delays_hours: [24, 72],
   business_hours: DEFAULT_BUSINESS_HOURS, daily_cap: 40, min_gap_seconds: 60, max_gap_seconds: 150, max_consecutive_errors: 3,
   allow_meta_text: true, allow_baileys: false, template_id: null, max_silence_hours: 720,
@@ -109,6 +120,13 @@ export interface FollowUpRuntimeState {
 export interface PreviewMessage { from_me: boolean; body: string; type: string; timestamp: string }
 
 export interface CadenceApproval { channel_class: ApprovalChannelClass; render: string | null; template_id: number | null }
+
+// Mensagem fixa de uma tarefa: o texto do passo como o dono escreveu (com [nome]) e o template dele na Meta.
+export interface CadenceFixedRef { source: string; template_name: string }
+
+// Template da Meta de cada mensagem fixa. status: o da Meta (APPROVED, PENDING, IN_APPEAL, REJECTED, PAUSED...)
+// ou NOT_CREATED (ainda não foi para a Meta; reason diz por quê quando houve erro).
+export interface FixedTemplateInfo { step: FollowUpStep; name: string; status: string; reason: string | null }
 
 export interface CadenceGenerationMeta {
   version?: string;
@@ -135,6 +153,8 @@ export interface CadenceGenerationMeta {
   cancel_reason?: CancelReason;
   block_code?: BlockCode;
   retention_applied_at?: string;
+  fixed?: CadenceFixedRef;               // mensagem fixa (modo 'fixed'); some da conta se o texto for editado
+  fixed_fallback?: boolean;              // saiu pelo template geral porque o do passo ainda não estava aprovado
 }
 
 export interface CadenceTaskRow {
@@ -155,6 +175,7 @@ export interface ChannelHealth {
   can_send: { inside_24h: boolean; outside_24h: boolean };
   level: 'ok' | 'degraded' | 'down';
   notes: string[];                         // frases prontas pt-BR, sem travessão
+  fixed?: { total: number; approved: number } | null;   // modo 'fixed': templates das mensagens fixas aprovados na Meta
 }
 
 export interface SweepRequest { manual: boolean; dry_run?: boolean; step?: FollowUpStep; track?: FollowUpTrack; deal_ids?: number[]; limit?: number }
@@ -172,6 +193,7 @@ export type OverviewPauseReason = 'disabled' | 'outside_hours' | 'daily_cap' | '
 export interface FollowUpOverview {
   migration_required?: true;
   configured: boolean; enabled: boolean; mode: FollowUpMode; tracker_enabled: boolean;
+  message_mode: FollowUpMessageMode; fixed_templates: FixedTemplateInfo[];
   can_edit_config: boolean; can_approve: boolean;
   consent: { external_ai: boolean; at: string | null };
   channels: ChannelHealth;
@@ -244,8 +266,9 @@ export type RegenerateResult =
   | { status: 'consent_required' }
   | { status: 'error'; message: string; retryable: boolean };
 
+// fixed: a mensagem fixa gravada na tarefa; o serviço confere se o texto ainda é ela (edição tira).
 export interface ForecastInput { id: number; contact_name: string | null; text: string; step: FollowUpStep; last_customer_at: string | null; phone: string;
-  track?: FollowUpTrack }
+  track?: FollowUpTrack; fixed?: CadenceFixedRef | null }
 export interface ForecastResult { id: number; channel: ChannelKind | 'blocked'; approval: CadenceApproval }
 
 export interface FollowUpTemplateOption {
@@ -290,11 +313,14 @@ export interface FollowUpConfigResponse {
   consent: { external_ai: boolean; at: string | null };
   dedupe_ready: boolean;
   can_edit: boolean;
+  fixed_templates: FixedTemplateInfo[];   // um por mensagem fixa salva, na ordem dos passos
 }
 export type FollowUpConfigPutRequest = Omit<Partial<FollowUpConfig>, 'tracker_config'> & {
   tracker_config?: Partial<TrackerConfig>; confirm_auto?: boolean; disable_legacy_on_ladder?: boolean; consent_to_external_ai?: boolean;
 };
-export interface FollowUpConfigPutResponse { config: FollowUpConfig; warnings: string[]; legacy_disabled: string[]; demoted_auto: number }
+// fixed_rerendered: follow-ups vivos que passaram a usar a mensagem fixa nova do passo.
+export interface FollowUpConfigPutResponse { config: FollowUpConfig; warnings: string[]; legacy_disabled: string[]; demoted_auto: number;
+  fixed_rerendered?: number }
 
 export type FollowUpErrorCode = 'MIGRATION_REQUIRED' | 'NOT_FOUND' | 'INVALID_STATUS' | 'ALREADY_CLAIMED'
   | 'CONVERSATION_CHANGED' | 'STAGE_CHANGED' | 'OPTED_OUT' | 'FOLLOWUPS_DISABLED' | 'SWEEP_RUNNING' | 'REGEN_RUNNING'
@@ -315,7 +341,60 @@ export interface FollowUpServices {
   businessWindow(config: FollowUpConfig, now: Date): { open: boolean; next_open_at: string | null };
   sweepState(userId: string): SweepState;
   invalidateConfig(userId: string): void;
+  // Mensagens fixas: pede agora a rodada dos templates na Meta; erros de criação lembrados por nome.
+  requestFixedTemplates?(userId: string): void;
+  fixedTemplateErrors?(userId: string): Record<string, string>;
   recordDeliveryFailure(input: DeliveryFailureInput): Promise<void>;
   reconcilePreview(userId: string, opts: { limit?: number; days?: number }): Promise<ReconcilePreview>;
   reconcileApply(userId: string, req: ReconcileApplyRequest, actorId: string): Promise<ReconcileApplyResult>;
+}
+
+// Painel (GET /api/followups/dashboard): números da semana, quadro do fluxo e quem espera
+// resposta do estúdio. Montado em followup-dashboard.ts; nunca traz valores em R$.
+export type DashboardDelivery = 'sent' | 'delivered' | 'read' | 'failed';
+export type KanbanColumnKey = 'follow_1' | 'follow_2' | 'follow_3' | 'replied' | 'closed';
+// queued = aprovado na fila; problem = blocked ou failed; replied e closed seguem a coluna.
+export type KanbanChip = 'queued' | 'sending' | 'draft' | 'sent' | 'problem' | 'replied' | 'closed';
+// no_reply = passo 3 ou mais enviado há mais de 7 dias, sem resposta e sem nada na fila.
+export type KanbanClosedReason = 'optout' | 'skipped' | 'cancelled' | 'no_reply';
+
+export interface FollowUpDashboardKpis {
+  sent_today: number; effective_cap: number;
+  next_send_at: string | null;           // previsão do próximo envio (null: nada na fila, desligado ou pausado)
+  scheduled: number;                     // approved + sending
+  drafts: number;
+  days_to_drain: number;                 // ceil(scheduled / effective_cap)
+  sent_7d: number; replied_7d: number;   // follow-ups enviados em 7 dias e quantos tiveram fala do cliente depois
+  reply_rate_7d: number;                 // % inteiro
+  advanced_14d: number;                  // negócios com follow-up em 14 dias que hoje estão ganhos ou convertidos
+  needs_you: number;                     // waiting_studio + blocked
+  waiting_studio: number;                // negócios abertos com o cliente esperando resposta há mais de 2h
+  blocked: number;
+}
+
+export interface KanbanCard {
+  deal_id: number; task_id: number;      // task_id = última tarefa da cadência do negócio
+  contact_name: string | null;
+  stage_name: string;                    // etapa atual do negócio no funil
+  track: FollowUpTrack; step: FollowUpStep; status: CadenceStatus; chip: KanbanChip;
+  eta: string | null;                    // queued e sending
+  sent_at: string | null;                // último follow-up enviado do negócio
+  delivery: DashboardDelivery | null;    // só no chip sent (status em wa_messages pelo sent_message_id)
+  error: string | null;                  // last_error cru (problem e closed); a tela traduz com lastErrorText
+  replied_at: string | null; reply_preview: string | null;   // só em Respondeu: primeira fala depois do envio (80 caracteres)
+  closed_reason: KanbanClosedReason | null;
+}
+export interface KanbanColumn { key: KanbanColumnKey; label: string; count: number; cards: KanbanCard[] }   // cards: até 60
+
+export interface FollowUpDashboardWaiting {
+  deal_id: number; contact_name: string | null; stage_name: string;
+  last_customer_at: string; preview: string;   // preview: últimos 100 caracteres da fala do cliente
+}
+
+export interface FollowUpDashboard {
+  kpis: FollowUpDashboardKpis;
+  board: { columns: KanbanColumn[] };   // Follow 01, Follow 02, Follow 03, Respondeu, Encerrado
+  needs_you_list: FollowUpDashboardWaiting[];   // até 15, a fala mais recente primeiro
+  tz: string;                           // fuso do horário comercial, para "hoje" e "amanhã"
+  server_time: string;
 }

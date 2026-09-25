@@ -7,11 +7,13 @@ import type { ToastState } from '../galeria/Toast';
 import { api, CONFIG_URL, errorMessage, FollowUpApiError } from './api';
 import { formatFullDate, parseListInput } from './format';
 import {
-  CONSENT_CHECKBOX_TEXT, DEDUPE_REQUIRED_TEXT, FIRST_STEP_WINDOW_TEXT, PRE_QUOTE_HELP_TEXT, SUPPORT_MODE_TEXT,
-  TEMPLATE_HINT_TEXT, TONE_CLASSES, WEEKDAY_SHORT,
+  CONSENT_CHECKBOX_TEXT, DEDUPE_REQUIRED_TEXT, FIRST_STEP_WINDOW_TEXT, FIXED_MESSAGES_HELP, FIXED_NAME_HINT, MESSAGE_MODE_AI_TEXT,
+  MESSAGE_MODE_FIXED_TEXT, PRE_QUOTE_HELP_TEXT, SUPPORT_MODE_TEXT, TEMPLATE_HINT_TEXT, TONE_CLASSES, WEEKDAY_SHORT,
+  fixedTemplateStatusText,
 } from './labels';
 import {
-  DEFAULT_PRE_QUOTE_DELAYS_HOURS, DEFAULT_STEP_DELAYS_HOURS, PRE_QUOTE_MAX_STEPS, type FollowUpConfig, type FollowUpConfigPutRequest, type FollowUpConfigPutResponse,
+  DEFAULT_PRE_QUOTE_DELAYS_HOURS, DEFAULT_STEP_DELAYS_HOURS, FIXED_MESSAGE_MAX_CHARS, FIXED_MESSAGES_MAX, PRE_QUOTE_MAX_STAGES,
+  PRE_QUOTE_MAX_STEPS, type FixedTemplateInfo, type FollowUpConfig, type FollowUpConfigPutRequest, type FollowUpConfigPutResponse,
   type FollowUpConfigResponse, type TrackerConfig,
 } from './types';
 
@@ -185,6 +187,72 @@ function ModeSection({ form, set, saved, impersonating, onAskAuto, errors }: Sec
   );
 }
 
+// ─── Mensagens (IA ou texto fixo por passo) ──────────────────────────────────
+
+function followLabel(index: number): string {
+  const label = `Follow ${String(index + 1).padStart(2, '0')}`;
+  return index === FIXED_MESSAGES_MAX - 1 ? `${label} (opcional)` : label;
+}
+
+// O status é do texto salvo: campo alterado só vai para a Meta depois de salvar.
+function FixedStatus({ text, saved, info }: { text: string; saved: string; info: FixedTemplateInfo | undefined }) {
+  if (!text.trim()) return null;
+  if (text.trim() !== saved.trim()) return <span className="text-[10px] text-gray-400">Vai para a Meta ao salvar</span>;
+  if (!info) return null;
+  const status = fixedTemplateStatusText(info.status, info.reason);
+  return <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-semibold', TONE_CLASSES[status.tone])}>{status.text}</span>;
+}
+
+function FixedMessageField({ index, text, saved, info, onChange }: {
+  index: number; text: string; saved: string; info: FixedTemplateInfo | undefined; onChange: (v: string) => void;
+}) {
+  return (
+    <label className="block space-y-1">
+      <span className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold text-gray-600 dark:text-gray-300">{followLabel(index)}</span>
+        <FixedStatus text={text} saved={saved} info={info} />
+      </span>
+      <textarea value={text} rows={3} maxLength={FIXED_MESSAGE_MAX_CHARS} onChange={(e) => onChange(e.target.value)} className={INPUT} />
+    </label>
+  );
+}
+
+function FixedMessagesFields({ form, set, data }: { form: FollowUpConfig; set: SetConfig; data: FollowUpConfigResponse }) {
+  const texts = Array.from({ length: FIXED_MESSAGES_MAX }, (_, i) => form.fixed_messages?.[i] ?? '');
+  const saved = data.config.fixed_messages ?? [];
+  const infos = data.fixed_templates ?? [];
+  const setText = (index: number, value: string) => set({ fixed_messages: texts.map((t, j) => (j === index ? value : t)) });
+  return (
+    <div className="space-y-3">
+      <Note tone="slate">{FIXED_MESSAGES_HELP}</Note>
+      <p className="text-[11px] text-gray-500 dark:text-gray-400">{FIXED_NAME_HINT}</p>
+      {texts.map((text, i) => (
+        <FixedMessageField key={i} index={i} text={text} saved={saved[i] ?? ''} info={infos.find((f) => f.step === i + 1)}
+          onChange={(v) => setText(i, v)} />
+      ))}
+    </div>
+  );
+}
+
+function MessagesSection({ form, set, errors, data }: SectionProps) {
+  const fixed = form.message_mode === 'fixed';
+  return (
+    <Section title="Mensagens">
+      <label className="flex items-center gap-2 text-[12px]">
+        <input type="radio" checked={fixed} onChange={() => set({ message_mode: 'fixed' })} className="accent-gold-600" />
+        {MESSAGE_MODE_FIXED_TEXT}
+      </label>
+      <label className="flex items-center gap-2 text-[12px]">
+        <input type="radio" checked={!fixed} onChange={() => set({ message_mode: 'ai' })} className="accent-gold-600" />
+        {MESSAGE_MODE_AI_TEXT}
+      </label>
+      {fixed && <FixedMessagesFields form={form} set={set} data={data} />}
+      <FieldError msg={errors.message_mode} />
+      <FieldError msg={errors.fixed_messages} />
+    </Section>
+  );
+}
+
 function LadderRow({ index, stageId, delay, stages, highlight, onStage, onDelay, onRemove }: {
   index: number; stageId: string; delay: number; stages: Stage[]; highlight: boolean;
   onStage: (id: string | null) => void; onDelay: (h: number) => void; onRemove: () => void;
@@ -271,7 +339,7 @@ function preQuoteDelay(delays: number[], i: number): number {
 
 function PreQuoteStages({ form, set, stages }: { form: FollowUpConfig; set: SetConfig; stages: Stage[] }) {
   const ids = form.pre_quote_stage_ids ?? [];
-  const setIds = (next: string[]) => set({ pre_quote_stage_ids: next.slice(0, PRE_QUOTE_MAX_STEPS) });
+  const setIds = (next: string[]) => set({ pre_quote_stage_ids: next.slice(0, PRE_QUOTE_MAX_STAGES) });
   const free = stages.find((s) => !ids.includes(s.id));
   return (
     <div className="space-y-1.5">
@@ -284,7 +352,7 @@ function PreQuoteStages({ form, set, stages }: { form: FollowUpConfig; set: SetC
           </button>
         </div>
       ))}
-      {ids.length < PRE_QUOTE_MAX_STEPS && free && (
+      {ids.length < PRE_QUOTE_MAX_STAGES && free && (
         <button type="button" onClick={() => setIds([...ids, free.id])} className="flex items-center gap-1 text-[12px] font-semibold text-gold-700 dark:text-gold-400">
           <Plus size={13} /> Adicionar etapa
         </button>
@@ -563,6 +631,9 @@ function SaveResult({ result, stages, onClose }: { result: FollowUpConfigPutResp
       {result.demoted_auto > 0 && (
         <Note>{result.demoted_auto === 1 ? '1 envio aprovado pela IA voltou para revisão.' : `${result.demoted_auto} envios aprovados pela IA voltaram para revisão.`}</Note>
       )}
+      {(result.fixed_rerendered ?? 0) > 0 && (
+        <Note tone="slate">{result.fixed_rerendered === 1 ? '1 follow-up da fila passou a usar a mensagem fixa.' : `${result.fixed_rerendered} follow-ups da fila passaram a usar as mensagens fixas.`}</Note>
+      )}
       {names.length > 0 && <Note tone="slate">Mensagem fixa antiga desligada em: {names.join(', ')}.</Note>}
       {result.warnings.map((w) => (
         <p key={w} className="flex items-start gap-1.5 text-[12px] text-amber-700 dark:text-amber-300"><AlertTriangle size={13} className="mt-0.5 flex-shrink-0" />{w}</p>
@@ -638,7 +709,7 @@ function useSave(s: FormState, deps: { onSaved: () => void; onToast: (t: ToastSt
       const res = await api.saveConfig(buildPutBody(s));
       void refreshApi(CONFIG_URL);
       deps.onSaved();
-      const quiet = res.warnings.length === 0 && res.demoted_auto === 0 && res.legacy_disabled.length === 0;
+      const quiet = res.warnings.length === 0 && res.demoted_auto === 0 && res.legacy_disabled.length === 0 && !res.fixed_rerendered;
       if (quiet) { deps.onToast({ kind: 'success', message: 'Configurações salvas.' }); deps.onClose(); return; }
       setResult(res);
     } catch (err) {
@@ -715,6 +786,7 @@ function DrawerBody({ s, saver, focusStageId, impersonating, onAskAuto, onClose 
         <ConsentSection data={s.data} consent={s.consent} impersonating={impersonating} onConsent={s.setConsent} />
         <ActivateSection {...common} saved={s.data.config} impersonating={impersonating} />
         <ModeSection {...common} saved={s.data.config} impersonating={impersonating} onAskAuto={onAskAuto} />
+        <MessagesSection {...common} />
         <LadderSection {...common} focusStageId={focusStageId} />
         <PreQuoteSection {...common} />
         <HoursSection {...common} />

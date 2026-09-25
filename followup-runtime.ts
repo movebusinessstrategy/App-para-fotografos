@@ -1,18 +1,21 @@
 // Monta a cadência de follow-up: repositório, varredura, sender e os serviços
 // que as rotas usam. start() liga o sender (a cada 20s) e o agendador de
-// varreduras (a cada 5 min). Sem a migration 083 tudo fica ocioso, com log
+// varreduras (a cada 5 min), que no modo de mensagens fixas também cuida dos
+// templates dos passos na Meta. Sem a migration 083 tudo fica ocioso, com log
 // espaçado. Não registra SIGTERM: a prova de entrega cobre a interrupção.
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type {
-  CadenceGenerationMeta, ChannelHealth, DeliveryFailureInput, FollowUpConfig, FollowUpServices, FollowUpTemplateOption,
-  ForecastInput, ForecastResult, MoveInput, MoveResult, ReconcileApplyRequest, ReconcileApplyResult, ReconcilePreview,
-  SweepState,
+  CadenceGenerationMeta, ChannelHealth, DeliveryFailureInput, FixedTemplateInfo, FollowUpConfig, FollowUpServices,
+  FollowUpTemplateOption, ForecastInput, ForecastResult, MoveInput, MoveResult, ReconcileApplyRequest, ReconcileApplyResult,
+  ReconcilePreview, SweepState,
 } from './src/features/followups/types.js';
 import type { DraftDeps } from './followup-draft.js';
-import { generateCadenceDraft, NEUTRAL_HOOKS } from './followup-draft.js';
+import { firstName, generateCadenceDraft, NEUTRAL_HOOKS } from './followup-draft.js';
 import { nextErrorState } from './followup-cadence.js';
-import type { CadenceTemplate } from './followup-channel.js';
+import type { CadenceTemplate, FixedSend } from './followup-channel.js';
 import { approvalFor, chooseChannel, renderTemplate, toChannelHealthDTO, validateCadenceTemplate } from './followup-channel.js';
+import type { FixedTemplatePort } from './followup-fixed.js';
+import { ensureFixedTemplates, FIXED_NOT_CREATED, fixedRefOf, fixedSteps, fixedTemplatesInfo } from './followup-fixed.js';
 import type { CadenceSenderRepo, SenderTransport } from './followup-sender.js';
 import { createCadenceSender } from './followup-sender.js';
 import type { CadenceSweepDeps } from './followup-sweep.js';
@@ -49,11 +52,15 @@ export interface FollowUpCadenceParts {
   generate?: CadenceSweepDeps['generate'];
   random?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  fetch?: typeof fetch;   // Graph dos templates das mensagens fixas
 }
+
+export interface FollowUpCadence { services: FollowUpServices; start(): void; stop(): void }
 
 export const SENDER_TICK_MS = 20_000;
 export const SWEEP_SCHEDULER_MS = 5 * 60_000;
 export const QUIET_LOG_MS = 10 * 60_000;
+export const FIXED_TEMPLATES_EVERY_MS = 10 * 60_000;
 const PREVIEW_PARAMS = ['Maria', NEUTRAL_HOOKS[1]];
 
 type Log = (event: string, data?: Record<string, unknown>) => void;
@@ -142,9 +149,27 @@ function nextAutoAt(entry: TenantEntry, now: Date): string {
   return new Date(base + entry.config.sweep_interval_minutes * 60_000).toISOString();
 }
 
+// Mensagens fixas não passam conversa pela IA: a varredura automática roda sem o consentimento.
+function needsAiConsent(entry: TenantEntry): boolean {
+  return entry.config.message_mode !== 'fixed' && !entry.state.external_ai_consent_at;
+}
+
+// Mensagem fixa intacta na previsão: o template do passo vem do lote carregado pelo nome.
+function fixedSendOf(item: ForecastInput, byName: Map<string, CadenceTemplate>): FixedSend | null {
+  const first = firstName(item.contact_name);
+  const ref = fixedRefOf({ fixed: item.fixed ?? undefined }, item.text, first);
+  return ref ? { step: item.step, template: byName.get(ref.template_name) ?? null, firstName: first } : null;
+}
+
+function creationErrors(infos: FixedTemplateInfo[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const info of infos) if (info.status === FIXED_NOT_CREATED && info.reason) out[info.name] = info.reason;
+  return out;
+}
+
 // Fábricas
 
-export function createFollowUpCadence(deps: FollowUpCadenceDeps): { services: FollowUpServices; start(): void; stop(): void } {
+export function createFollowUpCadence(deps: FollowUpCadenceDeps): FollowUpCadence {
   const repo = createFollowUpRepo(deps.db, {
     baileys: deps.baileys, decryptToken: deps.decryptToken, refreshMetaState: deps.refreshMetaState,
     mainWaNumber: deps.mainWaNumber, now: deps.now,
@@ -152,7 +177,7 @@ export function createFollowUpCadence(deps: FollowUpCadenceDeps): { services: Fo
   return createFollowUpCadenceFrom(deps, { repo, transport: createSenderTransport({ baileys: deps.baileys }) });
 }
 
-export function createFollowUpCadenceFrom(deps: FollowUpCadenceDeps, parts: FollowUpCadenceParts): { services: FollowUpServices; start(): void; stop(): void } {
+export function createFollowUpCadenceFrom(deps: FollowUpCadenceDeps, parts: FollowUpCadenceParts): FollowUpCadence {
   const now = deps.now ?? (() => new Date());
   const log: Log = deps.log ?? defaultLog;
   const quiet = createQuietLog(log, now);
@@ -171,20 +196,46 @@ export function createFollowUpCadenceFrom(deps: FollowUpCadenceDeps, parts: Foll
     return config.template_id ? repo.loadTemplate(userId, config.template_id) : null;
   }
 
+  // Modo fixo: quantos templates dos passos a Meta já aprovou (falha de leitura não derruba a saúde).
+  async function fixedSummary(userId: string, config: FollowUpConfig): Promise<{ total: number; approved: number } | null> {
+    const steps = config.message_mode === 'fixed' ? fixedSteps(config.fixed_messages) : [];
+    if (!steps.length) return null;
+    try {
+      const infos = fixedTemplatesInfo(config.fixed_messages, await repo.templatesByName(userId, steps.map((s) => s.name)));
+      return { total: infos.length, approved: infos.filter((i) => i.status === 'APPROVED').length };
+    } catch (error) {
+      log('cadence_fixed_summary_failed', { userId, error: errorText(error) });
+      return null;
+    }
+  }
+
   async function channelHealth(userId: string, config: FollowUpConfig): Promise<ChannelHealth> {
-    const [health, template] = await Promise.all([repo.loadHealth(userId, config), templateFor(userId, config)]);
-    return toChannelHealthDTO(health, config, template, now());
+    const [health, template, fixed] = await Promise.all([
+      repo.loadHealth(userId, config), templateFor(userId, config), fixedSummary(userId, config),
+    ]);
+    return toChannelHealthDTO(health, config, template, now(), fixed);
+  }
+
+  async function fixedTemplatesByName(userId: string, items: ForecastInput[]): Promise<Map<string, CadenceTemplate>> {
+    const names = Array.from(new Set(items.map((i) => i.fixed?.template_name).filter((n): n is string => !!n)));
+    if (!names.length) return new Map();
+    return new Map((await repo.templatesByName(userId, names)).map((t) => [t.name, t]));
   }
 
   async function forecast(userId: string, config: FollowUpConfig, items: ForecastInput[]): Promise<ForecastResult[]> {
     if (!items.length) return [];
-    const [health, template] = await Promise.all([repo.loadHealth(userId, config), templateFor(userId, config)]);
+    const [health, template, byName] = await Promise.all([
+      repo.loadHealth(userId, config), templateFor(userId, config), fixedTemplatesByName(userId, items),
+    ]);
     const at = now();
     const main = health.mainWaNumber ?? '';
     return items.map((item) => {
-      const d = chooseChannel({ now: at, lastCustomerAt: item.last_customer_at, conversationWaNumber: main, health, config, template });
+      const fixed = fixedSendOf(item, byName);
+      const d = chooseChannel({ now: at, lastCustomerAt: item.last_customer_at, conversationWaNumber: main, health, config, template, fixed });
       const channel = d.ok ? d.channel : 'blocked';
-      const approval = approvalFor({ channel, template, contactName: item.contact_name, text: item.text, step: item.step, track: item.track });
+      const approval = approvalFor({
+        channel, template, contactName: item.contact_name, text: item.text, step: item.step, track: item.track, fixed, via: d.ok ? d.via : undefined,
+      });
       return { id: item.id, channel, approval };
     });
   }
@@ -263,6 +314,56 @@ export function createFollowUpCadenceFrom(deps: FollowUpCadenceDeps, parts: Foll
     }
   }
 
+  // Templates das mensagens fixas na Meta: no máximo uma rodada a cada 10 min por conta
+  // (a rota de config pede uma na hora). Template aprovado solta as tarefas que esperavam.
+
+  const fixedRuns = new Map<string, number>();
+  const fixedRunning = new Set<string>();
+  const fixedErrors = new Map<string, Record<string, string>>();
+  const fixedPort: FixedTemplatePort = {
+    rows: (userId, names) => repo.templatesByName(userId, names),
+    account: (userId) => repo.metaTemplateAccount(userId),
+    insert: (row) => repo.saveTemplateRow(row),
+    update: (userId, name, patch) => repo.updateTemplateRow(userId, name, patch),
+  };
+
+  async function requeueApproved(userId: string, infos: FixedTemplateInfo[]): Promise<void> {
+    const names = infos.filter((i) => i.status === 'APPROVED').map((i) => i.name);
+    if (!names.length) return;
+    const requeued = await repo.requeueFixedBlocked(userId, names);
+    if (!requeued) return;
+    log('cadence_fixed_requeued', { userId, requeued });
+    sender.kick(userId);
+  }
+
+  async function ensureFixed(userId: string, config: FollowUpConfig): Promise<void> {
+    if (fixedRunning.has(userId)) return;
+    fixedRunning.add(userId);
+    fixedRuns.set(userId, now().getTime());
+    try {
+      const infos = await ensureFixedTemplates(userId, config.fixed_messages, { port: fixedPort, fetch: parts.fetch ?? fetch, log, now });
+      fixedErrors.set(userId, creationErrors(infos));
+      await requeueApproved(userId, infos);
+    } catch (error) {
+      log('cadence_fixed_templates_failed', { userId, error: errorText(error) });
+    } finally {
+      fixedRunning.delete(userId);
+    }
+  }
+
+  async function maybeEnsureFixed(entry: TenantEntry): Promise<void> {
+    if (entry.config.message_mode !== 'fixed') return;
+    const last = fixedRuns.get(entry.userId);
+    if (last !== undefined && now().getTime() - last < FIXED_TEMPLATES_EVERY_MS) return;
+    await ensureFixed(entry.userId, entry.config);
+  }
+
+  function requestFixedTemplates(userId: string): void {
+    repo.loadConfig(userId)
+      .then(({ config }) => (config.message_mode === 'fixed' ? ensureFixed(userId, config) : undefined))
+      .catch((error) => log('cadence_fixed_templates_failed', { userId, error: errorText(error) }));
+  }
+
   const services: FollowUpServices = {
     runSweep,
     countEligible: (userId, req) => sweep.countEligible(userId, req),
@@ -278,6 +379,8 @@ export function createFollowUpCadenceFrom(deps: FollowUpCadenceDeps, parts: Foll
       repo.invalidate(userId);
       deps.funnel.invalidate(userId);
     },
+    requestFixedTemplates,
+    fixedTemplateErrors: (userId) => ({ ...(fixedErrors.get(userId) ?? {}) }),
     recordDeliveryFailure,
     reconcilePreview: (userId, opts) => deps.funnel.reconcilePreview(userId, opts),
     reconcileApply: (userId, req, actorId) => deps.funnel.reconcileApply(userId, req, actorId),
@@ -296,8 +399,10 @@ export function createFollowUpCadenceFrom(deps: FollowUpCadenceDeps, parts: Foll
   async function autoSweepEntry(entry: TenantEntry): Promise<void> {
     const at = now();
     nextAuto.set(entry.userId, nextAutoAt(entry, at));
+    // Antes de varrer: cria o que falta e atualiza o status dos templates das mensagens fixas.
+    await maybeEnsureFixed(entry);
     if (!sweepDue(entry, at)) return;
-    if (!entry.state.external_ai_consent_at) return quiet(`consent:${entry.userId}`, 'cadence_sweep_consent_required', { userId: entry.userId });
+    if (needsAiConsent(entry)) return quiet(`consent:${entry.userId}`, 'cadence_sweep_consent_required', { userId: entry.userId });
     try {
       await runSweep(entry.userId, { manual: false });
       nextAuto.set(entry.userId, new Date(now().getTime() + entry.config.sweep_interval_minutes * 60_000).toISOString());

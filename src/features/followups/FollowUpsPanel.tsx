@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Ban, GitCompareArrows, Loader2, Settings, ShieldAlert, Sparkles } from 'lucide-react';
+import { Ban, GitCompareArrows, LayoutDashboard, ListChecks, Loader2, Settings, ShieldAlert, Sparkles } from 'lucide-react';
 import { DealDetailDrawer } from '../../components/vendas/DealDetailDrawer';
 import { useAuth } from '../../contexts/AuthContext';
 import type { Client, Deal, PipelineStage } from '../../types';
@@ -10,6 +10,7 @@ import { api, errorMessage, errorStatus, isSweepStarted, type SweepBody } from '
 import { ChannelHealthBanner } from './ChannelHealthBanner';
 import { ConfigDrawer } from './ConfigDrawer';
 import { formatDay } from './format';
+import { FollowUpsDashboard } from './FollowUpsDashboard';
 import { useFollowUpConfig, useFollowUpOverview } from './hooks';
 import {
   CONSENT_MEMBER_TEXT, CONSENT_OWNER_TEXT, MIGRATION_REQUIRED_TEXT, NETWORK_ERROR_TEXT, TONE_CLASSES,
@@ -28,6 +29,35 @@ interface Props {
 }
 
 type Notify = (t: ToastState) => void;
+
+// ─── Painel ou Fila ──────────────────────────────────────────────────────────
+
+type PanelView = 'painel' | 'fila';
+
+const VIEWS: Array<{ key: PanelView; label: string; icon: typeof LayoutDashboard }> = [
+  { key: 'painel', label: 'Painel', icon: LayoutDashboard },
+  { key: 'fila', label: 'Fila', icon: ListChecks },
+];
+
+function ViewSwitch({ view, drafts, onChange }: { view: PanelView; drafts: number; onChange: (v: PanelView) => void }) {
+  return (
+    <div role="tablist" aria-label="Visão dos follow-ups"
+      className="inline-flex rounded-xl border border-gray-200 bg-white p-0.5 dark:border-gray-700 dark:bg-gray-800">
+      {VIEWS.map(({ key, label, icon: Icon }) => (
+        <button key={key} type="button" role="tab" aria-selected={view === key} onClick={() => onChange(key)}
+          className={cn(
+            'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-semibold transition-colors',
+            view === key ? 'bg-gold-50 text-gold-800 dark:bg-gold-900/40 dark:text-gold-200' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700',
+          )}>
+          <Icon size={14} /> {label}
+          {key === 'fila' && drafts > 0 && (
+            <span className="rounded-full bg-gold-600 px-1.5 text-[10px] font-bold text-white" title="Rascunhos para aprovar">{drafts}</span>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 // ─── Deep link (?config=1&stage=<id>&deal=<id>) ──────────────────────────────
 
@@ -239,6 +269,7 @@ export function FollowUpsPanel({ deals, stages, clients, onDealUpdated }: Props)
   const [optOutsOpen, setOptOutsOpen] = useState(false);
   const [reconcileOpen, setReconcileOpen] = useState(false);
   const [openDealId, setOpenDealId] = useState<number | null>(null);
+  const [view, setView] = useState<PanelView>('painel');
 
   const { mutate: mutateOverview } = overviewSwr;
   const refreshOverview = useCallback(() => { void mutateOverview(); }, [mutateOverview]);
@@ -246,7 +277,9 @@ export function FollowUpsPanel({ deals, stages, clients, onDealUpdated }: Props)
   const resume = useResume(setToast, refreshOverview);
 
   const openConfig = useCallback((stageId: string | null) => { setFocusStage(stageId); setConfigOpen(true); }, []);
-  const filterDeal = useCallback((dealId: number) => { setDealFilter(dealId); setTab('draft'); setStep(null); }, []);
+  // Link para um negócio (?deal=) filtra a fila: abre direto na Fila.
+  const filterDeal = useCallback((dealId: number) => { setDealFilter(dealId); setTab('draft'); setStep(null); setView('fila'); }, []);
+  const openQueueTab = useCallback((t: QueueTab) => { setTab(t); setStep(null); setView('fila'); }, []);
   useDeepLink(openConfig, filterDeal);
 
   const overview = overviewSwr.data;
@@ -264,7 +297,8 @@ export function FollowUpsPanel({ deals, stages, clients, onDealUpdated }: Props)
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-5xl space-y-3 p-3 sm:p-4">
+      <div className={cn('mx-auto space-y-3 p-3 sm:p-4', view === 'painel' ? 'max-w-7xl' : 'max-w-5xl')}>
+        <ViewSwitch view={view} drafts={overview.counts.draft} onChange={setView} />
         <ConsentBanner overview={overview} impersonating={isImpersonating} busy={sweep.busy}
           onAuthorize={() => void sweep.run({ consent_to_external_ai: true })} />
         <WarmupNote sending={overview.sending} />
@@ -272,12 +306,18 @@ export function FollowUpsPanel({ deals, stages, clients, onDealUpdated }: Props)
           canResume={overview.can_approve} resuming={resume.busy} onResume={() => void resume.run()} />
         <DisabledNotice overview={overview} onConfigure={() => openConfig(null)} />
         <LegacyNotice overview={overview} />
-        <StatsStrip overview={overview} activeTab={tab} onPickTab={setTab} onOpenOptOuts={() => setOptOutsOpen(true)} />
-        <PanelActions overview={overview} sweeping={sweep.busy} onSweep={() => void sweep.run({})}
-          onConfigure={() => openConfig(null)} onOptOuts={() => setOptOutsOpen(true)} onReconcile={() => setReconcileOpen(true)} />
-        <QueueList overview={overview} tab={tab} onTabChange={setTab} step={step} onStepChange={setStep}
-          dealId={dealFilter} onClearDeal={() => setDealFilter(null)} gap={gap}
-          onOpenDeal={openDealById} onToast={setToast} onOverviewChanged={refreshOverview} />
+        {view === 'painel' ? (
+          <FollowUpsDashboard overview={overview} onOpenDeal={openDealById} onOpenQueue={openQueueTab} />
+        ) : (
+          <>
+            <StatsStrip overview={overview} activeTab={tab} onPickTab={setTab} onOpenOptOuts={() => setOptOutsOpen(true)} />
+            <PanelActions overview={overview} sweeping={sweep.busy} onSweep={() => void sweep.run({})}
+              onConfigure={() => openConfig(null)} onOptOuts={() => setOptOutsOpen(true)} onReconcile={() => setReconcileOpen(true)} />
+            <QueueList overview={overview} tab={tab} onTabChange={setTab} step={step} onStepChange={setStep}
+              dealId={dealFilter} onClearDeal={() => setDealFilter(null)} gap={gap}
+              onOpenDeal={openDealById} onToast={setToast} onOverviewChanged={refreshOverview} />
+          </>
+        )}
       </div>
 
       <ConfigDrawer open={configOpen} focusStageId={focusStage} impersonating={isImpersonating}

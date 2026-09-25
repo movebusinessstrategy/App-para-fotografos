@@ -1,9 +1,10 @@
 import { useCallback, useMemo } from 'react';
+import useSWR from 'swr';
 import useSWRInfinite from 'swr/infinite';
 import { useApi } from '../../utils/useApi';
-import { CONFIG_URL, OVERVIEW_URL, dealStateUrl, fetchJson, queueUrl } from './api';
+import { CONFIG_URL, DASHBOARD_URL, OVERVIEW_URL, dealStateUrl, fetchJson, queueUrl } from './api';
 import type {
-  DealFollowUpState, FollowUpConfigResponse, FollowUpDraftItem, FollowUpOverview, FollowUpQueueResponse,
+  DealFollowUpState, FollowUpConfigResponse, FollowUpDashboard, FollowUpDraftItem, FollowUpOverview, FollowUpQueueResponse,
   FollowUpStep, FollowUpTrack, QueueTab,
 } from './types';
 
@@ -16,6 +17,18 @@ export function useFollowUpOverview() {
     dedupingInterval: 3000,
     revalidateOnFocus: true,
     revalidateOnMount: true,
+  });
+}
+
+// Painel: o servidor guarda 30s por conta, então o poll de 30s não pesa no banco.
+// fetchJson traz a mensagem de erro da rota (ex.: migration faltando) para a tela.
+export function useFollowUpDashboard(active = true) {
+  return useSWR<FollowUpDashboard, Error>(active ? DASHBOARD_URL : null, fetchJson, {
+    refreshInterval: 30000,
+    dedupingInterval: 5000,
+    revalidateOnFocus: true,
+    revalidateOnMount: true,
+    keepPreviousData: true,
   });
 }
 

@@ -1,7 +1,7 @@
 import { authFetch } from '../../utils/authFetch';
 import type {
   ApproveAllRequest, ApproveAllResult, DealFollowUpState, FollowUpConfigPutRequest, FollowUpConfigPutResponse,
-  FollowUpConfigResponse, FollowUpDraftItem, FollowUpErrorCode, FollowUpOptOut, FollowUpOverview,
+  FollowUpConfigResponse, FollowUpDashboard, FollowUpDraftItem, FollowUpErrorCode, FollowUpOptOut, FollowUpOverview,
   FollowUpQueueResponse, FollowUpStep, FollowUpTrack, PreviewMessage, QueueTab, ReconcileApplyRequest,
   ReconcileApplyResult, ReconcilePreview, SweepDryRun,
 } from './types';
@@ -11,6 +11,7 @@ import type {
 export const FOLLOWUPS_BASE = '/api/followups';
 export const OVERVIEW_URL = `${FOLLOWUPS_BASE}/overview`;
 export const CONFIG_URL = `${FOLLOWUPS_BASE}/config`;
+export const DASHBOARD_URL = `${FOLLOWUPS_BASE}/dashboard`;
 
 export class FollowUpApiError extends Error {
   status: number;
@@ -122,6 +123,7 @@ const itemUrl = (id: number, suffix = '') => `${FOLLOWUPS_BASE}/${encodeURICompo
 
 export const api = {
   overview: () => call<FollowUpOverview>('GET', OVERVIEW_URL),
+  dashboard: () => call<FollowUpDashboard>('GET', DASHBOARD_URL),
   queue: (q: QueueQuery) => call<FollowUpQueueResponse>('GET', queueUrl(q)),
   conversation: (id: number, limit = 30) =>
     call<{ messages: PreviewMessage[] }>('GET', withQuery(itemUrl(id, '/conversation'), { limit })),

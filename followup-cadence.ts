@@ -7,12 +7,13 @@ import type {
 } from './src/features/followups/types.js';
 import {
   DEFAULT_BUSINESS_HOURS, DEFAULT_FOLLOWUP_CONFIG, DEFAULT_PRE_QUOTE_DELAYS_HOURS, DEFAULT_STEP_DELAYS_HOURS,
-  DEFAULT_TRACKER_CONFIG, LIVE_CADENCE_STATUSES, PRE_QUOTE_MAX_STEPS, WARMUP_DAILY_CAP, WARMUP_DAYS,
+  DEFAULT_TRACKER_CONFIG, LIVE_CADENCE_STATUSES, PRE_QUOTE_MAX_STAGES, PRE_QUOTE_MAX_STEPS, WARMUP_DAILY_CAP, WARMUP_DAYS,
 } from './src/features/followups/types.js';
 import type { StageRow } from './lib/stage-rules.js';
 import { firstOpenSalesStage, isClosedStage, isSalesStage } from './lib/stage-rules.js';
 import { canonicalPhoneKey, digitsOnly } from './lib/br-phone.js';
 import { isWithinBusinessHours, normalizeBusinessHours } from './lib/business-hours.js';
+import { checkFixedMessages, FIXED_MSG, fixedTextFor, parseFixedMessages } from './followup-fixed.js';
 
 export const CADENCE_MAX_STEPS = 4;
 export const CLOCK_TOLERANCE_MS = 5000;
@@ -38,7 +39,7 @@ export interface EligibleDeal { dealId: number; track: FollowUpTrack; step: Foll
 
 export type SkipReason = 'disabled' | 'closed_stage' | 'stage_not_in_ladder' | 'already_customer' | 'optout' | 'needs_human'
   | 'live_cadence_task' | 'live_legacy_task' | 'no_studio_turn' | 'customer_spoke_last' | 'too_old' | 'too_soon'
-  | 'episode_done' | 'step_already_sent' | 'duplicate_phone';
+  | 'episode_done' | 'step_already_sent' | 'no_fixed_text' | 'duplicate_phone';
 
 export interface SelectInput { config: FollowUpConfig; stages: StageRow[]; activities: DealActivity[]; cadenceTasks: CadenceTaskLite[];
   liveLegacyDealIds: Set<number>; optoutKeys: Set<string>; now: Date }
@@ -162,7 +163,7 @@ function parseLadder(value: unknown): string[] {
 
 function parsePreQuoteStages(value: unknown): string[] {
   const list = parseJsonish(value);
-  return Array.isArray(list) ? uniqueTrimmedStrings(list).slice(0, PRE_QUOTE_MAX_STEPS) : [];
+  return Array.isArray(list) ? uniqueTrimmedStrings(list).slice(0, PRE_QUOTE_MAX_STAGES) : [];
 }
 
 function parsePreQuoteDelays(value: unknown): number[] {
@@ -191,6 +192,9 @@ function parseExtraInstructions(value: unknown): string {
 const CONFIG_PARSERS: Record<keyof FollowUpConfig, Parser> = {
   enabled: (v) => boolOr(v, D.enabled),
   mode: (v) => (v === 'auto' || v === 'approval' ? v : D.mode),
+  // Sem a 087 as colunas não existem: vale a IA, como antes.
+  message_mode: (v) => (v === 'fixed' ? 'fixed' : D.message_mode),
+  fixed_messages: (v) => parseFixedMessages(parseJsonish(v)),
   ladder_stage_ids: parseLadder,
   step_delays_hours: parseDelays,
   after_last_stage_id: idOrNull,
@@ -342,7 +346,7 @@ const MSG = {
   preQuoteOpen: 'Antes do orçamento só entram etapas de venda abertas (nem ganho nem perdido).',
   preQuoteLadder: 'Uma etapa não pode estar ao mesmo tempo antes do orçamento e na escada.',
   preQuoteOrder: 'As etapas antes do orçamento precisam vir antes da 1ª etapa da escada no funil.',
-  preQuoteDelaysCount: 'Informe 1 ou 2 atrasos para antes do orçamento.',
+  preQuoteDelaysCount: `Informe de 1 a ${PRE_QUOTE_MAX_STEPS} atrasos para antes do orçamento.`,
   hours: 'Horário comercial inválido. Confira fuso, dias, início, fim e feriados.',
   maxGap: 'O intervalo máximo precisa ser maior ou igual ao mínimo e de no máximo 1800 segundos.',
   dedupe: 'Aplique a migration 085 antes de enviar pelo QR.',
@@ -364,6 +368,7 @@ const CONFIG_WARNINGS = {
   qr: 'O envio pelo QR usa cliente não oficial. Mantenha o teto diário baixo.',
   missingDelays: 'Passos sem atraso configurado ficam de fora.',
   firstStepOutside: 'Com o 1º passo em 24h ou mais, quase sempre fora da janela grátis: sai por template ou QR.',
+  fixedMissing: 'Passos sem mensagem fixa ficam sem follow-up (o card para nesse passo).',
 } as const;
 
 function pass(value: unknown): Check {
@@ -387,6 +392,16 @@ function intCheck(min: number, max: number): FieldValidator {
 
 function modeCheck(value: unknown): Check {
   return value === 'auto' || value === 'approval' ? pass(value) : fail(MSG.mode);
+}
+
+function messageModeCheck(value: unknown): Check {
+  return value === 'ai' || value === 'fixed' ? pass(value) : fail(FIXED_MSG.mode);
+}
+
+// Modo fixo exige ao menos o 1º texto; cada texto passa pelas regras do template da Meta.
+function fixedMessagesCheck(value: unknown, draft: Record<string, unknown>): Check {
+  const result = checkFixedMessages(value, draft.message_mode);
+  return 'error' in result ? fail(result.error) : pass(result.value);
 }
 
 function ladderStageError(id: string, stagesById: Map<string, StageRow>): string | null {
@@ -458,7 +473,7 @@ function preQuoteStageError(id: string, draft: Record<string, unknown>, env: Val
 function preQuoteStagesCheck(value: unknown, draft: Record<string, unknown>, env: ValidationEnv): Check {
   if (!Array.isArray(value) || !value.every((id) => typeof id === 'string' && id.trim())) return fail(MSG.preQuoteList);
   const ids = value.map((id: string) => id.trim());
-  if (ids.length > PRE_QUOTE_MAX_STEPS) return fail(MSG.preQuoteMax);
+  if (ids.length > PRE_QUOTE_MAX_STAGES) return fail(MSG.preQuoteMax);
   if (new Set(ids).size !== ids.length) return fail(MSG.preQuoteRepeat);
   const limit = firstLadderPosition(draftIds(draft.ladder_stage_ids), env.stagesById);
   for (const id of ids) {
@@ -570,6 +585,8 @@ function trackerCheck(value: unknown, _draft: Record<string, unknown>, env: Vali
 const FIELD_VALIDATORS: Array<[keyof FollowUpConfig, FieldValidator]> = [
   ['enabled', booleanCheck],
   ['mode', modeCheck],
+  ['message_mode', messageModeCheck],
+  ['fixed_messages', fixedMessagesCheck],
   ['ladder_stage_ids', ladderCheck],
   ['step_delays_hours', delaysCheck],
   ['after_last_stage_id', afterLastCheck],
@@ -603,13 +620,20 @@ function mergePatch(current: FollowUpConfig, patch: Record<string, unknown>): Re
   return draft;
 }
 
+const isFixed = (c: FollowUpConfig): boolean => c.message_mode === 'fixed';
+
+// Modo fixo: fora da janela cada texto sai pelo template dele (o servidor cria na Meta), e
+// passo sem texto não sai.
+const WARNING_RULES: Array<[(c: FollowUpConfig) => boolean, string]> = [
+  [(c) => !isFixed(c) && c.template_id === null && !c.allow_baileys, CONFIG_WARNINGS.noOutsideWindow],
+  [(c) => c.allow_baileys, CONFIG_WARNINGS.qr],
+  [(c) => c.step_delays_hours.length < c.ladder_stage_ids.length, CONFIG_WARNINGS.missingDelays],
+  [(c) => (c.step_delays_hours[0] ?? 0) >= 24, CONFIG_WARNINGS.firstStepOutside],
+  [(c) => isFixed(c) && c.fixed_messages.length < Math.max(stepCount(c), preQuoteStepCount(c)), CONFIG_WARNINGS.fixedMissing],
+];
+
 function configWarnings(c: FollowUpConfig): string[] {
-  const warnings: string[] = [];
-  if (c.template_id === null && !c.allow_baileys) warnings.push(CONFIG_WARNINGS.noOutsideWindow);
-  if (c.allow_baileys) warnings.push(CONFIG_WARNINGS.qr);
-  if (c.step_delays_hours.length < c.ladder_stage_ids.length) warnings.push(CONFIG_WARNINGS.missingDelays);
-  if ((c.step_delays_hours[0] ?? 0) >= 24) warnings.push(CONFIG_WARNINGS.firstStepOutside);
-  return warnings;
+  return WARNING_RULES.filter(([when]) => when(c)).map(([, message]) => message);
 }
 
 export function validateConfigInput(current: FollowUpConfig, patch: unknown,
@@ -889,6 +913,8 @@ const CHECKS: Array<[SkipReason, (d: DealEval, ctx: SelectContext) => boolean]> 
   ['too_soon', (d) => d.silenceHours < d.delayHours],
   ['episode_done', (d, ctx) => ctx.episodeKeys.has(episodeKey(d.track ?? 'ladder', d.phoneKey, d.turnMs))],
   ['step_already_sent', stepAlreadySent],
+  // Modo fixo: passo (ou toque) sem texto não gera tarefa; a IA nunca entra no lugar.
+  ['no_fixed_text', (d, ctx) => ctx.config.message_mode === 'fixed' && !fixedTextFor(ctx.config, Number(d.step))],
 ];
 
 function evaluateDeal(d: DealEval, ctx: SelectContext): SkipReason | null {

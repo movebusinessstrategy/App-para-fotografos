@@ -13,6 +13,7 @@ import type {
 } from './src/features/followups/types.js';
 import { DEFAULT_BUSINESS_HOURS } from './src/features/followups/types.js';
 import { canonicalPhoneKey } from './lib/br-phone.js';
+import { fixedTemplateName, renderFixedMessage } from './followup-fixed.js';
 
 // ─── Supabase falso em memória (subconjunto do PostgREST usado pelas rotas) ───
 
@@ -1275,9 +1276,11 @@ test('PUT /config valida e grava as etapas e os atrasos antes do orçamento; leg
   const after = await call('PUT', '/api/followups/config', { pre_quote_stage_ids: ['followup-3'] });
   assert.equal(after.status, 400);
   assert.match(after.body.fields.pre_quote_stage_ids, /escada/, 'a etapa depois do último passo também não serve');
-  const tooMany = await call('PUT', '/api/followups/config', { pre_quote_stage_ids: ['lead', 'contact'], pre_quote_delays_hours: [24, 72, 96] });
+  const tooMany = await call('PUT', '/api/followups/config', { pre_quote_stage_ids: ['lead', 'contact'], pre_quote_delays_hours: [24, 72, 96, 120] });
   assert.equal(tooMany.status, 400);
-  assert.match(tooMany.body.fields.pre_quote_delays_hours, /1 ou 2/);
+  assert.match(tooMany.body.fields.pre_quote_delays_hours, /de 1 a 3/);
+  const threeStages = await call('PUT', '/api/followups/config', { pre_quote_stage_ids: ['lead', 'contact', 'lead'], pre_quote_delays_hours: [24, 72, 96] });
+  assert.match(threeStages.body.fields.pre_quote_stage_ids, /no máximo 2/, 'as etapas continuam até 2; só os toques foram para 3');
   const won = await call('PUT', '/api/followups/config', { pre_quote_stage_ids: ['won'] });
   assert.match(won.body.fields.pre_quote_stage_ids, /abertas/);
 
@@ -1460,6 +1463,137 @@ test('revisão do funil: só dono, com limites de entrada', async (t) => {
   assert.equal(tooMany.status, 400);
   const badPhone = await call('POST', '/api/followups/reconcile/apply', { create_phones: ['12'] });
   assert.equal(badPhone.status, 400);
+});
+
+// ─── Mensagens fixas (087) ───
+
+const FIXED_TEXTS = ['Oiiii [nome], tudo bem 🥰?\n\nVamos ver uma data para as suas fotos?', 'Oiiii [nome], tudo bem? 🥰',
+  'Oi, [nome]! 🥰\nVocê ainda tem interesse em seguir com suas fotos?'];
+const fixedName = (step: number, texts = FIXED_TEXTS) => fixedTemplateName(step, texts[step - 1]);
+
+test('GET /config e /overview devolvem o modo e o status na Meta do template de cada mensagem fixa', async (t) => {
+  const db = makeDb({
+    followup_cadence_config: [configRow({ message_mode: 'fixed', fixed_messages: FIXED_TEXTS })],
+    whatsapp_message_templates: [
+      { id: 1, user_id: OWNER, name: fixedName(1), status: 'APPROVED', rejection_reason: 'NONE' },
+      { id: 2, user_id: OWNER, name: fixedName(2), status: 'REJECTED', rejection_reason: 'Conteúdo promocional' },
+      { id: 3, user_id: OTHER_TENANT, name: fixedName(3), status: 'APPROVED', rejection_reason: null },
+    ],
+  });
+  const { services } = fakeServices({ fixedTemplateErrors: () => ({ [fixedName(3)]: 'Nome já usado na Meta' }) });
+  const call = await startApp(t, db, services);
+  const expected = [
+    { step: 1, name: fixedName(1), status: 'APPROVED', reason: null },
+    { step: 2, name: fixedName(2), status: 'REJECTED', reason: 'Conteúdo promocional' },
+    { step: 3, name: fixedName(3), status: 'NOT_CREATED', reason: 'Nome já usado na Meta' },
+  ];
+  const cfg = await call('GET', '/api/followups/config');
+  assert.equal(cfg.status, 200);
+  assert.equal(cfg.body.config.message_mode, 'fixed');
+  assert.deepEqual(cfg.body.config.fixed_messages, FIXED_TEXTS);
+  assert.deepEqual(cfg.body.fixed_templates, expected);
+  const overview = await call('GET', '/api/followups/overview');
+  assert.equal(overview.body.message_mode, 'fixed');
+  assert.deepEqual(overview.body.fixed_templates, expected);
+  const query = db.entries('whatsapp_message_templates')[0];
+  assert.ok(query.filters.includes(`user_id=eq.${OWNER}`));
+  // Modo IA sem textos: nada para consultar.
+  const plain = makeDb();
+  const call2 = await startApp(t, plain, fakeServices().services);
+  assert.deepEqual((await call2('GET', '/api/followups/config')).body.fixed_templates, []);
+  assert.equal((await call2('GET', '/api/followups/overview')).body.message_mode, 'ai');
+  assert.equal(plain.entries('whatsapp_message_templates').length, 0);
+});
+
+test('PUT /config: modo fixo exige o Follow 01 e textos em ordem', async (t) => {
+  const db = makeDb();
+  const call = await startApp(t, db, fakeServices().services);
+  const empty = await call('PUT', '/api/followups/config', { message_mode: 'fixed' });
+  assert.equal(empty.status, 400);
+  assert.match(empty.body.fields.fixed_messages, /pelo menos o Follow 01/);
+  const gap = await call('PUT', '/api/followups/config', { message_mode: 'fixed', fixed_messages: [FIXED_TEXTS[0], '', FIXED_TEXTS[2]] });
+  assert.match(gap.body.fields.fixed_messages, /em ordem/);
+  const start = await call('PUT', '/api/followups/config', { message_mode: 'fixed', fixed_messages: ['[nome], tudo bem?'] });
+  assert.match(start.body.fields.fixed_messages, /^Follow 01: não comece/);
+  assert.equal(db.entries('followup_cadence_config', 'upsert').length, 0);
+});
+
+test('PUT /config no modo fixo grava os textos, pede os templates na hora e troca o texto dos follow-ups vivos', async (t) => {
+  const lease = new Date(NOW.getTime() + 60_000).toISOString();
+  const db = makeDb({
+    followup_cadence_config: [configRow({ mode: 'auto', ladder_stage_ids: ['proposal', 'negotiation', 'followup-3'], step_delays_hours: [24, 48, 72], after_last_stage_id: null })],
+    scheduled_followups: [
+      task({ id: 301, status: 'draft', step: 1, contact_name: 'Ana Souza' }),
+      task({ id: 302, status: 'approved', approved_by: 'auto', approved_at: '2026-09-16T11:00:00.000Z', step: 2, deal_id: 13, phone: PHONE_C,
+        stage_id: 'negotiation', contact_name: null, generation_meta: { approval: { channel_class: 'text', render: null, template_id: null } } }),
+      task({ id: 303, status: 'approved', approved_by: 'auto', approved_at: '2026-09-16T11:00:00.000Z', step: 1, deal_id: 12, phone: PHONE_B,
+        claimed_at: NOW.toISOString(), lease_expires_at: lease }),
+      task({ id: 304, status: 'sent', step: 1, deal_id: 12, phone: PHONE_B }),
+      task({ id: 305, status: 'draft', step: 1, user_id: OTHER_TENANT }),
+    ],
+  });
+  const { services, calls } = fakeServices({ requestFixedTemplates: (u: string) => { (calls.requestFixedTemplates ||= []).push([u]); } });
+  const call = await startApp(t, db, services);
+  const res = await call('PUT', '/api/followups/config', { message_mode: 'fixed', fixed_messages: [FIXED_TEXTS[0], FIXED_TEXTS[1], '', ''] });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.config.message_mode, 'fixed');
+  assert.deepEqual(res.body.config.fixed_messages, FIXED_TEXTS.slice(0, 2));
+  assert.equal(res.body.fixed_rerendered, 2);
+  assert.ok(res.body.warnings.includes('Passos sem mensagem fixa ficam sem follow-up (o card para nesse passo).'));
+  const saved = db.rows('followup_cadence_config').find((r) => r.user_id === OWNER) as Row;
+  assert.equal(saved.message_mode, 'fixed');
+  assert.deepEqual(saved.fixed_messages, FIXED_TEXTS.slice(0, 2));
+  assert.deepEqual(calls.requestFixedTemplates, [[OWNER]]);
+  const draft = findTask(db, 301);
+  assert.equal(draft.message, renderFixedMessage(FIXED_TEXTS[0], 'Ana'));
+  assert.equal(draft.draft_text, draft.message);
+  assert.equal(draft.status, 'draft');
+  assert.deepEqual(draft.generation_meta.fixed, { source: FIXED_TEXTS[0], template_name: fixedName(1) });
+  assert.deepEqual(draft.generation_meta.warnings, []);
+  const approved = findTask(db, 302);
+  assert.equal(approved.status, 'approved', 'a aprovação continua');
+  assert.equal(approved.message, 'Oiiii, tudo bem? 🥰', 'sem nome no card');
+  assert.deepEqual(approved.generation_meta.approval, { channel_class: 'text', render: null, template_id: null });
+  assert.equal(findTask(db, 303).message, 'Oi Ana, conseguiu ver o orçamento?', 'em envio (lease viva) não mexe');
+  assert.equal(findTask(db, 304).message, 'Oi Ana, conseguiu ver o orçamento?', 'enviado não mexe');
+  assert.equal(findTask(db, 305).message, 'Oi Ana, conseguiu ver o orçamento?', 'outra conta não mexe');
+
+  const same = await call('PUT', '/api/followups/config', { daily_cap: 30 });
+  assert.equal(same.body.fixed_rerendered, 0, 'texto igual: nada muda');
+  const changed = await call('PUT', '/api/followups/config', { fixed_messages: [FIXED_TEXTS[0], 'Oiiii [nome], como vai? 🥰'] });
+  assert.equal(changed.body.fixed_rerendered, 1, 'só o passo com texto novo');
+  assert.equal(findTask(db, 302).message, 'Oiiii, como vai? 🥰');
+});
+
+test('PUT /config: sem modo fixo as colunas da 087 não vão no upsert (código antes da migration continua gravando)', async (t) => {
+  const db = makeDb();
+  const call = await startApp(t, db, fakeServices().services);
+  await call('PUT', '/api/followups/config', { daily_cap: 12 });
+  const first = db.entries('followup_cadence_config', 'upsert')[0].payload;
+  assert.equal('message_mode' in first, false);
+  assert.equal('fixed_messages' in first, false);
+  await call('PUT', '/api/followups/config', { message_mode: 'fixed', fixed_messages: [FIXED_TEXTS[0]] });
+  await call('PUT', '/api/followups/config', { message_mode: 'ai' });
+  const back = db.entries('followup_cadence_config', 'upsert')[2].payload;
+  assert.equal(back.message_mode, 'ai', 'voltar para a IA grava a troca');
+  assert.deepEqual(back.fixed_messages, [FIXED_TEXTS[0]], 'e guarda os textos');
+});
+
+test('POST /sweep no modo fixo não pede consentimento da IA; aprovar passa a mensagem fixa para a previsão', async (t) => {
+  const meta = { outcome: 'draft', warnings: [], fixed: { source: FIXED_TEXTS[0], template_name: fixedName(1) } };
+  const db = makeDb({
+    followup_cadence_config: [configRow({ external_ai_consent_at: null, external_ai_consent_by: null, message_mode: 'fixed', fixed_messages: FIXED_TEXTS })],
+    scheduled_followups: [task({ id: 41, message: renderFixedMessage(FIXED_TEXTS[0], 'Ana'), generation_meta: meta })],
+  });
+  const { services, calls } = fakeServices();
+  const call = await startApp(t, db, services);
+  const started = await call('POST', '/api/followups/sweep', {});
+  assert.equal(started.status, 202);
+  await tick();
+  assert.deepEqual(calls.runSweep[0], [OWNER, { manual: true }]);
+  const approved = await call('POST', '/api/followups/41/approve', {});
+  assert.equal(approved.status, 200);
+  assert.deepEqual(calls.forecast[0][2][0].fixed, meta.fixed);
 });
 
 // ─── Garantias transversais ───

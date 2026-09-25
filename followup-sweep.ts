@@ -1,14 +1,16 @@
 // Varredura da cadência: acha quem ficou em silêncio depois da última fala do
-// estúdio, pede o rascunho à IA e grava a tarefa. Também gera de novo um
-// rascunho sob demanda. Banco, IA e canal entram por dependência; aqui ficam a
-// ordem das coisas, as travas (consentimento, CAS) e o resumo.
+// estúdio, pede o rascunho à IA (ou usa a mensagem fixa do passo, no modo
+// 'fixed') e grava a tarefa. Também gera de novo um rascunho sob demanda. Banco,
+// IA e canal entram por dependência; aqui ficam a ordem das coisas, as travas
+// (consentimento, CAS) e o resumo.
 import type {
-  CadenceGenerationMeta, CadenceStatus, CadenceTaskRow, CancelReason, FollowUpConfig, FollowUpRuntimeState, FollowUpStep,
-  ForecastInput, ForecastResult, RegenerateResult, SweepDryRun, SweepRequest, SweepSummary,
+  CadenceFixedRef, CadenceGenerationMeta, CadenceStatus, CadenceTaskRow, CancelReason, FollowUpConfig, FollowUpRuntimeState,
+  FollowUpStep, ForecastInput, ForecastResult, RegenerateResult, SweepDryRun, SweepRequest, SweepSummary,
 } from './src/features/followups/types.js';
 import { RETENTION_DAYS } from './src/features/followups/types.js';
 import type { AiAgentConfigRow, DraftDeps, DraftInput, DraftMeta, DraftResult, DraftRow } from './followup-draft.js';
-import { contextTail } from './followup-draft.js';
+import { contextTail, firstName } from './followup-draft.js';
+import { fixedRefFor, renderFixedMessage } from './followup-fixed.js';
 import type { CadenceTaskLite, DealActivity, EligibleDeal, SkipReason } from './followup-cadence.js';
 import {
   customerSpokeAfter, housekeepLiveTasks, initialStatusFor, LIVE_TASK_LOOKBACK_DAYS, preQuoteStepCount, selectEligibleDeals,
@@ -42,6 +44,7 @@ export interface CadenceSweepRepo {
   loadTask(userId: string, id: number): Promise<CadenceTaskRow | null>;
   updateTaskCas(id: number, userId: string, patch: Record<string, unknown>, opts: TaskCasOptions): Promise<CadenceTaskRow | null>;
   lastCustomerTurnAt(userId: string, phone: string): Promise<string | null>;
+  dealContactName?(userId: string, dealId: number): Promise<string | null>;   // nome atual do card (mensagem fixa)
 }
 
 export interface CadenceSweepDeps {
@@ -74,7 +77,8 @@ const HOUSEKEEP_STATUSES: readonly CadenceStatus[] = ['draft', 'approved', 'bloc
 const REGEN_STATUSES: readonly CadenceStatus[] = ['draft', 'blocked', 'approved', 'failed', 'skipped'];
 // Restos da tentativa anterior. A entrega antiga (failed pela Meta) precisa sair: com
 // ela, um lease vencido na próxima tentativa passaria por enviado sem ter saído nada.
-const STALE_META_KEYS = ['approval', 'approved_via', 'block_code', 'failure', 'cancel_reason', 'delivery', 'advance'] as const;
+const STALE_META_KEYS = ['approval', 'approved_via', 'block_code', 'failure', 'cancel_reason', 'delivery', 'advance', 'fixed_fallback'] as const;
+const FIXED_VERSION = 'fixed';
 const STALE_SEND_FIELDS = { sent_at: null, sent_message_id: null, channel_used: null } as const;
 const FORCE_INSTRUCTION = 'O estúdio revisou a conversa e decidiu retomar mesmo assim. Escreva a mensagem de retomada, sem pular e sem passar para uma pessoa.';
 const EMPTY_AGENT: AiAgentConfigRow = {
@@ -249,10 +253,11 @@ const SKIPPED_OUTCOMES: Record<'skip' | 'handoff', (reason: string) => Partial<C
   handoff: (reason) => ({ outcome: 'handoff', skip_reason: null, handoff_reason: reason, skipped_by: 'ai' }),
 };
 
-async function autoApproval(deps: CadenceSweepDeps, run: SweepRun, e: EligibleDeal, text: string): Promise<CadenceGenerationMeta['approval'] | null> {
+async function autoApproval(deps: CadenceSweepDeps, run: SweepRun, e: EligibleDeal, text: string, fixed: CadenceFixedRef | null):
+  Promise<CadenceGenerationMeta['approval'] | null> {
   const item: ForecastInput = {
     id: 0, contact_name: e.contactName, text, step: e.step, last_customer_at: e.lastCustomerAt, phone: normalizeBrazilianPhone13(e.contactPhone),
-    track: e.track,
+    track: e.track, fixed,
   };
   try {
     const [forecast] = await deps.forecastFor(run.userId, run.config, [item]);
@@ -263,13 +268,18 @@ async function autoApproval(deps: CadenceSweepDeps, run: SweepRun, e: EligibleDe
   }
 }
 
-async function draftOutcome(deps: CadenceSweepDeps, run: SweepRun, e: EligibleDeal, r: Extract<DraftResult, { kind: 'draft' }>): Promise<RowOutcome> {
+async function draftOutcome(deps: CadenceSweepDeps, run: SweepRun, e: EligibleDeal, r: Extract<DraftResult, { kind: 'draft' }>,
+  fixed: CadenceFixedRef | null): Promise<RowOutcome> {
   const fields = { status: 'draft', message: r.text, draft_text: r.text, approved_at: null, approved_by: null };
-  const meta: Partial<CadenceGenerationMeta> = { outcome: 'draft', skip_reason: null, skipped_by: null, handoff_reason: null, warnings: r.warnings };
-  const initial = initialStatusFor(run.config.mode, e, r.warnings, { manual: run.req.manual, enabled: run.config.enabled });
+  const meta: Partial<CadenceGenerationMeta> = {
+    outcome: 'draft', skip_reason: null, skipped_by: null, handoff_reason: null, warnings: r.warnings, ...(fixed ? { fixed } : {}),
+  };
+  // O texto fixo não depende do que a IA oficial respondeu: a base invisível não segura a aprovação.
+  const basis = fixed ? { invisibleBasis: false } : e;
+  const initial = initialStatusFor(run.config.mode, basis, r.warnings, { manual: run.req.manual, enabled: run.config.enabled });
   if (initial.status !== 'approved') return { fields, meta, approved: false };
   // Sem a previsão de canal não há como provar o que foi aprovado: fica rascunho.
-  const approval = await autoApproval(deps, run, e, r.text);
+  const approval = await autoApproval(deps, run, e, r.text, fixed);
   if (!approval) return { fields, meta, approved: false };
   return {
     fields: { ...fields, status: 'approved', approved_at: run.nowIso, approved_by: 'auto' },
@@ -278,9 +288,21 @@ async function draftOutcome(deps: CadenceSweepDeps, run: SweepRun, e: EligibleDe
   };
 }
 
-async function outcomeFor(deps: CadenceSweepDeps, run: SweepRun, e: EligibleDeal, r: Generated): Promise<RowOutcome> {
-  if (r.kind === 'draft') return draftOutcome(deps, run, e, r);
+async function outcomeFor(deps: CadenceSweepDeps, run: SweepRun, e: EligibleDeal, r: Generated, fixed: CadenceFixedRef | null): Promise<RowOutcome> {
+  if (r.kind === 'draft') return draftOutcome(deps, run, e, r, fixed);
   return { fields: { status: 'skipped', message: '', draft_text: null }, meta: SKIPPED_OUTCOMES[r.kind](r.reason), approved: false };
+}
+
+// Mensagem fixa: o texto do passo com o primeiro nome, sem IA e sem avisos (o dono aprovou o texto).
+function fixedDraftMeta(generatedAt: string): DraftMeta {
+  return {
+    version: FIXED_VERSION, model: null, latency_ms: null, usage: null, cost_usd: null, niche: null, messages_used: 0,
+    warnings: [], generated_at: generatedAt,
+  };
+}
+
+function fixedDraft(run: SweepRun, e: EligibleDeal, fixed: CadenceFixedRef): Extract<DraftResult, { kind: 'draft' }> {
+  return { kind: 'draft', text: renderFixedMessage(fixed.source, firstName(e.contactName)), warnings: [], meta: fixedDraftMeta(run.nowIso) };
 }
 
 // Opt-out pelo histórico: quem pediu para parar não passa pela IA.
@@ -336,9 +358,11 @@ function tally(summary: SweepSummary, inserted: 'ok' | 'duplicate', kind: Genera
 async function processEligible(deps: CadenceSweepDeps, run: SweepRun, e: EligibleDeal): Promise<void> {
   const rows = await deps.repo.loadConversationRows(run.userId, e.contactPhone, run.waNumbers, CONVERSATION_ROWS);
   if (await optOutFromHistory(deps, run, e, rows)) return;
-  const r = await deps.generate(sweepDraftInput(run, e, rows), deps.draftDeps);
+  // Modo fixo: a seleção já tirou os passos sem texto, então aqui nunca chega IA.
+  const fixed = fixedRefFor(run.config, e.step);
+  const r = fixed ? fixedDraft(run, e, fixed) : await deps.generate(sweepDraftInput(run, e, rows), deps.draftDeps);
   if (r.kind === 'error') return onGenerateError(deps, run, e, r);
-  const outcome = await outcomeFor(deps, run, e, r);
+  const outcome = await outcomeFor(deps, run, e, r, fixed);
   const row = { ...commonRow(run, e), ...outcome.fields, generation_meta: { ...commonMeta(run, e, rows, r.meta), ...outcome.meta } };
   tally(run.summary, await deps.repo.insertTask(row), r.kind, outcome.approved);
 }
@@ -400,7 +424,8 @@ async function runScope(deps: CadenceSweepDeps, scope: SweepScope, req: SweepReq
   const { eligible } = selectFor(scope, req);
   summary.eligible = eligible.length;
   const take = eligible.slice(0, takeCount(scope.config, req));
-  const agent = take.length ? (await deps.repo.loadAgentConfig(scope.userId)) ?? EMPTY_AGENT : EMPTY_AGENT;
+  const needsAgent = take.length > 0 && scope.config.message_mode !== 'fixed';
+  const agent = needsAgent ? (await deps.repo.loadAgentConfig(scope.userId)) ?? EMPTY_AGENT : EMPTY_AGENT;
   const run: SweepRun = { ...scope, req, agent, summary, aborted: false, progress: { total: take.length, done: 0 }, hooks };
   hooks.onProgress?.({ ...run.progress });
   await mapLimit(take, SWEEP_CONCURRENCY, () => run.aborted, (e) => processSafely(deps, run, e));
@@ -496,6 +521,48 @@ async function regenerateClaimed(deps: CadenceSweepDeps, ctx: RegenContext): Pro
   return updated ? { status: 'updated' } : { status: 'conflict' };
 }
 
+// Nome atual do card: quem completou o nome depois do bloqueio "sem nome" gera de novo e ele entra.
+async function currentContactName(deps: CadenceSweepDeps, ctx: RegenContext): Promise<string | null> {
+  if (!deps.repo.dealContactName) return ctx.task.contact_name;
+  try {
+    return (await deps.repo.dealContactName(ctx.userId, Number(ctx.task.deal_id))) ?? ctx.task.contact_name;
+  } catch (error) {
+    deps.log('cadence_regen_contact_failed', { userId: ctx.userId, taskId: ctx.task.id, error: errorText(error) });
+    return ctx.task.contact_name;
+  }
+}
+
+function fixedRegenPatch(ctx: RegenContext, fixed: CadenceFixedRef, contactName: string | null, doneIso: string): Record<string, unknown> {
+  const previous = ctx.task.generation_meta ?? {};
+  const text = renderFixedMessage(fixed.source, firstName(contactName));
+  const generation_meta: CadenceGenerationMeta = {
+    ...withoutStaleMeta(previous), ...fixedDraftMeta(doneIso),
+    outcome: 'draft', skip_reason: null, skipped_by: null, handoff_reason: null, warnings: [], fixed,
+    regenerations: Number(previous.regenerations ?? 0) + 1, edited_by: ctx.opts.actorId, edited_at: doneIso,
+  };
+  return {
+    status: 'draft', message: text, draft_text: text, contact_name: contactName, approved_at: null, approved_by: null, last_error: null,
+    ...STALE_SEND_FIELDS, updated_at: doneIso, generation_meta,
+  };
+}
+
+// Modo fixo com texto para o passo: renderiza de novo, sem IA e sem consentimento. Passo sem
+// texto (tarefa de antes da troca de modo) volta para a IA, que precisa do consentimento.
+function regenSource(loaded: LoadedConfig, task: CadenceTaskRow): { fixed: CadenceFixedRef | null } | { status: 'consent_required' } {
+  const fixed = fixedRefFor(loaded.config, task.step);
+  if (!fixed && !loaded.state.external_ai_consent_at) return { status: 'consent_required' };
+  return { fixed };
+}
+
+// Modo fixo: "gerar de novo" renderiza outra vez o texto atual do passo (sem IA e sem consentimento).
+async function regenerateFixed(deps: CadenceSweepDeps, ctx: RegenContext, fixed: CadenceFixedRef): Promise<RegenerateResult> {
+  const lastCustomer = await deps.repo.lastCustomerTurnAt(ctx.userId, ctx.task.phone);
+  if (customerSpokeAfter(ctx.task.basis_at, lastCustomer)) return { status: 'conversation_changed' };
+  const patch = fixedRegenPatch(ctx, fixed, await currentContactName(deps, ctx), deps.now().toISOString());
+  const updated = await deps.repo.updateTaskCas(ctx.task.id, ctx.userId, patch, { statuses: ['draft'], updatedAt: ctx.claimedAt });
+  return updated ? { status: 'updated' } : { status: 'conflict' };
+}
+
 // Fábrica
 
 export function createCadenceSweep(deps: CadenceSweepDeps): CadenceSweep {
@@ -503,7 +570,8 @@ export function createCadenceSweep(deps: CadenceSweepDeps): CadenceSweep {
     const now = deps.now();
     const loaded = await deps.repo.loadConfig(userId);
     if (!loaded.exists || (!req.manual && !loaded.config.enabled)) return { ...emptySummary(), finished_at: now.toISOString() };
-    if (!loaded.state.external_ai_consent_at) throw new Error('AI_CONSENT_REQUIRED');
+    // Mensagens fixas não passam conversa nenhuma pela IA: não pedem consentimento.
+    if (!loaded.state.external_ai_consent_at && loaded.config.message_mode !== 'fixed') throw new Error('AI_CONSENT_REQUIRED');
     const scope = await loadScope(deps, userId, loaded, req, now);
     if (!scope) return finishWithoutMain(deps, userId, loaded, now);
     return runScope(deps, scope, req, hooks);
@@ -523,17 +591,19 @@ export function createCadenceSweep(deps: CadenceSweepDeps): CadenceSweep {
 
   async function regenerate(userId: string, taskId: number, opts: { instruction?: string; force?: boolean; actorId: string }): Promise<RegenerateResult> {
     const loaded = await deps.repo.loadConfig(userId);
-    if (!loaded.state.external_ai_consent_at) return { status: 'consent_required' };
+    if (!loaded.state.external_ai_consent_at && loaded.config.message_mode !== 'fixed') return { status: 'consent_required' };
     const task = await deps.repo.loadTask(userId, taskId);
     const blocker = regenBlocker(task);
     if (blocker || !task) return { status: blocker ?? 'invalid_status' };
+    const source = regenSource(loaded, task);
+    if ('status' in source) return source;
     const now = deps.now();
     const nowIso = now.toISOString();
     // Tira da fila antes da IA: o sender não pega uma tarefa que está sendo reescrita.
     const claimed = await deps.repo.updateTaskCas(task.id, userId, backToDraftPatch(task, nowIso), { statuses: [task.status], noLiveLeaseAt: nowIso });
     if (!claimed) return { status: 'conflict' };
     const ctx: RegenContext = { userId, task, config: loaded.config, now, nowIso, claimedAt: claimed.updated_at || nowIso, opts };
-    return regenerateClaimed(deps, ctx);
+    return source.fixed ? regenerateFixed(deps, ctx, source.fixed) : regenerateClaimed(deps, ctx);
   }
 
   return { runSweep, countEligible, regenerate };

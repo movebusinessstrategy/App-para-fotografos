@@ -165,7 +165,29 @@ export const BLOCK_CODE_TEXT: Record<BlockCode, string> = {
   template_invalid: 'A Meta recusou o template escolhido.',
   template_not_eligible: 'O template escolhido não serve para retomada.',
   quality_not_green: 'A qualidade do número na Meta caiu. Envios pausados para proteger o número.',
+  fixed_template_pending: 'O template desta mensagem fixa ainda está em análise na Meta.',
+  contact_name_missing: 'Falta o nome do cliente no card para o template da mensagem fixa.',
 };
+
+// Mensagens fixas (texto aprovado pelo dono, um por passo) e o status do template de cada uma na Meta.
+export const MESSAGE_MODE_FIXED_TEXT = 'Mensagens fixas (o texto que você aprovou)';
+export const MESSAGE_MODE_AI_TEXT = 'IA escreve cada uma';
+export const FIXED_NAME_HINT = 'Use [nome] para o primeiro nome.';
+export const FIXED_MESSAGES_HELP = 'Cada follow-up sai exatamente com este texto, dentro ou fora da janela de 24h. Fora da janela ele vai por um template que o sistema cria e acompanha sozinho na Meta.';
+
+const FIXED_STATUS_TEXT: Record<string, { text: string; tone: Tone }> = {
+  APPROVED: { text: 'Aprovado', tone: 'emerald' },
+  PENDING: { text: 'Em análise na Meta', tone: 'amber' },
+  IN_APPEAL: { text: 'Em análise na Meta', tone: 'amber' },
+};
+
+export function fixedTemplateStatusText(status: string, reason: string | null): { text: string; tone: Tone } {
+  const key = String(status ?? '').trim().toUpperCase();
+  if (FIXED_STATUS_TEXT[key]) return FIXED_STATUS_TEXT[key];
+  if (key === 'REJECTED') return { text: reason ? `Recusado: ${reason}` : 'Recusado pela Meta', tone: 'red' };
+  if (key === 'NOT_CREATED') return reason ? { text: `Não foi para a Meta: ${reason}`, tone: 'red' } : { text: 'Indo para a Meta', tone: 'slate' };
+  return { text: `Na Meta: ${key || 'status desconhecido'}`, tone: 'amber' };
+}
 
 // last_error pode vir como 'cancel:<motivo>', 'block:<código>', um código solto ou texto pronto.
 export function lastErrorText(raw: string | null | undefined): string {

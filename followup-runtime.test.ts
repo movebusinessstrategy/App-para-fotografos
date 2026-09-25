@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { mock } from 'node:test';
-import { createFollowUpCadenceFrom, SENDER_TICK_MS, SWEEP_SCHEDULER_MS } from './followup-runtime.js';
+import { createFollowUpCadenceFrom, FIXED_TEMPLATES_EVERY_MS, SENDER_TICK_MS, SWEEP_SCHEDULER_MS } from './followup-runtime.js';
 import type { CadenceFunnelPort, FollowUpCadenceDeps } from './followup-runtime.js';
 import {
   CadenceMigrationMissing, createFollowUpRepo, createSenderTransport, graphResultFrom, invisibleCandidates, isCadenceMigrationMissing,
@@ -13,6 +13,7 @@ import type { SenderTransport } from './followup-sender.js';
 import { DEFAULT_FOLLOWUP_CONFIG } from './src/features/followups/types.js';
 import type { CadenceTaskRow, FollowUpConfig, FollowUpRuntimeState } from './src/features/followups/types.js';
 import { canonicalPhoneKey } from './lib/br-phone.js';
+import { fixedTemplateBody, fixedTemplateName, renderFixedMessage } from './followup-fixed.js';
 
 const HOUR = 3_600_000;
 // Sexta-feira, 12:00 em São Paulo.
@@ -90,7 +91,7 @@ function fakeFunnel() {
   return { funnel, calls };
 }
 
-function runtime(repo: FollowUpRepo, opts: { now?: () => Date; logs?: Array<{ event: string; data?: Record<string, unknown> }> } = {}) {
+function runtime(repo: FollowUpRepo, opts: { now?: () => Date; logs?: Array<{ event: string; data?: Record<string, unknown> }>; fetch?: typeof fetch } = {}) {
   const { funnel, calls } = fakeFunnel();
   const deps: FollowUpCadenceDeps = {
     db: {} as FollowUpCadenceDeps['db'], funnel,
@@ -104,7 +105,7 @@ function runtime(repo: FollowUpRepo, opts: { now?: () => Date; logs?: Array<{ ev
     now: opts.now ?? (() => new Date(T0)),
     log: (event, data) => opts.logs?.push({ event, data }),
   };
-  return { cadence: createFollowUpCadenceFrom(deps, { repo, transport: NO_TRANSPORT }), funnelCalls: calls };
+  return { cadence: createFollowUpCadenceFrom(deps, { repo, transport: NO_TRANSPORT, fetch: opts.fetch }), funnelCalls: calls };
 }
 
 function deferred<T>() {
@@ -740,4 +741,187 @@ test('repo: conversa assumida por uma pessoa (human_active) segura a cadência c
   assert.equal(needsHuman([{ needs_human: true, agent_status: 'idle' }]), true);
   assert.equal(needsHuman([{ needs_human: false, agent_status: 'lia_active' }, { needs_human: null, agent_status: null }]), false);
   assert.equal(needsHuman([]), false);
+});
+
+// Mensagens fixas (087)
+
+const FIXED_TEXTS = ['Oiiii [nome], tudo bem 🥰?\n\nVamos ver uma data para as suas fotos?', 'Oiiii [nome], tudo bem? 🥰'];
+const FIXED_CONFIG: FollowUpConfig = { ...BASE_CONFIG, message_mode: 'fixed', fixed_messages: FIXED_TEXTS };
+const fixedName = (step: number) => fixedTemplateName(step, FIXED_TEXTS[step - 1]);
+const fixedTemplate = (step: number, status = 'APPROVED'): CadenceTemplate => ({
+  id: 70 + step, name: fixedName(step), language: 'pt_BR', bodyText: fixedTemplateBody(FIXED_TEXTS[step - 1]), status,
+  category: 'MARKETING', headerText: null, buttons: [],
+});
+const settle = async (rounds = 12) => { for (let i = 0; i < rounds; i++) await new Promise((resolve) => setImmediate(resolve)); };
+
+function graphFetch(replies: Array<{ status: number; body: unknown }>) {
+  const calls: Array<{ url: string; method: string; body: any }> = [];
+  const fn = (async (url: string, init: RequestInit) => {
+    calls.push({ url, method: String(init.method), body: init.body ? JSON.parse(String(init.body)) : null });
+    const reply = replies.shift() ?? { status: 500, body: { error: { message: 'sem resposta' } } };
+    return { ok: reply.status < 300, status: reply.status, json: async () => reply.body } as Response;
+  }) as unknown as typeof fetch;
+  return { fn, calls };
+}
+
+test('forecast com mensagem fixa: template do passo pelo nome (uma consulta) e texto editado segue o fluxo normal', async () => {
+  const names: string[][] = [];
+  const repo = fakeRepo({
+    loadHealth: async () => health(), loadTemplate: async () => TEMPLATE,
+    templatesByName: async (_u, list) => { names.push(list); return [fixedTemplate(1)]; },
+  });
+  const { cadence } = runtime(repo);
+  const ref = { source: FIXED_TEXTS[0], template_name: fixedName(1) };
+  const exact = renderFixedMessage(FIXED_TEXTS[0], 'Ana');
+  const [fixed, edited, inside] = await cadence.services.forecast(USER, { ...FIXED_CONFIG, template_id: 40 }, [
+    { id: 1, contact_name: 'Ana Souza', text: exact, step: 1, last_customer_at: ago(30), phone: CUSTOMER, fixed: ref },
+    { id: 2, contact_name: 'Ana Souza', text: `${exact} Editado.`, step: 1, last_customer_at: ago(30), phone: CUSTOMER, fixed: ref },
+    { id: 3, contact_name: 'Ana Souza', text: exact, step: 1, last_customer_at: ago(2), phone: CUSTOMER, fixed: ref },
+  ]);
+  assert.deepEqual(names, [[fixedName(1)]]);
+  assert.equal(fixed.channel, 'meta_template');
+  assert.deepEqual(fixed.approval, { channel_class: 'template', render: exact, template_id: 71 });
+  assert.equal(edited.approval.template_id, 40, 'editado: template geral');
+  assert.deepEqual(inside.approval, { channel_class: 'text', render: null, template_id: null });
+});
+
+test('channelHealth no modo fixo conta os templates aprovados; leitura com erro não derruba a saúde', async () => {
+  const repo = fakeRepo({
+    loadHealth: async () => health(), loadTemplate: async () => null,
+    templatesByName: async () => [fixedTemplate(1), fixedTemplate(2, 'PENDING')],
+  });
+  const partial = await runtime(repo).cadence.services.channelHealth(USER, FIXED_CONFIG);
+  assert.deepEqual(partial.fixed, { total: 2, approved: 1 });
+  assert.equal(partial.can_send.outside_24h, false);
+  repo.templatesByName = async () => [fixedTemplate(1), fixedTemplate(2)];
+  assert.equal((await runtime(repo).cadence.services.channelHealth(USER, FIXED_CONFIG)).can_send.outside_24h, true);
+  repo.templatesByName = async () => { throw new Error('banco fora'); };
+  const logs: Array<{ event: string }> = [];
+  const down = await runtime(repo, { logs }).cadence.services.channelHealth(USER, FIXED_CONFIG);
+  assert.equal(down.fixed, null);
+  assert.ok(logs.some((l) => l.event === 'cadence_fixed_summary_failed'));
+});
+
+test('agendador no modo fixo: cuida dos templates antes de varrer (no máximo a cada 10 min) e varre sem consentimento', async (t) => {
+  mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
+  t.after(() => mock.timers.reset());
+  let clock = T0.getTime();
+  const swept: string[] = [];
+  const requeued: string[][] = [];
+  const entry = { userId: 'fixa', config: FIXED_CONFIG, state: { ...BASE_STATE, external_ai_consent_at: null, last_sweep_at: ago(2) } };
+  const repo = fakeRepo({
+    listConfigsForAutoSweep: async () => [entry],
+    listActiveConfigs: async () => [],
+    loadConfig: async (u) => { swept.push(u); return { config: FIXED_CONFIG, state: entry.state, exists: false }; },
+    templatesByName: async () => [{ ...fixedTemplate(1, 'PENDING'), metaTemplateId: '71' }, fixedTemplate(2)],
+    metaTemplateAccount: async () => ({ wabaId: 'waba-1', token: 'tok' }),
+    updateTemplateRow: async () => {},
+    requeueFixedBlocked: async (_u, names) => { requeued.push(names); return 0; },
+  });
+  const graph = graphFetch([{ status: 200, body: { data: [{ id: '71', name: fixedName(1), status: 'APPROVED', language: 'pt_BR' }] } }]);
+  const { cadence } = runtime(repo, { now: () => new Date(clock), fetch: graph.fn });
+  cadence.start();
+  mock.timers.tick(SWEEP_SCHEDULER_MS);
+  await settle();
+  assert.equal(graph.calls.length, 1, 'consultou o template em análise');
+  assert.deepEqual(requeued, [[fixedName(1), fixedName(2)]], 'aprovados soltam as tarefas que esperavam');
+  assert.deepEqual(swept, ['fixa'], 'varre sem o consentimento da IA');
+  clock += SWEEP_SCHEDULER_MS;
+  mock.timers.tick(SWEEP_SCHEDULER_MS);
+  await settle();
+  assert.equal(graph.calls.length, 1, 'menos de 10 min: não roda de novo');
+  clock += FIXED_TEMPLATES_EVERY_MS;
+  mock.timers.tick(SWEEP_SCHEDULER_MS);
+  await settle();
+  assert.equal(requeued.length, 2, 'depois de 10 min roda de novo');
+  cadence.stop();
+});
+
+test('requestFixedTemplates: roda na hora no modo fixo, lembra o erro de criação e solta as tarefas quando aprova', async () => {
+  const requeued: string[][] = [];
+  const inserted: Array<Record<string, unknown>> = [];
+  const repo = fakeRepo({
+    loadConfig: async () => ({ config: FIXED_CONFIG, state: BASE_STATE, exists: true }),
+    templatesByName: async () => [],
+    metaTemplateAccount: async () => ({ wabaId: 'waba-1', token: 'tok' }),
+    saveTemplateRow: async (row) => { inserted.push(row); },
+    requeueFixedBlocked: async (_u, names) => { requeued.push(names); return 1; },
+    listActiveConfigs: async () => [],
+  });
+  const graph = graphFetch([
+    { status: 200, body: { id: '10', status: 'APPROVED', category: 'MARKETING' } },
+    { status: 400, body: { error: { message: 'Invalid parameter' } } },
+    { status: 200, body: { data: [] } },
+  ]);
+  const logs: Array<{ event: string; data?: Record<string, unknown> }> = [];
+  const { cadence } = runtime(repo, { fetch: graph.fn, logs });
+  cadence.services.requestFixedTemplates?.(USER);
+  await settle();
+  assert.equal(inserted.length, 1);
+  assert.equal(inserted[0].name, fixedName(1));
+  assert.deepEqual(cadence.services.fixedTemplateErrors?.(USER), { [fixedName(2)]: 'Invalid parameter' });
+  assert.deepEqual(requeued, [[fixedName(1)]]);
+  assert.ok(logs.some((l) => l.event === 'cadence_fixed_requeued'));
+  // Modo IA: nada acontece.
+  const ai = runtime(fakeRepo({ loadConfig: async () => ({ config: BASE_CONFIG, state: BASE_STATE, exists: true }) }), { fetch: graphFetch([]).fn });
+  ai.cadence.services.requestFixedTemplates?.(USER);
+  await settle();
+  assert.deepEqual(ai.cadence.services.fixedTemplateErrors?.(USER), {});
+});
+
+test('repo: templates por nome (user_id texto), conta da Meta decifrada, cache gravado e 23505 atualiza', async () => {
+  let insertError: { code: string; message: string } | null = null;
+  const db = new FakeSupabase((c) => {
+    if (c.table === 'whatsapp_message_templates' && c.op === 'select') {
+      return { data: [{ id: 71, name: fixedName(1), language: 'pt_BR', body_text: 'Oi {{1}}', status: 'REJECTED', category: 'MARKETING',
+        header_text: null, buttons: [], rejection_reason: 'Parece promoção', meta_template_id: '999' }] };
+    }
+    if (c.table === 'whatsapp_message_templates' && c.op === 'insert') return { error: insertError };
+    if (c.table === 'whatsapp_business_accounts') return { data: [{ waba_id: ' waba-9 ', access_token: 'CIFRADO' }] };
+    return undefined;
+  });
+  const repo = createFollowUpRepo(db as any, repoDeps());
+  const [row] = await repo.templatesByName(USER, [fixedName(1)]);
+  assert.equal(row.rejectionReason, 'Parece promoção');
+  assert.equal(row.metaTemplateId, '999');
+  const select = db.calls[0];
+  assert.ok(has(select, 'eq', 'user_id', USER) && has(select, 'in', 'name', [fixedName(1)]));
+  assert.equal((await repo.loadTemplateByName!(USER, fixedName(1)))?.id, 71);
+  assert.deepEqual(await repo.templatesByName(USER, []), []);
+  assert.deepEqual(await repo.metaTemplateAccount(USER), { wabaId: 'waba-9', token: 'token-claro' });
+  await repo.saveTemplateRow({ user_id: USER, name: fixedName(1), status: 'PENDING', rejection_reason: null, meta_template_id: '5', updated_at: T0.toISOString() });
+  insertError = { code: '23505', message: 'duplicate key' };
+  await repo.saveTemplateRow({ user_id: USER, name: fixedName(1), status: 'APPROVED', rejection_reason: null, meta_template_id: '5', updated_at: T0.toISOString() });
+  const update = db.calls.find((c) => c.table === 'whatsapp_message_templates' && c.op === 'update') as DbCall;
+  assert.deepEqual(update.payload, { status: 'APPROVED', rejection_reason: null, meta_template_id: '5', updated_at: T0.toISOString() });
+  assert.ok(has(update, 'eq', 'user_id', USER) && has(update, 'eq', 'name', fixedName(1)));
+  insertError = { code: '23514', message: 'check' };
+  await assert.rejects(repo.saveTemplateRow({ user_id: USER, name: 'x' }), /check/);
+});
+
+test('repo: conta da Meta sem waba ou sem token decifrável => null', async () => {
+  for (const data of [[], [{ waba_id: '', access_token: 'CIFRADO' }], [{ waba_id: 'w', access_token: 'LIXO' }]]) {
+    const repo = createFollowUpRepo(new FakeSupabase(() => ({ data })) as any, repoDeps());
+    assert.equal(await repo.metaTemplateAccount(USER), null, JSON.stringify(data));
+  }
+});
+
+test('repo: requeueFixedBlocked só solta bloqueadas por template em análise daquele nome; nome do card cai no título', async () => {
+  const db = new FakeSupabase((c) => {
+    if (c.table === 'scheduled_followups' && c.op === 'update') return { data: [{ id: 1 }, { id: 2 }] };
+    if (c.table === 'deals') return { data: [{ contact_name: '  ', title: 'Ensaio Duda' }] };
+    return undefined;
+  });
+  const repo = createFollowUpRepo(db as any, repoDeps());
+  assert.equal(await repo.requeueFixedBlocked(USER, [fixedName(1)]), 2);
+  const call = db.calls[0];
+  assert.deepEqual(call.payload, { status: 'approved', last_error: null, updated_at: T0.toISOString() });
+  for (const f of [['eq', 'user_id', USER], ['eq', 'kind', 'cadence'], ['eq', 'status', 'blocked'], ['not', 'approved_at', 'is', null],
+    ['eq', 'generation_meta->>block_code', 'fixed_template_pending'], ['in', 'generation_meta->fixed->>template_name', [fixedName(1)]]]) {
+    assert.ok(has(call, ...f), JSON.stringify(f));
+  }
+  assert.equal(await repo.requeueFixedBlocked(USER, []), 0);
+  assert.equal(await repo.dealContactName!(USER, 7), 'Ensaio Duda');
+  const deal = db.calls.find((c) => c.table === 'deals') as DbCall;
+  assert.ok(has(deal, 'eq', 'user_id', USER) && has(deal, 'eq', 'id', 7));
 });

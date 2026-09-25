@@ -46,7 +46,17 @@ function qrLine(h: ChannelHealth): Line | null {
   };
 }
 
+// Mensagens fixas: fora da janela sai o template de cada passo; enquanto a Meta analisa, o geral (se houver).
+function fixedTemplatesLine(h: ChannelHealth, fixed: { total: number; approved: number }): Line | null {
+  if (fixed.approved >= fixed.total) return null;
+  const text = h.template.eligible
+    ? 'Templates das mensagens fixas em análise na Meta. Até aprovar, fora da janela de 24h sai pelo template geral.'
+    : 'Templates das mensagens fixas em análise na Meta. Até aprovar, os follow-ups fora da janela de 24h esperam.';
+  return { key: 'fixed_templates', tone: 'amber', text };
+}
+
 function templateLine(h: ChannelHealth): Line | null {
+  if (h.fixed && h.fixed.total > 0) return fixedTemplatesLine(h, h.fixed);
   if (!h.template.configured) {
     return { key: 'no_template', tone: 'amber', text: 'Sem template aprovado: fora da janela de 24h só sai pelo QR.' };
   }

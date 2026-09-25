@@ -5,23 +5,26 @@
 import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type {
-  ApproveAllResult, CadenceGenerationMeta, CadenceStatus, CadenceTaskRow, ChannelHealth, DealFollowUpState,
+  ApproveAllResult, CadenceGenerationMeta, CadenceStatus, CadenceTaskRow, ChannelHealth, DealFollowUpState, FixedTemplateInfo,
   FollowUpConfig, FollowUpConfigResponse, FollowUpDraftItem, FollowUpErrorBody, FollowUpErrorCode, FollowUpOptOut,
   FollowUpOverview, FollowUpRuntimeState, FollowUpServices, FollowUpStep, FollowUpTrack, ForecastInput, ForecastResult,
   OverviewPauseReason, PreviewMessage, QueueTab, ReconcileApplyRequest, RegenerateResult, SweepDryRun, SweepRequest,
   SweepState, SweepSummary,
 } from './src/features/followups/types.js';
-import { CUSTOMER_NON_TURN_TYPES, DEFAULT_FOLLOWUP_CONFIG, LIVE_CADENCE_STATUSES } from './src/features/followups/types.js';
+import { CUSTOMER_NON_TURN_TYPES, DEFAULT_FOLLOWUP_CONFIG, FOLLOWUP_STEPS, LIVE_CADENCE_STATUSES } from './src/features/followups/types.js';
 import {
   customerSpokeAfter, delayHoursForStep, effectiveDailyCap, parseCadenceConfig, preQuoteDelayHours, preQuoteSentInEpisode,
   preQuoteStepCount, preQuoteStepFor, stepForStage, suggestLadder, suggestPreQuote, suggestTrackerStages, trackForStage,
   trackStepCount, validateConfigInput,
 } from './followup-cadence.js';
+import { firstName } from './followup-draft.js';
+import { fixedRefFor, fixedSteps, fixedTemplatesInfo, fixedTextFor, renderFixedMessage } from './followup-fixed.js';
 import type { CadenceTaskLite } from './followup-cadence.js';
 import type { StageRow } from './lib/stage-rules.js';
 import { isSalesStage } from './lib/stage-rules.js';
 import { brazilianPhoneVariants, canonicalPhoneKey, digitsOnly, normalizeBrazilianPhone13 } from './lib/br-phone.js';
 import { localDayStartUtc } from './lib/business-hours.js';
+import { createDashboardLoader } from './followup-dashboard.js';
 
 export interface FollowUpRouteDeps { db: SupabaseClient; requireAuth: RequestHandler; requirePermission: (module: string) => RequestHandler;
   requireOwnerOrPlatformAdmin: RequestHandler; denyProductionOnly: RequestHandler; services: FollowUpServices; now?: () => Date }
@@ -553,10 +556,13 @@ async function loadOptOutKeysFor(db: Db, userId: string, rows: Row[]): Promise<S
   return new Set(((data || []) as Row[]).map((r) => String(r.phone_key)));
 }
 
+// fixed vai cru: o serviço confere se o texto (talvez editado agora) ainda é a mensagem fixa.
 function forecastInput(row: Row, text: string): ForecastInput {
+  const meta = metaOf(row);
   return {
     id: Number(row.id), contact_name: orNull(row.contact_name), text, step: Number(row.step) as FollowUpStep,
-    last_customer_at: orNull(metaOf(row).anchor?.last_customer_at), phone: String(row.phone ?? ''), track: trackOfRow(row),
+    last_customer_at: orNull(meta.anchor?.last_customer_at), phone: String(row.phone ?? ''), track: trackOfRow(row),
+    fixed: meta.fixed ?? null,
   };
 }
 
@@ -734,10 +740,32 @@ function idleSweep(): SweepState {
   return { running: false, started_at: null, finished_at: null, progress: null, last_summary: null, next_auto_at: null };
 }
 
+// Mensagens fixas não passam conversa pela IA: não dependem do consentimento.
+function aiConsentOk(config: FollowUpConfig, state: FollowUpRuntimeState): boolean {
+  return !!state.external_ai_consent_at || config.message_mode === 'fixed';
+}
+
 function nextAutoSweep(config: FollowUpConfig, state: FollowUpRuntimeState): string | null {
   const last = toMs(state.last_sweep_at);
-  if (!config.enabled || !state.external_ai_consent_at || last === null) return null;
+  if (!config.enabled || !aiConsentOk(config, state) || last === null) return null;
   return new Date(last + config.sweep_interval_minutes * 60_000).toISOString();
+}
+
+// Status na Meta do template de cada mensagem fixa salva (cache local mais o erro de criação
+// lembrado pelo servidor). Falha de leitura não derruba a tela: vira "ainda não enviado".
+async function fixedTemplatesView(env: Env, userId: string, config: FollowUpConfig): Promise<FixedTemplateInfo[]> {
+  const names = fixedSteps(config.fixed_messages).map((s) => s.name);
+  if (!names.length) return [];
+  const errors = env.services.fixedTemplateErrors?.(userId) ?? {};
+  try {
+    const { data } = await run(env.db.from('whatsapp_message_templates').select('name, status, rejection_reason')
+      .eq('user_id', String(userId)).in('name', names));
+    const rows = ((data || []) as Row[]).map((r) => ({ name: String(r.name ?? ''), status: String(r.status ?? ''), rejectionReason: orNull(r.rejection_reason) }));
+    return fixedTemplatesInfo(config.fixed_messages, rows, errors);
+  } catch (err) {
+    console.warn('[followups] status dos templates fixos falhou:', describeError(err));
+    return fixedTemplatesInfo(config.fixed_messages, [], errors);
+  }
 }
 
 // O estado em memória some no deploy: o resumo gravado na config cobre a lacuna.
@@ -757,14 +785,16 @@ function sweepView(services: FollowUpServices, userId: string, config: FollowUpC
 async function computeOverview(env: Env, userId: string): Promise<BaseOverview> {
   const now = env.now();
   const { config, state, exists } = await loadConfig(env.db, userId);
-  const [channels, counts, stages] = await Promise.all([
+  const [channels, counts, stages, fixedTemplates] = await Promise.all([
     safeChannelHealth(env.services, userId, config),
     loadCounts(env.db, userId, dayStartIso(config, now), weekAgoIso(now)),
     loadStages(env.db, userId),
+    fixedTemplatesView(env, userId, config),
   ]);
   const window = env.services.businessWindow(config, now);
   return {
     configured: exists, enabled: config.enabled, mode: config.mode, tracker_enabled: config.tracker_enabled,
+    message_mode: config.message_mode, fixed_templates: fixedTemplates,
     consent: consentView(state), channels, counts,
     sending: buildSending({ config, state, sentToday: counts.sent_today, channelLevel: channels.level, window, now }),
     sweep: sweepView(env.services, userId, config, state),
@@ -777,6 +807,7 @@ function migrationOverview(perms: { can_edit_config: boolean; can_approve: boole
   const cap = DEFAULT_FOLLOWUP_CONFIG.daily_cap;
   return {
     migration_required: true, configured: false, enabled: false, mode: 'approval', tracker_enabled: false, ...perms,
+    message_mode: 'ai', fixed_templates: [],
     consent: { external_ai: false, at: null },
     channels: fallbackChannelHealth(MSG.migration),
     counts: emptyCounts(),
@@ -1103,7 +1134,7 @@ async function sweepHandler(env: Env, locks: SweepLocks, req: Request, res: Resp
     res.json(await env.services.countEligible(ctx.userId, { ...request, dry_run: true }));
     return;
   }
-  if (!consentAt) throw routeError('AI_CONSENT_REQUIRED', MSG.consent);
+  if (!aiConsentOk(config, { ...state, external_ai_consent_at: consentAt })) throw routeError('AI_CONSENT_REQUIRED', MSG.consent);
   const full = !request.deal_ids?.length;
   locks.assertCanStart(ctx.userId, full);
   const preview: SweepDryRun = await env.services.countEligible(ctx.userId, { ...request, dry_run: true });
@@ -1392,6 +1423,7 @@ async function getConfigHandler(env: Env, req: Request, res: Response): Promise<
     consent: consentView(state),
     dedupe_ready: dedupeReady,
     can_edit: canEditFollowUpConfig(ctx),
+    fixed_templates: await fixedTemplatesView(env, ctx.userId, config),
   };
   res.json(body);
 }
@@ -1422,10 +1454,20 @@ async function validatePut(env: Env, userId: string, current: FollowUpConfig, bo
   throw routeError('CONFIG_INVALID', MSG.configInvalid, result.errors);
 }
 
+// Colunas da 087: só entram no upsert quando a config antiga ou a nova sai do padrão (IA, sem
+// textos). Assim o PUT de sempre continua gravando se o código subir antes da migration.
+const FIXED_COLUMNS: ReadonlyArray<keyof FollowUpConfig> = ['message_mode', 'fixed_messages'];
+
+function usesFixedColumns(...configs: FollowUpConfig[]): boolean {
+  return configs.some((c) => c.message_mode !== 'ai' || c.fixed_messages.length > 0);
+}
+
 // Só colunas editáveis, mais o início da rampa e o consentimento pelas regras do PUT.
-function configRow(ctx: FollowUpRouteCtx, body: Row, state: FollowUpRuntimeState, config: FollowUpConfig, nowIso: string): Row {
+function configRow(ctx: FollowUpRouteCtx, body: Row, state: FollowUpRuntimeState, config: FollowUpConfig, previous: FollowUpConfig,
+  nowIso: string): Row {
   const row: Row = { user_id: ctx.userId };
-  for (const key of EDITABLE_KEYS) row[key] = config[key];
+  const withFixed = usesFixedColumns(previous, config);
+  for (const key of EDITABLE_KEYS) if (withFixed || !FIXED_COLUMNS.includes(key)) row[key] = config[key];
   row.updated_at = nowIso;
   row.updated_by = ctx.realUserId;
   if (config.enabled && !state.first_enabled_at) row.first_enabled_at = nowIso;
@@ -1457,6 +1499,36 @@ async function disableLegacyOnLadder(db: Db, userId: string, config: FollowUpCon
   return ((data || []) as Row[]).map((r) => String(r.id));
 }
 
+// Modo fixo recém-ligado ou texto de um passo trocado: os follow-ups vivos daquele passo
+// (rascunho, aprovado ou com problema, fora do envio) passam a usar a mensagem fixa nova.
+// A aprovação fica: no envio, texto exato passa; se sair pela reserva, a conferência decide.
+const RERENDER_MAX = 500;
+
+function stepsToRerender(previous: FollowUpConfig, next: FollowUpConfig): FollowUpStep[] {
+  return FOLLOWUP_STEPS.filter((step) => {
+    const text = fixedTextFor(next, step);
+    return !!text && (previous.message_mode !== 'fixed' || fixedTextFor(previous, step) !== text);
+  });
+}
+
+async function rerenderOne(db: Db, userId: string, row: Row, config: FollowUpConfig, nowIso: string): Promise<boolean> {
+  const fixed = fixedRefFor(config, Number(row.step));
+  if (!fixed) return false;
+  const text = renderFixedMessage(fixed.source, firstName(orNull(row.contact_name)));
+  const generation_meta: CadenceGenerationMeta = {
+    ...metaOf(row), fixed, outcome: 'draft', warnings: [], skip_reason: null, skipped_by: null, handoff_reason: null,
+  };
+  return !!(await casUpdate(db, userId, row, EDITABLE, { message: text, draft_text: text, generation_meta, updated_at: nowIso }, nowIso));
+}
+
+async function rerenderFixedLive(db: Db, userId: string, previous: FollowUpConfig, next: FollowUpConfig, nowIso: string): Promise<number> {
+  const steps = stepsToRerender(previous, next);
+  if (!steps.length) return 0;
+  const { data } = await run(taskSelect(db, userId).in('status', EDITABLE).in('step', steps).order('id', { ascending: true }).limit(RERENDER_MAX));
+  const done = await mapPool((data || []) as Row[], APPROVE_POOL, (row) => rerenderOne(db, userId, row, next, nowIso));
+  return done.filter(Boolean).length;
+}
+
 async function putConfigHandler(env: Env, req: Request, res: Response): Promise<void> {
   const ctx = ctxFrom(req);
   const body: Row = isObj(req.body) ? req.body : {};
@@ -1466,10 +1538,14 @@ async function putConfigHandler(env: Env, req: Request, res: Response): Promise<
   const nowIso = env.now().toISOString();
   // Rebaixa antes de gravar: se o upsert falhar, as aprovações automáticas já voltaram para revisão.
   const demoted = mustDemoteAuto(current.config, result.config) ? await demoteAutoApprovals(env.db, ctx.userId, nowIso) : 0;
-  await run(env.db.from('followup_cadence_config').upsert(configRow(ctx, body, current.state, result.config, nowIso), { onConflict: 'user_id' }));
+  const row = configRow(ctx, body, current.state, result.config, current.config, nowIso);
+  await run(env.db.from('followup_cadence_config').upsert(row, { onConflict: 'user_id' }));
   const legacyDisabled = body.disable_legacy_on_ladder === true ? await disableLegacyOnLadder(env.db, ctx.userId, result.config) : [];
+  const rerendered = await rerenderFixedLive(env.db, ctx.userId, current.config, result.config, nowIso);
   env.services.invalidateConfig(ctx.userId);
-  res.json({ config: result.config, warnings: result.warnings, legacy_disabled: legacyDisabled, demoted_auto: demoted });
+  // Modo fixo: os templates dos passos vão para a Meta já, sem esperar o agendador.
+  env.services.requestFixedTemplates?.(ctx.userId);
+  res.json({ config: result.config, warnings: result.warnings, legacy_disabled: legacyDisabled, demoted_auto: demoted, fixed_rerendered: rerendered });
 }
 
 // Opt-outs
@@ -1680,4 +1756,12 @@ export function registerFollowUpRoutes(app: Express, deps: FollowUpRouteDeps): v
   app.post(`${BASE}/:id/approve`, approver, write((req, res) => approveHandler(env, req, res)));
   app.post(`${BASE}/:id/skip`, write((req, res) => skipHandler(env, req, res)));
   app.post(`${BASE}/:id/regenerate`, write((req, res) => regenerateHandler(env, req, res)));
+
+  // Painel (GET /dashboard): quadro do fluxo, números e quem espera resposta. Consultas e
+  // regras ficam em followup-dashboard.ts, com cache de 30s por conta. Mesmo middleware e
+  // permissão (vendas) do overview.
+  const loadDashboard = createDashboardLoader({ db: env.db, now: env.now });
+  app.get(`${BASE}/dashboard`, read(async (req, res) => {
+    res.json(await loadDashboard(ctxFrom(req).userId));
+  }));
 }

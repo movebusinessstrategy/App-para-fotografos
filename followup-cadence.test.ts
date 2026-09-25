@@ -755,7 +755,8 @@ test('o módulo só importa tipos e helpers puros permitidos', () => {
   assert.equal(LIVE_TASK_LOOKBACK_DAYS, 60);
   const source = readFileSync(new URL('./followup-cadence.ts', import.meta.url), 'utf8');
   const imports = [...source.matchAll(/from '([^']+)'/g)].map((m) => m[1]);
-  const allowed = new Set(['./src/features/followups/types.js', './lib/stage-rules.js', './lib/br-phone.js', './lib/business-hours.js']);
+  const allowed = new Set(['./src/features/followups/types.js', './lib/stage-rules.js', './lib/br-phone.js', './lib/business-hours.js',
+    './followup-fixed.js']);
   assert.ok(imports.length > 0);
   for (const spec of imports) assert.ok(allowed.has(spec), spec);
   assert.equal(/Date\.now\(|new Date\(\)/.test(source), false);
@@ -886,8 +887,12 @@ test('validateConfigInput: etapas e atrasos antes do orçamento', () => {
   assert.match(errorsOf({ ...base, pre_quote_stage_ids: ['aguardando-sinal'] }).pre_quote_stage_ids, /antes da 1ª etapa/);
   assert.match(errorsOf({ ...base, pre_quote_stage_ids: ['nao-existe'] }).pre_quote_stage_ids, /não encontrada/);
   assert.match(errorsOf({ ...base, pre_quote_stage_ids: 'contact' }).pre_quote_stage_ids, /lista/);
-  assert.match(errorsOf({ ...base, pre_quote_delays_hours: [] }).pre_quote_delays_hours, /1 ou 2/);
-  assert.match(errorsOf({ ...base, pre_quote_delays_hours: [24, 48, 72] }).pre_quote_delays_hours, /1 ou 2/);
+  assert.match(errorsOf({ ...base, pre_quote_delays_hours: [] }).pre_quote_delays_hours, /de 1 a 3/);
+  assert.match(errorsOf({ ...base, pre_quote_delays_hours: [24, 48, 72, 96] }).pre_quote_delays_hours, /de 1 a 3/);
+  // 087: a trilha antes do orçamento vai até 3 toques (as etapas continuam no máximo 2).
+  const three = validateConfigInput(DEFAULT_FOLLOWUP_CONFIG, { ...base, pre_quote_stage_ids: ['contact'], pre_quote_delays_hours: [18, 72, 120] }, CTX);
+  assert.equal(three.ok, true);
+  if (three.ok) assert.equal(preQuoteStepCount(three.config), 3);
   assert.match(errorsOf({ ...base, pre_quote_delays_hours: [0] }).pre_quote_delays_hours, /1 a 720/);
   assert.match(errorsOf({ ...base, pre_quote_delays_hours: [24, 721] }).pre_quote_delays_hours, /1 a 720/);
   // Sem escada, qualquer etapa aberta serve.
@@ -900,9 +905,9 @@ test('validateConfigInput: etapas e atrasos antes do orçamento', () => {
 test('parseCadenceConfig: antes do orçamento com padrão, corte e clamp', () => {
   assert.deepEqual(parseCadenceConfig({}).config.pre_quote_stage_ids, []);
   assert.deepEqual(parseCadenceConfig({}).config.pre_quote_delays_hours, [24, 72]);
-  const parsed = parseCadenceConfig({ pre_quote_stage_ids: ['contact', ' lead ', 'contact', 'x'], pre_quote_delays_hours: '[0, 900, 5]' }).config;
+  const parsed = parseCadenceConfig({ pre_quote_stage_ids: ['contact', ' lead ', 'contact', 'x'], pre_quote_delays_hours: '[0, 900, 5, 7]' }).config;
   assert.deepEqual(parsed.pre_quote_stage_ids, ['contact', 'lead']);
-  assert.deepEqual(parsed.pre_quote_delays_hours, [1, 720]);
+  assert.deepEqual(parsed.pre_quote_delays_hours, [1, 720, 5]);
 });
 
 test('suggestPreQuote: etapa de contato antes da escada; sem contato, vazio', () => {
@@ -911,4 +916,69 @@ test('suggestPreQuote: etapa de contato antes da escada; sem contato, vazio', ()
   assert.deepEqual(suggestPreQuote(plain), { pre_quote_stage_ids: [], pre_quote_delays_hours: [24, 72] });
   const contactAfter = [stage('proposal', 'Orçamento Enviado', 0), stage('contact', 'Conversa Iniciada', 3)];
   assert.deepEqual(suggestPreQuote(contactAfter).pre_quote_stage_ids, [], 'contato depois da escada não entra');
+});
+
+// Mensagens fixas (087)
+
+const FIXED_TEXTS = ['Oiiii [nome], tudo bem 🥰?\n\nVamos ver uma data para as suas fotos?', 'Oiiii [nome], tudo bem? 🥰',
+  'Oi, [nome]! 🥰\nVocê ainda tem interesse em seguir com suas fotos?'];
+const FIXED_CONFIG: FollowUpConfig = { ...CONFIG, message_mode: 'fixed', fixed_messages: FIXED_TEXTS };
+
+test('modo fixo: passo sem texto não gera tarefa; passo com texto mantém todas as exclusões', () => {
+  const step4 = activity({ dealId: 4, stage: '03-follow-up', lastStudioAt: hoursAgo(130), lastCustomerAt: hoursAgo(131) });
+  assert.equal(select([step4]).eligible[0]?.step, 4, 'no modo IA o passo 4 sai');
+  assert.equal(reasonOf(select([step4], { config: FIXED_CONFIG }), 4), 'no_fixed_text');
+  assert.equal(select([activity()], { config: FIXED_CONFIG }).eligible[0]?.step, 1);
+  assert.equal(reasonOf(select([activity({ alreadyCustomer: true })], { config: FIXED_CONFIG }), 1), 'already_customer');
+  assert.equal(reasonOf(select([activity({ lastCustomerAt: hoursAgo(1) })], { config: FIXED_CONFIG }), 1), 'customer_spoke_last');
+  assert.equal(reasonOf(select([activity()], { config: FIXED_CONFIG, optoutKeys: new Set([canonicalPhoneKey(PHONE)]) }), 1), 'optout');
+  assert.equal(reasonOf(select([activity({ needsHuman: true })], { config: FIXED_CONFIG }), 1), 'needs_human');
+  const withFour = { ...FIXED_CONFIG, fixed_messages: [...FIXED_TEXTS, 'Oi! Última retomada, tudo bem?'] };
+  assert.equal(select([step4], { config: withFour }).eligible[0]?.step, 4);
+});
+
+test('modo fixo antes do orçamento: o toque 3 (087) usa o 3º texto; sem ele, fica de fora', () => {
+  const config: FollowUpConfig = { ...FIXED_CONFIG, pre_quote_stage_ids: ['contact'], pre_quote_delays_hours: [24, 72, 120] };
+  const touch1 = pqSent({ id: 1, step: 1, basis_at: hoursAgo(300), sent_at: hoursAgo(250) });
+  const touch2 = pqSent({ id: 2, step: 2, basis_at: hoursAgo(250), sent_at: hoursAgo(130) });
+  const a = pqActivity({ lastStudioAt: hoursAgo(130), lastCustomerAt: hoursAgo(400) });
+  const third = select([a], { config, cadenceTasks: [touch1, touch2] });
+  assert.equal(third.eligible[0]?.track, 'pre_quote');
+  assert.equal(third.eligible[0]?.step, 3);
+  assert.equal(preQuoteStepCount(config), 3);
+  const twoTexts = { ...config, fixed_messages: FIXED_TEXTS.slice(0, 2) };
+  assert.equal(reasonOf(select([a], { config: twoTexts, cadenceTasks: [touch1, touch2] }), 7), 'no_fixed_text');
+});
+
+test('validateConfigInput: modo e mensagens fixas', () => {
+  const ok = validateConfigInput(DEFAULT_FOLLOWUP_CONFIG, { ...PITORI_PATCH, message_mode: 'fixed', fixed_messages: [...FIXED_TEXTS, ''] }, CTX);
+  assert.equal(ok.ok, true);
+  if (ok.ok) {
+    assert.equal(ok.config.message_mode, 'fixed');
+    assert.deepEqual(ok.config.fixed_messages, FIXED_TEXTS, 'vazio no fim sai');
+    assert.ok(ok.warnings.includes('Passos sem mensagem fixa ficam sem follow-up (o card para nesse passo).'), 'escada de 4 com 3 textos');
+  }
+  const noTemplate = validateConfigInput(DEFAULT_FOLLOWUP_CONFIG, { message_mode: 'fixed', fixed_messages: FIXED_TEXTS }, CTX);
+  assert.equal(noTemplate.ok, true);
+  if (noTemplate.ok) {
+    assert.ok(!noTemplate.warnings.includes('Sem template aprovado e com o QR desligado: fora da janela de 24h nada sai.'),
+      'no modo fixo os templates dos passos cobrem fora da janela');
+  }
+  assert.match(errorsOf({ message_mode: 'fixed' }).fixed_messages, /pelo menos o Follow 01/);
+  assert.match(errorsOf({ message_mode: 'fixed', fixed_messages: [FIXED_TEXTS[0], '', FIXED_TEXTS[2]] }).fixed_messages, /em ordem/);
+  assert.match(errorsOf({ message_mode: 'fixed', fixed_messages: ['[nome], oi!'] }).fixed_messages, /^Follow 01: não comece nem termine/);
+  assert.match(errorsOf({ message_mode: 'turbo' }).message_mode, /mensagens fixas e IA/);
+  assert.match(errorsOf({ fixed_messages: 'texto' }).fixed_messages, /lista de textos/);
+  const aiWithTexts = validateConfigInput({ ...DEFAULT_FOLLOWUP_CONFIG, message_mode: 'fixed', fixed_messages: FIXED_TEXTS }, { message_mode: 'ai' }, CTX);
+  assert.equal(aiWithTexts.ok, true, 'voltar para a IA guarda os textos');
+  if (aiWithTexts.ok) assert.deepEqual(aiWithTexts.config.fixed_messages, FIXED_TEXTS);
+});
+
+test('parseCadenceConfig: modo e mensagens fixas com padrão (sem a 087 vale a IA)', () => {
+  assert.equal(parseCadenceConfig({}).config.message_mode, 'ai');
+  assert.deepEqual(parseCadenceConfig({}).config.fixed_messages, []);
+  const parsed = parseCadenceConfig({ message_mode: 'fixed', fixed_messages: [` ${FIXED_TEXTS[0]} `, FIXED_TEXTS[1], '', ''] }).config;
+  assert.equal(parsed.message_mode, 'fixed');
+  assert.deepEqual(parsed.fixed_messages, FIXED_TEXTS.slice(0, 2));
+  assert.equal(parseCadenceConfig({ message_mode: 'FIXED' }).config.message_mode, 'ai');
 });

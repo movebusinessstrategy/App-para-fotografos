@@ -18,9 +18,15 @@ export interface SenderChannelHealth {
 }
 
 export interface CadenceTemplate { id: number; name: string; language: string; bodyText: string; status: string;
-  category: string | null; headerText: string | null; buttons: unknown }
+  category: string | null; headerText: string | null; buttons: unknown; rejectionReason?: string | null; metaTemplateId?: string | null }
 
-export type ChannelDecision = { ok: true; channel: ChannelKind; waNumber: string }
+// Mensagem fixa a caminho do cliente: o template do passo (pode ainda não estar aprovado)
+// e o primeiro nome usado no texto (null quando o card não tem nome).
+export interface FixedSend { step: FollowUpStep; template: CadenceTemplate | null; firstName: string | null }
+// Por qual template sai a mensagem fixa: o do passo (texto exato) ou o geral da conta (reserva).
+export type TemplateVia = 'fixed' | 'fallback';
+
+export type ChannelDecision = { ok: true; channel: ChannelKind; waNumber: string; via?: TemplateVia }
   | { ok: false; scope: 'task' | 'tenant'; code: BlockCode; message: string };
 
 export type ErrorClass = 'channel_auth' | 'channel_config' | 'window_closed' | 'undeliverable' | 'marketing_capped'
@@ -103,6 +109,23 @@ export function validateCadenceTemplate(t: CadenceTemplate): { ok: true } | { ok
   if (!t) return { ok: false, reason: 'O template escolhido não foi encontrado.' };
   const hit = TEMPLATE_RULES.find(([broken]) => broken(t));
   return hit ? { ok: false, reason: hit[1] } : { ok: true };
+}
+
+// Template de mensagem fixa: aprovado, só {{1}} (nome) ou nenhuma variável. A categoria
+// não importa: a Meta pode reclassificar e o envio continua valendo.
+const FIXED_TEMPLATE_RULES: Array<(t: CadenceTemplate) => boolean> = [
+  (t) => upper(t.status) !== 'APPROVED',
+  (t) => NAMED_VARIABLE.test(String(t.bodyText ?? '')),
+  (t) => numberedIndexes(t.bodyText).some((index) => index !== 1),
+  (t) => hasVariable(t.headerText) || hasVariable(t.buttons),
+];
+
+export function fixedTemplateUsable(t: CadenceTemplate | null | undefined): t is CadenceTemplate {
+  return !!t && !FIXED_TEMPLATE_RULES.some((broken) => broken(t));
+}
+
+export function fixedParams(f: FixedSend): string[] {
+  return f.template && countTemplateVars(f.template.bodyText) > 0 ? [f.firstName ?? ''] : [];
 }
 
 // Predicados de canal
@@ -204,11 +227,35 @@ function picked(channel: ChannelKind, number: string | null): ChannelDecision {
   return { ok: true, channel, waNumber: digitsOnly(number) };
 }
 
+export const FIXED_BLOCK_MESSAGES = {
+  noName: 'Sem o nome do cliente para o template: complete o nome no card.',
+  pending: (step: number) => `Template do Follow ${String(step).padStart(2, '0')} aguardando aprovação da Meta.`,
+} as const;
+
+// Mensagem fixa fora da janela: o template do passo; enquanto ele não é aprovado, o geral
+// da conta (reserva); sem nenhum dos dois, só esta tarefa espera.
+function pickedTemplate(number: string | null, via: TemplateVia): ChannelDecision {
+  return { ok: true, channel: 'meta_template', waNumber: digitsOnly(number), via };
+}
+
+function fixedTemplateDecision(c: ChannelCtx, f: FixedSend): ChannelDecision {
+  const number = c.h.meta.waNumber;
+  if (fixedTemplateUsable(f.template)) {
+    if (countTemplateVars(f.template.bodyText) > 0 && !f.firstName) {
+      return { ok: false, scope: 'task', code: 'contact_name_missing', message: FIXED_BLOCK_MESSAGES.noName };
+    }
+    return pickedTemplate(number, 'fixed');
+  }
+  if (c.templateEligible) return pickedTemplate(number, 'fallback');
+  return { ok: false, scope: 'task', code: 'fixed_template_pending', message: FIXED_BLOCK_MESSAGES.pending(f.step) };
+}
+
 export function chooseChannel(i: { now: Date; lastCustomerAt: string | null; conversationWaNumber: string; health: SenderChannelHealth;
-  config: FollowUpConfig; template: CadenceTemplate | null }): ChannelDecision {
+  config: FollowUpConfig; template: CadenceTemplate | null; fixed?: FixedSend | null }): ChannelDecision {
   const c = buildCtx(i.health, i.config, i.template, i.now, String(i.conversationWaNumber ?? ''));
   if (c.metaOk && i.config.allow_meta_text && windowOpen(i.lastCustomerAt, i.now)) return picked('meta_text', i.health.meta.waNumber);
   if (c.baileysOk) return picked('baileys', i.health.baileys.waNumber);
+  if (i.fixed && c.metaOk) return fixedTemplateDecision(c, i.fixed);
   if (c.metaOk && c.templateEligible) return picked('meta_template', i.health.meta.waNumber);
   return explainBlock(c);
 }
@@ -265,11 +312,19 @@ const HEALTH_NOTES: Array<[(c: ChannelCtx) => boolean, (c: ChannelCtx) => string
     () => 'A cadência envia pela API oficial mesmo com a preferência do chat em QR.'],
 ];
 
-export function toChannelHealthDTO(h: SenderChannelHealth, config: FollowUpConfig, template: CadenceTemplate | null, now: Date): ChannelHealth {
+type FixedSummary = { total: number; approved: number };
+
+// Modo fixo com todos os templates dos passos aprovados também cobre fora da janela.
+function fixedCoversOutside(fixed: FixedSummary | null | undefined): boolean {
+  return !!fixed && fixed.total > 0 && fixed.approved >= fixed.total;
+}
+
+export function toChannelHealthDTO(h: SenderChannelHealth, config: FollowUpConfig, template: CadenceTemplate | null, now: Date,
+  fixed: FixedSummary | null = null): ChannelHealth {
   const c = buildCtx(h, config, template, now, mainNumber(h));
   const canSend = {
     inside_24h: (c.metaOk && config.allow_meta_text) || c.baileysOk,
-    outside_24h: c.baileysOk || (c.metaOk && c.templateEligible),
+    outside_24h: c.baileysOk || (c.metaOk && (c.templateEligible || fixedCoversOutside(fixed))),
   };
   const state = tokenState(h, now);
   return {
@@ -283,6 +338,7 @@ export function toChannelHealthDTO(h: SenderChannelHealth, config: FollowUpConfi
     can_send: canSend,
     level: healthLevel(canSend, state),
     notes: HEALTH_NOTES.filter(([when]) => when(c)).map(([, text]) => text(c)),
+    fixed,
   };
 }
 
@@ -299,12 +355,19 @@ export function templateParams(contactName: string | null, text: string, step: F
   return [firstName(contactName) ?? 'tudo bem', toTemplateHook(text, step, undefined, track)];
 }
 
+// Template e parâmetros de um envio por template: o da mensagem fixa (via 'fixed') ou o geral.
+export function templatePlan(i: { template: CadenceTemplate | null; contactName: string | null; text: string; step: FollowUpStep;
+  track?: FollowUpTrack | null; fixed?: FixedSend | null; via?: TemplateVia }): { template: CadenceTemplate; params: string[] } | null {
+  if (i.via === 'fixed' && i.fixed?.template) return { template: i.fixed.template, params: fixedParams(i.fixed) };
+  return i.template ? { template: i.template, params: templateParams(i.contactName, i.text, i.step, i.track) } : null;
+}
+
 export function approvalFor(i: { channel: ChannelKind | 'blocked'; template: CadenceTemplate | null; contactName: string | null;
-  text: string; step: FollowUpStep; track?: FollowUpTrack | null }): CadenceApproval {
+  text: string; step: FollowUpStep; track?: FollowUpTrack | null; fixed?: FixedSend | null; via?: TemplateVia }): CadenceApproval {
   if (i.channel !== 'meta_template') return { channel_class: 'text', render: null, template_id: null };
-  if (!i.template) return { channel_class: 'template', render: null, template_id: null };
-  const render = renderTemplate(i.template.bodyText, templateParams(i.contactName, i.text, i.step, i.track));
-  return { channel_class: 'template', render, template_id: i.template.id };
+  const plan = templatePlan(i);
+  if (!plan) return { channel_class: 'template', render: null, template_id: null };
+  return { channel_class: 'template', render: renderTemplate(plan.template.bodyText, plan.params), template_id: plan.template.id };
 }
 
 function templateChanged(approval: Partial<CadenceApproval>, task: CadenceTaskRow, template: CadenceTemplate | null): boolean {
@@ -314,8 +377,21 @@ function templateChanged(approval: Partial<CadenceApproval>, task: CadenceTaskRo
   return approval.render !== current;
 }
 
-export function approvalMatches(task: CadenceTaskRow, channel: ChannelKind, template: CadenceTemplate | null):
+export interface FixedMatch { send: FixedSend; via?: TemplateVia }
+
+// Mensagem fixa: pelo texto livre, pelo QR ou pelo template do passo sai exatamente o texto
+// aprovado. Só a reserva (template geral) muda o texto: aí vale a conferência normal, a não
+// ser que a aprovação tenha sido do modo automático (o sistema aprova de novo, como o dono pediu).
+function fixedApprovalOk(task: CadenceTaskRow, channel: ChannelKind, fixed: FixedMatch): boolean {
+  if (channelClass(channel) === 'text') return true;
+  if (fixed.via === 'fallback') return task.approved_by === 'auto';
+  if (fixed.via !== 'fixed' || !fixed.send.template) return false;
+  return renderTemplate(fixed.send.template.bodyText, fixedParams(fixed.send)) === String(task.message ?? '').trim();
+}
+
+export function approvalMatches(task: CadenceTaskRow, channel: ChannelKind, template: CadenceTemplate | null, fixed: FixedMatch | null = null):
   { ok: true } | { ok: false; message: string } {
+  if (fixed && fixedApprovalOk(task, channel, fixed)) return { ok: true };
   const approval: Partial<CadenceApproval> = task.generation_meta?.approval ?? { channel_class: 'text', render: null, template_id: null };
   const klass = channelClass(channel);
   if (klass !== (approval.channel_class ?? 'text')) return { ok: false, message: klass === 'template' ? TEMPLATE_REVIEW : TEXT_REVIEW };
