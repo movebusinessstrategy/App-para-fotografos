@@ -385,24 +385,32 @@ test('passo 4 sem etapa depois do último: avanço fica skipped', async () => {
   assert.deepEqual(w2.advances, [{ id: 7, state: 'skipped', result: null }]);
 });
 
-test('antes do orçamento: envia sem nunca mover o card, nem com avanço pendente antigo', async () => {
+test('antes do orçamento: o card anda para a etapa do mesmo follow-up, 15 min depois do envio', async () => {
   const config = { pre_quote_stage_ids: ['contact'], pre_quote_delays_hours: [24, 72] };
   const w = world({ config, tasks: [task({ id: 1, track: 'pre_quote', step: 1, stage_id: 'contact',
     message: 'Oi, Ana! Me conta que tipo de ensaio você tem em mente?' })] });
   await w.sender.tick();
   assert.equal(w.task(1).status, 'sent');
-  assert.equal(w.task(1).generation_meta.advance.state, 'skipped');
-  w.state.next_send_after = null;
-  w.now = new Date(T0.getTime() + 20 * MINUTE);
-  await w.sender.tick();
+  assert.equal(w.task(1).generation_meta.advance.state, 'pending');
   assert.equal(w.moves.length, 0);
-  assert.equal(w.count('moveDealStage'), 0);
-  // Mesmo que uma linha antiga tenha ficado com avanço pendente, a trilha não move.
+  w.state.next_send_after = null;
+  w.now = new Date(T0.getTime() + 16 * MINUTE);
+  await w.sender.tick();
+  assert.deepEqual(w.moves, [{
+    userId: USER, dealId: 101, toStageId: 'negotiation', expectedFromStage: 'contact', allowFrom: ['contact'],
+    reason: 'cadence_step', evidence: { task_id: 1, step: 1 },
+  }]);
+  assert.deepEqual(w.advances, [{ id: 1, state: 'done', result: 'moved' }]);
+  // Toque 2 leva para a etapa do Follow 02.
   const w2 = world({ config, tasks: [task({ id: 8, track: 'pre_quote', step: 2, stage_id: 'contact', status: 'sent',
     generation_meta: { advance: { state: 'pending', due_at: new Date(T0.getTime() - MINUTE).toISOString() } } })] });
   await w2.sender.tick();
-  assert.equal(w2.moves.length, 0);
-  assert.deepEqual(w2.advances, [{ id: 8, state: 'skipped', result: null }]);
+  assert.equal(w2.moves.length, 1);
+  assert.equal(w2.moves[0].toStageId, '02-follow-up');
+  // Sem escada configurada, o card fica.
+  const w3 = world({ config: { ...config, ladder_stage_ids: [] }, tasks: [task({ id: 9, track: 'pre_quote', step: 1, stage_id: 'contact' })] });
+  await w3.sender.tick();
+  assert.equal(w3.task(9).generation_meta.advance.state, 'skipped');
 });
 
 test('antes do orçamento: card saiu da etapa (foi para proposal) cancela com stage_changed', async () => {

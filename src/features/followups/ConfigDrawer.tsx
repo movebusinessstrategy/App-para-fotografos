@@ -577,7 +577,7 @@ function TrackerSection({ form, set, errors, data }: SectionProps) {
     proposal_stage_id: data.suggested.proposal_stage_id,
   });
   return (
-    <Section title="Funil automático" hint="Cria o lead quando chega mensagem e anda o card sozinho: resposta do estúdio vai para Conversa iniciada, PDF de orçamento vai para Orçamento enviado. Só anda para frente.">
+    <Section title="Funil automático" hint="Cria o lead quando chega mensagem e anda o card sozinho: resposta do estúdio vai para Conversa iniciada, PDF de orçamento vai para Orçamento enviado. Quem está nos follow-ups e recebe orçamento novo volta para Orçamento enviado e a sequência recomeça. Fora isso, só anda para frente.">
       <Check checked={form.tracker_enabled} onChange={(v) => set({ tracker_enabled: v })} label="Funil automático ligado" />
       <TrackerStages t={t} setTracker={setTracker} stages={stages} errors={errors} />
       <button type="button" onClick={useSuggested} className="flex items-center gap-1 text-[12px] font-semibold text-gray-600 dark:text-gray-300">

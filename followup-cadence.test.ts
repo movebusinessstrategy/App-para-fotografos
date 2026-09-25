@@ -792,7 +792,10 @@ test('antes do orçamento: trilha por etapa, contagem de toques e atrasos', () =
   assert.equal(preQuoteStepFor(0, PQ_CONFIG), 1);
   assert.equal(preQuoteStepFor(1, PQ_CONFIG), 2);
   assert.equal(preQuoteStepFor(2, PQ_CONFIG), null);
-  assert.equal(advanceTargetFor({ track: 'pre_quote', step: 1 }, PQ_CONFIG), null, 'nunca move o card');
+  // Antes do orçamento o card anda para a etapa do mesmo follow-up da escada.
+  assert.equal(advanceTargetFor({ track: 'pre_quote', step: 1 }, PQ_CONFIG), 'negotiation');
+  assert.equal(advanceTargetFor({ track: 'pre_quote', step: 2 }, PQ_CONFIG), '02-follow-up');
+  assert.equal(advanceTargetFor({ track: 'pre_quote', step: 1 }, { ...PQ_CONFIG, ladder_stage_ids: [] }), null, 'sem escada fica');
   assert.equal(advanceTargetFor({ track: 'ladder', step: 1 }, PQ_CONFIG), 'negotiation');
   assert.equal(advanceTargetFor({ step: 4 }, PQ_CONFIG), '04-follow-up', 'sem track = escada');
 });
@@ -811,14 +814,14 @@ test('antes do orçamento: episódio conta só toques enviados depois da última
   assert.equal(preQuoteSentInEpisode(tasks, canonicalPhoneKey(PHONE), hoursAgo(5)), 0, 'cliente respondeu: episódio novo');
 });
 
-test('antes do orçamento: deal em Conversa Iniciada com o estúdio por último entra no toque 1, sem próxima etapa', () => {
+test('antes do orçamento: deal em Conversa Iniciada com o estúdio por último entra no toque 1 e vai para a etapa do Follow 01', () => {
   const result = select([pqActivity()], { config: PQ_CONFIG });
   assert.equal(result.eligible.length, 1);
   const e = result.eligible[0];
   assert.equal(e.track, 'pre_quote');
   assert.equal(e.step, 1);
   assert.equal(e.stageId, 'contact');
-  assert.equal(e.nextStageId, null);
+  assert.equal(e.nextStageId, 'negotiation');
   assert.equal(e.dueAt, new Date(Date.parse(hoursAgo(26)) + 24 * HOUR).toISOString());
 });
 

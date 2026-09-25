@@ -36,12 +36,12 @@ function stateLines(s: DealFollowUpState, stageName: string): Line[] {
   return lines;
 }
 
-// Antes do orçamento: diz em qual toque está e lembra que o card não muda de etapa.
+// Antes do orçamento: diz em qual toque está e que o card anda depois do envio.
 function preQuoteLine(s: DealFollowUpState): Line | null {
   if (s.stage_role !== 'pre_quote') return null;
   const total = s.track_steps || 0;
-  if (s.step === null) return { key: 'pq', tone: 'slate', text: `Antes do orçamento: os ${total} toques já saíram. O card não muda de etapa por eles.` };
-  return { key: 'pq', tone: 'blue', text: `${stepLabel({ step: s.step, track: 'pre_quote', track_steps: total })}. O card não muda de etapa por esses toques.` };
+  if (s.step === null) return { key: 'pq', tone: 'slate', text: `Antes do orçamento: os ${total} toques já saíram.` };
+  return { key: 'pq', tone: 'blue', text: `${stepLabel({ step: s.step, track: 'pre_quote', track_steps: total })}. Depois do envio, o card anda para a etapa do follow-up.` };
 }
 
 const ACTIVE_TEXT: Record<string, (i: FollowUpDraftItem) => string> = {

@@ -1,5 +1,6 @@
 // Regras de etapa do funil de vendas, sem banco. O rastreador e a cadência só
-// andam para frente e nunca mexem em etapa fechada ou de produção.
+// andam para frente e nunca mexem em etapa fechada ou de produção. Única volta:
+// orçamento novo para quem está na escada de follow-ups (canMoveBack).
 
 export interface StageRow { id: string; name: string; position: number; is_final: boolean | null; is_won: boolean | null; process_id?: string | null }
 export interface StageHistoryEntry { stage_id: string; stage_name: string; entered_at: string; left_at: string | null }
@@ -31,6 +32,13 @@ export function canMoveForward(fromId: string, toId: string, stages: StageRow[])
   const to = stages.find((s) => s.id === toId);
   if (!isOpenSalesStage(from) || !isOpenSalesStage(to)) return false;
   return positionOf(to) > positionOf(from);
+}
+
+export function canMoveBack(fromId: string, toId: string, stages: StageRow[]): boolean {
+  const from = stages.find((s) => s.id === fromId);
+  const to = stages.find((s) => s.id === toId);
+  if (!isOpenSalesStage(from) || !isOpenSalesStage(to)) return false;
+  return positionOf(to) < positionOf(from);
 }
 
 function isHistoryEntry(entry: unknown): entry is StageHistoryEntry {

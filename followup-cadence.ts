@@ -761,9 +761,12 @@ export function preQuoteSentInEpisode(tasks: CadenceTaskLite[], phoneKey: string
     && sentAtMs(t) > customerMs).length;
 }
 
-// A trilha antes do orçamento nunca move o card.
+// Antes do orçamento o card também anda (pedido do dono): o toque N leva para a mesma
+// etapa de quem recebeu o Follow N depois do orçamento, e dali a escada continua.
+// Sem escada configurada, o card fica onde está.
 export function advanceTargetFor(task: { track?: FollowUpTrack | null; step: FollowUpStep }, c: FollowUpConfig): string | null {
-  return task.track === 'pre_quote' ? null : nextStageAfterStep(task.step, c);
+  if (task.track === 'pre_quote' && stepCount(c) === 0) return null;
+  return nextStageAfterStep(task.step, c);
 }
 
 // A rampa de 14 dias protege o número quando a cadência envia pelo QR (cliente

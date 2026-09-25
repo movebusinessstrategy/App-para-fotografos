@@ -144,6 +144,38 @@ test('PDF de orçamento: lead e contact vão para proposal; negotiation, ganho e
   assert.equal((decide(outEvt({ type: 'document', quoteHint: true, origin: 'agent' }), ctx({ deal: deal() }))[0] as { toStageId: string }).toStageId, 'proposal');
 });
 
+// Escada de follow-ups depois do orçamento (Pitori): quem entrou nela, inclusive por um
+// follow-up antes do orçamento, volta para proposal quando recebe um orçamento novo.
+const LADDER_STAGES: StageRow[] = [...STAGES, stage('02-follow-up', 5), stage('03-follow-up', 6), stage('aguardando-sinal', 7)];
+const LADDER_ROW = { ladder_stage_ids: ['proposal', 'negotiation', '02-follow-up'], after_last_stage_id: '03-follow-up' };
+const LADDER_CFG = parseFunnelConfig(configRow(LADDER_ROW), LADDER_STAGES);
+const decideLadder = (e: FunnelMessageEvent, c: FunnelContext, cfg = LADDER_CFG) => decideFunnelActions(e, c, LADDER_STAGES, cfg, NO_MATERIALS);
+
+test('orçamento novo na escada de follow-ups: volta para proposal e a escada recomeça', () => {
+  assert.deepEqual(LADDER_CFG.restartOnQuoteFrom, ['negotiation', '02-follow-up', '03-follow-up']);
+  assert.deepEqual(CFG.restartOnQuoteFrom, [], 'sem escada não volta');
+  const pdf = outEvt(quotePdf('Orçamento ensaio newborn.pdf'));
+  for (const from of ['negotiation', '02-follow-up', '03-follow-up']) {
+    assert.deepEqual(decideLadder(pdf, ctx({ deal: deal({ stage: from }) })),
+      [{ kind: 'move', toStageId: 'proposal', fromStageId: from, reason: 'quote_sent', restart: true }]);
+  }
+  // Antes do orçamento continua a promoção normal, sem marca de recomeço.
+  assert.deepEqual(decideLadder(pdf, ctx({ deal: deal({ stage: 'contact' }) })),
+    [{ kind: 'move', toStageId: 'proposal', fromStageId: 'contact', reason: 'quote_sent' }]);
+  // Fora da escada, texto comum e orçamento velho ficam.
+  assert.equal(ignoreReason(decideLadder(pdf, ctx({ deal: deal({ stage: 'aguardando-sinal' }) }))), 'no_promotion');
+  assert.equal(ignoreReason(decideLadder(outEvt(), ctx({ deal: deal({ stage: 'negotiation' }) }))), 'no_promotion');
+  const old = deal({ stage: 'negotiation', current_stage_entered_at: AT });
+  assert.equal(ignoreReason(decideLadder(outEvt({ ...quotePdf('Orçamento.pdf'), occurredAt: '2026-09-19T11:00:00.000Z' }), ctx({ deal: old }))), 'stale_event');
+  // restart_on_quote_from: [] desliga.
+  const off = parseFunnelConfig(configRow(LADDER_ROW, { restart_on_quote_from: [] }), LADDER_STAGES);
+  assert.deepEqual(off.restartOnQuoteFrom, []);
+  assert.equal(ignoreReason(decideLadder(pdf, ctx({ deal: deal({ stage: 'negotiation' }) }), off)), 'no_promotion');
+  // O histórico (reconcile) nunca volta: o orçamento antigo já levou o card para a escada.
+  const row: OutboundHistoryRow = { message_id: 'b', type: 'document', body: 'Orçamento ensaio.pdf', timestamp: '2026-09-19T11:20:00.000Z' };
+  assert.equal(decideFromHistory(deal({ stage: 'negotiation' }), [row], LADDER_STAGES, LADDER_CFG, NO_MATERIALS), null);
+});
+
 test('saída sem deal nunca cria lead', () => {
   assert.equal(ignoreReason(decide(outEvt(), ctx())), 'no_deal');
 });
@@ -549,6 +581,24 @@ test('moveDealStage recusa etapa fechada, para trás, allowFrom e convertido; no
   assert.equal(await t.tracker.moveDealStage(move({ dealId: 999 })), 'conflict');
   assert.equal(await t.tracker.moveDealStage(move({ expectedFromStage: 'contact', toStageId: 'proposal' })), 'conflict');
   assert.equal(t.opsOf('casUpdateStage').length, 0);
+});
+
+test('moveDealStage: volta só com allowBackward e só entre etapas abertas de venda', async () => {
+  const t = setup({ deals: [deal({ id: 11, stage: 'negotiation' })] });
+  const back = move({ dealId: 11, expectedFromStage: 'negotiation', toStageId: 'proposal', reason: 'quote_sent' });
+  assert.equal(await t.tracker.moveDealStage(back), 'refused');
+  assert.equal(await t.tracker.moveDealStage({ ...back, toStageId: 'prod-agendado', allowBackward: true }), 'refused');
+  assert.equal(await t.tracker.moveDealStage({ ...back, toStageId: 'lost', allowBackward: true }), 'refused');
+  assert.equal(await t.tracker.moveDealStage({ ...back, allowBackward: true }), 'moved');
+  assert.equal(t.opsOf('casUpdateStage').length, 1);
+});
+
+test('observe: orçamento novo para card na escada volta para proposal', async () => {
+  const t = setup({ config: configRow(LADDER_ROW), stages: LADDER_STAGES, deals: [deal({ stage: '02-follow-up' })] });
+  const result = await t.tracker.observe(outEvt(quotePdf('Orçamento ensaio newborn.pdf')));
+  assert.deepEqual(result.moved, { from: '02-follow-up', to: 'proposal' });
+  const activity = t.opsOf('logActivity')[0].args[0] as FunnelActivityEntry;
+  assert.equal(activity.summary, 'Funil automático: Orçamento Enviado (orçamento enviado)');
 });
 
 test('observe: saída move lead para contact com evidência do evento', async () => {

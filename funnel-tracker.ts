@@ -4,7 +4,7 @@
 // nunca lança: a mensagem já está salva quando ele roda.
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { brazilianPhoneVariants, canonicalPhoneKey, digitsOnly, maskPhone, normalizeBrazilianPhone13, samePhone } from './lib/br-phone.js';
-import { appendStageHistory, canMoveForward, firstOpenSalesStage, isClosedStage, isLostStage, isSalesStage, type StageRow } from './lib/stage-rules.js';
+import { appendStageHistory, canMoveBack, canMoveForward, firstOpenSalesStage, isClosedStage, isLostStage, isSalesStage, type StageRow } from './lib/stage-rules.js';
 import { detectOptOut } from './lib/optout-detect.js';
 import { isQuoteDocument, materialKeysFrom, type QuoteCandidate, type QuoteRules } from './lib/quote-document.js';
 import { CUSTOMER_NON_TURN_TYPES, DEFAULT_TRACKER_CONFIG } from './src/features/followups/types.js';
@@ -32,7 +32,7 @@ export interface FunnelMessageEvent {
 export type FunnelAction =
   | { kind: 'ignore'; reason: string }
   | { kind: 'create_deal'; stageId: string; title: string; contactName: string | null }
-  | { kind: 'move'; toStageId: string; fromStageId: string; reason: 'studio_reply' | 'quote_sent' }
+  | { kind: 'move'; toStageId: string; fromStageId: string; reason: 'studio_reply' | 'quote_sent'; restart?: true }
   | { kind: 'cancel_cadence'; reason: 'customer_replied' | 'optout' }
   | { kind: 'opt_out'; optKind: 'hard' | 'soft'; pattern: string };
 export interface FunnelDealState { id: number; stage: string; converted: boolean; converted_job_id: number | null;
@@ -41,7 +41,7 @@ export interface FunnelContext { deal: FunnelDealState | null; allDealsLost: boo
   isOwnOrIgnored: boolean; syntheticEcho: boolean }
 export interface FunnelConfig { trackerEnabled: boolean; cadenceEnabled: boolean; optOutDetection: boolean; createDealOnInbound: boolean;
   entryStageId: string | null; contactStageId: string | null; proposalStageId: string | null; promoteToContactFrom: string[];
-  promoteToProposalFrom: string[]; keywords: string[]; exclusions: string[]; genericPdfIsQuote: boolean; countBotAsStudioReply: boolean;
+  promoteToProposalFrom: string[]; restartOnQuoteFrom: string[]; keywords: string[]; exclusions: string[]; genericPdfIsQuote: boolean; countBotAsStudioReply: boolean;
   recreateAfterLost: boolean; skipExistingCustomers: boolean; ignoredPhones: string[] }
 export interface FunnelObserveResult {
   trackerEnabled: boolean; actions: Array<FunnelAction['kind']>; dealId: number | null;
@@ -144,6 +144,23 @@ function entryStageOf(tc: Row, stages: StageRow[]): string | null {
   return validStageId(tc.entry_stage_id, stages) ?? firstOpenSalesStage(stages)?.id ?? null;
 }
 
+// Etapas da escada depois da etapa do orçamento, mais a etapa final da escada.
+function ladderAfterProposal(row: Row | null, proposal: string): unknown[] {
+  const raw = row?.ladder_stage_ids;
+  const ladder: unknown[] = Array.isArray(raw) ? raw : [];
+  const at = ladder.indexOf(proposal);
+  return at < 0 ? [] : [...ladder.slice(at + 1), row?.after_last_stage_id];
+}
+
+// Orçamento novo para quem está na escada de follow-ups (inclusive quem entrou nela por um
+// follow-up antes do orçamento) volta o card para a etapa do orçamento e a escada recomeça.
+// tracker_config.restart_on_quote_from: [] desliga.
+function restartStagesOf(row: Row | null, tc: Row, stages: StageRow[], proposal: string | null): string[] {
+  if (!proposal) return [];
+  const raw = Array.isArray(tc.restart_on_quote_from) ? tc.restart_on_quote_from : ladderAfterProposal(row, proposal);
+  return stageListOr(raw, stages, []).filter((id) => id !== proposal);
+}
+
 // Linha nula => tudo desligado. Id inválido (inexistente, final, prod- ou de
 // processo) vira null; a entrada nula cai na 1ª etapa aberta de venda.
 export function parseFunnelConfig(row: Record<string, unknown> | null, stages: StageRow[]): FunnelConfig {
@@ -151,6 +168,7 @@ export function parseFunnelConfig(row: Record<string, unknown> | null, stages: S
   const d = DEFAULT_TRACKER_CONFIG;
   const entry = entryStageOf(tc, stages);
   const contact = validStageId(tc.contact_stage_id, stages);
+  const proposal = validStageId(tc.proposal_stage_id, stages);
   return {
     trackerEnabled: row?.tracker_enabled === true,
     cadenceEnabled: row?.enabled === true,
@@ -158,9 +176,10 @@ export function parseFunnelConfig(row: Record<string, unknown> | null, stages: S
     createDealOnInbound: boolOr(tc.create_deal_on_inbound, d.create_deal_on_inbound),
     entryStageId: entry,
     contactStageId: contact,
-    proposalStageId: validStageId(tc.proposal_stage_id, stages),
+    proposalStageId: proposal,
     promoteToContactFrom: stageListOr(tc.promote_to_contact_from, stages, [entry]),
     promoteToProposalFrom: stageListOr(tc.promote_to_proposal_from, stages, [entry, contact]),
+    restartOnQuoteFrom: restartStagesOf(row, tc, stages, proposal),
     keywords: stringsOr(tc.quote_keywords, d.quote_keywords),
     exclusions: stringsOr(tc.quote_exclusions, d.quote_exclusions),
     genericPdfIsQuote: boolOr(tc.generic_pdf_is_quote, d.generic_pdf_is_quote),
@@ -293,7 +312,7 @@ function canPromote(from: string, to: string | null, allowed: string[], stages: 
   return !!to && allowed.includes(from) && canMoveForward(from, to, stages);
 }
 
-type Promotion = { to: string; reason: 'studio_reply' | 'quote_sent' };
+type Promotion = { to: string; reason: 'studio_reply' | 'quote_sent'; restart?: true };
 
 function promotionTarget(stage: string, isQuote: boolean, stages: StageRow[], cfg: FunnelConfig): Promotion | null {
   if (isQuote && canPromote(stage, cfg.proposalStageId, cfg.promoteToProposalFrom, stages)) {
@@ -303,6 +322,16 @@ function promotionTarget(stage: string, isQuote: boolean, stages: StageRow[], cf
     return { to: cfg.contactStageId as string, reason: 'studio_reply' };
   }
   return null;
+}
+
+// Só no evento ao vivo: o reconcile olha o histórico, onde o orçamento antigo já levou o card à escada.
+function restartTarget(stage: string, isQuote: boolean, cfg: FunnelConfig): Promotion | null {
+  if (!isQuote || !cfg.proposalStageId || !cfg.restartOnQuoteFrom.includes(stage)) return null;
+  return { to: cfg.proposalStageId, reason: 'quote_sent', restart: true };
+}
+
+function moveAction(stage: string, target: Promotion): FunnelAction {
+  return { kind: 'move', toStageId: target.to, fromStageId: stage, reason: target.reason, ...(target.restart ? { restart: true as const } : {}) };
 }
 
 function quoteRules(cfg: FunnelConfig, materialKeys: Set<string>): QuoteRules {
@@ -318,9 +347,9 @@ function decideOutbound(evt: FunnelMessageEvent, ctx: FunnelContext, stages: Sta
   if (skip) return [ignore(skip)];
   const deal = ctx.deal as FunnelDealState;
   const isQuote = isQuoteDocument(eventCandidate(evt), quoteRules(cfg, materialKeys));
-  const target = promotionTarget(deal.stage, isQuote, stages, cfg);
+  const target = promotionTarget(deal.stage, isQuote, stages, cfg) ?? restartTarget(deal.stage, isQuote, cfg);
   if (!target) return [ignore('no_promotion')];
-  return [{ kind: 'move', toStageId: target.to, fromStageId: deal.stage, reason: target.reason }];
+  return [moveAction(deal.stage, target)];
 }
 
 export function decideFunnelActions(
@@ -572,6 +601,7 @@ async function applyMove(
   const outcome = await moveDealStageSafe(core, {
     userId: scope.evt.userId, dealId: deal.id, toStageId: action.toStageId, expectedFromStage: action.fromStageId,
     reason: action.reason, allowFrom: [action.fromStageId], evidence: eventEvidence(scope.evt),
+    ...(action.restart ? { allowBackward: true } : {}),
   });
   if (outcome === 'moved') result.moved = { from: action.fromStageId, to: action.toStageId };
 }
@@ -720,11 +750,16 @@ async function reconcileAfterCreateSafely(
 }
 
 // ─── Mudança de etapa (a única automática) ──────────────────────────
+function directionAllowed(input: MoveInput, from: string, stages: StageRow[]): boolean {
+  if (canMoveForward(from, input.toStageId, stages)) return true;
+  return input.allowBackward === true && canMoveBack(from, input.toStageId, stages);
+}
+
 function isRefused(input: MoveInput, deal: FunnelDealState, stages: StageRow[]): boolean {
   if (isClosedStage(stageOf(stages, input.toStageId))) return true;
   if (deal.converted || deal.converted_job_id != null) return true;
   if (isClosedStage(stageOf(stages, deal.stage))) return true;
-  if (!canMoveForward(deal.stage, input.toStageId, stages)) return true;
+  if (!directionAllowed(input, deal.stage, stages)) return true;
   return !!input.allowFrom && !input.allowFrom.includes(deal.stage);
 }
 

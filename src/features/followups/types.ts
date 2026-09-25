@@ -285,6 +285,7 @@ export type MoveReason = 'studio_reply' | 'quote_sent' | 'cadence_step' | 'backf
 export interface MoveInput {
   userId: string; dealId: number; toStageId: string; expectedFromStage: string; reason: MoveReason;
   allowFrom?: string[]; actorId?: string | null; evidence?: Record<string, unknown>;
+  allowBackward?: boolean;   // só o recomeço da escada por orçamento novo
 }
 export type MoveResult = 'moved' | 'noop' | 'conflict' | 'refused';
 

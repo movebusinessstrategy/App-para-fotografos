@@ -27,7 +27,7 @@ export const TRACK_LABELS: Record<FollowUpTrack, string> = {
   pre_quote: 'Antes do orçamento',
 };
 
-export const PRE_QUOTE_HELP_TEXT = 'Para quem parou antes do orçamento (ex.: Conversa Iniciada). A IA retoma a conversa de onde parou, sem preço e sem PDF. Esses toques nunca mudam o card de etapa.';
+export const PRE_QUOTE_HELP_TEXT = 'Para quem parou antes do orçamento (ex.: Conversa Iniciada). A IA retoma a conversa de onde parou, sem preço e sem PDF. Depois do envio, o card anda para a etapa do mesmo follow-up da escada e segue dali. Se receber orçamento, volta para a etapa do orçamento.';
 
 // Rótulo do passo na fila e no card: a trilha antes do orçamento fala em toque N de M.
 export function stepLabel(i: { step: FollowUpStep; track?: FollowUpTrack | null; track_steps?: number | null }): string {
