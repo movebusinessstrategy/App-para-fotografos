@@ -76,6 +76,31 @@ test('shouldScheduleReply aceita mensagem recente e recusa mensagem velha', () =
   assert.equal(shouldScheduleReply('lixo', now), true);
 });
 
+test('webhook Meta reconhece mensagem já salva pelo QR pelo key.id', async () => {
+  const key = '3A0123456789ABCDEF01';
+  const remote = Buffer.from('5543988887777');
+  const encoded = Buffer.concat([
+    Buffer.from([0x1c, 0x18, remote.length]), remote,
+    Buffer.from([0x15, 0x02, 0x00, 0x12, 0x18, key.length]), Buffer.from(key), Buffer.from([0]),
+  ]).toString('base64');
+  const payload = inboundPayload(Math.floor(Date.now() / 1000));
+  payload.entry[0].changes[0].value.messages[0].id = `wamid.${encoded}`;
+  let messageReads = 0;
+  const { db, calls } = fakeDb((query) => {
+    if (query.table === 'wa_messages' && query.op === 'select') {
+      messageReads += 1;
+      return { data: messageReads === 2 ? [{ message_id: key }] : [] };
+    }
+    return inboxMissingHandler(query);
+  });
+  const runtime = createMetaWebhookRuntime({
+    db, decryptToken: () => null, normalizePhone: value => value.replace(/\D/g, ''),
+  });
+  await runtime.ingest(payload);
+  assert.equal(calls.filter(query => query.table === 'wa_messages' && query.op === 'insert').length, 0);
+  assert.equal(calls.filter(query => query.table === 'wa_conversations' && query.op === 'insert').length, 0);
+});
+
 test('falha na captura de marketing não derruba a mensagem nem a resposta', async () => {
   const { db, calls } = fakeDb(inboxMissingHandler);
   const replies: string[] = [];

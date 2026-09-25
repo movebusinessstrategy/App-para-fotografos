@@ -123,6 +123,7 @@ import {
 import { appStorageBucket, ensureAppStorageBucket, registerPublicStorageRoutes, resolvePublicStorageUrl } from './app-storage.js';
 import { sumPrefixBytes } from './object-storage.js';
 import { captureMarketingWhatsAppContact } from './lib/marketing-whatsapp-contact.js';
+import { waMessageKeyId } from './lib/whatsapp-message-key.js';
 import { createFunnelTracker, createSupabaseFunnelRepo, isBaileysBotMessage, type FunnelMessageEvent, type FunnelObserveResult } from './funnel-tracker.js';
 import type { FollowUpServices } from './src/features/followups/types.js';
 import { resolveLegacyMetaAuth, legacyWithin24h, legacyPreSendCheck, applyLegacyGate, extractGraphMessageId } from './legacy-followup-fix.js';
@@ -28516,6 +28517,23 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       console.log(`[Baileys] MSG RECEBIDA | phone=${phone} | tipo=${msgType} | fromMe=${msg.key.fromMe} | userId=${userId}`);
     }
 
+    // A API oficial usa wamid; o aparelho usa o key.id dentro dele. O índice
+    // 085 protege o banco, e esta consulta evita efeitos colaterais mesmo se
+    // a sessão QR receber uma cópia do histórico já salva pela Meta.
+    if (msgType === 'text' && msgBody && waNumber) {
+      const near = new Date(new Date(ts).getTime() - 120_000).toISOString();
+      const until = new Date(new Date(ts).getTime() + 120_000).toISOString();
+      const phoneAlias = normalizeBrazilianPhone(phone);
+      const { data: candidates, error: lookupError } = await supabaseAdmin.from('wa_messages')
+        .select('message_id').eq('user_id', userId)
+        .in('phone', [...new Set([phone, phoneAlias])])
+        .eq('wa_number', waNumber).eq('from_me', !!msg.key.fromMe)
+        .eq('type', 'text').eq('body', msgBody)
+        .gte('timestamp', near).lte('timestamp', until).limit(20);
+      if (lookupError) console.warn('[Baileys] Falha na consulta de duplicata:', lookupError.message);
+      if (candidates?.some(row => waMessageKeyId(row.message_id) === msgId)) return;
+    }
+
     // Salva mensagem (ignora duplicatas via message_id)
     const { error: msgSaveErr } = await supabaseAdmin.from('wa_messages').insert({
       user_id: userId, phone, wa_number: waNumber, message_id: msgId,
@@ -28537,9 +28555,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         queueWaNumberRepair(userId, waNumber, msgId);
       }
     }
+    if (msgSaveErr) return;
 
-    // Roda mesmo se o insert falhou: com o rastreador ligado o legado não cria o lead,
-    // e a entrada só precisa do telefone e do corpo, não da linha salva.
+    // Só atualiza funil, conversa e follow-up quando a mensagem foi gravada.
     if (!isHistory && slot === 'main') {
       await observeFunnel({
         userId, waNumber, slot: 'main', phone, messageId: msgId, occurredAt: ts,
@@ -28621,6 +28639,16 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         ? `phone.eq.${rawPhone},phone.eq.${normalizedPhone}`
         : `phone.eq.${rawPhone}`;
       const { phone: _ph, user_id: _ui, ...updateFields } = convPayload;
+      if (isHistory) {
+        const { data: current, error: currentError } = await supabaseAdmin
+          .from('wa_conversations').select('last_message_at')
+          .eq('user_id', userId).eq('wa_number', waNumber).or(phoneFilter);
+        if (currentError) throw currentError;
+        if (current?.some(row => row.last_message_at && row.last_message_at > ts)) {
+          delete updateFields.last_message;
+          delete updateFields.last_message_at;
+        }
+      }
       const { data: updated, error: updateErr } = await supabaseAdmin
         .from('wa_conversations')
         .update(updateFields)
@@ -28652,7 +28680,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     // Resposta enviada pelo celular/WhatsApp Web depois de um hand-off = uma
     // pessoa assumiu. Mensagens da própria Lia chegam aqui também, mas nesse
     // caso a conversa não está marcada como needs_human e nada é alterado.
-    if (!isHistory && msg.key.fromMe && slot === 'main') {
+    if (!isHistory && msg.key.fromMe && slot === 'main' && !isBaileysBotMessage(msg)) {
       await markConversationHumanActiveIfNeeded(userId, phone, waNumber);
     }
 

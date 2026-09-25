@@ -8,6 +8,7 @@ import {
 } from './meta-whatsapp-coexistence.js';
 import type { FunnelMessageEvent } from '../funnel-tracker.js';
 import type { DeliveryFailureInput } from '../src/features/followups/types.js';
+import { waMessageKeyId } from './whatsapp-message-key.js';
 
 type MetaAccount = {
   id: string;
@@ -408,6 +409,15 @@ async function messagePresence(
   }
   if (direct.data?.length) {
     return (direct.data[0] as any).source_event_key === bound.event.eventKey ? 'same_event' : 'duplicate';
+  }
+  const keyId = waMessageKeyId(message.id);
+  if (keyId && keyId !== message.id) {
+    const paired = await db.from('wa_messages').select('message_id')
+      .eq('user_id', bound.account.user_id)
+      .in('wa_number', waNumberVariants)
+      .eq('message_id', keyId).limit(1);
+    if (paired.error) throw paired.error;
+    if (paired.data?.length) return 'duplicate';
   }
   if (!message.timestamp || message.type !== 'text' || !message.body.trim()) return 'new';
   const exact = await db.from('wa_messages').select('message_id')
