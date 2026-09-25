@@ -17,6 +17,7 @@ import { TextDecoder } from 'node:util';
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 import * as BaileysManager from './baileys-manager.js';
+import { incomingContentType, unwrapIncomingContent } from './lib/whatsapp-message-content.js';
 import * as Asaas from './asaas-client.js';
 import { initSentry } from './sentry-server.js';
 import { encryptIfNeeded, decryptIfNeeded, isEncryptionConfigured } from './lib/wa-token-crypto.js';
@@ -28461,8 +28462,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       : new Date().toISOString();
 
     // Tipo e conteúdo
-    const msgContent = msg.message || {};
-    const firstKey = Object.keys(msgContent)[0] || '';
+    // Abre envelopes (IA da Meta, temporária, documento com legenda) e ignora metadados.
+    const msgContent = unwrapIncomingContent(msg.message);
+    const firstKey = incomingContentType(msgContent);
     let msgType = 'text';
     let msgBody = '';
     let mediaDataUrl: string | null = null;
