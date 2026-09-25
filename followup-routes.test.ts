@@ -593,7 +593,7 @@ test('GET /overview com a 083 ausente responde 200 migration_required', async (t
 
 test('GET /overview conta a fila, aplica a rampa e calcula permissões de quem vê', async (t) => {
   const db = makeDb({
-    followup_cadence_config: [configRow({ first_enabled_at: '2026-09-10T12:00:00.000Z', paused_at: '2026-09-16T12:00:00.000Z', paused_reason: 'error_streak', last_error: 'erro x' })],
+    followup_cadence_config: [configRow({ allow_baileys: true, first_enabled_at: '2026-09-10T12:00:00.000Z', paused_at: '2026-09-16T12:00:00.000Z', paused_reason: 'error_streak', last_error: 'erro x' })],
     scheduled_followups: [
       task({ id: 1, status: 'draft', step: 1 }), task({ id: 2, status: 'draft', step: 2 }), task({ id: 3, status: 'approved' }),
       task({ id: 4, status: 'blocked' }), task({ id: 5, status: 'sent', sent_at: '2026-09-16T13:00:00.000Z' }),

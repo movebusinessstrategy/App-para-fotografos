@@ -467,8 +467,14 @@ test('nextErrorState e customerSpokeAfter', () => {
 
 // Teto e rampa
 
-test('effectiveDailyCap na rampa de 14 dias e fora dela', () => {
-  const cfg = { ...CONFIG, daily_cap: 40 };
+test('effectiveDailyCap: só API oficial não tem rampa, vale o teto desde o 1º dia', () => {
+  const first = '2026-09-10T12:00:00.000Z';
+  const oficial = { ...CONFIG, daily_cap: 30, allow_baileys: false };
+  assert.deepEqual(effectiveDailyCap(oficial, { ...STATE, first_enabled_at: first }, NOW), { cap: 30, warmupUntil: null });
+});
+
+test('effectiveDailyCap na rampa de 14 dias e fora dela (envio pelo QR)', () => {
+  const cfg = { ...CONFIG, daily_cap: 40, allow_baileys: true };
   assert.deepEqual(effectiveDailyCap(cfg, STATE, NOW), { cap: 40, warmupUntil: null });
   const first = '2026-09-10T12:00:00.000Z';
   assert.deepEqual(effectiveDailyCap(cfg, { ...STATE, first_enabled_at: first }, NOW), { cap: 10, warmupUntil: '2026-09-24T12:00:00.000Z' });

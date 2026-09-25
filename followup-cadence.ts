@@ -742,9 +742,12 @@ export function advanceTargetFor(task: { track?: FollowUpTrack | null; step: Fol
   return task.track === 'pre_quote' ? null : nextStageAfterStep(task.step, c);
 }
 
+// A rampa de 14 dias protege o número quando a cadência envia pelo QR (cliente
+// não oficial, risco de bloqueio). Pela API oficial a própria Meta limita o
+// volume, então vale o teto configurado desde o primeiro dia (pedido do dono).
 export function effectiveDailyCap(config: FollowUpConfig, state: FollowUpRuntimeState, now: Date): { cap: number; warmupUntil: string | null } {
   const firstEnabled = toMs(state.first_enabled_at);
-  if (firstEnabled === null) return { cap: config.daily_cap, warmupUntil: null };
+  if (!config.allow_baileys || firstEnabled === null) return { cap: config.daily_cap, warmupUntil: null };
   const until = firstEnabled + WARMUP_DAYS * DAY_MS;
   if (now.getTime() >= until) return { cap: config.daily_cap, warmupUntil: null };
   return { cap: Math.min(config.daily_cap, WARMUP_DAILY_CAP), warmupUntil: new Date(until).toISOString() };
