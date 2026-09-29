@@ -130,6 +130,7 @@ import { resolveLegacyMetaAuth, legacyWithin24h, legacyPreSendCheck, applyLegacy
 import { isOptedOut, loadOptOutKeys, optOutSetHas } from './lib/optout-store.js';
 import { createFollowUpCadence } from './followup-runtime.js';
 import { registerFollowUpRoutes } from './followup-routes.js';
+import { registerWhatsAppUsageRoutes } from './whatsapp-usage.js';
 import {
   MarketingSiteRouteError,
   registerMarketingSiteEvent,
@@ -4492,7 +4493,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // Foto de perfil do contato via Baileys
   app.get('/api/inbox/profile-picture/:phone', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const phone = normalizeBrazilianPhone(req.params.phone.replace(/\D/g, ''));
+    const phone = req.params.phone.replace(/\D/g, '');
     try {
       const url = await BaileysManager.getProfilePicture(userId, phone);
       return res.json({ url });
@@ -17367,6 +17368,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   }) : null;
   followUpCadenceRef = followUpCadence;
   if (supabaseAdmin && followUpCadence) registerFollowUpRoutes(app, { db: supabaseAdmin, requireAuth, requirePermission, requireOwnerOrPlatformAdmin, denyProductionOnly, services: followUpCadence.services });
+  if (supabaseAdmin) registerWhatsAppUsageRoutes(app, { db: supabaseAdmin, requireAuth, requirePermission, requireOwnerOrPlatformAdmin, denyProductionOnly });
 
   app.get('/api/deals/:id/activities', requireAuth, async (req, res) => {
     const userId = (req as any).userId;

@@ -7,6 +7,9 @@ import { StageCustomizer } from "./StageCustomizer";
 import { useApi, refreshApi, liveRefresh } from "../../utils/useApi";
 import { Deal, PipelineStage, Client } from "../../types";
 import { useAuth } from "../../contexts/AuthContext";
+import { canonicalPhoneKey } from '../../../lib/br-phone';
+import { dealExclusionReason } from '../../../lib/deal-exclusions';
+import { ExcludedContacts, type FollowUpExclusion } from '../../features/followups/ExcludedContacts';
 
 // Lazy: cada tab vira um chunk próprio, baixado só quando o usuário clicar.
 // FunilTab fica eager porque é a tab default (Kanban) - render instantâneo.
@@ -26,7 +29,7 @@ function TabFallback() {
   );
 }
 
-type Tab = "inbox" | "kanban" | "historico" | "analises" | "followups";
+type Tab = "inbox" | "kanban" | "historico" | "analises" | "followups" | "excluded";
 type HistoryFilter = "todos" | "ativos" | "convertidos" | "perdidos";
 
 export function VendasDashboard() {
@@ -47,6 +50,9 @@ export function VendasDashboard() {
   const { data: dealsData, isLoading: dealsLoading, mutate: mutateDeals } = useApi<Deal[]>("/api/deals", liveRefresh);
   const { data: stagesData } = useApi<PipelineStage[]>("/api/pipeline/stages");
   const { data: clientsData } = useApi<Client[]>("/api/clients");
+  const { data: exclusionsData, error: exclusionsError, mutate: mutateExclusions } = useApi<FollowUpExclusion[]>("/api/followups/exclusions", liveRefresh);
+  const exclusions = Array.isArray(exclusionsData) ? exclusionsData : [];
+  const excludedPhones = new Set(exclusions.map(item => item.phone_key));
 
   const deals = useMemo(() => Array.isArray(dealsData) ? dealsData : [], [dealsData]);
   const stages = useMemo(() => Array.isArray(stagesData) ? stagesData : [], [stagesData]);
@@ -61,6 +67,7 @@ export function VendasDashboard() {
     try {
       await Promise.all([
         mutateDeals(),
+        mutateExclusions(),
         refreshApi("/api/pipeline/stages"),
         refreshApi("/api/clients"),
       ]);
@@ -113,7 +120,7 @@ export function VendasDashboard() {
 
   const activeDeals = deals.filter((d) => {
     const stage = stages.find((s) => s.id === d.stage);
-    return !d.converted && !d.converted_job_id && !stage?.is_final;
+    return !d.converted && !d.converted_job_id && !stage?.is_final && !dealExclusionReason(d) && !excludedPhones.has(canonicalPhoneKey(d.contact_phone));
   });
 
   const TABS = [
@@ -121,6 +128,7 @@ export function VendasDashboard() {
     { id: "inbox" as Tab, label: "Conversas", icon: MessageCircle },
     { id: "followups" as Tab, label: "Follow-ups", icon: Sparkles },
     { id: "historico" as Tab, label: "Histórico", icon: History },
+    { id: "excluded" as Tab, label: "Fora do funil", icon: History },
     // Análises pode ser desmarcada por funcionário (permissão "vendas_analises").
     ...(canSeeAnalises ? [{ id: "analises" as Tab, label: "Análises", icon: BarChart3 }] : []),
   ];
@@ -174,6 +182,10 @@ export function VendasDashboard() {
             onClick={() => {
               if (id === "historico") setHistoryInitialFilter("todos");
               setTab(id);
+              const next = new URLSearchParams(searchParams);
+              next.set('tab', id);
+              if (id !== 'inbox') next.delete('phone');
+              setSearchParams(next, { replace: true });
             }}
             className={`flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[12px] font-semibold transition-colors ${
               tab === id
@@ -189,6 +201,7 @@ export function VendasDashboard() {
 
       {/* Conteúdo - flex-1 para preencher o espaço restante */}
       <div className="flex-1 min-h-0 overflow-hidden">
+        {exclusionsError && <p role="status" className="px-4 py-2 text-xs text-amber-700">Não foi possível atualizar os contatos fora do funil. O bloqueio de envios continua ativo no servidor.</p>}
         {loading ? (
           <div className="flex items-center justify-center h-full">
             <div className="flex flex-col items-center gap-3 text-gray-400">
@@ -198,14 +211,16 @@ export function VendasDashboard() {
           </div>
         ) : tab === "kanban" ? (
           <FunilTab
-            deals={deals}
+            deals={deals.filter(d => !dealExclusionReason(d) && !excludedPhones.has(canonicalPhoneKey(d.contact_phone)))}
             stages={stages}
             clients={clients}
             onUpdate={fetchData}
           />
         ) : (
           <Suspense fallback={<TabFallback />}>
-            {tab === "inbox" ? (
+            {tab === "excluded" ? (
+              <ExcludedContacts deals={deals} stages={stages} exclusions={exclusions} onUpdate={fetchData} />
+            ) : tab === "inbox" ? (
               <InboxView
                 deals={deals}
                 stages={stages}

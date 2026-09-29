@@ -17,7 +17,7 @@ const STALE_TEXT = 'Não foi possível atualizar agora. Mostrando os últimos da
 
 interface Props {
   overview: FollowUpOverview;
-  onOpenDeal: (dealId: number) => void;
+  onOpenDeal: (dealId: number, phone?: string | null) => void;
   onOpenQueue: (tab: QueueTab) => void;
 }
 
@@ -44,7 +44,7 @@ function DashboardError({ error, onRetry }: { error: unknown; onRetry: () => voi
   );
 }
 
-interface BoardCardProps { data: FollowUpDashboard; now: Date; refreshing: boolean; stale: boolean; onRefresh: () => void; onOpenDeal: (id: number) => void }
+interface BoardCardProps { data: FollowUpDashboard; now: Date; refreshing: boolean; stale: boolean; onRefresh: () => void; onOpenDeal: (id: number, phone?: string | null) => void }
 
 function BoardCard({ data, now, refreshing, stale, onRefresh, onOpenDeal }: BoardCardProps) {
   return (
@@ -55,7 +55,7 @@ function BoardCard({ data, now, refreshing, stale, onRefresh, onOpenDeal }: Boar
             <SquareKanban size={14} className="text-gold-600" /> Fluxo dos follow-ups
           </h3>
           <p className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400">
-            Cada negócio aparece uma vez, no passo do último follow-up. Clique no card para abrir o negócio.
+            Cada negócio aparece uma vez, no passo do último follow-up. Clique no card para conversar.
           </p>
           {stale && <p className="mt-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300">{STALE_TEXT}</p>}
         </div>

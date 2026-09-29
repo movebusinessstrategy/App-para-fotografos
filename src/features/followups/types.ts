@@ -375,6 +375,7 @@ export interface FollowUpDashboardKpis {
 
 export interface KanbanCard {
   deal_id: number; task_id: number;      // task_id = última tarefa da cadência do negócio
+  contact_phone?: string | null;
   contact_name: string | null;
   stage_name: string;                    // etapa atual do negócio no funil
   track: FollowUpTrack; step: FollowUpStep; status: CadenceStatus; chip: KanbanChip;
@@ -388,6 +389,7 @@ export interface KanbanCard {
 export interface KanbanColumn { key: KanbanColumnKey; label: string; count: number; cards: KanbanCard[] }   // cards: até 60
 
 export interface FollowUpDashboardWaiting {
+  contact_phone?: string | null;
   deal_id: number; contact_name: string | null; stage_name: string;
   last_customer_at: string; preview: string;   // preview: últimos 100 caracteres da fala do cliente
 }

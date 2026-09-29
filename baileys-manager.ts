@@ -563,20 +563,11 @@ export async function getProfilePicture(userId: string, phone: string): Promise<
   const session = sessions.get(userId);
   if (session?.status !== 'open' || !session.sock) return null;
 
-  // Tenta formato atual (13 dígitos)
+  // A foto pertence ao JID exato. Não tentar outro número se a foto for privada.
   try {
     const url = await session.sock.profilePictureUrl(_jid(phone), 'image');
     if (url) return url;
   } catch {}
-
-  // Tenta formato antigo (12 dígitos, sem o 9 extra) para compatibilidade
-  if (phone.startsWith('55') && phone.length === 13) {
-    const oldPhone = phone.slice(0, 4) + phone.slice(5); // remove o 9 na posição 5
-    try {
-      const url = await session.sock.profilePictureUrl(_jid(oldPhone), 'image');
-      if (url) return url;
-    } catch {}
-  }
 
   return null;
 }

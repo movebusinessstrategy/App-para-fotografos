@@ -438,6 +438,19 @@ test('repo: candidates chama a RPC com os parâmetros e mapeia as linhas', async
   assert.equal(a.lastStudioAt, ago(30));
 });
 
+test('repo: não cria cadência para oportunidade fora do funil e isola a consulta por conta', async () => {
+  const db = new FakeSupabase(c => {
+    if (c.table === 'followup_cadence_candidates') return { data: [{ deal_id: 3 }, { deal_id: 4 }] };
+    if (c.table === 'deals') return { data: [{ id: 3, labels: ['Fora do funil: sem interação recente'] }, { id: 4, labels: [] }] };
+    return undefined;
+  });
+  const repo = createFollowUpRepo(db as any, repoDeps());
+  const result = await repo.candidates(USER, ['proposal'], [MAIN], 768, 1000);
+  assert.deepEqual(result.map(row => row.dealId), [4]);
+  const call = db.calls.find(c => c.table === 'deals')!;
+  assert.ok(has(call, 'eq', 'user_id', USER));
+});
+
 test('repo: insertTask nunca manda phone_key; 23505 => duplicate; outro erro lança', async () => {
   let answer: { code: string; message: string } | null = null;
   const db = new FakeSupabase((c) => (c.op === 'insert' ? { error: answer } : undefined));

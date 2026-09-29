@@ -4,6 +4,7 @@
 // Canal, templates e envio ficam atrás de deps.services (followup-runtime.ts).
 import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { loadFollowUpExclusions } from './followup-exclusions.js';
 import type {
   ApproveAllResult, CadenceGenerationMeta, CadenceStatus, CadenceTaskRow, ChannelHealth, DealFollowUpState, FixedTemplateInfo,
   FollowUpConfig, FollowUpConfigResponse, FollowUpDraftItem, FollowUpErrorBody, FollowUpErrorCode, FollowUpOptOut,
@@ -1743,6 +1744,10 @@ export function registerFollowUpRoutes(app: Express, deps: FollowUpRouteDeps): v
   app.get(`${BASE}/config`, read((req, res) => getConfigHandler(env, req, res)));
   app.put(`${BASE}/config`, owner, write((req, res) => putConfigHandler(env, req, res)));
   app.get(`${BASE}/optouts`, read((req, res) => listOptOutsHandler(env, req, res)));
+  app.get(`${BASE}/exclusions`, read(async (req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(await loadFollowUpExclusions(env.db, ctxFrom(req).userId));
+  }));
   app.post(`${BASE}/optouts`, write((req, res) => addOptOutHandler(env, req, res)));
   app.delete(`${BASE}/optouts/:id`, owner, write((req, res) => removeOptOutHandler(env, req, res)));
   app.get(`${BASE}/reconcile/preview`, owner, read((req, res) => reconcilePreviewHandler(env, req, res)));

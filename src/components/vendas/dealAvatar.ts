@@ -45,7 +45,7 @@ async function loadAvatar(phone: string): Promise<string | null> {
   return promise;
 }
 
-export function useDealAvatar(phone?: string | null): string | null {
+export function useDealAvatar(phone?: string | null, revision = 0): string | null {
   const digits = normalize(phone);
   const [url, setUrl] = useState<string | null>(() => {
     if (!digits) return null;
@@ -63,7 +63,7 @@ export function useDealAvatar(phone?: string | null): string | null {
       });
     }
     return () => { cancelled = true; };
-  }, [digits]);
+  }, [digits, revision]);
 
   return url;
 }
