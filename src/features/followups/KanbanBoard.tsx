@@ -5,6 +5,7 @@ import {
 import { cn } from '../../utils/cn';
 import { COLUMN_EMPTY_TEXT, DELIVERY_LABELS, chipView, type ChipView } from './DashboardFormat';
 import { TONE_CLASSES } from './labels';
+import { ContactAvatar } from './ContactAvatar';
 import type { KanbanCard, KanbanChip, KanbanColumn, KanbanColumnKey } from './types';
 
 // Quadro do fluxo: cada negócio uma vez, na coluna do último follow-up. Colunas com altura
@@ -53,14 +54,15 @@ function Chip({ card, view }: { card: KanbanCard; view: ChipView }) {
   );
 }
 
-interface CardProps { card: KanbanCard; now: Date; tz: string; onOpen: (dealId: number) => void }
+interface CardProps { card: KanbanCard; now: Date; tz: string; onOpen: (dealId: number, phone?: string | null) => void }
 
 function KanbanCardView({ card, now, tz, onOpen }: CardProps) {
   const view = chipView(card, now, tz);
   return (
-    <button type="button" onClick={() => onOpen(card.deal_id)}
+    <button type="button" onClick={() => onOpen(card.deal_id, card.contact_phone)} title="Abrir conversa"
       className="w-full rounded-xl border border-gray-200 bg-white p-2.5 text-left shadow-sm transition-colors hover:border-gold-300 hover:shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gold-700">
-      <div className="flex items-start justify-between gap-1.5">
+      <div className="mb-1.5 flex items-center gap-2">
+        <ContactAvatar phone={card.contact_phone} name={card.contact_name} />
         <p className="min-w-0 truncate text-[12px] font-semibold text-gray-900 dark:text-white">{card.contact_name || 'Sem nome'}</p>
         {card.step === 4 && (
           <span className="shrink-0 rounded bg-gray-100 px-1 text-[9px] font-bold uppercase text-gray-500 dark:bg-gray-700 dark:text-gray-300">Passo 4</span>
@@ -82,7 +84,7 @@ function KanbanCardView({ card, now, tz, onOpen }: CardProps) {
   );
 }
 
-interface ColumnProps { column: KanbanColumn; now: Date; tz: string; onOpenDeal: (dealId: number) => void }
+interface ColumnProps { column: KanbanColumn; now: Date; tz: string; onOpenDeal: (dealId: number, phone?: string | null) => void }
 
 function KanbanColumnView({ column, now, tz, onOpenDeal }: ColumnProps) {
   const hidden = Math.max(0, column.count - column.cards.length);
@@ -115,7 +117,7 @@ function KanbanColumnView({ column, now, tz, onOpenDeal }: ColumnProps) {
   );
 }
 
-export interface KanbanBoardProps { columns: KanbanColumn[]; now: Date; tz: string; onOpenDeal: (dealId: number) => void }
+export interface KanbanBoardProps { columns: KanbanColumn[]; now: Date; tz: string; onOpenDeal: (dealId: number, phone?: string | null) => void }
 
 // A largura que vale é a do próprio quadro (a tela de Vendas tem menu lateral): com 56rem
 // ou mais as cinco colunas dividem o espaço; abaixo disso cada coluna tem 15rem e o quadro

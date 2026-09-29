@@ -17,6 +17,7 @@ import type { CadenceSweepRepo, ConversationRow, LoadedConfig, OptOutInput, Task
 import type { StageRow } from './lib/stage-rules.js';
 import { brazilianPhoneVariants, canonicalPhoneKey, digitsOnly } from './lib/br-phone.js';
 import { getWhatsAppChannelState } from './lib/meta-whatsapp-channel.js';
+import { dealExclusionReason } from './lib/deal-exclusions.js';
 
 export class CadenceMigrationMissing extends Error {
   code: string;
@@ -304,7 +305,20 @@ async function candidates(db: SupabaseClient, userId: string, stageIds: string[]
     p_lookback_hours: Math.round(lookbackHours), p_limit: limit,
   });
   check(error);
-  return rowsOf(data).map(activityFromRpcRow);
+  const rows = rowsOf(data);
+  if (!rows.length) return [];
+  const archived = await excludedDealIds(db, userId, rows.map(row => Number(row.deal_id)));
+  return rows.filter(row => !archived.has(Number(row.deal_id))).map(activityFromRpcRow);
+}
+
+async function excludedDealIds(db: SupabaseClient, userId: string, ids: number[]): Promise<Set<number>> {
+  const rows: Row[] = [];
+  for (let offset = 0; offset < ids.length; offset += 200) {
+    const { data, error } = await db.from('deals').select('id,labels').eq('user_id', userId).in('id', ids.slice(offset, offset + 200));
+    check(error);
+    rows.push(...rowsOf(data));
+  }
+  return new Set(rows.filter(row => dealExclusionReason(row)).map(row => Number(row.id)));
 }
 
 async function sweepTasks(db: SupabaseClient, userId: string, sinceIso: string): Promise<CadenceTaskLite[]> {
@@ -421,7 +435,7 @@ async function lastCustomerTurnAt(db: SupabaseClient, userId: string, phone: str
 // Snapshot do envio: tudo relido do banco logo antes de encostar no WhatsApp.
 
 async function snapDeal(db: SupabaseClient, userId: string, dealId: number): Promise<SendSnapshot['deal']> {
-  const { data, error } = await db.from('deals').select('id, stage, converted, converted_job_id, contact_name')
+  const { data, error } = await db.from('deals').select('id, stage, converted, converted_job_id, contact_name, labels')
     .eq('user_id', userId).eq('id', dealId).maybeSingle();
   check(error);
   if (!data) return null;
@@ -429,6 +443,7 @@ async function snapDeal(db: SupabaseClient, userId: string, dealId: number): Pro
   return {
     id: Number(row.id), stage: String(row.stage ?? ''), converted: row.converted === true,
     converted_job_id: row.converted_job_id == null ? null : Number(row.converted_job_id), contact_name: nullableText(row.contact_name),
+    labels: Array.isArray(row.labels) ? row.labels : [],
   };
 }
 
@@ -606,7 +621,7 @@ async function loadSendSnapshot(ctx: RepoCtx, task: CadenceTaskRow, waNumbers: s
     lastCustomerAt: latestIso(customerAt, queue.customerAt),
     lastStudioAt: latestIso(studioAt, legacyAt, queue.studioAt),
     lastInvisibleOutAt: invisibleAt,
-    optedOut, alreadyCustomer: keys.has(phoneKey), needsHuman: needsHuman(conversations),
+    optedOut: optedOut || !!dealExclusionReason(deal), alreadyCustomer: keys.has(phoneKey), needsHuman: needsHuman(conversations),
     conversationPhone: String(conversation?.phone || task.phone),
     conversationWaNumber: digitsOnly(conversation?.wa_number) || digitsOnly(task.wa_number) || waNumbers[0] || '',
     seenBaileysPhones: seen,

@@ -2,18 +2,20 @@ import type { RefObject } from 'react';
 import { ChevronRight, CircleCheck, Hand, TriangleAlert } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { plural, waitingLabel } from './DashboardFormat';
+import { ContactAvatar } from './ContactAvatar';
 import type { FollowUpDashboardKpis, FollowUpDashboardWaiting, QueueTab } from './types';
 
 // Clientes que falaram por último há mais de 2 horas e ainda esperam o estúdio, mais o
 // atalho para os follow-ups com problema. Clicar abre o negócio.
 
-interface RowProps { item: FollowUpDashboardWaiting; now: Date; tz: string; onOpenDeal: (dealId: number) => void }
+interface RowProps { item: FollowUpDashboardWaiting; now: Date; tz: string; onOpenDeal: (dealId: number, phone?: string | null) => void }
 
 function WaitingRow({ item, now, tz, onOpenDeal }: RowProps) {
   return (
     <li>
-      <button type="button" onClick={() => onOpenDeal(item.deal_id)}
+      <button type="button" onClick={() => onOpenDeal(item.deal_id, item.contact_phone)} title="Abrir conversa"
         className="flex w-full items-start gap-2 rounded-xl px-2 py-2 text-left transition-colors hover:bg-amber-100/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 dark:hover:bg-amber-900/20">
+        <ContactAvatar phone={item.contact_phone} name={item.contact_name} />
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline justify-between gap-2">
             <span className="truncate text-[12px] font-semibold text-gray-900 dark:text-white">{item.contact_name || 'Sem nome'}</span>
@@ -36,7 +38,7 @@ export interface DashboardNeedsYouProps {
   now: Date;
   tz: string;
   sectionRef?: RefObject<HTMLElement | null>;
-  onOpenDeal: (dealId: number) => void;
+  onOpenDeal: (dealId: number, phone?: string | null) => void;
   onOpenQueue: (tab: QueueTab) => void;
 }
 

@@ -2,6 +2,7 @@ interface CachedContact {
   phone: string;
   name?: string;
   avatar?: string;
+  avatarUpdatedAt?: number;
   updatedAt: number;
 }
 
@@ -31,6 +32,11 @@ export function getCachedContact(phone: string): CachedContact | null {
     saveCache(cache);
     return null;
   }
+  // URLs de foto expiram independentemente das atualizações de nome.
+  if (entry.avatar && Date.now() - (entry.avatarUpdatedAt || 0) > 4 * 60 * 60 * 1000) {
+    delete entry.avatar;
+    saveCache(cache);
+  }
   return entry;
 }
 
@@ -43,6 +49,7 @@ export function updateCachedContact(phone: string, data: Partial<CachedContact>)
     phone,
     name: (data.name && data.name.trim()) ? data.name : existing.name,
     avatar: data.avatar || existing.avatar,
+    avatarUpdatedAt: data.avatar ? Date.now() : existing.avatarUpdatedAt,
     updatedAt: Date.now(),
   };
   saveCache(cache);
@@ -50,4 +57,12 @@ export function updateCachedContact(phone: string, data: Partial<CachedContact>)
 
 export function clearContactCache() {
   localStorage.removeItem(CACHE_KEY);
+}
+
+export function invalidateCachedAvatar(phone: string) {
+  const cache = loadCache();
+  if (!cache[phone]) return;
+  delete cache[phone].avatar;
+  delete cache[phone].avatarUpdatedAt;
+  saveCache(cache);
 }

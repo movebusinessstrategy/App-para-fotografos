@@ -6,6 +6,7 @@ import { brazilianPhoneVariants, canonicalPhoneKey } from './lib/br-phone.js';
 import { isWithinBusinessHours, localDateKey, nextWindowOpening } from './lib/business-hours.js';
 import { isMissingSchemaError, isOptedOut } from './lib/optout-store.js';
 import { isClosedStage } from './lib/stage-rules.js';
+import { dealExclusionReason } from './lib/deal-exclusions.js';
 import type { StageRow } from './lib/stage-rules.js';
 import { CUSTOMER_NON_TURN_TYPES, DEFAULT_BUSINESS_HOURS } from './src/features/followups/types.js';
 
@@ -13,7 +14,7 @@ export type LegacyMetaAuth = { ok: true; bearer: string } | { ok: false; reason:
 export type LegacyCancelReason = 'deal_missing' | 'deal_closed' | 'stage_changed' | 'optout' | 'cadence_active' | 'customer_replied';
 export type LegacyGate = { action: 'send' } | { action: 'cancel'; reason: LegacyCancelReason } | { action: 'defer'; until: string };
 export interface LegacyFacts {
-  deal: { id: number; stage: string; converted: boolean; converted_job_id: number | null } | null;
+  deal: { id: number; stage: string; converted: boolean; converted_job_id: number | null; labels?: string[] } | null;
   stages: StageRow[]; optedOut: boolean; cadenceEnabled: boolean; lastCustomerAt: string | null;
   // Telefone com ensaio ou venda fechada em QUALQUER deal da conta (não só no desta tarefa).
   alreadyCustomer: boolean;
@@ -147,7 +148,7 @@ export function decideLegacyGate(task: { stage_id: string | null; created_at: st
 async function loadDeal(db: SupabaseClient, userId: string, dealId: number): Promise<LegacyFacts['deal']> {
   const { data, error } = await db
     .from('deals')
-    .select('id, stage, converted, converted_job_id')
+    .select('id, stage, converted, converted_job_id, labels')
     .eq('id', dealId)
     .eq('user_id', userId)
     .maybeSingle();
@@ -159,6 +160,7 @@ async function loadDeal(db: SupabaseClient, userId: string, dealId: number): Pro
     stage: String(row.stage ?? ''),
     converted: row.converted === true,
     converted_job_id: row.converted_job_id == null ? null : Number(row.converted_job_id),
+    labels: Array.isArray(row.labels) ? row.labels : [],
   };
 }
 
@@ -227,7 +229,7 @@ export async function loadLegacyFacts(
     loadLastCustomerAt(db, task.user_id, task.phone),
     loadAlreadyCustomer(db, task.user_id, task.phone),
   ]);
-  return { deal, stages, optedOut, cadenceEnabled, lastCustomerAt, alreadyCustomer };
+  return { deal, stages, optedOut: optedOut || !!dealExclusionReason(deal), cadenceEnabled, lastCustomerAt, alreadyCustomer };
 }
 
 // A sentinela da Lia grava a etapa de ANTES de mover o deal para "Orçamento

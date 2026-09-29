@@ -19,6 +19,7 @@ import { OptOutsDrawer } from './OptOutsDrawer';
 import { QueueList } from './QueueList';
 import { ReconcileModal } from './ReconcileModal';
 import { StatsStrip } from './StatsStrip';
+import { WhatsAppUsagePanel } from './WhatsAppUsagePanel';
 import type { FollowUpOverview, FollowUpStep, QueueTab } from './types';
 
 interface Props {
@@ -257,6 +258,7 @@ function findDeal(deals: Deal[], id: number | null): Deal | null {
 }
 
 export function FollowUpsPanel({ deals, stages, clients, onDealUpdated }: Props) {
+  const [, setSearchParams] = useSearchParams();
   const { isImpersonating } = useAuth();
   const overviewSwr = useFollowUpOverview();
   const configSwr = useFollowUpConfig(true);
@@ -294,6 +296,14 @@ export function FollowUpsPanel({ deals, stages, clients, onDealUpdated }: Props)
     if (findDeal(deals, id)) { setOpenDealId(id); return; }
     setToast({ kind: 'info', message: 'Este negócio não aparece no funil agora. Atualize a página e tente de novo.' });
   };
+  const openConversation = (id: number, phone?: string | null) => {
+    const deal = findDeal(deals, id);
+    const client = clients.find(c => c.id === deal?.client_id);
+    const target = String(phone || deal?.contact_phone || client?.phone || '').replace(/\D/g, '');
+    if (target) { setSearchParams({ tab: 'inbox', phone: target }); return; }
+    openDealById(id);
+    setToast({ kind: 'info', message: 'Adicione o telefone deste contato para abrir a conversa.' });
+  };
 
   return (
     <div className="h-full overflow-y-auto">
@@ -306,8 +316,9 @@ export function FollowUpsPanel({ deals, stages, clients, onDealUpdated }: Props)
           canResume={overview.can_approve} resuming={resume.busy} onResume={() => void resume.run()} />
         <DisabledNotice overview={overview} onConfigure={() => openConfig(null)} />
         <LegacyNotice overview={overview} />
+        {overview.can_edit_config && view === 'painel' && <WhatsAppUsagePanel dailyCap={cfg?.daily_cap ?? overview.sending.daily_cap} onConfigure={() => openConfig(null)} />}
         {view === 'painel' ? (
-          <FollowUpsDashboard overview={overview} onOpenDeal={openDealById} onOpenQueue={openQueueTab} />
+          <FollowUpsDashboard overview={overview} onOpenDeal={openConversation} onOpenQueue={openQueueTab} />
         ) : (
           <>
             <StatsStrip overview={overview} activeTab={tab} onPickTab={setTab} onOpenOptOuts={() => setOptOutsOpen(true)} />

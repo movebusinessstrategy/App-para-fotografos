@@ -379,6 +379,15 @@ test('painel desligado ou pausado: sem previsão, e o card na fila continua na c
 
 // Carregador (consultas) e rota, com Supabase falso em memória
 
+test('fora do funil sai da espera e da fila, mantendo telefone para abrir a conversa', () => {
+  const archived = { ...deal(11, PHONE_A), labels: ['Fora do funil: campanha encerrada'] };
+  const d = buildDashboard(sources({ tasks: [task({ status: 'approved' })], deals: [archived], turns: [msg(PHONE_A, ago(3 * HOUR))] }));
+  assert.equal(column(d, 'follow_1').count, 0);
+  const card = column(d, 'closed').cards[0];
+  assert.equal(card.contact_phone, PHONE_A);
+  assert.equal(d.kpis.scheduled, 0);
+});
+
 type Row = Record<string, any>;
 type Pred = (row: Row) => boolean;
 

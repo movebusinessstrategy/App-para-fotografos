@@ -329,7 +329,7 @@ test('loadLegacyFacts lê deal, etapas, opt-out, cadência e última fala do cli
     }),
   });
   const facts = await loadLegacyFacts(db, DB_TASK);
-  assert.deepEqual(facts.deal, { id: 10, stage: '02-follow-up', converted: false, converted_job_id: null });
+  assert.deepEqual(facts.deal, { id: 10, stage: '02-follow-up', converted: false, converted_job_id: null, labels: [] });
   assert.equal(facts.stages.length, STAGES.length);
   assert.equal(facts.optedOut, true);
   assert.equal(facts.cadenceEnabled, true);
@@ -356,6 +356,13 @@ test('legacyPreSendCheck manda quando está tudo certo e cancela quando o client
 
   const replied = fakeDb({ tables: tenantTables({ wa_messages: [inbound(CLIENT_12, STUDIO_12, hoursBefore(MONDAY_2PM, 1))] }) });
   assert.deepEqual(await legacyPreSendCheck(replied.db, DB_TASK, MONDAY_2PM), { action: 'cancel', reason: 'customer_replied' });
+});
+
+test('legado respeita separação do funil mesmo sem optout do telefone', async () => {
+  const tables = tenantTables();
+  tables.deals[0].labels = ['Fora do funil: campanha encerrada'];
+  const result = await legacyPreSendCheck(fakeDb({ tables }).db, DB_TASK, MONDAY_2PM);
+  assert.deepEqual(result, { action: 'cancel', reason: 'optout' });
 });
 
 test('legacyPreSendCheck: sentinela da Lia não é cancelada pela etapa gravada antes do orçamento', async () => {

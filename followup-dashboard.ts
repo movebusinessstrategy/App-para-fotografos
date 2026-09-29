@@ -11,6 +11,7 @@ import type {
 } from './src/features/followups/types.js';
 import { CUSTOMER_NON_TURN_TYPES, LIVE_CADENCE_STATUSES, STUDIO_NON_TURN_TYPES } from './src/features/followups/types.js';
 import { MESSAGE_TYPE_LABELS } from './src/features/followups/labels.js';
+import { dealExclusionReason } from './lib/deal-exclusions.js';
 import { CLOCK_TOLERANCE_MS, customerSpokeAfter, effectiveDailyCap, parseCadenceConfig } from './followup-cadence.js';
 import type { StageRow } from './lib/stage-rules.js';
 import { isClosedStage, isSalesStage } from './lib/stage-rules.js';
@@ -60,6 +61,7 @@ export interface BoardTask {
 }
 
 export interface DashDeal {
+  labels?: string[] | null;
   id: number; stage: string | null; title?: string | null; contact_name?: string | null; contact_phone?: string | null;
   converted?: boolean | null; converted_job_id?: number | null;
 }
@@ -330,6 +332,7 @@ export function openSalesStages(stages: StageRow[]): StageRow[] {
 }
 
 export function isOpenDeal(deal: DashDeal, openStageIds: Set<string>): boolean {
+  if (dealExclusionReason(deal)) return false;
   if (deal.converted === true || deal.converted_job_id != null) return false;
   return openStageIds.has(String(deal.stage ?? ''));
 }
@@ -436,7 +439,7 @@ function placeAll(flows: DealFlow[], ctx: BoardContext): PlacedFlow[] {
   const out: PlacedFlow[] = [];
   for (const flow of flows) {
     const deal = ctx.deals.get(flow.dealId);
-    if (deal) out.push({ flow, deal, placement: placeFlow(flow, place) });
+    if (deal) out.push({ flow, deal, placement: dealExclusionReason(deal) ? { column: 'closed', reply: null, closed: 'optout' } : placeFlow(flow, place) });
   }
   return out;
 }
@@ -493,6 +496,7 @@ function cardFor(p: PlacedFlow, etas: Map<number, string | null>, stageNames: Ma
   const chip = chipFor(p.placement, t);
   return {
     deal_id: p.flow.dealId, task_id: Number(t.id),
+    contact_phone: firstText(p.deal.contact_phone, t.phone),
     contact_name: firstText(p.deal.contact_name, t.contact_name, p.deal.title),
     stage_name: stageNameOf(p.deal, stageNames),
     track: trackOf(t), step: stepOf(t), status: t.status as CadenceStatus, chip,
@@ -576,13 +580,14 @@ function advancedCount(src: DashboardSources, deals: Map<number, DashDeal>): num
 
 function buildKpis(src: DashboardSources, ctx: BoardContext, etas: Map<number, string | null>, waiting: number): FollowUpDashboardKpis {
   const cap = effectiveDailyCap(src.config, src.state, src.now).cap;
-  const scheduled = statusCount(src.tasks, ['approved', 'sending']);
-  const blocked = statusCount(src.tasks, ['blocked']);
+  const activeTasks = src.tasks.filter(task => !dealExclusionReason(ctx.deals.get(Number(task.deal_id))) && !src.optOutKeys.has(canonicalPhoneKey(task.phone)));
+  const scheduled = statusCount(activeTasks, ['approved', 'sending']);
+  const blocked = statusCount(activeTasks, ['blocked']);
   const week = sentSince(src.tasks, daysAgoMs(src.now, 7));
   const replied = week.filter((t) => repliedTo(t, ctx.replies)).length;
   return {
     sent_today: ctx.sentToday, effective_cap: cap, next_send_at: earliestEta(etas),
-    scheduled, drafts: statusCount(src.tasks, ['draft']),
+    scheduled, drafts: statusCount(activeTasks, ['draft']),
     days_to_drain: scheduled > 0 ? Math.ceil(scheduled / Math.max(1, cap)) : 0,
     sent_7d: week.length, replied_7d: replied, reply_rate_7d: percent(replied, week.length),
     advanced_14d: advancedCount(src, ctx.deals),
@@ -613,6 +618,7 @@ function boardContext(src: DashboardSources): BoardContext {
 
 function waitingItem(w: WaitingDeal, stageNames: Map<string, string>): FollowUpDashboardWaiting {
   return {
+    contact_phone: firstText(w.deal.contact_phone, w.message.phone),
     deal_id: Number(w.deal.id), contact_name: firstText(w.deal.contact_name, w.deal.title), stage_name: stageNameOf(w.deal, stageNames),
     last_customer_at: w.message.timestamp, preview: tailText(messageText(w.message), WAITING_PREVIEW_CHARS),
   };
@@ -624,7 +630,7 @@ export function buildDashboard(src: DashboardSources): FollowUpDashboard {
   const etas = queueEtas(placed, ctx);
   const entries = placed.map((p) => ({ card: cardFor(p, etas, ctx.stageNames), flow: p.flow, column: p.placement.column }));
   const openIds = new Set(openSalesStages(src.stages).map((s) => s.id));
-  const open = [...ctx.deals.values()].filter((d) => isOpenDeal(d, openIds));
+  const open = [...ctx.deals.values()].filter((d) => isOpenDeal(d, openIds) && !src.optOutKeys.has(canonicalPhoneKey(d.contact_phone)));
   const waiting = waitingDeals(open, latestTurnByKey(src.turns), src.now);
   return {
     kpis: buildKpis(src, ctx, etas, waiting.length),
@@ -668,7 +674,7 @@ const PHONE_BLOCK = 200;       // telefones por consulta com .in('phone', varian
 const MESSAGE_ID_BLOCK = 50;
 const CONVERSATION_LIMIT = 2000;
 const TASK_COLUMNS = 'id, deal_id, phone, status, step, track, created_at, scheduled_at, sent_at, sent_message_id, last_error, contact_name';
-const DEAL_COLUMNS = 'id, stage, title, contact_name, contact_phone, converted, converted_job_id';
+const DEAL_COLUMNS = 'id, stage, title, contact_name, contact_phone, converted, converted_job_id, labels';
 const STAGE_COLUMNS = 'id, name, position, is_final, is_won, process_id';
 const TURN_COLUMNS = 'phone, from_me, timestamp, type, status, body, transcription';
 const REPLY_COLUMNS = 'phone, from_me, timestamp, type, body, transcription';

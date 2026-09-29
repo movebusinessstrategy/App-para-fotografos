@@ -45,7 +45,7 @@ export interface SelectInput { config: FollowUpConfig; stages: StageRow[]; activ
   liveLegacyDealIds: Set<number>; optoutKeys: Set<string>; now: Date }
 
 export interface SendSnapshot {
-  deal: { id: number; stage: string; converted: boolean; converted_job_id: number | null; contact_name: string | null } | null;
+  deal: { id: number; stage: string; converted: boolean; converted_job_id: number | null; contact_name: string | null; labels?: string[] } | null;
   stages: StageRow[];
   lastCustomerAt: string | null; lastStudioAt: string | null; lastInvisibleOutAt: string | null;
   optedOut: boolean; alreadyCustomer: boolean; needsHuman: boolean;
