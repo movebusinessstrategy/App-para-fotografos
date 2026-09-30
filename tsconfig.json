@@ -26,6 +26,7 @@
   "exclude": [
     "api",
     "workers",
+    "private-backups",
     "marketing-site-bridge-worker.test.ts"
   ]
 }
