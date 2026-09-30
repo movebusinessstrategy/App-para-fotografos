@@ -4180,7 +4180,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           user_id: userId, phone: storedPhone, last_message: text, last_message_at: now, updated_at: now, wa_number: sourceWaNumber,
         });
       }
-      await markConversationHumanActiveIfNeeded(userId, storedPhone, sourceWaNumber);
+      await pauseLiaAfterManualReply(userId, storedPhone, sourceWaNumber, slot);
       void observeFunnel({
         userId, waNumber: sourceWaNumber, slot: slot === 'posvenda' ? 'posvenda' : 'main', phone: storedPhone, messageId: msgId,
         occurredAt: now, direction: 'out', origin: 'human_crm', provider: 'crm', type: 'text', body: text,
@@ -4383,7 +4383,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         .or(phoneOr)
         .select('id');
       if (!upd || upd.length === 0) { await db.from('wa_conversations').insert(convPayload); }
-      await markConversationHumanActiveIfNeeded(userId, storedPhone, sourceWaNumber);
+      await pauseLiaAfterManualReply(userId, storedPhone, sourceWaNumber, slot);
       void observeFunnel({
         userId, waNumber: sourceWaNumber, slot: slot === 'posvenda' ? 'posvenda' : 'main', phone: storedPhone, messageId: msgId,
         occurredAt: now, direction: 'out', origin: 'human_crm', provider: 'crm', type: mediaType, body: caption || null,
@@ -10989,7 +10989,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   app.get('/api/agent/atendimentos', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
     const db = supabaseAdmin || ((req as any).supabase as SupabaseClient);
-    const emptyResp = { items: [] as any[], counts: { precisa_humano: 0, orcamento: 0, conversando: 0, humano: 0, total: 0 } };
+    const emptyResp = { items: [] as any[], counts: { precisa_humano: 0, orcamento: 0, conversando: 0, humano: 0, sugestoes: 0, total: 0 } };
     try {
       const waNumber = await inboxWaNumber(db, userId, 'main');
       if (!waNumber) return res.json(emptyResp);
@@ -11015,7 +11015,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const convs = (convData || []).filter((c: any) => {
         if (c.needs_human || c.agent_status === 'needs_human') return true;
         const activity = Date.parse(c.last_agent_action_at || c.human_assumed_at || c.last_agent_reply_at || '');
-        const currentState = ['lia_active', 'quote_sent', 'human_active'].includes(c.agent_status);
+        const currentState = ['lia_active', 'quote_sent', 'human_active', 'suggestions'].includes(c.agent_status);
         const legacyActive = !c.agent_status && !!c.last_agent_reply_at;
         return (currentState || legacyActive) && Number.isFinite(activity) && activity >= activeCutoff;
       });
@@ -11066,9 +11066,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         const deal = dealForPhone(c.phone);
         const sName = deal ? (stageName.get(deal.stage) || '') : '';
         const fup = deal ? fupByDeal.get(deal.id) : null;
-        let bucket: 'precisa_humano' | 'orcamento' | 'conversando' | 'humano';
+        let bucket: 'precisa_humano' | 'orcamento' | 'conversando' | 'humano' | 'sugestoes';
         if (c.needs_human || c.agent_status === 'needs_human') bucket = 'precisa_humano';
         else if (c.agent_status === 'human_active') bucket = 'humano';
+        else if (c.agent_status === 'suggestions') bucket = 'sugestoes';
         else if (c.agent_status === 'quote_sent' || orcRe.test(sName)) bucket = 'orcamento';
         else bucket = 'conversando';
         return {
@@ -11092,6 +11093,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         orcamento: items.filter((i) => i.bucket === 'orcamento').length,
         conversando: items.filter((i) => i.bucket === 'conversando').length,
         humano: items.filter((i) => i.bucket === 'humano').length,
+        sugestoes: items.filter((i) => i.bucket === 'sugestoes').length,
         total: items.length,
       };
       res.json({ items, counts });
@@ -11118,6 +11120,33 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
   });
 
+  // Sugestões mantêm a decisão e o envio com uma pessoa, sem resposta autônoma.
+  app.post('/api/agent/atendimentos/:phone/sugestoes', requireAuth, async (req, res) => {
+    const userId = (req as any).userId;
+    const db = supabaseAdmin || ((req as any).supabase as SupabaseClient);
+    const phone = String(req.params.phone || '').replace(/\D/g, '');
+    if (!phone) return res.status(400).json({ error: 'phone inválido' });
+    try {
+      const waNumber = await inboxWaNumber(db, userId, 'main');
+      if (!waNumber) return res.status(409).json({ error: 'Canal principal não identificado' });
+      const { data: conversation, error: lookupError } = await db.from('wa_conversations')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('wa_number', waNumber)
+        .in('phone', agentPhoneVariants(phone))
+        .limit(1)
+        .maybeSingle();
+      if (lookupError) throw lookupError;
+      if (!conversation) return res.status(404).json({ error: 'Conversa não encontrada no canal principal.' });
+      await updateAgentConversationState(userId, phone, waNumber, 'suggestions', {
+        human_assumed_at: new Date().toISOString(),
+      });
+      res.json({ ok: true, agent_status: 'suggestions' });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || 'Erro ao ativar sugestões.' });
+    }
+  });
+
   // Devolve uma conversa pra Lia (limpa needs_human → o autônomo volta a responder).
   app.post('/api/agent/atendimentos/:phone/devolver', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
@@ -11129,6 +11158,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       if (!waNumber) return res.status(409).json({ error: 'Canal principal não identificado' });
       const channel = await activeAgentChannel(db, userId, waNumber);
       if (!channel) return res.status(409).json({ error: 'Canal principal não está ativo' });
+      const { data: config, error: configError } = await db.from('ai_agent_config')
+        .select('enabled, auto_send').eq('user_id', userId).maybeSingle();
+      if (configError) throw configError;
+      if (!config?.enabled || !config?.auto_send) {
+        return res.status(409).json({ error: 'Ative o atendimento automático da Lia antes de passar esta conversa para ela.' });
+      }
       await updateAgentConversationState(userId, phone, waNumber, 'lia_active', {
         handoff_reason: null,
         handoff_requested_at: null,
@@ -27682,7 +27717,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   const autoReplyTimers = new Map<string, NodeJS.Timeout>();
   const lastAutoReplyAt = new Map<string, number>();
 
-  type AgentConversationStatus = 'idle' | 'lia_active' | 'quote_sent' | 'needs_human' | 'human_active';
+  type AgentConversationStatus = 'idle' | 'lia_active' | 'quote_sent' | 'needs_human' | 'human_active' | 'suggestions';
 
   function agentPhoneVariants(phone: string): string[] {
     const variants = brazilianPhoneVariants(phone);
@@ -27696,6 +27731,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     waNumber: string,
     status: AgentConversationStatus,
     extra: Record<string, unknown> = {},
+    onlyIfAutomatic = false,
   ) {
     if (!supabaseAdmin) return;
     const now = new Date().toISOString();
@@ -27705,26 +27741,33 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       needs_human: status === 'needs_human',
       ...extra,
     };
-    const { error } = await supabaseAdmin.from('wa_conversations')
+    let stateUpdate = supabaseAdmin.from('wa_conversations')
       .update(payload)
       .eq('user_id', userId)
       .eq('wa_number', waNumber)
       .in('phone', agentPhoneVariants(phone));
+    if (onlyIfAutomatic) {
+      stateUpdate = stateUpdate.in('agent_status', ['idle', 'lia_active', 'quote_sent']).eq('needs_human', false);
+    }
+    const { error } = await stateUpdate;
     if (!error) return;
     // PGRST204 = coluna ausente no schema cache do PostgREST; 42703 = do Postgres.
     const missingStateColumns = error.code === '42703' || error.code === 'PGRST204'
       || /agent_status|handoff_reason|handoff_requested_at|human_assumed_at|last_agent_action_at/.test(error.message || '');
     if (!missingStateColumns) throw error;
+    if (status === 'suggestions') throw new Error('Modo de sugestões indisponível. Aplique a migration 088.');
     // Sem as colunas da migration 069, grava o que a tabela JÁ tem. O
     // last_agent_reply_at estava sendo descartado junto, e por isso o CRM
     // nunca mostrava que a Lia tinha atendido a conversa.
     const legado: Record<string, unknown> = { needs_human: status === 'needs_human' };
     if (extra.last_agent_reply_at) legado.last_agent_reply_at = extra.last_agent_reply_at;
-    await supabaseAdmin.from('wa_conversations')
+    let legacyUpdate = supabaseAdmin.from('wa_conversations')
       .update(legado)
       .eq('user_id', userId)
       .eq('wa_number', waNumber)
       .in('phone', agentPhoneVariants(phone));
+    if (onlyIfAutomatic) legacyUpdate = legacyUpdate.eq('needs_human', false);
+    await legacyUpdate;
   }
 
   async function markConversationForHuman(
@@ -27771,6 +27814,43 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     if (data?.needs_human || data?.agent_status === 'needs_human') {
       await markConversationHumanActive(userId, phone, waNumber);
     }
+  }
+
+  // Uma resposta enviada pela equipe no CRM assume o atendimento que estava
+  // com a Lia. O modo de sugestões permanece ativo para os próximos rascunhos.
+  async function pauseLiaAfterManualReply(userId: string, phone: string, waNumber: string, slot?: string) {
+    if (slot === 'posvenda' || !supabaseAdmin || !waNumber) return;
+    const { data, error } = await supabaseAdmin.from('wa_conversations')
+      .select('needs_human, agent_status')
+      .eq('user_id', userId)
+      .eq('wa_number', waNumber)
+      .in('phone', agentPhoneVariants(phone))
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      await markConversationHumanActiveIfNeeded(userId, phone, waNumber);
+      return;
+    }
+    if (data?.needs_human || ['needs_human', 'lia_active', 'quote_sent'].includes(data?.agent_status || '')) {
+      await markConversationHumanActive(userId, phone, waNumber);
+    }
+  }
+
+  async function agentCanContinue(userId: string, phone: string, waNumber: string, autonomousEnabled: boolean) {
+    if (!supabaseAdmin) return false;
+    const { data, error } = await supabaseAdmin.from('wa_conversations')
+      .select('needs_human, agent_status')
+      .eq('user_id', userId)
+      .eq('wa_number', waNumber)
+      .in('phone', agentPhoneVariants(phone))
+      .limit(1)
+      .maybeSingle();
+    if (error || !data || data.needs_human) return false;
+    if (['needs_human', 'human_active', 'suggestions'].includes(data.agent_status || '')) return false;
+    if (!autonomousEnabled) return false;
+    const { data: config, error: configError } = await supabaseAdmin.from('ai_agent_config')
+      .select('enabled, auto_send').eq('user_id', userId).maybeSingle();
+    return !configError && !!config?.enabled && !!config?.auto_send;
   }
 
   async function claimAgentMessage(
@@ -28068,6 +28148,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     waNumber: string,
     channel: AgentChannel,
     text: string,
+    autonomousEnabled: boolean,
   ) {
     const parts = splitIntoMessages(text);
     for (let i = 0; i < parts.length; i++) {
@@ -28076,8 +28157,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         await new Promise((r) => setTimeout(r, agentTypingDelayMs(parts[i])));
         if (channel === 'baileys') await BaileysManager.sendTyping(userId, phone, false);
       }
+      if (!await agentCanContinue(userId, phone, waNumber, autonomousEnabled)) return false;
       await sendAgentText(userId, phone, waNumber, channel, parts[i]);
     }
+    return true;
   }
 
   // Cruza o telefone com clients/jobs pra a Lia reconhecer quem JÁ é cliente e
@@ -28142,7 +28225,8 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       }
       if (Date.now() - (lastAutoReplyAt.get(key) || 0) < 8000) return; // cooldown anti-duplicidade
       const { data: cfg } = await supabaseAdmin.from('ai_agent_config').select('*').eq('user_id', userId).maybeSingle();
-      if (!cfg?.enabled || !cfg?.auto_send) return; // só se ligado E autônomo on
+      const autonomoLigado = !!cfg?.auto_send;
+      if (!cfg?.enabled || !autonomoLigado) return;
       // Se a última mensagem já é nossa (respondemos / humano entrou), não age.
       const { data: lastMsgs, error: lastMsgsError } = await supabaseAdmin.from('wa_messages')
         .select('message_id, from_me, type, transcription, timestamp, source_event_key')
@@ -28191,7 +28275,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         convError = fallback.error;
       }
       if (convError) throw convError;
-      if (conv?.needs_human || conv?.agent_status === 'needs_human' || conv?.agent_status === 'human_active') return;
+      if (conv?.needs_human || ['needs_human', 'human_active', 'suggestions'].includes(conv?.agent_status || '')) return;
       // Pediu para não receber mais mensagens: nada de resposta automática, uma pessoa decide.
       if (await isOptedOut(supabaseAdmin, userId, phone)) {
         await markConversationForHuman(userId, phone, waNumber, 'pessoa');
@@ -28233,6 +28317,14 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const flowReply = enforceConversationFlowReply(generatedReply, conversationFlow);
       const reply = enforceApprovedPortfolioUrls(flowReply, portfolioLinks, conversationFlow.niche);
 
+      // Uma pessoa pode assumir ou mudar para sugestões enquanto a IA pensa.
+      // Revalidar antes do hand-off e do envio impede que uma resposta atrasada
+      // sobrescreva a escolha feita no painel.
+      if (!await agentCanContinue(userId, phone, waNumber, autonomoLigado)) {
+        await finishAgentMessage(userId, waNumber, claimedMessageId, 'completed', 'service_mode_changed');
+        return;
+      }
+
       const handoffReason = parseAgentHandoff(reply) || (!reply ? 'duvida' : null);
       if (handoffReason) {
         await markConversationForHuman(userId, phone, waNumber, handoffReason);
@@ -28272,6 +28364,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         await finishAgentMessage(userId, waNumber, claimedMessageId, 'completed', 'conversation_changed_while_typing');
         return;
       }
+      if (!await agentCanContinue(userId, phone, waNumber, autonomoLigado)) {
+        await finishAgentMessage(userId, waNumber, claimedMessageId, 'completed', 'service_mode_changed_while_typing');
+        return;
+      }
 
       if (pdfMatch) {
         // Manda o PDF do pacote do nicho + a frase de acompanhamento e move o
@@ -28285,7 +28381,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           console.warn(`[Lia autônoma] PDF ${nicho} ausente → hand-off | ${phone}`);
           return;
         }
-        if (followText) await sendAgentMessages(userId, phone, waNumber, channel, followText);
+        const followTextSent = !followText || await sendAgentMessages(userId, phone, waNumber, channel, followText, autonomoLigado);
         // Catálogo de produtos é material de apoio: não é o orçamento do ensaio,
         // então não move o funil, não agenda o follow-up nem fecha a etapa.
         const ehOrcamento = nicho !== AGENT_EXTRA_MATERIAL_NICHE;
@@ -28296,6 +28392,12 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         }) : null;
         if (deal && ehOrcamento) {
           if (!auroraQuoteObs?.trackerEnabled) await moveDealToStageNamed(userId, deal.id, /or[çc]amento.*enviad|enviad.*or[çc]amento/i);
+        }
+        if (!followTextSent || !await agentCanContinue(userId, phone, waNumber, autonomoLigado)) {
+          await finishAgentMessage(userId, waNumber, claimedMessageId, 'completed', 'service_mode_changed_after_pdf');
+          return;
+        }
+        if (deal && ehOrcamento) {
           // Agenda o follow-up contextual da Lia pra ~24h (dispara só se a pessoa
           // não responder; o worker cancela sozinho se ela responder ou virar humano).
           // A API oficial não recebe este follow-up livre fora da janela de 24h.
@@ -28318,13 +28420,18 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           }
         }
         if (ehOrcamento) {
-          await updateAgentConversationState(userId, phone, waNumber, 'quote_sent', {
-            last_agent_reply_at: new Date().toISOString(),
-          });
+          if (await agentCanContinue(userId, phone, waNumber, autonomoLigado)) {
+            await updateAgentConversationState(userId, phone, waNumber, 'quote_sent', {
+              last_agent_reply_at: new Date().toISOString(),
+            }, true);
+          }
         }
         console.log(`[Lia autônoma] PDF ${nicho} enviado | ${phone}`);
       } else {
-        await sendAgentMessages(userId, phone, waNumber, channel, reply);
+        if (!await sendAgentMessages(userId, phone, waNumber, channel, reply, autonomoLigado)) {
+          await finishAgentMessage(userId, waNumber, claimedMessageId, 'completed', 'service_mode_changed_during_reply');
+          return;
+        }
         // Primeira resposta nossa → coloca o lead em "Conversa Iniciada".
         const auroraTextObs = await observeFunnel({
           userId, waNumber, slot: 'main', phone, messageId: `aurora-text-${Date.now()}`, occurredAt: new Date().toISOString(),
@@ -28332,9 +28439,11 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           body: reply.slice(0, 500), filename: null, mimeType: null, contactName: null, isBot: false,
         });
         if (isFirstReply && deal && !auroraTextObs?.trackerEnabled) await moveDealToStageNamed(userId, deal.id, /conversa\s*iniciada/i);
-        await updateAgentConversationState(userId, phone, waNumber, 'lia_active', {
-          last_agent_reply_at: new Date().toISOString(),
-        });
+        if (await agentCanContinue(userId, phone, waNumber, autonomoLigado)) {
+          await updateAgentConversationState(userId, phone, waNumber, 'lia_active', {
+            last_agent_reply_at: new Date().toISOString(),
+          }, true);
+        }
         console.log(`[Lia autônoma] respondeu | ${phone}: ${reply.slice(0, 60)}`);
       }
       lastAutoReplyAt.set(key, Date.now());
@@ -28904,7 +29013,7 @@ async function runAgentFollowUp(task: any): Promise<'sent' | 'cancelled' | 'fail
       convError = fallback.error;
     }
     if (convError) throw convError;
-    if (conv?.needs_human || conv?.agent_status === 'needs_human' || conv?.agent_status === 'human_active') return 'cancelled';
+    if (conv?.needs_human || ['needs_human', 'human_active', 'suggestions'].includes(conv?.agent_status || '')) return 'cancelled';
     // Carrega a conversa (últimas 60, desc + reverte — precisa do contexto recente,
     // inclusive o orçamento que acabou de ir). Mesmo mapeamento do autônomo.
     const { data: rows } = await supabaseAdmin.from('wa_messages')

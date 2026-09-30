@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Mic, CheckCheck, ChevronDown, UserRound } from 'lucide-react';
+import { Mic, CheckCheck, ChevronDown, UserRound, Bot, Lightbulb } from 'lucide-react';
 import { Conversation } from '../types';
 import { extractContact, getInitials } from '../utils/contactHelpers';
 import { useContactProfile } from '../hooks/useContactProfile';
@@ -56,6 +56,8 @@ export function ConversationItem({ conv, selected, onClick, onMarkUnread, onMark
   const hasUnread = conv.unread_count > 0;
   const needsHuman = conv.agent_status === 'needs_human' || (!conv.agent_status && conv.needs_human === true);
   const humanActive = conv.agent_status === 'human_active';
+  const liaActive = conv.agent_status === 'lia_active' || conv.agent_status === 'quote_sent';
+  const suggestionsActive = conv.agent_status === 'suggestions';
   const initials = getInitials(name);
   // Menu de ações (marcar não lida / lida) — chevron aparece no hover, como no
   // WhatsApp. Em tela touch não existe hover: chevron fica sempre visível,
@@ -115,6 +117,19 @@ export function ConversationItem({ conv, selected, onClick, onMarkUnread, onMark
                 title="Atendimento humano em andamento"
               >
                 Humano
+              </span>
+            )}
+            {liaActive && (
+              <span
+                className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-1.5 py-0.5 text-[10px] font-bold text-violet-700 dark:bg-violet-950/40 dark:text-violet-300"
+                title="A Aurora está atendendo esta conversa sozinha"
+              >
+                <Bot size={10} /> Aurora
+              </span>
+            )}
+            {suggestionsActive && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700 dark:bg-violet-950/40 dark:text-violet-300" title="A Lia sugere uma resposta para você revisar e enviar">
+                <Lightbulb size={10} /> Sugestões
               </span>
             )}
           </span>

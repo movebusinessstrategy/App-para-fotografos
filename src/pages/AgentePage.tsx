@@ -47,8 +47,8 @@ interface Atendimento {
   stage_name: string | null;
   followup_status: "pending" | "sent" | null;
   followup_at: string | null;
-  bucket: "precisa_humano" | "humano" | "orcamento" | "conversando";
-  agent_status?: "idle" | "lia_active" | "quote_sent" | "needs_human" | "human_active" | null;
+  bucket: "precisa_humano" | "humano" | "sugestoes" | "orcamento" | "conversando";
+  agent_status?: "idle" | "lia_active" | "quote_sent" | "needs_human" | "human_active" | "suggestions" | null;
   handoff_reason?: string | null;
   handoff_at?: string | null;
   human_assumed_at?: string | null;
@@ -90,6 +90,7 @@ interface PlaygroundFeedbackContext {
 interface AtendimentoCounts {
   precisa_humano: number;
   humano: number;
+  sugestoes: number;
   orcamento: number;
   conversando: number;
   total: number;
@@ -98,6 +99,7 @@ interface AtendimentoCounts {
 const EMPTY_ATENDIMENTO_COUNTS: AtendimentoCounts = {
   precisa_humano: 0,
   humano: 0,
+  sugestoes: 0,
   orcamento: 0,
   conversando: 0,
   total: 0,
@@ -1016,7 +1018,7 @@ export default function AgentePage() {
             <div className="flex gap-3 p-4 rounded-xl bg-violet-50 dark:bg-violet-900/20 border border-violet-200 dark:border-violet-800 flex-1">
               <Bot size={20} className="text-violet-500 flex-shrink-0 mt-0.5" />
               <div className="text-sm text-violet-800 dark:text-violet-300">
-                <strong>Atendimentos da Lia.</strong> Quem ela está atendendo sozinha, quem já recebeu o orçamento e quem ela passou pra você assumir. Atualiza sozinho a cada 30s — clique numa pessoa pra abrir a conversa.
+                <strong>Atendimentos da Lia.</strong> Veja quem está respondendo, os orçamentos enviados e as conversas que precisam de você. Atualiza a cada 30s; clique numa pessoa para abrir a conversa e trocar o modo de atendimento.
               </div>
             </div>
             <button
@@ -1029,10 +1031,11 @@ export default function AgentePage() {
             </button>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
             {[
               { key: "precisa_humano", label: "Precisa de você", n: atendCounts.precisa_humano, cls: "text-amber-600 dark:text-amber-400" },
               { key: "humano", label: "Você assumiu", n: atendCounts.humano, cls: "text-blue-600 dark:text-blue-400" },
+              { key: "sugestoes", label: "Sugestões", n: atendCounts.sugestoes, cls: "text-violet-600 dark:text-violet-400" },
               { key: "orcamento", label: "Orçamento enviado", n: atendCounts.orcamento, cls: "text-gold-600 dark:text-gold-400" },
               { key: "conversando", label: "Lia conversando", n: atendCounts.conversando, cls: "text-emerald-600 dark:text-emerald-400" },
             ].map((s) => (
@@ -1046,13 +1049,14 @@ export default function AgentePage() {
           {atendCounts.total === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center text-gray-400 dark:text-gray-500">
               <Inbox size={40} className="mb-3 opacity-40" />
-              <p className="text-sm">A Lia ainda não atendeu ninguém por aqui.</p>
-              <p className="text-xs mt-1">Com o atendimento autônomo ligado, os contatos vão aparecer aqui.</p>
+              <p className="text-sm">Nenhum atendimento recente da Lia.</p>
+              <p className="text-xs mt-1">Ao escolher um modo de atendimento na conversa, ela aparece aqui.</p>
             </div>
           ) : (
             [
               { key: "precisa_humano", title: "🙋 Precisa de você", desc: "A Lia passou pra você assumir (preço, fechamento, objeção ou pedido de pessoa).", border: "border-amber-300 dark:border-amber-800" },
               { key: "humano", title: "👤 Você assumiu", desc: "Conversas em atendimento humano. A Lia fica pausada até você devolver.", border: "border-blue-200 dark:border-blue-900" },
+              { key: "sugestoes", title: "✦ Sugestões", desc: "A Lia prepara rascunhos, mas só você envia.", border: "border-violet-200 dark:border-violet-900" },
               { key: "orcamento", title: "📄 Orçamento enviado", desc: "A Lia mandou o orçamento e está aguardando a resposta.", border: "border-gray-200 dark:border-gray-800" },
               { key: "conversando", title: "💬 Lia conversando", desc: "Atendimento em andamento com a Lia.", border: "border-gray-200 dark:border-gray-800" },
             ].map((grp) => {
@@ -1095,7 +1099,7 @@ export default function AgentePage() {
                           <div className="mt-0.5 truncate text-xs font-medium text-amber-700 dark:text-amber-300">Motivo: {handoffReasonLabel(a.handoff_reason)}</div>
                         )}
                       </button>
-                      {(grp.key === "precisa_humano" || grp.key === "humano") && (
+                      {(grp.key === "precisa_humano" || grp.key === "humano" || grp.key === "sugestoes") && (
                         <button
                           onClick={() => devolverParaLia(a.phone)}
                           disabled={devolvendo === a.phone}

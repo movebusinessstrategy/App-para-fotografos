@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic, Sun, Moon, PenSquare, Search, MoreVertical, Smile, Paperclip, ChevronDown, UserPlus, UserRound, Loader2, CheckCircle2, FileText, X, Megaphone } from 'lucide-react';
+import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic, Sun, Moon, PenSquare, Search, MoreVertical, Smile, Paperclip, ChevronDown, UserPlus, Loader2, CheckCircle2, FileText, X, Megaphone } from 'lucide-react';
 import { authFetch } from '../../../utils/authFetch';
 import EmojiPicker, { Theme as EmojiTheme } from 'emoji-picker-react';
 import { useTheme } from '../../../contexts/ThemeContext';
@@ -8,7 +8,6 @@ import { extractContact, formatBrazilianPhone, getInitials } from '../utils/cont
 import { useContactProfile } from '../hooks/useContactProfile';
 import { updateCachedContact } from '../utils/contactCache';
 import { conversationMatchesSearch } from '../utils/conversationSearch';
-import { handoffReasonLabel } from '../utils/agentHandoff';
 import { useConversations } from '../hooks/useConversations';
 import { useMessages } from '../hooks/useMessages';
 import { useWaStatus } from '../hooks/useWaStatus';
@@ -16,6 +15,7 @@ import { ConversationItem } from './ConversationItem';
 import { MessageBubble } from './MessageBubble';
 import { AudioRecorder } from './AudioRecorder';
 import { LiaSuggestButton } from './LiaSuggestButton';
+import { AgentModeSwitch, type AgentMode } from './AgentModeSwitch';
 import { BulkFollowupModal } from './BulkFollowupModal';
 import { WhatsAppConnectionModal } from './WhatsAppConnectionModal';
 import { NewConversationModal } from './NewConversationModal';
@@ -112,18 +112,33 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
   const { conversations, loading: loadingConvs, refresh, mutateUnread } = useConversations(waSlot, debouncedSearch);
   const { connected } = useWaStatus();
   const [selectedPhone, setSelectedPhone] = useState<string | null>(initialPhone || null);
-  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [conversationFilter, setConversationFilter] = useState<'all' | 'unread' | 'lia' | 'handoff' | 'human' | 'suggestions'>('all');
+  useEffect(() => {
+    if (waSlot === 'posvenda') setConversationFilter('all');
+  }, [waSlot]);
   const shownConversations = conversations.filter((conversation) => {
-    if (unreadOnly && conversation.unread_count <= 0) return false;
+    if (conversationFilter === 'unread' && conversation.unread_count <= 0) return false;
+    if (conversationFilter === 'lia' && !['lia_active', 'quote_sent'].includes(conversation.agent_status || '')) return false;
+    if (conversationFilter === 'handoff' && !(
+      conversation.agent_status === 'needs_human' || (!conversation.agent_status && conversation.needs_human)
+    )) return false;
+    if (conversationFilter === 'human' && conversation.agent_status !== 'human_active') return false;
+    if (conversationFilter === 'suggestions' && conversation.agent_status !== 'suggestions') return false;
     return conversationMatchesSearch(conversation, searchTerm, extractContact(conversation).name);
   });
   const unreadTotal = conversations.filter((c) => c.unread_count > 0).length;
+  const liaTotal = conversations.filter((c) => c.agent_status === 'lia_active' || c.agent_status === 'quote_sent').length;
+  const handoffTotal = conversations.filter((c) => c.agent_status === 'needs_human' || (!c.agent_status && c.needs_human)).length;
+  const humanTotal = conversations.filter((c) => c.agent_status === 'human_active').length;
+  const suggestionsTotal = conversations.filter((c) => c.agent_status === 'suggestions').length;
   const { messages, loading: loadingMsgs, sendText } = useMessages(selectedPhone, waSlot);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [handingToLia, setHandingToLia] = useState(false);
+  const [enablingSuggestions, setEnablingSuggestions] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   const [newConvOpen, setNewConvOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
@@ -374,6 +389,41 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
     }
   }
 
+  async function enableSuggestions() {
+    if (!selectedPhone || enablingSuggestions) return;
+    setEnablingSuggestions(true);
+    setHandoffError(null);
+    try {
+      const phone = selectedPhone.replace(/\D/g, '');
+      const response = await authFetch(`/api/agent/atendimentos/${encodeURIComponent(phone)}/sugestoes`, { method: 'POST' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error || 'Não foi possível ativar sugestões.');
+      await refresh();
+    } catch (error) {
+      setHandoffError(error instanceof Error ? error.message : 'Não foi possível ativar sugestões.');
+    } finally {
+      setEnablingSuggestions(false);
+    }
+  }
+
+  // Entrega ESTA conversa pra Aurora, mesmo com o atendimento automático
+  // desligado no geral. É o jeito de dar pra IA uma pessoa que você abriu.
+  async function handToLia() {
+    if (!selectedPhone || handingToLia) return;
+    setHandingToLia(true);
+    setHandoffError(null);
+    try {
+      const phone = selectedPhone.replace(/\D/g, '');
+      const response = await authFetch(`/api/agent/atendimentos/${encodeURIComponent(phone)}/devolver`, { method: 'POST' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error || 'Não foi possível passar pra Aurora.');
+      await refresh();
+    } catch (error) {
+      setHandoffError(error instanceof Error ? error.message : 'Não foi possível passar pra Aurora.');
+    } finally {
+      setHandingToLia(false);
+    }
+  }
   async function handleAudioSend(blob: Blob, durationSec: number) {
     if (!selectedPhone) throw new Error('Nenhuma conversa selecionada');
 
@@ -425,7 +475,7 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
   const selectedConv = conversations.find(c => c.phone === selectedPhone);
   const selectedNeedsHuman = selectedConv?.agent_status === 'needs_human'
     || (!selectedConv?.agent_status && selectedConv?.needs_human === true);
-  const selectedHumanActive = selectedConv?.agent_status === 'human_active';
+  const selectedMode: AgentMode = selectedNeedsHuman ? 'needs_human' : (selectedConv?.agent_status || 'idle');
   const { name: baseName, avatar: baseAvatar, phone: convPhone } = selectedConv
     ? extractContact(selectedConv, messages)
     : { name: selectedPhone ? formatBrazilianPhone(selectedPhone) : '', avatar: null, phone: selectedPhone || '' };
@@ -596,23 +646,31 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
           </div>
         </div>
 
-        {/* Filtros: Todas / Não lidas (igual WhatsApp) */}
+        {/* Quem está atendendo cada conversa, no mesmo lugar em que a equipe trabalha. */}
         <div
-          className="px-3 py-2 flex-shrink-0 flex items-center gap-2"
+          className="px-3 py-2 flex-shrink-0 flex items-center gap-2 overflow-x-auto wa-scrollbar"
         >
-          {([['all', 'Todas'], ['unread', 'Não lidas']] as const).map(([k, label]) => {
-            const active = (k === 'unread') === unreadOnly;
+          {([
+            ['all', 'Todas', null],
+            ['handoff', 'Precisa de você', handoffTotal],
+            ['lia', 'Lia respondendo', liaTotal],
+            ['human', 'Minha resposta', humanTotal],
+            ['suggestions', 'Sugestões', suggestionsTotal],
+            ['unread', 'Não lidas', unreadTotal],
+          ] as const).filter(([key]) => waSlot === 'main' || key === 'all' || key === 'unread').map(([k, label, count]) => {
+            const active = conversationFilter === k;
             return (
               <button
                 key={k}
-                onClick={() => setUnreadOnly(k === 'unread')}
-                className="px-3 py-1 rounded-full text-[12.5px] font-medium transition-colors"
+                onClick={() => setConversationFilter(k)}
+                aria-pressed={active}
+                className="flex-shrink-0 px-3 py-1 rounded-full text-[12.5px] font-medium transition-colors"
                 style={{
                   background: active ? 'var(--wa-accent-green)' : 'var(--wa-bg-hover)',
                   color: active ? '#fff' : 'var(--wa-text-secondary)',
                 }}
               >
-                {label}{k === 'unread' && unreadTotal > 0 ? ` (${unreadTotal})` : ''}
+                {label}{count !== null && count > 0 ? ` (${count})` : ''}
               </button>
             );
           })}
@@ -675,9 +733,9 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
               <p className="text-sm" style={{ color: 'var(--wa-text-muted)' }}>
                 {searchTerm
                   ? `Nenhuma conversa encontrada para “${searchTerm}”`
-                  : unreadOnly
-                    ? 'Nenhuma conversa não lida'
-                    : 'Nenhuma conversa ainda'}
+                  : conversationFilter === 'all'
+                    ? 'Nenhuma conversa ainda'
+                    : 'Nenhuma conversa neste filtro'}
               </p>
             </div>
           ) : (
@@ -839,43 +897,16 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
               />
             )}
 
-            {selectedNeedsHuman && (
-              <div
-                role="alert"
-                className="flex flex-col gap-3 border-b border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-900/60 dark:bg-amber-950/30 sm:flex-row sm:items-center"
-              >
-                <div className="flex min-w-0 flex-1 items-start gap-3">
-                  <span className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-amber-500 text-white">
-                    <UserRound size={18} />
-                  </span>
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold text-amber-950 dark:text-amber-100">A Lia pausou. Esta conversa precisa de você.</p>
-                    <p className="mt-0.5 text-[13px] leading-relaxed text-amber-800 dark:text-amber-200">
-                      {handoffReasonLabel(selectedConv?.handoff_reason)}. O cliente não recebeu aviso de transferência.
-                    </p>
-                    {handoffError && <p className="mt-1 text-xs font-semibold text-red-600">{handoffError}</p>}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={assumeHumanService}
-                  disabled={assumingHuman}
-                  className="inline-flex min-h-10 flex-shrink-0 items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 text-sm font-bold text-white transition-colors hover:bg-amber-700 disabled:opacity-60"
-                >
-                  {assumingHuman ? <Loader2 size={16} className="animate-spin" /> : <UserRound size={16} />}
-                  {assumingHuman ? 'Assumindo…' : 'Assumir atendimento'}
-                </button>
-              </div>
-            )}
-
-            {selectedHumanActive && (
-              <div
-                className="flex items-center gap-2 border-b px-4 py-2 text-xs font-medium"
-                style={{ background: 'var(--wa-bg-secondary)', borderColor: 'var(--wa-border)', color: 'var(--wa-text-secondary)' }}
-              >
-                <UserRound size={14} style={{ color: 'var(--wa-accent-green)' }} />
-                Você assumiu este atendimento. A Lia está pausada nesta conversa.
-              </div>
+            {waSlot === 'main' && selectedConv && (
+              <AgentModeSwitch
+                mode={selectedMode}
+                handoffReason={selectedConv.handoff_reason}
+                error={handoffError}
+                busy={assumingHuman ? 'human' : enablingSuggestions ? 'suggestions' : handingToLia ? 'lia' : null}
+                onHuman={assumeHumanService}
+                onSuggestions={enableSuggestions}
+                onLia={handToLia}
+              />
             )}
 
             {/* Mensagens - fundo e scroll como irmãos para evitar conflito de position CSS */}
