@@ -1,3 +1,4 @@
+import { buildMetaAccountUpdate, isMetaAccountOffboarded } from './meta-account-lifecycle.js';
 import crypto from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
@@ -753,7 +754,9 @@ async function mutateSyncDetails(
   if (current.error && isCoexistenceSchemaMissing(current.error)) return;
   if (current.error) throw current.error;
   if (!current.data) return;
-  const details = mutate((current.data.sync_details || {}) as Record<string, any>);
+  const previous = (current.data.sync_details || {}) as Record<string, any>;
+  if (isMetaAccountOffboarded(previous)) return;
+  const details = mutate(previous);
   const completed = requestedSyncComplete(details);
   const failed = details.history?.failed === true || details.contacts?.failed === true;
   const now = new Date().toISOString();
@@ -821,13 +824,10 @@ async function recordAccountUpdate(db: SupabaseClient, bound: BoundEvent): Promi
   if (current.error && isCoexistenceSchemaMissing(current.error)) return;
   if (current.error) throw current.error;
   if (!current.data) return;
-  const result = await db.from('whatsapp_channel_accounts').update({
-    sync_details: {
-      ...(current.data.sync_details || {}),
-      account_update: { payload: bound.event.raw, received_at: new Date().toISOString() },
-    },
-    updated_at: new Date().toISOString(),
-  }).eq('id', current.data.id);
+  const now = new Date().toISOString();
+  const result = await db.from('whatsapp_channel_accounts').update(
+    buildMetaAccountUpdate(bound.event.raw, current.data.sync_details || {}, now),
+  ).eq('id', current.data.id).eq('user_id', bound.account.user_id);
   if (result.error) throw result.error;
 }
 

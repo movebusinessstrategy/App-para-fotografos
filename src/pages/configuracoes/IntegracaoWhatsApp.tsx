@@ -492,6 +492,16 @@ export default function IntegracaoWhatsApp() {
                 snapshot={coexistenceSnapshot}
                 onRefresh={checkStatus}
               />
+              {!liveStatusLoading && liveDiagnostic && !officialOperational && (
+                <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-900/10">
+                  <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">A API oficial precisa ser reconectada</p>
+                  <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">O cadastro no CRM não confirma uma conexão ativa na Meta. Retome o vínculo oficial para receber mensagens e verificar a recuperação do histórico.</p>
+                  <button type="button" onClick={() => connectMode('coexistence')} disabled={connecting !== null} className="mt-3 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60">
+                    {connecting ? 'Abrindo Meta…' : 'Reconectar API oficial'}
+                  </button>
+                  <p className="mt-2 text-xs text-amber-800 dark:text-amber-300">Mantém o WhatsApp Business no celular. O histórico e o cadastro atual permanecem no CRM.</p>
+                </div>
+              )}
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={() => setPhonePickerOpen(true)}

@@ -418,3 +418,17 @@ test('onDeliveryFailed lançando reporta followup e o status segue processado', 
   assert.ok(calls.some(q => q.table === 'wa_messages' && q.op === 'update'), 'status gravado');
   assert.deepEqual(reported, ['followup']);
 });
+
+test('ACCOUNT_OFFBOARDED encerra sincronização na conta do evento sem enviar mensagens', async () => {
+  const { db, calls } = fakeDb(inboxMissingHandler);
+  const replies: string[] = [];
+  const runtime = createMetaWebhookRuntime({ db, decryptToken: () => null, normalizePhone: value => value,
+    scheduleReply: (_user, phone) => { replies.push(phone); } });
+  await runtime.ingest({ object: 'whatsapp_business_account', entry: [{ id: 'waba-1', changes: [{ field: 'account_update',
+    value: { event: 'ACCOUNT_OFFBOARDED', phone_number_id: 'phone-1' } }] }] });
+  const update = calls.find(q => q.table === 'whatsapp_channel_accounts' && q.op === 'update')?.value as any;
+  assert.equal(update.sync_status, 'failed');
+  assert.equal(update.sync_details.meta_operational, false);
+  assert.equal(calls.filter(q => q.table === 'wa_messages' && q.op === 'insert').length, 0);
+  assert.deepEqual(replies, []);
+});
