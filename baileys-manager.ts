@@ -13,7 +13,7 @@ import QRCode from 'qrcode';
 import path from 'path';
 import fs from 'fs';
 import pino from 'pino';
-import { shouldProcessMessageUpsert } from './lib/whatsapp-upsert-policy.js';
+import { shouldProcessMessageUpsert, isHistoricalUpsert } from './lib/whatsapp-upsert-policy.js';
 
 // Caminho das credenciais do WhatsApp (Baileys). Em produção, aponte
 // BAILEYS_SESSIONS_DIR para um DISCO PERSISTENTE do Render (ex.:
@@ -279,11 +279,11 @@ async function _initSocket(session: Session, sessionDir: string) {
     const { messages, type } = upsert;
     const accepted = messages.filter((msg) => shouldProcessMessageUpsert(type, msg.key.fromMe));
     if (type === 'append' && accepted.length > 0) {
-      console.log(`[Baileys] messages.upsert append: ${accepted.length} mensagem(ns) enviada(s) por outro aparelho para ${userId}`);
+      console.log(`[Baileys] messages.upsert append: ${accepted.length} mensagem(ns) recuperada(s) da sessão para ${userId}`);
     }
     for (const msg of accepted) {
       try {
-        await globalOnMessage(userId, msg, sock, false);
+        await globalOnMessage(userId, msg, sock, isHistoricalUpsert(type, msg.key.fromMe));
       } catch (e) {
         console.error('[Baileys] Erro ao processar msg:', e);
       }
@@ -315,7 +315,8 @@ async function _initSocket(session: Session, sessionDir: string) {
       if (chats.length > 0) await globalChatsSetHandler(userId, chats);
     } catch (e) { console.error('[Baileys] Erro messaging-history chats:', e); }
     for (const msg of messages) {
-      try { await globalOnMessage(userId, msg, sock, true, isOnDemand); } catch { /* silencioso */ }
+      try { await globalOnMessage(userId, msg, sock, true, isOnDemand); }
+      catch (error) { console.error('[Baileys] Falha ao persistir mensagem do histórico:', error); }
     }
   });
 

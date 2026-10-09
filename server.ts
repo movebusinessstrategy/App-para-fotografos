@@ -17,6 +17,7 @@ import { TextDecoder } from 'node:util';
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 import * as BaileysManager from './baileys-manager.js';
+import { messageHistoryAnchor, conversationIsNewer, historyChatUpdate } from './lib/whatsapp-history-integrity.js';
 import { incomingContentType, unwrapIncomingContent } from './lib/whatsapp-message-content.js';
 import * as Asaas from './asaas-client.js';
 import { initSentry } from './sentry-server.js';
@@ -2914,22 +2915,14 @@ async function startServer() {
       return res.json({ connected: false, provider: 'baileys', state: 'connecting', whatsapp: { connected: false } });
     }
 
-    // Fallback: Meta Cloud API. Filtra is_active=true porque o user pode ter
-    // múltiplas rows (uma ativa + histórico inativo após troca-número). Sem
-    // is_active, maybeSingle estoura PGRST116 e cai no catch silencioso, daí
-    // a UI mostrava "Conectar" mesmo com Cloud API funcionando.
+    // Cadastro salvo não confirma uma conexão ativa na API oficial.
     try {
-      const { data: metaAccount } = await supabase
-        .from('whatsapp_business_accounts')
-        .select('phone_number, display_name')
-        .eq('user_id', userId)
-        .eq('is_active', true)
-        .maybeSingle();
-      if (metaAccount) {
-        return res.json({ connected: true, provider: 'meta', phone: metaAccount.phone_number, whatsapp: { connected: true } });
+      const state = await outboundWhatsAppChannel(supabaseAdmin || supabase, userId, false);
+      if (state.selected_channel === 'meta' && state.meta_operational) {
+        return res.json({ connected: true, provider: 'meta', phone: state.wa_number, whatsapp: { connected: true } });
       }
     } catch (err: any) {
-      console.error('[Status] Erro ao consultar Meta Cloud:', err?.message || err);
+      console.error('[Status] Erro ao validar Meta Cloud:', err?.message || err);
     }
 
     return res.json({ connected: false, provider: 'baileys', whatsapp: { connected: false } });
@@ -3929,15 +3922,15 @@ async function startServer() {
     }
 
     const { data: anchors, error } = await db.from('wa_messages')
-      .select('message_id, from_me, timestamp')
+      .select('message_id, phone, from_me, timestamp')
       .eq('user_id', userId)
       .eq('wa_number', waNumber)
       .in('phone', variants)
       .order('timestamp', { ascending: false })
       .limit(1);
     if (error) return res.status(500).json({ error: error.message });
-    const anchor = anchors?.[0];
-    if (!anchor?.message_id || !anchor?.timestamp) {
+    const anchor = anchors?.[0] ? messageHistoryAnchor(anchors[0]) : null;
+    if (!anchor) {
       console.warn(`[InboxSync] âncora ausente | user=${userId} | final=${withoutNinthDigit.slice(-4)}`);
       return res.status(404).json({ error: 'Ainda não há uma mensagem de referência para sincronizar.' });
     }
@@ -3945,13 +3938,9 @@ async function startServer() {
     try {
       const requestId = await BaileysManager.requestMessageHistory(
         sessionKey,
-        withoutNinthDigit,
+        anchor.phone,
         50,
-        {
-          id: String(anchor.message_id),
-          fromMe: !!anchor.from_me,
-          timestampMs: new Date(anchor.timestamp).getTime(),
-        },
+        anchor,
       );
       inboxHistorySyncAt.set(throttleKey, Date.now());
       console.log(`[InboxSync] pedido aceito | user=${userId} | final=${withoutNinthDigit.slice(-4)} | request=${requestId}`);
@@ -27607,20 +27596,22 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
         };
         const { data: existingChat } = await supabaseAdmin
           .from('wa_conversations')
-          .select('id')
+          .select('id, last_message_at')
           .eq('user_id', userId)
           .eq('wa_number', waNumber)
           .in('phone', [...new Set([rawPhone, phone])])
           .limit(1)
           .maybeSingle();
+        const chatUpdate = historyChatUpdate(chatPayload, existingChat?.last_message_at);
         let { error } = existingChat
-          ? await supabaseAdmin.from('wa_conversations').update(chatPayload).eq('id', existingChat.id)
+          ? await supabaseAdmin.from('wa_conversations').update(chatUpdate).eq('id', existingChat.id)
           : await supabaseAdmin.from('wa_conversations').insert(chatPayload);
         if (error && /archived/.test(error.message || '')) {
           // Coluna ainda não existe (migration 059 pendente) — segue sem o campo
           delete chatPayload.archived;
+          delete chatUpdate.archived;
           ({ error } = existingChat
-            ? await supabaseAdmin.from('wa_conversations').update(chatPayload).eq('id', existingChat.id)
+            ? await supabaseAdmin.from('wa_conversations').update(chatUpdate).eq('id', existingChat.id)
             : await supabaseAdmin.from('wa_conversations').insert(chatPayload));
         }
         if (error) {
@@ -28628,7 +28619,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       updated_at: now,
       // Quem mandou a última? Pro ✓✓ na lista ("já respondi"). Baileys dispara
       // o handler também nas NOSSAS mensagens (fromMe), então isso cobre tudo.
-      ...(!isHistory ? { last_from_me: !!msg.key.fromMe } : {}),
+      last_from_me: !!msg.key.fromMe,
       ...(!isHistory ? { unread_count: msg.key.fromMe ? 0 : 1 } : {}),
       ...(contactName ? { contact_name: contactName } : {}),
     };
@@ -28646,9 +28637,10 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
           .from('wa_conversations').select('last_message_at')
           .eq('user_id', userId).eq('wa_number', waNumber).or(phoneFilter);
         if (currentError) throw currentError;
-        if (current?.some(row => row.last_message_at && row.last_message_at > ts)) {
+        if (current?.some(row => conversationIsNewer(row.last_message_at, ts))) {
           delete updateFields.last_message;
           delete updateFields.last_message_at;
+          delete updateFields.last_from_me;
         }
       }
       const { data: updated, error: updateErr } = await supabaseAdmin
