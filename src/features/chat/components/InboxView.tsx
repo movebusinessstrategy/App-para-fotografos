@@ -30,6 +30,8 @@ interface Props {
   stages: PipelineStage[];
   clients: Client[];
   initialPhone?: string;
+  initialContactName?: string | null;
+  embedded?: boolean;
   onDealUpdated: () => void;
   /** 'main' = WhatsApp de vendas (padrão) | 'posvenda' = página do 2º número */
   slot?: 'main' | 'posvenda';
@@ -64,7 +66,7 @@ function dateLabel(iso: string): string {
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
 }
 
-export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated, slot = 'main', onSlotChange }: Props) {
+export function InboxView({ initialPhone, initialContactName, embedded = false, deals, stages, clients, onDealUpdated, slot = 'main', onSlotChange }: Props) {
   const { waTheme, toggleWaTheme } = useTheme();
   const { canAccess } = useAuth();
   // Página DEDICADA por número (equipes diferentes): /whatsapp = Vendas,
@@ -109,7 +111,7 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
     const timer = window.setTimeout(() => setDebouncedSearch(searchTerm.trim()), 250);
     return () => window.clearTimeout(timer);
   }, [searchTerm]);
-  const { conversations, loading: loadingConvs, refresh, mutateUnread } = useConversations(waSlot, debouncedSearch);
+  const { conversations, loading: loadingConvs, searching, error: conversationError, refresh, mutateUnread } = useConversations(waSlot, embedded ? initialPhone || '' : debouncedSearch);
   const { connected } = useWaStatus();
   const [selectedPhone, setSelectedPhone] = useState<string | null>(initialPhone || null);
   const [unreadOnly, setUnreadOnly] = useState(false);
@@ -264,12 +266,13 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
 
   // ESC volta pra lista de conversas (como no WhatsApp Web)
   useEffect(() => {
+    if (embedded) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setSelectedPhone(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [embedded]);
 
   // Fecha emoji picker ao clicar fora do picker
   useEffect(() => {
@@ -428,7 +431,7 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
   const selectedHumanActive = selectedConv?.agent_status === 'human_active';
   const { name: baseName, avatar: baseAvatar, phone: convPhone } = selectedConv
     ? extractContact(selectedConv, messages)
-    : { name: selectedPhone ? formatBrazilianPhone(selectedPhone) : '', avatar: null, phone: selectedPhone || '' };
+    : { name: initialContactName || (selectedPhone ? formatBrazilianPhone(selectedPhone) : ''), avatar: null, phone: selectedPhone || '' };
   const { name: resolvedName, avatar: resolvedAvatar } = useContactProfile(convPhone, baseName, baseAvatar);
   const displayName = resolvedName || baseName;
   const avatarUrl = resolvedAvatar || baseAvatar;
@@ -452,6 +455,7 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
     <div className="flex h-full overflow-hidden font-sans" style={{ background: 'var(--wa-bg-secondary)' }}>
 
       {/* ── SIDEBAR ── (min-h-0 permite a lista interna rolar até o fim) */}
+      {!embedded && (
       <div
         className={`${selectedPhone ? 'hidden md:flex' : 'flex'} w-full flex-col flex-shrink-0 min-h-0 overflow-hidden md:w-[360px]`}
         style={{ borderRight: '1px solid var(--wa-border)', background: 'var(--wa-bg-secondary)' }}
@@ -573,7 +577,7 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
               color: 'var(--wa-text-secondary)',
             }}
           >
-            <Search size={16} className="flex-shrink-0" />
+            {searching ? <Loader2 size={16} className="flex-shrink-0 animate-spin" aria-label="Buscando conversas" /> : <Search size={16} className="flex-shrink-0" />}
             <input
               type="search"
               value={searchTerm}
@@ -597,6 +601,11 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
         </div>
 
         {/* Filtros: Todas / Não lidas (igual WhatsApp) */}
+        {conversationError && (
+          <div role="alert" className="px-4 pt-2 text-xs" style={{ color: 'var(--wa-text-secondary)' }}>
+            {conversationError} <button type="button" onClick={() => refresh()} className="underline">Tentar novamente</button>
+          </div>
+        )}
         <div
           className="px-3 py-2 flex-shrink-0 flex items-center gap-2"
         >
@@ -716,6 +725,7 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
         </div>
         )}
       </div>
+      )}
 
       {/* ── ÁREA DE CHAT ── */}
       <div className={`${selectedPhone ? 'flex' : 'hidden md:flex'} flex-1 flex-col min-w-0 overflow-hidden`}>
@@ -744,13 +754,13 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
               className="flex items-center gap-3 px-4 py-3 flex-shrink-0"
               style={{ background: 'var(--wa-bg-tertiary)', borderBottom: '1px solid var(--wa-border)' }}
             >
-              <button
+              {!embedded && <button
                 onClick={() => setSelectedPhone(null)}
                 className="p-1 rounded-full md:hidden"
                 style={{ color: 'var(--wa-text-secondary)' }}
               >
                 <ArrowLeft size={20} />
-              </button>
+              </button>}
 
               {/* Avatar + nome CLICÁVEL → abre as informações do contato (igual WhatsApp) */}
               <button
@@ -781,7 +791,7 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
               <div className="flex items-center gap-1 flex-shrink-0">
                 {/* Encaminhar entre os dois WhatsApps: venda fechada → pós-venda;
                     cliente do pós-venda querendo comprar de novo → NOVO lead em vendas */}
-                {waSlot === 'main' && posvendaOn && selectedPhone && (
+                {!embedded && waSlot === 'main' && posvendaOn && selectedPhone && (
                   <button
                     onClick={() => {
                       if (onSlotChange) onSlotChange('posvenda', selectedPhone);
@@ -804,13 +814,13 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
                     📞 → Vendas
                   </button>
                 )}
-                <FunnelStatusButton
+                {!embedded && <FunnelStatusButton
                   phone={selectedPhone || ''}
                   contactName={displayName}
                   deals={deals}
                   stages={stages}
                   onAdded={onDealUpdated}
-                />
+                />}
                 <button
                   className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
                   style={{ color: 'var(--wa-text-secondary)' }}
@@ -831,6 +841,7 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
             {/* Faixa do CRM: só aparece quando o contato tem deal no funil. */}
             {selectedPhone && (
               <CrmDealStrip
+                embedded={embedded}
                 phone={selectedPhone}
                 deals={deals}
                 stages={stages}
@@ -962,7 +973,7 @@ export function InboxView({ initialPhone, deals, stages, clients, onDealUpdated,
                       onMouseDown={e => e.stopPropagation()}
                     >
                       <EmojiPicker
-                        theme={EmojiTheme.DARK}
+                        theme={waTheme === 'dark' ? EmojiTheme.DARK : EmojiTheme.LIGHT}
                         onEmojiClick={data => {
                           const textarea = textareaRef.current;
                           if (!textarea) {

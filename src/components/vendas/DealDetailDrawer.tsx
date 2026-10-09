@@ -175,6 +175,7 @@ interface DealDetailDrawerProps {
   stages: PipelineStage[];
   onClose: () => void;
   onUpdate: (options?: { silent?: boolean }) => void | Promise<void>;
+  onOpenChat?: (deal: Deal) => void;
 }
 
 const PRIORITY_OPTIONS = [
@@ -213,7 +214,7 @@ const LABEL_COLORS = [
 ];
 
 export function DealDetailDrawer({
-  deal, client, clients = [], stages, onClose, onUpdate,
+  deal, client, clients = [], stages, onClose, onUpdate, onOpenChat,
 }: DealDetailDrawerProps) {
   const { canAccess } = useAuth();
   const navigate = useNavigate();
@@ -230,6 +231,12 @@ export function DealDetailDrawer({
   const [showLostModal, setShowLostModal] = useState(false);
   const [isEditingContact, setIsEditingContact] = useState(false);
   const [, setSearchParams] = useSearchParams();
+  const openChat = () => {
+    if (!deal) return;
+    onClose();
+    if (onOpenChat) { onOpenChat(deal); return; }
+    setSearchParams({ tab: 'inbox', phone: String(chatPhone || '').replace(/\D/g, '') });
+  };
   const [contactData, setContactData] = useState({
     contact_name: "", contact_phone: "", contact_email: "", contact_instagram: "",
   });
@@ -794,7 +801,7 @@ export function DealDetailDrawer({
                       </button>
                       <button
                         type="button"
-                        onClick={() => { onClose(); setSearchParams({ tab: 'inbox', phone: String(chatPhone).replace(/\D/g, '') }); }}
+                        onClick={openChat}
                         className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-[10px] font-bold text-emerald-700 hover:bg-emerald-500/15 dark:text-emerald-300"
                       >
                         <MessageCircle size={11} /> Abrir chat
@@ -845,10 +852,7 @@ export function DealDetailDrawer({
                 </button>
                 {chatPhone && (
                   <button
-                    onClick={() => {
-                      onClose();
-                      setSearchParams({ tab: "inbox", phone: String(chatPhone).replace(/\D/g, "") });
-                    }}
+                    onClick={openChat}
                     title="Abrir conversa no Inbox"
                     className="hidden"
                   >

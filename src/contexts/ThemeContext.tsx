@@ -15,15 +15,14 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem("theme") as Theme;
-    if (saved) return saved;
+    if (saved === 'light' || saved === 'dark') return saved;
     // Padrão claro (estilo Apple/landing). Quem já escolheu um tema antes,
     // inclusive dark, é respeitado — ninguém é forçado a mudar.
     return "light";
   });
 
-  const [waTheme, setWaTheme] = useState<ThemeMode>(() => {
-    return (localStorage.getItem("wa-theme") as ThemeMode) ?? "dark";
-  });
+  // Atendimento acompanha a mesma preferência do restante do CRM.
+  const waTheme: ThemeMode = theme;
 
   useEffect(() => {
     const root = document.documentElement;
@@ -46,7 +45,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, [waTheme]);
 
   const toggleTheme = () => setTheme((prev) => (prev === "light" ? "dark" : "light"));
-  const toggleWaTheme = () => setWaTheme((prev) => (prev === "dark" ? "light" : "dark"));
+  const toggleWaTheme = toggleTheme;
 
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme, waTheme, toggleWaTheme }}>

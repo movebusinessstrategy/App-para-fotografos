@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo, useEffect } from "react";
+import React, { Suspense, lazy, useState, useRef, useMemo, useEffect } from "react";
 import {
   DndContext,
   DragEndEvent,
@@ -10,7 +10,8 @@ import {
   useDroppable,
 } from "@dnd-kit/core";
 import { SortableContext } from "@dnd-kit/sortable";
-import { Settings2 } from "lucide-react";
+import { Settings2, Search, X } from "lucide-react";
+import { conversationMatchesSearch } from "../../features/chat/utils/conversationSearch";
 
 import { Deal, PipelineStage, Client, PipelineLabel, TeamMember, SaleCampaign } from "../../types";
 import { authFetch } from "../../utils/authFetch";
@@ -20,6 +21,8 @@ import { CampaignManagerModal } from "./CampaignManagerModal";
 import { useSellers } from "../../hooks/useSellers";
 import { SellerAvatar } from "./SellerPicker";
 import { useAuth } from "../../contexts/AuthContext";
+
+const ChatPopup = lazy(() => import('./ChatPopup').then(module => ({ default: module.ChatPopup })));
 
 interface FunilTabProps {
   deals: Deal[];
@@ -45,10 +48,12 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
   const [localDeals, setLocalDeals] = useState<Deal[]>(deals);
   const [activeDeal, setActiveDeal] = useState<Deal | null>(null);
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
+  const [chatDeal, setChatDeal] = useState<Deal | null>(null);
   const [pipelineLabels, setPipelineLabels] = useState<PipelineLabel[]>([]);
   const [campaigns, setCampaigns] = useState<SaleCampaign[]>([]);
   const [sellerFilter, setSellerFilter] = useState<string | 'all' | 'none'>('all');
   const [campaignFilter, setCampaignFilter] = useState<string | 'all'>('all');
+  const [search, setSearch] = useState('');
   const [showCampaignManager, setShowCampaignManager] = useState(false);
   const boardRef = useRef<HTMLDivElement>(null);
   // Polling de 5s do parent: enquanto o usuário arrasta (ou nos ~2s seguintes
@@ -117,8 +122,12 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
     if (sellerFilter === 'none') result = result.filter(d => !d.assigned_to);
     else if (sellerFilter !== 'all') result = result.filter(d => d.assigned_to === sellerFilter);
     if (campaignFilter !== 'all') result = result.filter(d => d.campaign_id === campaignFilter);
+    if (search.trim()) result = result.filter(d => {
+      const client = clientMap.get(d.client_id!);
+      return conversationMatchesSearch({ phone: d.contact_phone || client?.phone || '', contact_name: d.contact_name || client?.name || null, last_message: null, last_message_at: null, unread_count: 0 }, search, d.title);
+    });
     return result;
-  }, [localDeals, sellerFilter, campaignFilter]);
+  }, [localDeals, sellerFilter, campaignFilter, search, clientMap]);
 
   const dealsByStage = useMemo(() => {
     const map: Record<string, Deal[]> = {};
@@ -146,6 +155,8 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
     );
     return map;
   }, [filteredDeals, activeStages, stages]);
+
+  const visibleDealCount = Object.values(dealsByStage).reduce((total, items) => total + items.length, 0);
 
   const handleDragStart = (event: DragStartEvent) => {
     isDraggingRef.current = true;
@@ -195,6 +206,14 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
     <>
       <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
         <div className="h-full flex flex-col">
+          <div className="flex items-center gap-3 border-b border-black/[0.04] px-3 py-2 dark:border-white/[0.05]">
+            <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 focus-within:border-gold-500 dark:border-gray-700 dark:bg-gray-900 sm:max-w-sm">
+              <Search size={15} className="shrink-0 text-gray-400" />
+              <input type="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar por nome ou número" aria-label="Buscar vendas por nome ou número" className="min-w-0 flex-1 bg-transparent text-sm text-gray-900 outline-none placeholder:text-gray-400 dark:text-gray-100" />
+              {search && <button type="button" onClick={() => setSearch('')} aria-label="Limpar busca de vendas" className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"><X size={15} /></button>}
+            </div>
+            {search.trim() && <span role="status" className="shrink-0 text-xs text-gray-500 dark:text-gray-400">{visibleDealCount} {visibleDealCount === 1 ? 'resultado' : 'resultados'}</span>}
+          </div>
           <div className="flex items-center gap-1.5 overflow-x-auto border-b border-black/[0.04] px-2.5 py-1.5 dark:border-white/[0.05]">
             {sellers.length > 0 && (
               <>
@@ -286,6 +305,7 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
                     deals={dealsByStage[stage.id] || []}
                     clientMap={clientMap}
                     onDealClick={setSelectedDeal}
+                    onChatClick={setChatDeal}
                     labelMap={labelMap}
                     campaignMap={campaignMap}
                     sellerById={sellerById}
@@ -311,6 +331,21 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
         </DragOverlay>
       </DndContext>
 
+      {chatDeal && (
+        <Suspense fallback={<div role="status" className="fixed bottom-6 right-6 z-50 rounded-xl bg-white px-4 py-3 text-sm shadow-lg dark:bg-gray-900 dark:text-white">Abrindo conversa…</div>}>
+          <ChatPopup
+            key={chatDeal.id}
+            phone={(chatDeal.client_id ? clientMap.get(chatDeal.client_id)?.phone : '') || chatDeal.contact_phone || ''}
+            contactName={(chatDeal.client_id ? clientMap.get(chatDeal.client_id)?.name : '') || chatDeal.contact_name || chatDeal.title}
+            deals={localDeals}
+            stages={stages}
+            clients={clients}
+            onDealUpdated={() => { void onUpdate({ silent: true }); }}
+            onClose={() => setChatDeal(null)}
+          />
+        </Suspense>
+      )}
+
       <DealDetailDrawer
         deal={selectedDeal}
         client={selectedDeal?.client_id ? clientMap.get(selectedDeal.client_id) : undefined}
@@ -318,6 +353,7 @@ export function FunilTab({ deals, stages, clients, onUpdate }: FunilTabProps) {
         stages={stages}
         onClose={() => setSelectedDeal(null)}
         onUpdate={onUpdate}
+        onOpenChat={setChatDeal}
       />
 
       <CampaignManagerModal
@@ -337,13 +373,14 @@ interface StageColumnProps {
   deals: Deal[];
   clientMap: Map<number, Client>;
   onDealClick: (deal: Deal) => void;
+  onChatClick: (deal: Deal) => void;
   labelMap: Map<string, PipelineLabel>;
   campaignMap: Map<string, SaleCampaign>;
   sellerById: Map<string, TeamMember>;
   canSeeFinance: boolean;
 }
 
-function StageColumn({ index, stage, deals, clientMap, onDealClick, labelMap, campaignMap, sellerById, canSeeFinance }: StageColumnProps) {
+function StageColumn({ index, stage, deals, clientMap, onDealClick, onChatClick, labelMap, campaignMap, sellerById, canSeeFinance }: StageColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const totalValue = deals.reduce((sum, d) => sum + (d.value || 0), 0);
   const chevronShape = index === 0
@@ -391,6 +428,7 @@ function StageColumn({ index, stage, deals, clientMap, onDealClick, labelMap, ca
                 deal={deal}
                 client={deal.client_id ? clientMap.get(deal.client_id) : undefined}
                 onClick={() => onDealClick(deal)}
+                onChatClick={() => onChatClick(deal)}
                 labelMap={labelMap}
                 campaignMap={campaignMap}
                 seller={deal.assigned_to ? sellerById.get(deal.assigned_to) : undefined}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { authFetch } from '../../../utils/authFetch';
 import { Message } from '../types';
 import { startVisiblePoll } from '../../../utils/poll';
@@ -7,19 +7,29 @@ import { startVisiblePoll } from '../../../utils/poll';
 export function useMessages(phone: string | null, slot: 'main' | 'posvenda' = 'main') {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
-  const intervalRef = useRef<(() => void) | null>(null);
+  const requestSeqRef = useRef(0);
+  const controllerRef = useRef<AbortController | null>(null);
+  const activeKeyRef = useRef(`${slot}:${phone}`);
+  activeKeyRef.current = `${slot}:${phone}`;
 
-  async function fetchMessages() {
+  const fetchMessages = useCallback(async () => {
     if (!phone) return;
+    const key = `${slot}:${phone}`;
+    if (key !== activeKeyRef.current) return;
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    const seq = ++requestSeqRef.current;
     try {
       const clean = phone.replace(/\D/g, '');
       // slot na BUSCA também: sem ele o server filtrava pelo número principal
       // e a conversa aberta na aba Pós-venda aparecia vazia
-      const res = await authFetch(`/api/inbox/messages/${clean}?limit=80${slot === 'posvenda' ? '&slot=posvenda' : ''}`);
+      const res = await authFetch(`/api/inbox/messages/${clean}?limit=80${slot === 'posvenda' ? '&slot=posvenda' : ''}`, { signal: controller.signal });
       if (!res.ok) return;
 
       const data = await res.json();
       if (!Array.isArray(data)) return;
+      if (controller.signal.aborted || seq !== requestSeqRef.current || key !== activeKeyRef.current) return;
 
       setMessages(
         data.sort((a, b) =>
@@ -29,15 +39,16 @@ export function useMessages(phone: string | null, slot: 'main' | 'posvenda' = 'm
     } catch {
       // silencioso
     }
-  }
+  }, [phone, slot]);
 
   useEffect(() => {
-    if (!phone) { setMessages([]); return; }
+    if (!phone) { setMessages([]); setLoading(false); return; }
 
     setLoading(true);
     setMessages([]);
 
     let cancelled = false;
+    let syncTimer: number | undefined;
     const syncRecentHistory = async () => {
       const clean = phone.replace(/\D/g, '');
       const suffix = slot === 'posvenda' ? '?slot=posvenda' : '';
@@ -45,23 +56,27 @@ export function useMessages(phone: string | null, slot: 'main' | 'posvenda' = 'm
         method: 'POST',
       });
       if (!response.ok || cancelled) return;
-      const result = await response.json().catch(() => ({}));
+      const result = await response.json().catch(() => ({})) as { queued?: boolean };
       if (!result.queued) return;
-      window.setTimeout(() => { if (!cancelled) fetchMessages(); }, 3500);
+      syncTimer = window.setTimeout(() => { if (!cancelled) fetchMessages(); }, 3500);
     };
 
-    fetchMessages().finally(() => setLoading(false));
+    fetchMessages().finally(() => { if (!cancelled) setLoading(false); });
     syncRecentHistory().catch(() => {});
-    intervalRef.current = startVisiblePoll(fetchMessages, 8000);
+    const stopPolling = startVisiblePoll(fetchMessages, 8000);
 
     return () => {
       cancelled = true;
-      if (intervalRef.current) intervalRef.current();
+      stopPolling();
+      window.clearTimeout(syncTimer);
+      controllerRef.current?.abort();
+      requestSeqRef.current++;
     };
     // slot nos deps: trocar de aba com a MESMA conversa aberta refaz a busca
-  }, [phone, slot]);
+  }, [phone, slot, fetchMessages]);
 
   async function sendText(text: string): Promise<void> {
+    const key = `${slot}:${phone}`;
     const tmpId = `tmp-${Date.now()}`;
     const tmp: Message = {
       message_id: tmpId,
@@ -81,9 +96,9 @@ export function useMessages(phone: string | null, slot: 'main' | 'posvenda' = 'm
       body: JSON.stringify({ phone: phone!.replace(/\D/g, ''), text, ...(slot === 'posvenda' ? { slot } : {}) }),
     });
 
-    setMessages(prev => prev.filter(m => m.message_id !== tmpId));
+    if (key === activeKeyRef.current) setMessages(prev => prev.filter(m => m.message_id !== tmpId));
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
+      const err = await res.json().catch(() => ({})) as { error?: string };
       throw new Error(err.error || 'Erro ao enviar');
     }
     await fetchMessages();

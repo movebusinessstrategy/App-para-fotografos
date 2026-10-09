@@ -10,6 +10,7 @@ interface DealCardProps {
   deal: Deal;
   client?: Client;
   onClick: () => void;
+  onChatClick: () => void;
   labelMap?: Map<string, PipelineLabel>;
   // Mapa opcional de campanhas (venda especial) para resolver nome/cor pelo campaign_id.
   campaignMap?: Map<string, SaleCampaign>;
@@ -54,7 +55,7 @@ function hasQualifiedLabel(deal: Deal, labelMap?: Map<string, PipelineLabel>) {
   });
 }
 
-export function DealCard({ deal, client, onClick, labelMap, campaignMap, seller, canSeeFinance = true }: DealCardProps) {
+export function DealCard({ deal, client, onClick, onChatClick, labelMap, campaignMap, seller, canSeeFinance = true }: DealCardProps) {
   const {
     attributes,
     listeners,
@@ -102,6 +103,12 @@ export function DealCard({ deal, client, onClick, labelMap, campaignMap, seller,
       {...attributes}
       {...listeners}
       onClick={onClick}
+      onKeyDown={event => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        onClick();
+      }}
       title={getStalenessLabel(staleness)}
       className={`group relative min-h-[142px] cursor-pointer rounded-2xl border bg-white p-3.5 shadow-[0_14px_34px_-28px_rgba(0,0,0,0.7)] transition-all hover:-translate-y-0.5 hover:shadow-[0_20px_40px_-28px_rgba(0,0,0,0.5)] dark:bg-[#171717] dark:shadow-black/30 ${getStalenessFrame(staleness)} ${isDragging ? 'rotate-1 opacity-50 shadow-xl' : ''}`}
     >
@@ -156,7 +163,19 @@ export function DealCard({ deal, client, onClick, labelMap, campaignMap, seller,
               <CheckCircle2 size={12} /> Qualificado
             </span>
           )}
-          {phone && <MessageCircle size={15} className="ml-auto flex-shrink-0 text-gray-400 dark:text-gray-500" aria-label="Conversa disponível" />}
+          {phone && (
+            <button
+              type="button"
+              onPointerDown={event => event.stopPropagation()}
+              onKeyDown={event => event.stopPropagation()}
+              onClick={event => { event.stopPropagation(); onChatClick(); }}
+              aria-label={`Conversar com ${contactName}`}
+              title="Abrir conversa aqui no funil"
+              className="ml-auto flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gold-500/10 hover:text-gold-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold-500 dark:text-gray-400 dark:hover:text-gold-400"
+            >
+              <MessageCircle size={16} />
+            </button>
+          )}
         </div>
 
         <div className="mt-2 flex items-center gap-1" title={`${deal.activity_count || 0} interação(ões) registrada(s)`}>
