@@ -41,3 +41,12 @@ test('captura seleção concluída somente das origens oficiais da Meta', () => 
     assert.equal(parseMetaSignupSession('https://www.facebook.com', raw), null);
   }
 });
+
+test('Coexistência aceita o retorno documentado com apenas waba_id e exige telefone único', () => {
+  const event = { type: 'WA_EMBEDDED_SIGNUP', event: 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING', data: { waba_id: '232' } };
+  const selection = parseMetaSignupSession('https://www.facebook.com', event);
+  assert.deepEqual(selection, { waba_id: '232' });
+  assert.deepEqual(resolveMetaSignupSelection(authorized, selection!, current), { waba_id: '232' });
+  assert.deepEqual(selectMetaSignupPhone([{ id: '999' }], selection?.phone_number_id), { id: '999' });
+  assert.throws(() => selectMetaSignupPhone([{ id: '999' }, { id: '888' }], selection?.phone_number_id), /não confirmou/);
+});

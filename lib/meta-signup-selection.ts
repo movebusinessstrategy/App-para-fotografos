@@ -13,8 +13,9 @@ function requestedSelection(input: SelectionInput): MetaSignupSelection | null {
   if (input.waba_id == null && input.phone_number_id == null) return null;
   const waba_id = metaId(input.waba_id);
   const phone_number_id = metaId(input.phone_number_id);
-  if (!waba_id || !phone_number_id) throw new Error('Selecione a conta e o número do WhatsApp na Meta.');
-  return { waba_id, phone_number_id };
+  if (!waba_id) throw new Error('Selecione a conta e o número do WhatsApp na Meta.');
+  if (input.phone_number_id != null && !phone_number_id) throw new Error('Número de identificação do WhatsApp inválido.');
+  return phone_number_id ? { waba_id, phone_number_id } : { waba_id };
 }
 
 export function resolveMetaSignupSelection(
@@ -49,5 +50,8 @@ export function parseMetaSignupSession(origin: string, raw: unknown): MetaSignup
   const event = decodeSignupEvent(raw);
   if (event?.type !== 'WA_EMBEDDED_SIGNUP') return null;
   if (!['FINISH', 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING'].includes(event.event)) return null;
+  // No fluxo de Coexistência a Meta pode retornar somente waba_id.
+  // O servidor resolve o telefone nessa WABA e recusa listas ambíguas.
+  if (event.event === 'FINISH' && !metaId(event.data?.phone_number_id)) return null;
   try { return requestedSelection(event.data ?? {}); } catch { return null; }
 }
