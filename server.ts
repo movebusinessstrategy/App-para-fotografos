@@ -1,4 +1,5 @@
 import express from 'express';
+import { resolveMetaSignupSelection, selectMetaSignupPhone } from './lib/meta-signup-selection.js';
 import { convertSaleSessions, normalizeSaleItems } from './sale-sessions.js';
 import { dealGross, jobSaleBase, moneyCents, salePricing } from './src/utils/salePricing.js';
 import { isClientValueEligibleStatus, summarizeClientValue } from './src/utils/client-value.js';
@@ -24017,33 +24018,38 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       const wabaScope = (debugData.data?.granular_scopes || []).find(
         (s: any) => s.scope === 'whatsapp_business_management'
       );
-      // Plan B (System User Token): debug_token de app-scoped token nem sempre
-      // expõe granular_scopes — então aceita waba_id/phone_number_id vindos
-      // do body como override explícito.
-      const wabaId: string | null = wabaScope?.target_ids?.[0] || bodyWabaId || null;
-      console.log('[Meta] WABA scope:', wabaScope, '| wabaId:', wabaId);
+      // A renovação de autorização pode retornar várias WABAs, sem nova seleção.
+      // Nesse caso preserva a conta atual; nunca escolhe a primeira silenciosamente.
+      const { data: currentAccount, error: currentAccountError } = await supabase
+        .from('whatsapp_business_accounts')
+        .select('waba_id, phone_number_id')
+        .eq('user_id', userId)
+        .eq('is_active', true)
+        .maybeSingle();
+      if (currentAccountError) return res.status(500).json({ error: 'Não foi possível verificar a conexão atual.' });
 
-      // 3. Busca número de telefone do WABA
-      let phoneNumberId: string | null = bodyPhoneId || null;
-      let phoneNumber: string | null = null;
-      let displayName: string | null = null;
-
-      if (wabaId) {
+      let wabaId: string;
+      let selectedPhone: { id: string; display_phone_number?: string; verified_name?: string };
+      try {
+        const selection = resolveMetaSignupSelection(
+          wabaScope?.target_ids || [],
+          { waba_id: bodyWabaId, phone_number_id: bodyPhoneId },
+          currentAccount,
+        );
+        wabaId = selection.waba_id;
         const phoneRes = await fetch(
-          `https://graph.facebook.com/v21.0/${wabaId}/phone_numbers?access_token=${token}`
+          `https://graph.facebook.com/v21.0/${wabaId}/phone_numbers?fields=id,display_phone_number,verified_name&limit=100`,
+          { headers: { Authorization: `Bearer ${token}` } },
         );
         const phoneData = await phoneRes.json();
-        if (phoneData.data?.length > 0) {
-          // Se body passou phone_number_id específico, prioriza ele; senão
-          // pega o primeiro retornado pela API.
-          const phone = bodyPhoneId
-            ? phoneData.data.find((p: any) => p.id === bodyPhoneId) || phoneData.data[0]
-            : phoneData.data[0];
-          phoneNumberId = phone.id;
-          phoneNumber = phone.display_phone_number;
-          displayName = phone.verified_name;
-        }
+        if (!phoneRes.ok || phoneData.error) throw new Error('A Meta não permitiu validar o número nesta conta. A conexão atual foi preservada.');
+        selectedPhone = selectMetaSignupPhone(phoneData.data || [], selection.phone_number_id);
+      } catch (selectionError: any) {
+        return res.status(400).json({ error: selectionError.message });
       }
+      const phoneNumberId = selectedPhone.id;
+      const phoneNumber = selectedPhone.display_phone_number || null;
+      const displayName = selectedPhone.verified_name || null;
 
       // 4. Troca token curto por long-lived token (60 dias em vez de ~2h)
       let finalToken = token;

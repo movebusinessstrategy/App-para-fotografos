@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ChevronLeft, CheckCircle2, Phone, RefreshCw, RefreshCcw, Stethoscope, Smartphone, Cloud } from "lucide-react";
 import { authFetch } from "../../utils/authFetch";
@@ -11,6 +11,8 @@ import {
   type CoexistenceSnapshot,
   type MetaPhoneDiagnostic,
 } from "./CoexistenceStatusCard";
+
+import { parseMetaSignupSession, type MetaSignupSelection } from "../../../lib/meta-signup-selection";
 
 type Tab = "conexao" | "templates";
 type ConnectMode = "cloud_api" | "coexistence";
@@ -125,6 +127,16 @@ export default function IntegracaoWhatsApp() {
   const [account, setAccount] = useState<WaAccount | null>(null);
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState<ConnectMode | null>(null);
+  const signupSelection = useRef<MetaSignupSelection | null>(null);
+
+  useEffect(() => {
+    const onSignupMessage = (event: MessageEvent) => {
+      const selection = parseMetaSignupSession(event.origin, event.data);
+      if (selection) signupSelection.current = selection;
+    };
+    window.addEventListener('message', onSignupMessage);
+    return () => window.removeEventListener('message', onSignupMessage);
+  }, []);
   const [subscribing, setSubscribing] = useState(false);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [phonePickerOpen, setPhonePickerOpen] = useState(false);
@@ -239,6 +251,7 @@ export default function IntegracaoWhatsApp() {
       return _originalOpen.call(window, url, ...args);
     };
 
+    signupSelection.current = null;
     setConnecting(mode);
     FB.login(
       (response: any) => {
@@ -255,6 +268,7 @@ export default function IntegracaoWhatsApp() {
               mode,
               launcher_url: launcherUrl,
               fb_sdk_redirect_uri: fbSdkRedirectUri,
+              ...signupSelection.current,
             }),
           })
             .then(r => r.json())
