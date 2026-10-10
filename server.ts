@@ -1,3 +1,4 @@
+import { readJobPaymentHistory } from './lib/job-payment-history.js';
 import express from 'express';
 import { resolveMetaSignupSelection, selectMetaSignupPhone } from './lib/meta-signup-selection.js';
 import { convertSaleSessions, normalizeSaleItems } from './sale-sessions.js';
@@ -188,6 +189,7 @@ import {
   MetaChannelNotOperationalError,
   recordMetaPhoneStatus,
   refreshMetaOperationalState,
+  resolveWhatsAppOutboundState,
   requestMetaDataSync,
   setWhatsAppChannelPreference,
 } from './lib/meta-whatsapp-channel.js';
@@ -2565,17 +2567,11 @@ async function startServer() {
   ): Promise<string> {
     if (slot === 'posvenda') return registeredSlotNumber(userId, 'posvenda');
     const baileysNumber = registeredSlotNumber(userId, 'main');
-    const state = await outboundWhatsAppChannel(db, userId, BaileysManager.getStatus(userId) === 'open');
+    const state = await getWhatsAppChannelState(db, userId, BaileysManager.getStatus(userId) === 'open');
     if (state.selected_channel === 'meta') return state.wa_number || '';
     if (state.selected_channel === 'baileys') return baileysNumber;
     if (state.preferred_channel === 'meta') return state.wa_number || '';
     return baileysNumber || state.wa_number || '';
-  }
-
-  function metaStatusCacheStale(checkedAt: string | null): boolean {
-    if (!checkedAt) return true;
-    const timestamp = new Date(checkedAt).getTime();
-    return !Number.isFinite(timestamp) || Date.now() - timestamp > 5 * 60 * 1000;
   }
 
   async function outboundWhatsAppChannel(
@@ -2583,15 +2579,7 @@ async function startServer() {
     userId: string,
     baileysAvailable: boolean,
   ) {
-    let state = await getWhatsAppChannelState(db, userId, baileysAvailable);
-    const shouldRefresh = state.configured
-      && state.preferred_channel !== 'baileys'
-      && metaStatusCacheStale(state.meta_status_checked_at);
-    if (shouldRefresh) {
-      await refreshMetaOperationalState(db, userId, decryptIfNeeded);
-      state = await getWhatsAppChannelState(db, userId, baileysAvailable);
-    }
-    return state;
+    return resolveWhatsAppOutboundState(db, userId, baileysAvailable, decryptIfNeeded);
   }
 
   app.get('/api/whatsapp/slots', requireAuth, async (req, res) => {
@@ -2905,28 +2893,20 @@ async function startServer() {
 
   app.get('/api/whatsapp/status', requireAuth, async (req, res) => {
     const userId = (req as any).userId;
-    const supabase = (req as any).supabase as SupabaseClient;
-
-    // Baileys direto
-    const baileysStatus = BaileysManager.getStatus(userId);
-    if (baileysStatus === 'open') {
-      return res.json({ connected: true, provider: 'baileys', whatsapp: { connected: true } });
-    }
-    if (baileysStatus === 'connecting') {
-      return res.json({ connected: false, provider: 'baileys', state: 'connecting', whatsapp: { connected: false } });
-    }
-
-    // Cadastro salvo não confirma uma conexão ativa na API oficial.
+    const db = (supabaseAdmin || (req as any).supabase) as SupabaseClient;
     try {
-      const state = await outboundWhatsAppChannel(supabaseAdmin || supabase, userId, false);
-      if (state.selected_channel === 'meta' && state.meta_operational) {
-        return res.json({ connected: true, provider: 'meta', phone: state.wa_number, whatsapp: { connected: true } });
-      }
-    } catch (err: any) {
-      console.error('[Status] Erro ao validar Meta Cloud:', err?.message || err);
+      const channel = await outboundWhatsAppChannel(db, userId, BaileysManager.getStatus(userId) === 'open');
+      const connected = channel.selected_channel !== null;
+      res.json({
+        connected, configured: channel.configured,
+        provider: channel.selected_channel || channel.preferred_channel,
+        phone: channel.selected_channel === 'meta' ? channel.wa_number : registeredSlotNumber(userId, 'main'),
+        preferred_channel: channel.preferred_channel,
+        whatsapp: { connected },
+      });
+    } catch {
+      res.status(503).json({ error: 'Não foi possível conferir o canal do WhatsApp.', connected: false });
     }
-
-    return res.json({ connected: false, provider: 'baileys', whatsapp: { connected: false } });
   });
 
   app.get('/api/whatsapp/status_legacy', requireAuth, async (req, res) => {
@@ -6261,7 +6241,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   // ============ JOB FINANCEIRO ============
 
   // GET /api/jobs/:id/financeiro — itens do deal vinculado + job_items + pagamentos
-  app.get('/api/jobs/:id/financeiro', requireAuth, denyProductionOnly, async (req, res) => {
+  app.get('/api/jobs/:id/financeiro', requireAuth, denyProductionOnly, requirePermission('finance'), async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -6298,32 +6278,9 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
       jobItems = data || [];
     } catch { jobItems = []; }
 
-    // Busca pagamentos do job. Depois de separar uma venda, o dinheiro continua
-    // sendo uma única transação e cada card recebe apenas uma atribuição interna.
-    let payments: any[] = [];
-    try {
-      const { data: allocations } = await adminClient.from('sale_payment_allocations')
-        .select('id,amount,job_payment_id').eq('user_id', userId).eq('job_id', jobId);
-      if ((allocations || []).length > 0) {
-        const paymentIds = allocations!.map((row: any) => row.job_payment_id);
-        const { data: sourcePayments } = await adminClient.from('job_payments').select('*').in('id', paymentIds);
-        const sourceById = new Map((sourcePayments || []).map((row: any) => [String(row.id), row]));
-        payments = allocations!.map((allocation: any) => {
-          const source: any = sourceById.get(String(allocation.job_payment_id)) || {};
-          return {
-            ...source,
-            id: `allocation:${allocation.id}`,
-            amount: Number(allocation.amount) || 0,
-            description: source.description ? `${source.description} · atribuído a este ensaio` : 'Valor atribuído a este ensaio',
-            allocated: true,
-            source_payment_id: allocation.job_payment_id,
-          };
-        });
-      } else {
-        const { data } = await adminClient.from('job_payments').select('*').eq('job_id', jobId).order('payment_date').order('created_at');
-        payments = data || [];
-      }
-    } catch { payments = []; }
+    let payments;
+    try { payments = await readJobPaymentHistory(adminClient, userId, jobId); }
+    catch { return res.status(503).json({ error: 'Não foi possível conferir o histórico de pagamentos. Tente novamente.' }); }
 
     // Compatibilidade somente-leitura: versões antigas guardavam o sinal nas
     // notas. Abrir este GET nunca deve criar pagamento nem inventar a data de
@@ -6455,7 +6412,7 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
   });
 
   // POST /api/jobs/:id/payments — registrar um pagamento
-  app.post('/api/jobs/:id/payments', requireAuth, denyProductionOnly, async (req, res) => {
+  app.post('/api/jobs/:id/payments', requireAuth, denyProductionOnly, requirePermission('finance'), async (req, res) => {
     const userId = (req as any).userId;
     const supabase = (req as any).supabase as SupabaseClient;
     const adminClient = supabaseAdmin || supabase;
@@ -6495,14 +6452,23 @@ ${(convs||[]).map(c=>`<tr><td>${(c as any).phone}</td><td>${(c as any).contact_n
     }
 
     // Recalcula total pago e atualiza payment_status (contra o total já com desconto)
-    const { data: allPayments } = await adminClient.from('job_payments').select('amount').eq('job_id', jobId);
-    const totalPago = (allPayments || []).reduce((s: number, p: any) => s + (p.amount || 0), 0);
+    let allPayments;
+    try { allPayments = await readJobPaymentHistory(adminClient, userId, jobId); }
+    catch {
+      if (payment) return res.status(202).json({ payment, warning: 'Pagamento registrado; a atualização do saldo está pendente.' });
+      return res.status(503).json({ error: 'Não foi possível conferir os pagamentos. Nenhum desconto foi aplicado.' });
+    }
+    const totalPago = allPayments.reduce((sum, row) => sum + Number(row.amount), 0);
     const newStatus = (newAmount === 0 && (totalPago > 0 || discountVal > 0))
       ? 'paid'
       : totalPago <= 0 ? 'pending' : totalPago >= newAmount ? 'paid' : 'partial';
     const jobUpdate: any = { payment_status: newStatus };
     if (discountVal > 0) jobUpdate.amount = newAmount;
-    await supabase.from('jobs').update(jobUpdate).eq('id', jobId).eq('user_id', userId);
+    const { error: paymentStatusError } = await supabase.from('jobs').update(jobUpdate).eq('id', jobId).eq('user_id', userId);
+    if (paymentStatusError) {
+      if (payment) return res.status(202).json({ payment, totalPago, warning: 'Pagamento registrado; o status do card está pendente de atualização.' });
+      return res.status(503).json({ error: 'Não foi possível aplicar o desconto.' });
+    }
 
     res.json({ payment, totalPago, newStatus, newAmount, discountApplied: discountVal });
   });

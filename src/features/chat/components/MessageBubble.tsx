@@ -43,7 +43,7 @@ function StatusIcon({ msg }: { msg: Message }) {
   return <Check size={14} style={{ color: muted }} />;
 }
 
-export function MessageBubble({ msg, onImageClick, contactInitial }: Props) {
+export const MessageBubble = React.memo(function MessageBubble({ msg, onImageClick, contactInitial }: Props) {
   const isMe = msg.from_me;
   const isSending = msg.status === 'sending';
 
@@ -137,4 +137,4 @@ export function MessageBubble({ msg, onImageClick, contactInitial }: Props) {
       </div>
     </div>
   );
-}
+});

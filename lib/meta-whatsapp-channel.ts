@@ -274,7 +274,8 @@ async function requestOneSync(account: LegacyAccount, token: string, syncType: M
 async function fetchMetaPhoneStatus(account: LegacyAccount, token: string): Promise<MetaPhoneStatus> {
   const response = await fetch(
     `https://graph.facebook.com/v21.0/${account.phone_number_id}?fields=platform_type,status,is_on_biz_app,code_verification_status,quality_rating,display_phone_number,verified_name`,
-    { headers: { Authorization: `Bearer ${token}` } },
+    // Roda no caminho do envio: uma lentidão da Meta não pode segurar a mensagem.
+    { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(6_000) },
   );
   const data = await response.json() as Record<string, unknown>;
   if (!response.ok || data.error) {
@@ -307,6 +308,61 @@ export async function refreshMetaOperationalState(
   } catch {
     return false;
   }
+}
+
+type LiveMetaCheck = { operational: boolean; checkedAt: string };
+const liveMetaChecks = new Map<string, { expires: number; check: Promise<LiveMetaCheck> }>();
+
+async function verifyLiveMetaAccount(
+  db: SupabaseClient,
+  userId: string,
+  mode: string | null,
+  decryptToken: (value: string | null) => string | null,
+): Promise<LiveMetaCheck> {
+  const account = await legacyAccount(db, userId);
+  if (!account) return { operational: false, checkedAt: new Date().toISOString() };
+  const key = `${userId}:${account.id}:${account.phone_number_id}:${mode}`;
+  const existing = liveMetaChecks.get(key);
+  if (existing && existing.expires > Date.now()) return existing.check;
+  // Cache curto por conta/número, inclusive para instalações sem a tabela 072.
+  for (const [cachedKey, cached] of liveMetaChecks) {
+    if (cached.expires <= Date.now()) liveMetaChecks.delete(cachedKey);
+  }
+  if (liveMetaChecks.size >= 256) liveMetaChecks.delete(liveMetaChecks.keys().next().value!);
+  const check = (async (): Promise<LiveMetaCheck> => {
+    const checkedAt = new Date().toISOString();
+    const token = decryptToken(account.access_token);
+    if (!token) return { operational: false, checkedAt };
+    try {
+      const status = await fetchMetaPhoneStatus(account, token);
+      const operational = isMetaPhoneOperational(status, mode);
+      // Persistir o diagnóstico é best effort; a decisão usa a resposta real
+      // da Meta e nunca um "conectado" inferido de token/webhook/histórico.
+      await recordMetaPhoneStatus(db, userId, status).catch(() => false);
+      return { operational, checkedAt };
+    } catch { return { operational: false, checkedAt }; }
+  })();
+  liveMetaChecks.set(key, { expires: Date.now() + 60_000, check });
+  return check;
+}
+
+/** Verifica o canal no envio mesmo quando o diagnóstico não pode ser persistido. */
+export async function resolveWhatsAppOutboundState(
+  db: SupabaseClient,
+  userId: string,
+  baileysAvailable: boolean,
+  decryptToken: (value: string | null) => string | null,
+): Promise<WhatsAppChannelState> {
+  const state = await getWhatsAppChannelState(db, userId, baileysAvailable);
+  if (!state.configured || state.preferred_channel === 'baileys') return state;
+  if (cacheIsFresh(state.meta_status_checked_at)) return state;
+  const verified = await verifyLiveMetaAccount(db, userId, state.mode, decryptToken);
+  return {
+    ...state,
+    meta_operational: verified.operational,
+    meta_status_checked_at: verified.checkedAt,
+    selected_channel: selectWhatsAppChannel(state.preferred_channel, { meta: verified.operational, baileys: baileysAvailable }),
+  };
 }
 
 export async function requestMetaDataSync(

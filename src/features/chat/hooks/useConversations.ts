@@ -66,13 +66,13 @@ export function useConversations(slot: 'main' | 'posvenda' = 'main', search = ''
 
   // Update otimista do badge (mark-read/unread): a UI responde na hora e o
   // refresh() confirma com o servidor em seguida.
-  function mutateUnread(phone: string, unread: number) {
+  const mutateUnread = useCallback((phone: string, unread: number) => {
     controllerRef.current?.abort();
     fetchSeqRef.current++; // invalida buscas em voo: o snapshot delas é anterior à mutação
     setSearching(false);
     setLoading(false);
     setConversations(prev => prev.map(c => (c.phone === phone ? { ...c, unread_count: unread } : c)));
-  }
+  }, []);
 
   useEffect(() => {
     const changedSlot = loadedSlotRef.current !== slot;

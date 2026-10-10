@@ -7,6 +7,8 @@ import { startVisiblePoll } from '../../../utils/poll';
 export function useMessages(phone: string | null, slot: 'main' | 'posvenda' = 'main') {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadedKey, setLoadedKey] = useState('');
+  const [error, setError] = useState<string | null>(null);
   const requestSeqRef = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
   const activeKeyRef = useRef(`${slot}:${phone}`);
@@ -25,19 +27,24 @@ export function useMessages(phone: string | null, slot: 'main' | 'posvenda' = 'm
       // slot na BUSCA também: sem ele o server filtrava pelo número principal
       // e a conversa aberta na aba Pós-venda aparecia vazia
       const res = await authFetch(`/api/inbox/messages/${clean}?limit=80${slot === 'posvenda' ? '&slot=posvenda' : ''}`, { signal: controller.signal });
-      if (!res.ok) return;
+      if (!res.ok) throw new Error('Não foi possível carregar as mensagens. Tente novamente.');
 
       const data = await res.json();
-      if (!Array.isArray(data)) return;
+      if (!Array.isArray(data)) throw new Error('Resposta inválida ao carregar as mensagens.');
       if (controller.signal.aborted || seq !== requestSeqRef.current || key !== activeKeyRef.current) return;
 
-      setMessages(
-        data.sort((a, b) =>
+      setError(null);
+      setLoadedKey(key);
+      setMessages(previous => {
+        const pending = previous.filter(message => message.status === 'sending');
+        return [...data, ...pending].sort((a, b) =>
           new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-        )
-      );
-    } catch {
-      // silencioso
+        );
+      });
+    } catch (cause) {
+      if (controller.signal.aborted || key !== activeKeyRef.current) return;
+      setLoadedKey(key);
+      setError(cause instanceof Error ? cause.message : 'Não foi possível carregar as mensagens.');
     }
   }, [phone, slot]);
 
@@ -45,6 +52,7 @@ export function useMessages(phone: string | null, slot: 'main' | 'posvenda' = 'm
     if (!phone) { setMessages([]); setLoading(false); return; }
 
     setLoading(true);
+    setError(null);
     setMessages([]);
 
     let cancelled = false;
@@ -89,20 +97,25 @@ export function useMessages(phone: string | null, slot: 'main' | 'posvenda' = 'm
     };
     setMessages(prev => [...prev, tmp]);
 
-    // authFetch: impersonado, o envio tem que sair pelo WhatsApp do TENANT —
-    // fetch cru mandava pela conta do próprio admin.
-    const res = await authFetch('/api/inbox/send', {
-      method: 'POST',
-      body: JSON.stringify({ phone: phone!.replace(/\D/g, ''), text, ...(slot === 'posvenda' ? { slot } : {}) }),
-    });
-
-    if (key === activeKeyRef.current) setMessages(prev => prev.filter(m => m.message_id !== tmpId));
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({})) as { error?: string };
-      throw new Error(err.error || 'Erro ao enviar');
+    try {
+      const res = await authFetch('/api/inbox/send', {
+        method: 'POST',
+        body: JSON.stringify({ phone: phone!.replace(/\D/g, ''), text, ...(slot === 'posvenda' ? { slot } : {}) }),
+      });
+      const data = await res.json().catch(() => ({})) as { error?: string; message_id?: string };
+      if (!res.ok) throw new Error(data.error || 'Não foi possível enviar a mensagem.');
+      if (key !== activeKeyRef.current) return;
+      // Mostra o envio confirmado enquanto o histórico é revalidado.
+      setMessages(previous => previous.map(message => message.message_id === tmpId
+        ? { ...message, message_id: data.message_id || tmpId, status: 'sent' }
+        : message));
+      await fetchMessages();
+    } catch (cause) {
+      if (key === activeKeyRef.current) setMessages(previous => previous.filter(message => message.message_id !== tmpId));
+      throw cause;
     }
-    await fetchMessages();
   }
 
-  return { messages, loading, sendText };
+  const current = `${slot}:${phone}`;
+  return { messages: loadedKey === current ? messages : [], loading: !!phone && (loading || loadedKey !== current), error, refreshMessages: fetchMessages, sendText };
 }

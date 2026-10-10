@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
 import { Send, Wifi, WifiOff, RefreshCw, MessageCircle, ArrowLeft, Settings, Mic, Sun, Moon, PenSquare, Search, MoreVertical, Smile, Paperclip, ChevronDown, UserPlus, UserRound, Loader2, CheckCircle2, FileText, X, Megaphone } from 'lucide-react';
 import { authFetch } from '../../../utils/authFetch';
-import EmojiPicker, { Theme as EmojiTheme } from 'emoji-picker-react';
+import type { Theme as EmojiTheme } from 'emoji-picker-react';
+const EmojiPicker = lazy(() => import('emoji-picker-react'));
 import { useTheme } from '../../../contexts/ThemeContext';
 import { useAuth } from '../../../contexts/AuthContext';
 import { extractContact, formatBrazilianPhone, getInitials } from '../utils/contactHelpers';
@@ -11,6 +12,9 @@ import { conversationMatchesSearch } from '../utils/conversationSearch';
 import { handoffReasonLabel } from '../utils/agentHandoff';
 import { useConversations } from '../hooks/useConversations';
 import { useMessages } from '../hooks/useMessages';
+import { useChatScroll } from '../hooks/useChatScroll';
+import { ConversationCustomerPanel } from './ConversationCustomerPanel';
+import { customerPhoneMatches } from '../utils/conversationCustomer';
 import { useWaStatus } from '../hooks/useWaStatus';
 import { ConversationItem } from './ConversationItem';
 import { MessageBubble } from './MessageBubble';
@@ -112,15 +116,17 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
     return () => window.clearTimeout(timer);
   }, [searchTerm]);
   const { conversations, loading: loadingConvs, searching, error: conversationError, refresh, mutateUnread } = useConversations(waSlot, embedded ? initialPhone || '' : debouncedSearch);
-  const { connected } = useWaStatus();
+  const { connected } = useWaStatus(waSlot);
   const [selectedPhone, setSelectedPhone] = useState<string | null>(initialPhone || null);
   const [unreadOnly, setUnreadOnly] = useState(false);
-  const shownConversations = conversations.filter((conversation) => {
+  const shownConversations = useMemo(() => conversations.filter((conversation) => {
     if (unreadOnly && conversation.unread_count <= 0) return false;
     return conversationMatchesSearch(conversation, searchTerm, extractContact(conversation).name);
-  });
-  const unreadTotal = conversations.filter((c) => c.unread_count > 0).length;
-  const { messages, loading: loadingMsgs, sendText } = useMessages(selectedPhone, waSlot);
+  }), [conversations, unreadOnly, searchTerm]);
+  const unreadTotal = useMemo(() => conversations.filter((c) => c.unread_count > 0).length, [conversations]);
+  const { messages, loading: loadingMsgs, error: messageError, refreshMessages, sendText } = useMessages(selectedPhone, waSlot);
+  const activeConversationRef = useRef('');
+  activeConversationRef.current = `${waSlot}:${selectedPhone}`;
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -134,7 +140,7 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
   const [mediaPreview, setMediaPreview] = useState<{ file: File; url: string; type: string } | null>(null);
   const [mediaCaption, setMediaCaption] = useState('');
   const [sendingMedia, setSendingMedia] = useState(false);
-  const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [confirmToVendas, setConfirmToVendas] = useState<{ phone: string; name: string } | null>(null);
   const [movingToVendas, setMovingToVendas] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
@@ -147,6 +153,8 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
     setInfoOpen(false);
     setInfoData(null);
     setHandoffError(null);
+    setSendError(null);
+    setText('');
   }, [selectedPhone]);
   useEffect(() => {
     if (!infoOpen || !selectedPhone) return;
@@ -182,9 +190,7 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
   const fileRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
-  const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const prevCountRef = useRef(0);
+  const { containerRef: messagesContainerRef, contentRef: messagesContentRef, onScroll: handleMessagesScroll, scrollToBottom, showScrollButton: showScrollBtn } = useChatScroll(`${waSlot}:${selectedPhone}`, loadingMsgs, messages);
 
   // O campo de digitar CRESCE com o texto (até 120px, aí rola), pra dar pra ler a
   // mensagem inteira enquanto escreve — antes ficava travado em 1 linha.
@@ -194,39 +200,6 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
     ta.style.height = 'auto';
     ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
   }, [text]);
-
-  function handleMessagesScroll() {
-    const el = messagesContainerRef.current;
-    if (!el) return;
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    setShowScrollBtn(distFromBottom > 200);
-  }
-
-  function scrollToBottom(behavior: ScrollBehavior = 'smooth') {
-    const el = messagesContainerRef.current;
-    if (!el) return;
-    if (behavior === 'instant' as ScrollBehavior) {
-      el.scrollTop = el.scrollHeight;
-    } else {
-      el.scrollTo({ top: el.scrollHeight, behavior });
-    }
-  }
-
-  useEffect(() => {
-    if (messages.length > prevCountRef.current) {
-      const el = messagesContainerRef.current;
-      const nearBottom = el ? el.scrollHeight - el.scrollTop - el.clientHeight < 150 : true;
-      const lastMsg = messages[messages.length - 1] as any;
-      const isMyMsg = lastMsg?.from_me ?? lastMsg?.fromMe ?? false;
-      if (nearBottom || isMyMsg) scrollToBottom('smooth');
-    }
-    prevCountRef.current = messages.length;
-  }, [messages.length]);
-
-  useEffect(() => {
-    scrollToBottom('instant' as ScrollBehavior);
-    prevCountRef.current = 0;
-  }, [selectedPhone]);
 
   useEffect(() => {
     if (initialPhone && !selectedPhone) setSelectedPhone(initialPhone);
@@ -342,13 +315,17 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
     e.preventDefault();
     const t = text.trim();
     if (!t || sending || !selectedPhone) return;
+    const conversationKey = activeConversationRef.current;
     setSending(true);
+    setSendError(null);
     setText('');
     try {
       await sendText(t);
     } catch (err) {
-      alert(`Erro ao enviar: ${err instanceof Error ? err.message : 'Tente novamente.'}`);
-      setText(t);
+      if (conversationKey === activeConversationRef.current) {
+        setSendError(err instanceof Error ? err.message : 'Não foi possível enviar. Tente novamente.');
+        setText(t);
+      }
     } finally {
       setSending(false);
     }
@@ -415,15 +392,16 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
     setIsRecording(false);
   }
 
-  const groups: { label: string; msgs: typeof messages }[] = [];
-  for (const msg of messages) {
-    const label = dateLabel(msg.timestamp);
-    if (!groups.length || groups[groups.length - 1].label !== label) {
-      groups.push({ label, msgs: [msg] });
-    } else {
-      groups[groups.length - 1].msgs.push(msg);
+  const groups = useMemo(() => {
+    const result: { label: string; msgs: typeof messages }[] = [];
+    for (const msg of messages) {
+      const label = dateLabel(msg.timestamp);
+      const last = result.at(-1);
+      if (last?.label === label) last.msgs.push(msg);
+      else result.push({ label, msgs: [msg] });
     }
-  }
+    return result;
+  }, [messages]);
 
   const selectedConv = conversations.find(c => c.phone === selectedPhone);
   const selectedNeedsHuman = selectedConv?.agent_status === 'needs_human'
@@ -450,6 +428,41 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
       }
     }
   }, [convPhone, messages]);
+
+  // A digitação não deve redesenhar as centenas de contatos da lista.
+  const conversationItems = useMemo(() => (
+            shownConversations.map(conv => (
+              <ConversationItem
+                key={conv.phone}
+                conv={conv}
+                selected={conv.phone === selectedPhone}
+                onClick={() => setSelectedPhone(conv.phone)}
+                onMarkUnread={() => {
+                  // Fecha a conversa se for a aberta — senão o mark-read de
+                  // "conversa aberta" desfaz o não-lida na próxima mensagem
+                  if (conv.phone === selectedPhone) setSelectedPhone(null);
+                  mutateUnread(conv.phone, 1); // otimista: badge aparece na hora
+                  authFetch(`/api/inbox/mark-unread/${conv.phone.replace(/\D/g, '')}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ slot: waSlot }),
+                  })
+                    .then(() => refresh())
+                    .catch(() => {});
+                }}
+                onMarkRead={() => {
+                  mutateUnread(conv.phone, 0); // otimista: badge some na hora
+                  authFetch(`/api/inbox/mark-read/${conv.phone.replace(/\D/g, '')}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ slot: waSlot }),
+                  })
+                    .then(() => refresh())
+                    .catch(() => {});
+                }}
+              />
+            ))
+  ), [shownConversations, selectedPhone, waSlot, mutateUnread, refresh]);
 
   return (
     <div className="flex h-full overflow-hidden font-sans" style={{ background: 'var(--wa-bg-secondary)' }}>
@@ -690,37 +703,7 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
               </p>
             </div>
           ) : (
-            shownConversations.map(conv => (
-              <ConversationItem
-                key={conv.phone}
-                conv={conv}
-                selected={conv.phone === selectedPhone}
-                onClick={() => setSelectedPhone(conv.phone)}
-                onMarkUnread={() => {
-                  // Fecha a conversa se for a aberta — senão o mark-read de
-                  // "conversa aberta" desfaz o não-lida na próxima mensagem
-                  if (conv.phone === selectedPhone) setSelectedPhone(null);
-                  mutateUnread(conv.phone, 1); // otimista: badge aparece na hora
-                  authFetch(`/api/inbox/mark-unread/${conv.phone.replace(/\D/g, '')}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ slot: waSlot }),
-                  })
-                    .then(() => refresh())
-                    .catch(() => {});
-                }}
-                onMarkRead={() => {
-                  mutateUnread(conv.phone, 0); // otimista: badge some na hora
-                  authFetch(`/api/inbox/mark-read/${conv.phone.replace(/\D/g, '')}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ slot: waSlot }),
-                  })
-                    .then(() => refresh())
-                    .catch(() => {});
-                }}
-              />
-            ))
+            conversationItems
           )}
         </div>
         )}
@@ -789,6 +772,9 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
 
               {/* FEATURE 6 - botões do header */}
               <div className="flex items-center gap-1 flex-shrink-0">
+                <button type="button" onClick={() => setInfoOpen(value => !value)} aria-label="Cliente e ensaios" aria-expanded={infoOpen} className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs font-semibold" style={{ color: 'var(--wa-text-secondary)', border: '1px solid var(--wa-border)' }}>
+                  <UserRound size={16} /><span className="hidden sm:inline">Cliente e ensaios</span>
+                </button>
                 {/* Encaminhar entre os dois WhatsApps: venda fechada → pós-venda;
                     cliente do pós-venda querendo comprar de novo → NOVO lead em vendas */}
                 {!embedded && waSlot === 'main' && posvendaOn && selectedPhone && (
@@ -901,7 +887,7 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
                 className="wa-scrollbar"
                 style={{ position: 'absolute', inset: 0, overflowY: 'auto', zIndex: 1 }}
               >
-                <div className="flex flex-col min-h-full justify-end px-4 py-2">
+                <div ref={messagesContentRef} className="flex flex-col min-h-full justify-end px-4 py-2">
                   {loadingMsgs ? (
                     <div className="flex flex-col gap-2 pt-4">
                       {[...Array(5)].map((_, i) => (
@@ -912,6 +898,10 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
                           />
                         </div>
                       ))}
+                    </div>
+                  ) : messageError && messages.length === 0 ? (
+                    <div role="alert" className="flex flex-col items-center justify-center flex-1 gap-3 px-5 text-center text-sm" style={{ color: 'var(--wa-text-secondary)' }}>
+                      <p>{messageError}</p><button type="button" onClick={() => refreshMessages()} className="font-semibold underline">Tentar novamente</button>
                     </div>
                   ) : messages.length === 0 ? (
                     <div className="flex flex-col items-center justify-center flex-1 gap-3" style={{ color: 'var(--wa-text-muted)' }}>
@@ -933,14 +923,15 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
                       </div>
                     ))
                   )}
-                  <div ref={bottomRef} />
+
                 </div>
               </div>
 
               {/* Botão scroll-to-bottom */}
               {showScrollBtn && (
                 <button
-                  onClick={() => scrollToBottom()}
+                  aria-label="Ir para as mensagens mais recentes"
+                  onClick={() => scrollToBottom('smooth')}
                   className="w-10 h-10 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105"
                   style={{
                     position: 'absolute', bottom: 16, right: 16, zIndex: 2,
@@ -951,6 +942,13 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
                 </button>
               )}
             </div>
+
+            {sendError && (
+              <div role="alert" className="flex items-start gap-3 border-t border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+                <p className="min-w-0 flex-1">{sendError}</p>
+                <button type="button" onClick={() => setConnectOpen(true)} className="shrink-0 font-semibold underline">Ver conexão</button>
+              </div>
+            )}
 
             {/* Composer */}
             <div
@@ -972,8 +970,9 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
                       className="absolute bottom-12 left-0 z-50"
                       onMouseDown={e => e.stopPropagation()}
                     >
+                      <Suspense fallback={<p className="p-4 text-xs" style={{ color: 'var(--wa-text-secondary)' }}>Carregando emojis…</p>}>
                       <EmojiPicker
-                        theme={waTheme === 'dark' ? EmojiTheme.DARK : EmojiTheme.LIGHT}
+                        theme={waTheme as EmojiTheme}
                         onEmojiClick={data => {
                           const textarea = textareaRef.current;
                           if (!textarea) {
@@ -995,6 +994,7 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
                         height={380}
                         width={320}
                       />
+                      </Suspense>
                     </div>
                   )}
 
@@ -1209,6 +1209,7 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
       {infoOpen && selectedPhone && (
         <ContactInfoPanel
           key={selectedPhone}
+          embedded={embedded}
           phone={selectedPhone}
           displayName={displayName}
           avatarUrl={avatarUrl}
@@ -1273,11 +1274,12 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
 // Painel "Informações do contato" — o feijão com arroz EDITÁVEL sem sair do
 // chat: nome, e-mail, observações, etapa do funil e marcar como ganho.
 // Sem lead no funil, oferece "Adicionar ao funil".
-function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages, clients, onClose, onDealUpdated }: {
+function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages, clients, onClose, onDealUpdated, embedded = false }: {
   phone: string;
   displayName: string;
   avatarUrl: string | null;
   about: string | null;
+  embedded?: boolean;
   deals: Deal[];
   stages: PipelineStage[];
   clients: Client[];
@@ -1285,7 +1287,7 @@ function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages,
   onDealUpdated: () => void;
 }) {
   const digits = phone.replace(/\D/g, '');
-  const deal = deals.find(d => (d.contact_phone || '').replace(/\D/g, '').endsWith(digits.slice(-8))) || null;
+  const deal = deals.find(d => customerPhoneMatches(phone, d.contact_phone)) || null;
   const [nome, setNome] = useState((deal as any)?.contact_name || displayName);
   const [email, setEmail] = useState((deal as any)?.contact_email || '');
   const [notes, setNotes] = useState((deal as any)?.notes || '');
@@ -1372,14 +1374,14 @@ function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages,
 
   return (
     <>
-      <div className="fixed inset-0 z-[75] flex justify-end bg-black/40 backdrop-blur-sm lg:static lg:z-auto lg:h-full lg:w-[360px] lg:flex-shrink-0 lg:bg-transparent lg:backdrop-blur-none" onClick={onClose}>
+      <div className={`fixed inset-0 z-[75] flex justify-end bg-black/40 ${embedded ? '' : 'xl:static xl:z-auto xl:h-full xl:w-[400px] xl:flex-shrink-0 xl:bg-transparent'}`} onClick={onClose}>
       <div
-        className="h-full w-full max-w-sm flex flex-col shadow-2xl lg:max-w-none lg:shadow-none"
+        className="h-full w-full max-w-[440px] flex flex-col shadow-xl xl:shadow-none"
         style={{ background: 'var(--wa-bg-secondary)', borderLeft: '1px solid var(--wa-border)' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-3 px-4 py-3 flex-shrink-0" style={{ background: 'var(--wa-bg-tertiary)', borderBottom: '1px solid var(--wa-border)' }}>
-          <button onClick={onClose} className="p-1 rounded-full" style={{ color: 'var(--wa-text-secondary)' }}><X size={20} /></button>
+          <button aria-label="Fechar informações do contato" onClick={onClose} className="p-1 rounded-full" style={{ color: 'var(--wa-text-secondary)' }}><X size={20} /></button>
           <span className="text-sm font-semibold" style={{ color: 'var(--wa-text-primary)' }}>Informações do contato</span>
         </div>
 
@@ -1397,6 +1399,8 @@ function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages,
             </div>
             {about && <p className="text-[13px] italic text-center px-4" style={{ color: 'var(--wa-text-secondary)' }}>“{about}”</p>}
           </div>
+
+          <ConversationCustomerPanel phone={phone} clients={clients} deals={deals} onUpdate={onDealUpdated} />
 
           {deal ? (
             <div className="px-5 py-4 space-y-4">
