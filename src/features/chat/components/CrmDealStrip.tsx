@@ -14,6 +14,7 @@ interface Props {
   clients: Client[];
   onUpdate: () => void;
   embedded?: boolean;
+  expanded?: boolean;
 }
 
 // Faixa do CRM no topo da conversa: mostra contexto do deal vinculado
@@ -21,7 +22,7 @@ interface Props {
 // Sem deal, o header da conversa renderiza só o FunnelStatusButton existente.
 //
 // Membros não veem valor — alinhado com a decisão de 2026-05-29.
-export function CrmDealStrip({ phone, deals, stages, clients, onUpdate, embedded = false }: Props) {
+export function CrmDealStrip({ phone, deals, stages, clients, onUpdate, embedded = false, expanded = false }: Props) {
   const { canAccess } = useAuth();
   const [showConversion, setShowConversion] = useState(false);
   const canSeeFinance = canAccess('finance'); // dono ou funcionário com permissão "Financeiro"
@@ -52,7 +53,7 @@ export function CrmDealStrip({ phone, deals, stages, clients, onUpdate, embedded
   return (
     <>
       <div
-        className={`flex items-center gap-3 px-4 py-2 flex-shrink-0 border-b ${embedded ? 'flex-wrap' : ''}`}
+        className="wa-crm-strip flex flex-wrap items-center gap-3 px-4 py-2 flex-shrink-0 border-b"
         style={{
           background: "var(--wa-bg-secondary, rgba(255,255,255,0.03))",
           borderColor: "var(--wa-border)",
@@ -82,7 +83,7 @@ export function CrmDealStrip({ phone, deals, stages, clients, onUpdate, embedded
         <PendingTasksBadge clientId={deal.client_id} />
       )}
 
-      <div className="flex-1" />
+      <div className="wa-crm-secondary ml-auto flex items-center gap-2" data-expanded={expanded}>
 
       {/* Ações terminais */}
       <DealActions
@@ -102,6 +103,7 @@ export function CrmDealStrip({ phone, deals, stages, clients, onUpdate, embedded
         <ExternalLink size={11} />
         Funil
       </Link>}
+      </div>
       </div>
       {showConversion && (
         <DealConversionModal

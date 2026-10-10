@@ -50,7 +50,7 @@ export const MessageBubble = React.memo(function MessageBubble({ msg, onImageCli
   return (
     <div className={`flex ${isMe ? 'justify-end' : 'justify-start'} mb-1 animate-msg-enter`}>
       <div
-        className="max-w-[65%] text-sm"
+        className="wa-message-bubble min-w-0 max-w-[85%] sm:max-w-[65%] text-sm"
         style={{
           background: isMe ? 'var(--wa-bubble-sent)' : 'var(--wa-bubble-recv)',
           opacity: isSending ? 0.7 : 1,

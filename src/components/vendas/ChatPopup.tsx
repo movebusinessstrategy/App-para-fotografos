@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { useChatViewport } from '../../features/chat/hooks/useChatViewport';
 import { InboxView } from '../../features/chat/components/InboxView';
 import { Client, Deal, PipelineStage } from '../../types';
 
@@ -29,6 +30,7 @@ function trapFocus(event: React.KeyboardEvent<HTMLElement>) {
 
 /** Extensão do Atendimento no funil: usa os mesmos recursos, histórico e canal. */
 export function ChatPopup({ phone, contactName, deals, stages, clients, onDealUpdated, onClose }: ChatPopupProps) {
+  const viewportRef = useChatViewport();
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -45,7 +47,7 @@ export function ChatPopup({ phone, contactName, deals, stages, clients, onDealUp
   }, []);
 
   return createPortal(
-    <div className="fixed inset-0 z-[60] flex justify-end">
+    <div ref={viewportRef} className="wa-viewport fixed inset-0 z-[60] flex justify-end">
       <div aria-hidden="true" onClick={onClose} className="absolute inset-0 bg-black/20" />
       <section
         role="dialog"
@@ -58,12 +60,12 @@ export function ChatPopup({ phone, contactName, deals, stages, clients, onDealUp
           trapFocus(event);
         }}
       >
-        <div className="flex shrink-0 items-center justify-between gap-3 px-4 py-3" style={{ borderBottom: '1px solid var(--wa-border)' }}>
+        <div className="wa-popup-heading flex shrink-0 items-center justify-between gap-3 px-4 py-3" style={{ borderBottom: '1px solid var(--wa-border)' }}>
           <div className="min-w-0">
             <p className="text-sm font-semibold" style={{ color: 'var(--wa-text-primary)' }}>Conversa no funil</p>
             <p className="text-xs" style={{ color: 'var(--wa-text-secondary)' }}>Continue o atendimento sem sair de vendas</p>
           </div>
-          <button ref={closeRef} type="button" onClick={onClose} aria-label="Fechar conversa" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg hover:bg-black/5 focus-visible:outline-2 focus-visible:outline-gold-500 dark:hover:bg-white/5" style={{ color: 'var(--wa-text-secondary)' }}>
+          <button ref={closeRef} type="button" onClick={onClose} aria-label="Fechar conversa" className="wa-touch-button flex h-9 w-9 shrink-0 items-center justify-center rounded-lg hover:bg-black/5 focus-visible:outline-2 focus-visible:outline-gold-500 dark:hover:bg-white/5" style={{ color: 'var(--wa-text-secondary)' }}>
             <X size={20} />
           </button>
         </div>

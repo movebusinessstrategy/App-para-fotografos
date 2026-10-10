@@ -1,0 +1,38 @@
+.wa-chat-pane { container-type: inline-size; container-name: conversation; }
+.wa-touch-button { align-items: center; justify-content: center; flex-shrink: 0; min-width: 44px; min-height: 44px; }
+.wa-conversation-actions-toggle, .wa-composer-tools-toggle { display: none; }
+.wa-composer { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+.wa-composer textarea { scroll-margin-bottom: 12px; }
+.wa-message-area .wa-scrollbar { overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; }
+.wa-message-bubble { overflow-wrap: anywhere; }
+.wa-inbox { isolation: isolate; }
+
+@container conversation (max-width: 540px) {
+  .wa-chat-header { flex-wrap: wrap; gap: 4px; padding: 6px 8px; }
+  .wa-contact-heading { gap: 8px; }
+  .wa-contact-heading > div:first-child { width: 34px; height: 34px; }
+  .wa-chat-header > .wa-touch-button span { display: none; }
+  .wa-conversation-actions-toggle, .wa-composer-tools-toggle { display: flex; }
+  .wa-header-actions { display: none; }
+  .wa-header-actions[data-open="true"] { display: flex; flex-wrap: wrap; width: 100%; padding-top: 4px; gap: 8px; }
+  .wa-header-actions button { min-height: 44px; }
+  .wa-crm-strip { gap: 8px; padding: 6px 12px; }
+  .wa-crm-secondary { display: none; }
+  .wa-crm-secondary[data-expanded="true"] { display: flex; flex-wrap: wrap; width: 100%; margin-left: 0; }
+  .wa-crm-strip button, .wa-crm-strip a { min-height: 44px; }
+  .wa-composer { gap: 4px; padding: 8px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+  .wa-composer form { gap: 4px; }
+  .wa-composer-tools { display: none; }
+  .wa-composer-tools[data-open="true"] { display: flex; position: absolute; bottom: calc(100% + 12px); left: 0; z-index: 25; padding: 8px; border: 1px solid var(--wa-border); border-radius: 12px; background: var(--wa-bg-secondary); box-shadow: 0 4px 12px rgb(0 0 0 / .1); }
+  .wa-composer-tools button, .wa-composer form > button { min-width: 44px; min-height: 44px; }
+  .wa-composer textarea { min-height: 44px; font-size: 16px; }
+  .wa-emoji-popover { max-height: min(380px, 55dvh); overflow-y: auto; }
+  .wa-message-bubble { max-width: 88%; }
+}
+
+@media (max-width: 767px), (pointer: coarse) {
+  .wa-viewport[data-keyboard-open="true"] .wa-global-header { display: none; }
+  .wa-viewport[data-keyboard-open="true"] .wa-popup-heading { padding-top: 4px; padding-bottom: 4px; }
+  .wa-viewport[data-keyboard-open="true"] .wa-popup-heading p:last-child { display: none; }
+  .wa-inbox .wa-scrollbar { overscroll-behavior: contain; }
+}

@@ -1,6 +1,7 @@
 import React, { Suspense, useEffect, useMemo, useState } from "react";
 import { Outlet, useLocation, Navigate } from "react-router-dom";
 
+import { useChatViewport } from "../../features/chat/hooks/useChatViewport";
 import Sidebar from "./Sidebar";
 import Header from "./Header";
 import ContactOpportunityModal from "../shared/ContactOpportunityModal";
@@ -56,6 +57,8 @@ const TITLE_MAP: Record<string, string> = {
 export default function AppLayout() {
   const { user, signOut, isProductionOnly } = useAuth();
   const location = useLocation();
+  const chatRoute = /^\/(whatsapp|pos-venda|vendas)(?:\/|$)/.test(location.pathname);
+  const viewportRef = useChatViewport(chatRoute);
   const [contactModal, setContactModal] = useState<ContactModalPayload | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // Recolher o menu no desktop → mais espaço (essencial pro chat em tela cheia).
@@ -95,7 +98,7 @@ export default function AppLayout() {
   };
 
   return (
-    <div className="flex h-dvh max-w-full overflow-hidden bg-luxury-paper dark:bg-[#070707] text-luxury-black dark:text-gray-100 font-sans">
+    <div ref={viewportRef} className="wa-viewport flex h-dvh max-w-full overflow-hidden bg-luxury-paper dark:bg-[#070707] text-luxury-black dark:text-gray-100 font-sans">
       <Sidebar
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
@@ -105,15 +108,17 @@ export default function AppLayout() {
 
 
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <ImpersonationBanner />
-        <TrialBanner />
-        <Header
-          title={pageTitle}
-          userInitial={user?.email?.charAt(0).toUpperCase()}
-          userEmail={user?.email ?? undefined}
-          onSignOut={signOut}
-          onMenuClick={() => setSidebarOpen(true)}
-        />
+        <div className="wa-global-header shrink-0">
+          <ImpersonationBanner />
+          <TrialBanner />
+          <Header
+            title={pageTitle}
+            userInitial={user?.email?.charAt(0).toUpperCase()}
+            userEmail={user?.email ?? undefined}
+            onSignOut={signOut}
+            onMenuClick={() => setSidebarOpen(true)}
+          />
+        </div>
 
         <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
           <Suspense

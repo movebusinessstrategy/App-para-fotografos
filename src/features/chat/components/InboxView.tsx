@@ -13,6 +13,9 @@ import { handoffReasonLabel } from '../utils/agentHandoff';
 import { useConversations } from '../hooks/useConversations';
 import { useMessages } from '../hooks/useMessages';
 import { useChatScroll } from '../hooks/useChatScroll';
+import { useChatDraft } from '../hooks/useChatDraft';
+import { useChatViewport } from '../hooks/useChatViewport';
+import './chatMobile.css';
 import { ConversationCustomerPanel } from './ConversationCustomerPanel';
 import { customerPhoneMatches } from '../utils/conversationCustomer';
 import { useWaStatus } from '../hooks/useWaStatus';
@@ -127,7 +130,9 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
   const { messages, loading: loadingMsgs, error: messageError, refreshMessages, sendText } = useMessages(selectedPhone, waSlot);
   const activeConversationRef = useRef('');
   activeConversationRef.current = `${waSlot}:${selectedPhone}`;
-  const [text, setText] = useState('');
+  const [text, setText] = useChatDraft(`${waSlot}:${selectedPhone}`);
+  const [composerToolsOpen, setComposerToolsOpen] = useState(false);
+  const [conversationActionsOpen, setConversationActionsOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [lightbox, setLightbox] = useState<string | null>(null);
@@ -154,8 +159,10 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
     setInfoData(null);
     setHandoffError(null);
     setSendError(null);
-    setText('');
-  }, [selectedPhone]);
+    setComposerToolsOpen(false);
+    setShowEmoji(false);
+    setConversationActionsOpen(false);
+  }, [selectedPhone, waSlot]);
   useEffect(() => {
     if (!infoOpen || !selectedPhone) return;
     let on = true;
@@ -465,7 +472,7 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
   ), [shownConversations, selectedPhone, waSlot, mutateUnread, refresh]);
 
   return (
-    <div className="flex h-full overflow-hidden font-sans" style={{ background: 'var(--wa-bg-secondary)' }}>
+    <div className="wa-inbox flex h-full min-h-0 min-w-0 w-full overflow-hidden font-sans" style={{ background: 'var(--wa-bg-secondary)' }}>
 
       {/* ── SIDEBAR ── (min-h-0 permite a lista interna rolar até o fim) */}
       {!embedded && (
@@ -711,7 +718,7 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
       )}
 
       {/* ── ÁREA DE CHAT ── */}
-      <div className={`${selectedPhone ? 'flex' : 'hidden md:flex'} flex-1 flex-col min-w-0 overflow-hidden`}>
+      <div className={`wa-chat-pane ${selectedPhone ? 'flex' : 'hidden md:flex'} flex-1 flex-col min-h-0 min-w-0 overflow-hidden`}>
         {!selectedPhone ? (
           /* Estado vazio */
           <div className="flex-1 flex flex-col items-center justify-center gap-4 wa-chat-pattern">
@@ -734,12 +741,13 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
           <>
             {/* Header da conversa */}
             <div
-              className="flex items-center gap-3 px-4 py-3 flex-shrink-0"
+              className="wa-chat-header relative flex items-center gap-3 px-4 py-3 flex-shrink-0"
               style={{ background: 'var(--wa-bg-tertiary)', borderBottom: '1px solid var(--wa-border)' }}
             >
               {!embedded && <button
                 onClick={() => setSelectedPhone(null)}
-                className="p-1 rounded-full md:hidden"
+                aria-label="Voltar para conversas"
+                className="wa-touch-button flex p-1 rounded-full md:hidden"
                 style={{ color: 'var(--wa-text-secondary)' }}
               >
                 <ArrowLeft size={20} />
@@ -748,7 +756,7 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
               {/* Avatar + nome CLICÁVEL → abre as informações do contato (igual WhatsApp) */}
               <button
                 onClick={() => setInfoOpen(true)}
-                className="flex items-center gap-3 flex-1 min-w-0 text-left rounded-xl px-1 py-0.5 -mx-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+                className="wa-contact-heading flex items-center gap-3 flex-1 min-w-0 text-left rounded-xl px-1 py-0.5 -mx-1 transition-colors hover:bg-black/5 dark:hover:bg-white/5"
                 title="Ver informações do contato"
               >
                 <div
@@ -770,11 +778,11 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
                 </div>
               </button>
 
-              {/* FEATURE 6 - botões do header */}
-              <div className="flex items-center gap-1 flex-shrink-0">
-                <button type="button" onClick={() => setInfoOpen(value => !value)} aria-label="Cliente e ensaios" aria-expanded={infoOpen} className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs font-semibold" style={{ color: 'var(--wa-text-secondary)', border: '1px solid var(--wa-border)' }}>
+                <button type="button" onClick={() => setInfoOpen(value => !value)} aria-label="Cliente e ensaios" aria-expanded={infoOpen} className="wa-touch-button flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs font-semibold" style={{ color: 'var(--wa-text-secondary)', border: '1px solid var(--wa-border)' }}>
                   <UserRound size={16} /><span className="hidden sm:inline">Cliente e ensaios</span>
                 </button>
+              <button type="button" aria-label="Ações da conversa" aria-expanded={conversationActionsOpen} onClick={() => setConversationActionsOpen(value => !value)} className="wa-conversation-actions-toggle wa-touch-button rounded-lg" style={{ color: 'var(--wa-text-secondary)' }}><MoreVertical size={20} /></button>
+              <div className="wa-header-actions flex items-center gap-1 flex-shrink-0" data-open={conversationActionsOpen}>
                 {/* Encaminhar entre os dois WhatsApps: venda fechada → pós-venda;
                     cliente do pós-venda querendo comprar de novo → NOVO lead em vendas */}
                 {!embedded && waSlot === 'main' && posvendaOn && selectedPhone && (
@@ -807,20 +815,6 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
                   stages={stages}
                   onAdded={onDealUpdated}
                 />}
-                <button
-                  className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
-                  style={{ color: 'var(--wa-text-secondary)' }}
-                  title="Buscar mensagem"
-                >
-                  <Search size={18} />
-                </button>
-                <button
-                  className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
-                  style={{ color: 'var(--wa-text-secondary)' }}
-                  title="Mais opções"
-                >
-                  <MoreVertical size={18} />
-                </button>
               </div>
             </div>
 
@@ -828,6 +822,7 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
             {selectedPhone && (
               <CrmDealStrip
                 embedded={embedded}
+                expanded={conversationActionsOpen}
                 phone={selectedPhone}
                 deals={deals}
                 stages={stages}
@@ -876,7 +871,7 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
             )}
 
             {/* Mensagens - fundo e scroll como irmãos para evitar conflito de position CSS */}
-            <div className="flex-1 min-h-0 relative">
+            <div className="wa-message-area flex-1 min-h-0 relative">
               {/* Camada de fundo: wa-chat-pattern como irmão do scroll, não pai */}
               <div className="wa-chat-pattern absolute inset-0" aria-hidden="true" />
 
@@ -952,7 +947,7 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
 
             {/* Composer */}
             <div
-              className="flex items-end gap-2 px-3 py-3 flex-shrink-0"
+              className="wa-composer flex items-end gap-2 px-3 py-3 flex-shrink-0"
               style={{ background: 'var(--wa-bg-tertiary)', borderTop: '1px solid var(--wa-border)' }}
             >
               {isRecording ? (
@@ -962,12 +957,12 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
                   className="flex-1"
                 />
               ) : (
-                <form onSubmit={handleSend} className="flex items-end gap-2 flex-1 relative">
+                <form onSubmit={handleSend} aria-label="Responder à conversa" className="flex min-w-0 items-end gap-2 flex-1 relative">
                   {/* Emoji picker popover */}
                   {showEmoji && (
                     <div
                       ref={emojiPickerRef}
-                      className="absolute bottom-12 left-0 z-50"
+                      className="wa-emoji-popover absolute bottom-12 left-0 z-50"
                       onMouseDown={e => e.stopPropagation()}
                     >
                       <Suspense fallback={<p className="p-4 text-xs" style={{ color: 'var(--wa-text-secondary)' }}>Carregando emojis…</p>}>
@@ -992,7 +987,7 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
                           // Não fecha - permite escolher vários
                         }}
                         height={380}
-                        width={320}
+                        width="min(320px, calc(100vw - 24px))"
                       />
                       </Suspense>
                     </div>
@@ -1007,9 +1002,11 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
                     onChange={handleFileSelect}
                   />
 
+                  <button type="button" aria-label="Anexos, emojis e sugestão" aria-expanded={composerToolsOpen} onClick={() => { setComposerToolsOpen(value => !value); setShowEmoji(false); }} className="wa-composer-tools-toggle wa-touch-button rounded-full" style={{ color: 'var(--wa-text-secondary)' }}><Paperclip size={21} /></button>
+                  <div className="wa-composer-tools flex shrink-0 items-center gap-2" data-open={composerToolsOpen}>
                   <button
                     type="button"
-                    onClick={() => setShowEmoji(v => !v)}
+                    onClick={() => { setShowEmoji(v => !v); setComposerToolsOpen(false); }}
                     className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 transition-colors"
                     style={{ color: showEmoji ? 'var(--wa-accent-green)' : 'var(--wa-text-secondary)' }}
                     title="Emoji"
@@ -1018,7 +1015,7 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
                   </button>
                   <button
                     type="button"
-                    onClick={() => fileRef.current?.click()}
+                    onClick={() => { setComposerToolsOpen(false); fileRef.current?.click(); }}
                     className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 transition-colors"
                     style={{ color: 'var(--wa-text-secondary)' }}
                     title="Anexar arquivo"
@@ -1029,25 +1026,33 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
                   <LiaSuggestButton
                     messages={messages}
                     onSuggested={reply => {
+                      setComposerToolsOpen(false);
                       setText(reply);
                       // Foca o textarea pra usuário revisar antes de mandar
                       setTimeout(() => textareaRef.current?.focus(), 0);
                     }}
                   />
 
+                  </div>
+
                   <textarea
                     ref={textareaRef}
                     value={text}
                     onChange={e => setText(e.target.value)}
                     onKeyDown={e => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
+                      if (e.nativeEvent.isComposing) return;
+                      const mobile = window.matchMedia('(max-width: 767px), (pointer: coarse)').matches;
+                      if (e.key === 'Enter' && !e.shiftKey && !mobile) {
                         e.preventDefault();
                         handleSend(e as any);
                       }
                     }}
+                    aria-label="Mensagem"
+                    enterKeyHint="enter"
+                    onFocus={() => { setComposerToolsOpen(false); setShowEmoji(false); setConversationActionsOpen(false); }}
                     placeholder="Digite uma mensagem"
                     rows={1}
-                    className="flex-1 rounded-lg px-4 py-2.5 text-sm outline-none resize-none wa-scrollbar"
+                    className="min-w-0 w-0 flex-1 rounded-lg px-3 py-2.5 text-sm outline-none resize-none wa-scrollbar"
                     style={{
                       background: 'var(--wa-bg-input)',
                       color: 'var(--wa-text-primary)',
@@ -1060,6 +1065,7 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
                   {text.trim() ? (
                     <button
                       type="submit"
+                      aria-label="Enviar mensagem"
                       disabled={sending}
                       className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 disabled:opacity-40 transition-opacity"
                       style={{ background: 'var(--wa-accent-green)', color: '#fff' }}
@@ -1091,7 +1097,7 @@ export function InboxView({ initialPhone, initialContactName, embedded = false, 
           style={{ background: 'rgba(0,0,0,0.9)' }}
           onClick={() => setLightbox(null)}
         >
-          <img src={lightbox} alt="" className="max-w-[90%] max-h-[85vh] rounded-xl" />
+          <img src={lightbox} alt="" className="max-w-[90%] max-h-[85dvh] rounded-xl" />
         </div>
       )}
 
@@ -1286,6 +1292,7 @@ function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages,
   onClose: () => void;
   onDealUpdated: () => void;
 }) {
+  const viewportRef = useChatViewport();
   const digits = phone.replace(/\D/g, '');
   const deal = deals.find(d => customerPhoneMatches(phone, d.contact_phone)) || null;
   const [nome, setNome] = useState((deal as any)?.contact_name || displayName);
@@ -1374,14 +1381,14 @@ function ContactInfoPanel({ phone, displayName, avatarUrl, about, deals, stages,
 
   return (
     <>
-      <div className={`fixed inset-0 z-[75] flex justify-end bg-black/40 ${embedded ? '' : 'xl:static xl:z-auto xl:h-full xl:w-[400px] xl:flex-shrink-0 xl:bg-transparent'}`} onClick={onClose}>
+      <div ref={viewportRef} className={`wa-viewport fixed inset-0 z-[75] flex justify-end bg-black/40 ${embedded ? '' : 'xl:static xl:z-auto xl:h-full xl:w-[400px] xl:flex-shrink-0 xl:bg-transparent'}`} onClick={onClose} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); onClose(); } }}>
       <div
         className="h-full w-full max-w-[440px] flex flex-col shadow-xl xl:shadow-none"
         style={{ background: 'var(--wa-bg-secondary)', borderLeft: '1px solid var(--wa-border)' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-3 px-4 py-3 flex-shrink-0" style={{ background: 'var(--wa-bg-tertiary)', borderBottom: '1px solid var(--wa-border)' }}>
-          <button aria-label="Fechar informações do contato" onClick={onClose} className="p-1 rounded-full" style={{ color: 'var(--wa-text-secondary)' }}><X size={20} /></button>
+          <button aria-label="Fechar informações do contato" onClick={onClose} className="wa-touch-button flex rounded-full" style={{ color: 'var(--wa-text-secondary)' }}><X size={20} /></button>
           <span className="text-sm font-semibold" style={{ color: 'var(--wa-text-primary)' }}>Informações do contato</span>
         </div>
 
